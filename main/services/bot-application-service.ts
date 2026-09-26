@@ -10,6 +10,7 @@ import type {
   BotDefinition,
   BotUpdateInput,
 } from "../../renderer/shared/bots.js";
+import { finalizeBotCapabilityCatalog } from "./bot-capability-catalog-core.js";
 import type { BotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
 import {
   retainedBotProviderForChat,
@@ -1209,12 +1210,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             input.access,
             snapshot.catalog.revision,
           );
+          const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
           const binding = access.accessMode === "custom"
             ? await deps.catalog.bindCustom({
                 audienceId: input.audienceId,
                 botId: input.botId,
                 selection: access.custom,
                 catalogRevision: access.catalogRevision,
+                retainedBindings: savedBinding ? [savedBinding] : [],
                 snapshot,
               })
             : undefined;
@@ -1488,6 +1491,25 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               ],
             }),
       });
+      if (botId !== undefined && snapshot.catalog.skillsEnabled === false) {
+        // Full Bots have no exact Custom binding, but their existing chat
+        // reductions still own saved skill IDs. Retain safe presentation-only
+        // tombstones so native readers/editors can preserve those reductions.
+        // Never turn these IDs into runtime resources or new positive grants.
+        const chats = await deps.chatStore.listByBot(botId);
+        const policies = await Promise.all(chats.map(({ id }) => deps.capabilityStore.getChatPolicy(id)));
+        const skills = new Map(snapshot.catalog.skills.map((option) => [option.id, option]));
+        for (const policy of policies) {
+          if (policy.botId !== botId || policy.mode !== "custom") continue;
+          for (const id of policy.custom.skillIds) {
+            if (!skills.has(id)) skills.set(id, { id, label: "Saved skill", available: false });
+          }
+        }
+        return finalizeBotCapabilityCatalog({
+          ...snapshot.catalog,
+          skills: [...skills.values()].sort((left, right) => left.id.localeCompare(right.id)),
+        });
+      }
       return snapshot.catalog;
     },
 

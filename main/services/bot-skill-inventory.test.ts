@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveBotCapabilitySkills } from "./bot-skill-inventory.js";
+import { resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings } from "./bot-skill-inventory.js";
 
 test("Bot skills resolve configured, global, and only the selected Bot home without paths", async () => {
   const discoveredRoots: Array<string | undefined> = [];
@@ -39,4 +39,49 @@ test("create-Bot skill inventory never discovers a managed Bot home", async () =
   });
   assert.deepEqual(discoveredRoots, [undefined]);
   assert.deepEqual(skills.map(({ label }) => label), ["Global"]);
+});
+
+
+test("global disable withholds Bot catalogs and runtime bindings without reading skill content", async () => {
+  const unexpectedRead = async (): Promise<never> => { throw new Error("Skill storage must not be read"); };
+  const dependencies = {
+    isEnabled: async () => false,
+    loadIdentityKey: unexpectedRead,
+    listConfigured: unexpectedRead,
+    loadBotHomePath: unexpectedRead,
+    discover: unexpectedRead,
+  };
+  assert.deepEqual(await resolveBotCapabilitySkills(dependencies), []);
+  assert.deepEqual(await resolveBotRuntimeSkillBindings(dependencies), []);
+});
+
+test("Bot automatic skill bindings honor model invocation independently of user menus", async () => {
+  const dependencies = {
+    loadIdentityKey: async () => Buffer.alloc(32, 7),
+    listConfigured: async () => [],
+    discover: async () => [
+      { id: "user", name: "User", description: "", instructions: "Explicit", source: "global" as const, path: "/skills/user/SKILL.md", modelInvocable: false, userInvocable: true },
+      { id: "model", name: "Model", description: "", instructions: "Automatic", source: "global" as const, path: "/skills/model/SKILL.md", modelInvocable: true, userInvocable: false },
+    ],
+  };
+  for (const resolve of [resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings]) {
+    const skills = await resolve(dependencies);
+    assert.equal(skills.find(({ label }) => label === "User")?.available, false);
+    assert.equal(skills.find(({ label }) => label === "Model")?.available, true);
+  }
+});
+
+test("user-only skills cannot crowd automatic skills out of bounded Bot inventory", async () => {
+  const dependencies = {
+    loadIdentityKey: async () => Buffer.alloc(32, 7),
+    listConfigured: async () => [],
+    discover: async () => Array.from({ length: 300 }, (_, i) => ({
+      id: String(i).padStart(4, "0"), name: `Skill ${i}`, description: "", instructions: "Body",
+      source: "global" as const, path: `/skills/${i}/SKILL.md`, modelInvocable: i === 299,
+    })),
+  };
+  for (const resolve of [resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings]) {
+    const skills = await resolve(dependencies);
+    assert.equal(skills.find(({ label }) => label === "Skill 299")?.available, true);
+  }
 });

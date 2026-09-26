@@ -55,8 +55,15 @@ import {
 } from "./aiden-remote-streams.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
+import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
+import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
+import { createChatProgressAuthorizer } from "./aiden-remote-chat-progress-authorize.js";
+import { chatProgressEvents } from "./chat-progress-events.js";
+import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
+import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
+import { subagentRunStore } from "./subagents/subagent-run-store.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
@@ -102,6 +109,7 @@ import {
   botManagedWorkspace,
 } from "./bot-capability-services-main.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { simulatorShareRelay } from "./devices/device-share.js";
 import {
   createBotInboxProjectionService,
   mergeBotInboxActivityPreviews,
@@ -193,6 +201,8 @@ function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
           ...(status >= 500 ? { code: "internal-error" as const } : {}),
           fields: {
             routeCategory: remoteRouteCategory(details.route),
+            ...(typeof details.method === "string" ? { method: details.method } : {}),
+            ...(typeof details.routePath === "string" ? { route: details.routePath } : {}),
             statusClass: status >= 500 ? "5xx" : status >= 400 ? "4xx" : "2xx",
             latencyBucket: latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
             remoteCode: typeof details.errorCode === "string" ? details.errorCode : null,
@@ -357,6 +367,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         workspaces: AidenRemoteWorkspaceService;
         workspaceBrowser: AidenRemoteWorkspaceBrowserService;
         chats: AidenRemoteChatService;
+        chatProgress: AidenRemoteChatProgressService;
         models: AidenRemoteModelService;
         streams: AidenRemoteStreamService;
         files: AidenRemoteFileService;
@@ -376,6 +387,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let workspaceApiInstanceId: string | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
+  let activeProgress: AidenRemoteChatProgressService | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
   const service = new AidenRemoteService({
     state,
@@ -388,6 +400,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    simulators: simulatorShareRelay,
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -435,6 +448,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           });
           activeStreams = streams;
           const chats = new AidenRemoteChatService({
+            attachments: remoteAttachmentStore,
             application: chatApplicationService,
             chatStore,
             generation: {
@@ -463,6 +477,36 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
           });
           activeChats = chats;
+          activeProgress?.close();
+          const chatProgress = new AidenRemoteChatProgressService({
+            instanceId,
+            events: chatProgressEvents,
+            authorize: createChatProgressAuthorizer({
+              acquireDeviceAuthorization: (deviceId) =>
+                state.acquireDeviceAuthorization(deviceId, false),
+              device: async (deviceId) =>
+                (await state.snapshot()).devices.find(
+                  (entry) => entry.id === deviceId,
+                ),
+              chatMetadata: () => chatStore.listSummaryMetadata(),
+              readChat: async (chatId) =>
+                (await chatStore.get(chatId)) ?? undefined,
+              authorizeRetainedBotChat: (input) =>
+                chats.authorizeRetainedBotChat(input),
+              events: chatProgressEvents,
+            }),
+            readTodo: async (chatId) => {
+              const chat = await chatStore.get(chatId);
+              if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
+              const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+              return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
+            },
+            readAgents: (chatId) => subagentRunStore.listByChat(chatId),
+            // Remote-created turns already have a public turn identity; the
+            // roster must echo it so clients can correlate turnStart with agents.
+            publicTurnId: (chatId, generationId) => streams.turnIdFor(chatId, generationId),
+          });
+          activeProgress = chatProgress;
           const projectBotHealth = async (
             botId: string,
             fullReady?: boolean,
@@ -653,6 +697,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             chats,
             models,
             streams,
+            chatProgress,
             files,
             botFiles,
             git,
@@ -693,12 +738,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     revokeDevice: async (deviceId) => {
+      activeProgress?.revokeDevice(deviceId);
+      simulatorShareRelay.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
         chats: activeChats,
         workspaceOwners,
       }, deviceId);
+      // A relay admitted between the first close and the revocation fence is closed here.
+      simulatorShareRelay.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       await botApplicationService.revokeNoticeAudience(deviceId);

@@ -13,6 +13,7 @@ import type { SubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-ru
 import { SubagentControlMainV2 } from "./subagent-control-main.js";
 import { subagentWorkspaceWriteAllowedForGeneration } from "./eligibility.js";
 import { subagentMcpEffectProfileFingerprintV2 } from "./authority-v2.js";
+import { effectiveSubagentTaskCapabilities, parseSubagentToolRequest } from "./contracts.js";
 
 function runtime(): ResolvedModelRuntime {
   return {
@@ -58,6 +59,103 @@ test("cumulative token budgets are separate from one-request context capacity", 
   assert.equal(cumulativeSubagentTokenBudget(32_000), 128_000);
   assert.equal(cumulativeSubagentTokenBudget(4_000_000), 10_000_000);
   assert.equal(cumulativeSubagentTokenBudget(undefined), 4_000_000);
+});
+
+test("foreground authority uses a bounded explicit read-only turn budget", async () => {
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v2", [])));
+  const prepared = await persistence.prepareRun({
+    identity: { runId: "run-budget", groupId: "group-budget", childId: "child-budget" },
+    task: { role: "scout", label: "Survey", task: "Survey source.", maxTurns: 72 },
+    contextMode: "fresh",
+    contextRevision: "a".repeat(64),
+    deadlineMs: 5_000,
+    stop: () => {},
+  });
+  assert.equal(prepared.authority?.budgets.maxTurns, 72);
+  await prepared.abortPreparation();
+});
+
+test("implementer role defaults meet parent permission and independent rollout ceilings", async () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  });
+  const task = parsed.tasks[0]!;
+  const requestedCapabilities = effectiveSubagentTaskCapabilities(parsed, task);
+  for (const variant of [
+    { permission: "ask" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
+    { permission: "full" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
+    { permission: "ask" as const, writeEnabled: false, shellEnabled: true, expectedWrite: false, expectedShell: true },
+    { permission: "ask" as const, writeEnabled: true, shellEnabled: false, expectedWrite: true, expectedShell: false },
+    { permission: "none" as const, writeEnabled: true, shellEnabled: true, expectedWrite: false, expectedShell: false },
+  ]) {
+    const parentWorkspace = { ...workspace, permission: variant.permission };
+    const persistence = createForegroundSubagentPersistenceV2({
+      ...input(store("v2", [])), workspace: parentWorkspace,
+      permission: variant.permission,
+      writeEnabled: variant.writeEnabled,
+      shellEnabled: variant.shellEnabled,
+      shellBinary: "/bin/zsh",
+      requestApproval: async () => true,
+      currentWorkspace: async () => parentWorkspace,
+      validateWorkspace: async () => {},
+    });
+    const prepared = await persistence.prepareRun({
+      identity: { runId: `run-${variant.permission}-${variant.writeEnabled}-${variant.shellEnabled}`, groupId: "group", childId: "child" },
+      task, requestedCapabilities, contextMode: "fresh",
+      contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+    });
+    assert.equal(prepared.authority?.capabilities.workspaceWrite, variant.expectedWrite);
+    assert.equal(prepared.authority?.capabilities.shell, variant.expectedShell);
+    assert.equal(prepared.authority?.capabilities.delegation, false);
+    await prepared.abortPreparation();
+  }
+  const fullWorkspace = { ...workspace, permission: "full" as const };
+  const narrowedTurn = createForegroundSubagentPersistenceV2({
+    ...input(store("v2", [])), workspace: fullWorkspace,
+    permission: "full", generationPermission: "read-only",
+    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    requestApproval: async () => true,
+    currentWorkspace: async () => fullWorkspace,
+    validateWorkspace: async () => {},
+  });
+  const prepared = await narrowedTurn.prepareRun({
+    identity: { runId: "run-narrowed", groupId: "group", childId: "child" },
+    task, requestedCapabilities, contextMode: "fresh",
+    contextRevision: "b".repeat(64), deadlineMs: 5_000, stop: () => {},
+  });
+  assert.equal(prepared.authority?.capabilities.workspaceWrite, false);
+  assert.equal(prepared.authority?.capabilities.shell, false);
+  await prepared.abortPreparation();
+});
+
+test("implementer tasks fail closed during V1 rollback", async () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  });
+  const task = parsed.tasks[0]!;
+  const workspaceV1 = { ...workspace, permission: "full" as const };
+  const persistence = createForegroundSubagentPersistenceV2({
+    ...input(store("v1", [])), workspace: workspaceV1,
+    permission: "full",
+    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    requestApproval: async () => true,
+    currentWorkspace: async () => workspaceV1,
+    validateWorkspace: async () => {},
+  });
+  for (const requestedCapabilities of [
+    // Role defaults (write + shell) and an explicitly read-only implementer.
+    effectiveSubagentTaskCapabilities(parsed, task),
+    { workspaceRead: true, workspaceWrite: false, shell: false, web: false, mcp: [], delegate: false },
+  ]) {
+    await assert.rejects(
+      persistence.prepareRun({
+        identity: { runId: "run-v1-implementer", groupId: "group", childId: "child" },
+        task, requestedCapabilities, contextMode: "fresh",
+        contextRevision: "c".repeat(64), deadlineMs: 5_000, stop: () => {},
+      }),
+      /implementer role is unavailable during V1 rollback/u,
+    );
+  }
 });
 
 function store(
@@ -717,7 +815,7 @@ test("Phase 6B mints one fresh depth-2 authority from an exact live parent and p
       groupId: "group-tree",
       childId: "child-nested",
     },
-    task: { role: "scout", label: "Check", task: "Check one narrow fact." },
+    task: { role: "scout", label: "Check", task: "Check one narrow fact.", maxTurns: 72 },
     contextMode: "fresh",
     contextRevision: "2".repeat(64),
     deadlineMs: 4_000,
@@ -732,6 +830,7 @@ test("Phase 6B mints one fresh depth-2 authority from an exact live parent and p
     stop: () => {},
   });
   assert.equal(nested.authority?.depth, 2);
+  assert.equal(nested.authority?.budgets.maxTurns, parent.authority?.budgets.maxTurns);
   assert.equal(nested.authority?.parentRunId, "run-parent");
   assert.equal(nested.authority?.treeRootId, parent.authority?.treeRootId);
   assert.equal(nested.authority?.capabilities.delegation, false);

@@ -1,0 +1,104 @@
+import type { AssistantLiveStartIntent } from "../../renderer/shared/assistant-live.js";
+import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+export function parseAssistantLiveStartIntent(value: unknown): AssistantLiveStartIntent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, "screen" in value ? ["computerUseAuthorization", "microphone", "screen"] : ["computerUseAuthorization", "microphone"]) ||
+    ("screen" in value && typeof value.screen !== "boolean") ||
+    typeof value.microphone !== "boolean" ||
+    !(
+      value.computerUseAuthorization === null ||
+      (typeof value.computerUseAuthorization === "string" &&
+        value.computerUseAuthorization.length >= 1 &&
+        value.computerUseAuthorization.length <= 128)
+    )
+  ) {
+    throw new Error("Invalid Assistant Live start request.");
+  }
+  return {
+    microphone: value.microphone,
+    ...("screen" in value ? { screen: value.screen as boolean } : {}),
+    computerUseAuthorization: value.computerUseAuthorization,
+  };
+}
+
+export function parseAssistantLiveStopIntent(value: unknown): void {
+  if (!isRecord(value) || !exactKeys(value, [])) {
+    throw new Error("Invalid Assistant Live stop request.");
+  }
+}
+
+export interface AssistantLiveAudioIntent {
+  sessionId: string;
+  pcm: Uint8Array;
+}
+
+export function parseAssistantLiveAudioIntent(value: unknown): AssistantLiveAudioIntent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["pcm", "sessionId"]) ||
+    typeof value.sessionId !== "string" ||
+    value.sessionId.length < 1 ||
+    value.sessionId.length > 128 ||
+    !(value.pcm instanceof Uint8Array) ||
+    value.pcm.byteLength !== 640
+  ) {
+    throw new Error("Invalid Assistant Live audio request.");
+  }
+  return { sessionId: value.sessionId, pcm: Uint8Array.from(value.pcm) };
+}
+
+export interface AssistantLiveFrameIntent {
+  sessionId: string;
+  frame: Uint8Array;
+}
+
+export function parseAssistantLiveFrameIntent(value: unknown): AssistantLiveFrameIntent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["frame", "sessionId"]) ||
+    typeof value.sessionId !== "string" ||
+    value.sessionId.length < 1 ||
+    value.sessionId.length > 128 ||
+    !(value.frame instanceof Uint8Array) ||
+    value.frame.byteLength < 4 ||
+    value.frame.byteLength > GEMINI_LIVE_MAX_JPEG_BYTES
+  ) {
+    throw new Error("Invalid Assistant Live frame request.");
+  }
+  return { sessionId: value.sessionId, frame: Uint8Array.from(value.frame) };
+}
+
+export function parseAssistantLiveEmptyIntent(
+  value: unknown,
+  name: string,
+): void {
+  if (!isRecord(value) || !exactKeys(value, [])) {
+    throw new Error(`Invalid Assistant Live ${name} request.`);
+  }
+}
+
+export function parseAssistantLiveDisplayReleaseIntent(
+  value: unknown,
+): { bindingId: string } {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["bindingId"]) ||
+    typeof value.bindingId !== "string" ||
+    value.bindingId.length < 1 ||
+    value.bindingId.length > 128
+  ) {
+    throw new Error("Invalid Assistant Live display-release request.");
+  }
+  return { bindingId: value.bindingId };
+}

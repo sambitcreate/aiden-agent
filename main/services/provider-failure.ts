@@ -3,6 +3,8 @@ import {
   PROVIDER_FAILURE_VERSION,
   type ProviderFailureV1,
 } from "../../renderer/shared/provider-failure.js";
+import { createHash } from "node:crypto";
+import type { DiagnosticSafeFields } from "./diagnostics-contract.js";
 
 export type ProviderFailureReason =
   | "request-failed"
@@ -57,6 +59,16 @@ function requestFailureCategory(
   return "unknown";
 }
 
+function networkTransportCause(message: string): string {
+  if (/\b(?:EAI_AGAIN|ENOTFOUND)\b|\bgetaddrinfo\b/iu.test(message)) return "dns";
+  if (/\bECONNRESET\b|connection reset/iu.test(message)) return "connection-reset";
+  if (/\bECONNREFUSED\b|connection refused/iu.test(message)) return "connection-refused";
+  if (/socket.{0,30}closed|socket hang up|other side closed/iu.test(message)) return "socket-closed";
+  if (/\bfetch failed\b/iu.test(message)) return "fetch-failed";
+  if (/\bconnection error\b/iu.test(message)) return "connection-error";
+  return "network-unknown";
+}
+
 /**
  * Collapse a terminal outcome to closed metadata before it reaches chat
  * persistence. The raw message is inspected only for classification and is
@@ -96,6 +108,26 @@ export function providerFailureChatMetadata(
   outcome: ProviderFailedTerminalOutcome,
 ): { providerFailure: ProviderFailureV1 } {
   return { providerFailure: providerFailureFromTerminalOutcome(outcome) };
+}
+
+/** Main-only: call before outcome redaction. Message-derived categories are hints, never HTTP evidence. */
+export function providerFailureDiagnosticFields(
+  outcome: ProviderFailedTerminalOutcome,
+): DiagnosticSafeFields {
+  const failure = providerFailureFromTerminalOutcome(outcome);
+  const message = outcome.finalMessage?.errorMessage;
+  const providerCategory = failure.category === "invalid_request" &&
+    typeof message === "string" && MODEL_UNAVAILABLE.test(message)
+    ? "model_unavailable" : failure.category;
+  const failurePhase = outcome.reason === "compaction-failed" ? "provider-compaction" : "provider-request";
+  // Fingerprint only closed metadata, never low-entropy provider/request text.
+  return {
+    providerCategory,
+    failurePhase,
+    attempts: failure.attempts,
+    ...(failure.category === "network" ? { transportCause: networkTransportCause(message ?? "") } : {}),
+    fingerprint: createHash("sha256").update(`${failurePhase}:${providerCategory}`).digest("hex").slice(0, 16),
+  };
 }
 
 const CLOSED_NON_PROVIDER_ERRORS = new Set([

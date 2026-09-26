@@ -563,3 +563,38 @@ test("owner.send throws after destroy is called", () => {
   assert.equal(bg.owner.isDestroyed(), true);
   assert.throws(() => bg.owner.send("chat:done", { content: "late" }), /no longer active/);
 });
+
+
+test("Telegram skill provenance reaches generation while only raw user text is persisted", async () => {
+  const chat = mockChatStore();
+  const selection = { workspaceId: "project", invocationId: "opaque-skill" };
+  const { deps } = mockDeps({ store: chat.store, llm: mockLlm(async (streamId, params, owner, options) => {
+    assert.deepEqual(options.telegramSkillInvocation, selection);
+    assert.equal(params.messages[0]?.content, "inspect this patch");
+    owner.send("chat:done", { streamId, content: "Reviewed" });
+    return true;
+  }) });
+  const result = await sendTelegramTurn(deps, "telegram-test", "inspect this patch",
+    { kind: "project", workspaceId: "project" }, undefined, undefined, { skillInvocation: selection });
+  assert.equal(result.ok, true);
+  assert.deepEqual(chat.appended.map(({ content }) => content), ["inspect this patch"]);
+});
+
+
+test("Stop during transcript append prevents a later generation start", async () => {
+  const controller = new AbortController();
+  const chat = mockChatStore();
+  const append = chat.store.appendMessage;
+  chat.store.appendMessage = async (...args) => {
+    const result = await append(...args);
+    controller.abort();
+    return result;
+  };
+  let starts = 0;
+  const { deps } = mockDeps({ store: chat.store, llm: mockLlm(async () => { starts++; return true; }) });
+  const result = await sendTelegramTurn(deps, "telegram-42", "work", undefined, undefined, undefined, { signal: controller.signal });
+  assert.equal(result.ok, false);
+  assert.match(result.error!, /stopped before/);
+  assert.equal(starts, 0);
+  assert.equal(chat.appended.length, 1, "already persisted input stays in canonical history");
+});

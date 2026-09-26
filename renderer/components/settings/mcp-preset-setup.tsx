@@ -31,20 +31,22 @@ export function PresetSetupDialog({
   const [key, setKey] = React.useState("");
   const [hasKey, setHasKey] = React.useState(state.ready);
   const [authorized, setAuthorized] = React.useState(state.ready);
+  const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [toggling, setToggling] = React.useState(false);
-  const [enabled, setEnabled] = React.useState(server?.enabled ?? state.enabled);
+  const [enabled, setEnabled] = React.useState(server?.enabled ?? true);
 
   React.useEffect(() => {
     if (open) {
+      setConnectionError(null);
       setName(server?.name ?? preset.name);
       setUrl(server?.url ?? preset.url);
       setKey("");
       setHasKey(state.ready);
       setAuthorized(state.ready);
-      setEnabled(server?.enabled ?? state.enabled);
+      setEnabled(server?.enabled ?? true);
     }
   }, [open, server, preset, state.enabled, state.ready]);
 
@@ -155,6 +157,7 @@ export function PresetSetupDialog({
       }
       description={preset.tagline}
       size="large"
+      busy={saving || testing || authorizing || toggling}
       confirmLabel={saving ? "Saving…" : server ? "Save" : "Connect"}
       confirmDisabled={
         saving ||
@@ -166,14 +169,20 @@ export function PresetSetupDialog({
         !credentialReady
       }
       onConfirm={async () => {
-        setSaving(true);
+        setSaving(true); setConnectionError(null);
         try {
           await mcpApi.save(build());
           await persistKey();
           await onSaved();
+          if (enabled) {
+            const status = await mcpApi.status(build());
+            if (!status.connected) throw new Error(status.error ?? "Saved, but the connection is not ready. Try connecting again.");
+            toast.success(`Connected — ${status.toolCount} tools available.`);
+          }
           onOpenChange(false);
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : String(error));
+          const message = error instanceof Error ? error.message : String(error);
+          setConnectionError(message); toast.error(message);
         } finally {
           setSaving(false);
         }
@@ -198,6 +207,9 @@ export function PresetSetupDialog({
           </Field>
         ) : null}
 
+        <Text as="p" variant="small" color="secondary" className="p-4">Sign in or add your key to connect {preset.name}. This service receives the requests made with its tools. Review its account permissions during sign-in.</Text>
+        <details className="px-4 py-3">
+          <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Connection details</summary>
         <Field label="Name">
           <Input
             value={name}
@@ -217,6 +229,7 @@ export function PresetSetupDialog({
           />
         </Field>
 
+        </details>
         {preset.auth.kind === "apiKey" ? (
           <Field
             label={preset.auth.keyLabel}
@@ -293,11 +306,12 @@ export function PresetSetupDialog({
             >
               {testing ? "Connecting…" : "Test connection"}
             </Button>
-            {credentialReady ? <Badge color="green">Ready</Badge> : null}
+            {credentialReady ? <Badge>Credentials saved</Badge> : null}
           </div>
         </Field>
       </FieldSet>
 
+      {connectionError ? <Text as="p" variant="small" color="red" role="alert" className="mt-3">{connectionError}</Text> : null}
       <Text variant="small" color="tertiary" className="mt-2 block">
         Learn more in the{" "}
         <a

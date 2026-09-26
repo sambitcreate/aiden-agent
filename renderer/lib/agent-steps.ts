@@ -32,6 +32,22 @@ const VERBS: Record<string, VerbPair> = {
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using Mac", complete: "Used Mac" },
+  browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
+  browser_status: { active: "Checking browser", complete: "Checked browser" },
+  browser_open: { active: "Opening browser", complete: "Opened browser" },
+  browser_navigate: { active: "Navigating browser", complete: "Navigated browser" },
+  browser_resize: { active: "Resizing browser", complete: "Resized browser" },
+  browser_set_appearance: { active: "Setting browser appearance", complete: "Set browser appearance" },
+  browser_snapshot: { active: "Inspecting browser", complete: "Inspected browser" },
+  browser_click: { active: "Clicking in browser", complete: "Clicked in browser" },
+  browser_type: { active: "Typing in browser", complete: "Typed in browser" },
+  browser_press: { active: "Pressing browser keys", complete: "Pressed browser keys" },
+  browser_scroll: { active: "Scrolling browser", complete: "Scrolled browser" },
+  browser_evaluate: { active: "Evaluating page", complete: "Evaluated page" },
+  browser_wait_for: { active: "Waiting for page", complete: "Waited for page" },
+  browser_recording_start: { active: "Starting browser recording", complete: "Started browser recording" },
+  browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
+  vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
 };
 
@@ -126,6 +142,16 @@ export function activityTrailNeedsAttention(timeline: GenerationTimeline): boole
 
 function countTools(steps: AgentStep[], names: string[]): number {
   return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
+}
+
+/**
+ * A trail that is exactly one compaction: its own line already carries every
+ * metric, so expanding it would only repeat the "Compacted context" label.
+ * Repeated compactions keep the trail so each run's metrics stay reachable.
+ */
+export function isCompactContextOnly(steps: readonly AgentStep[]): boolean {
+  const [only] = steps;
+  return steps.length === 1 && isToolStep(only) && only.toolName === "compact_context";
 }
 
 const TALLIED_TOOLS = [

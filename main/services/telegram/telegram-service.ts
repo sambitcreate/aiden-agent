@@ -27,7 +27,6 @@ import { contextLifecycleService } from "../context-lifecycle-service-main.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
-import { formatSkillInvocation } from "@earendil-works/pi-agent-core";
 import {
   mkdir,
   readFile,
@@ -43,6 +42,7 @@ import type { TelegramModelChoice } from "./telegram-controls.js";
 import {
   TELEGRAM_COMMANDS,
   visibleTelegramModelChoices,
+  telegramModelChoice,
 } from "./telegram-controls.js";
 import { getTelegramExtensions } from "./telegram-extension-registry.js";
 import {
@@ -215,17 +215,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
     });
   }
   const models = [...byId.values()].flatMap((provider) =>
-    provider.models.map((model) => {
-      const metadata = provider.modelMetadata?.[model];
-      return {
-        providerId: provider.id,
-        providerLabel: provider.label,
-        model,
-        modelLabel: metadata?.name,
-        reasoning: metadata?.reasoning ?? false,
-        thinkingLevels: metadata?.thinkingLevels,
-      };
-    }),
+    provider.models.map((model) => telegramModelChoice(provider, model)),
   );
   return visibleTelegramModelChoices(models, settings.hiddenModelsByProvider);
 }
@@ -635,7 +625,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       );
       if (!workspaceId) return extensionCommands;
       const snapshot = await skillRegistry.snapshot(workspaceId);
-      const skillCommands = snapshot.available.flatMap((skill) => {
+      const skillCommands = snapshot.catalog.flatMap((skill) => {
+        if (!skill.available) return [];
         const command = skill.name
           .toLowerCase()
           .replace(/[^a-z0-9_]+/gu, "_")
@@ -650,20 +641,14 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
             description: (skill.description || `Run ${skill.name}`)
               .replace(/\s+/gu, " ")
               .slice(0, 256),
-            expand: (argument: string) =>
-              formatSkillInvocation(
-                {
-                  name: skill.name,
-                  description: skill.description,
-                  content: skill.instructions,
-                  filePath: skill.path ?? "/Aiden/Configured Skills/SKILL.md",
-                },
-                argument,
-              ),
+            skillInvocation: { workspaceId, invocationId: skill.invocationId },
           },
         ];
       });
       return [...extensionCommands, ...skillCommands];
+    },
+    validateSkillInvocation: async ({ workspaceId, invocationId }) => {
+      await skillRegistry.resolveFresh(workspaceId, invocationId);
     },
     readOutboundAttachment: readWorkspaceAttachment,
     applyModelSelection: async (choice) => {
@@ -866,6 +851,9 @@ export function createTelegramProfileManager() {
       await telegramBotBindings.assertHealthy();
       const profiles = await refreshProfiles();
       await Promise.all(profiles.map((profile) => serviceFor(profile).start()));
+    },
+    async refreshCommands(): Promise<void> {
+      await Promise.all([...services.values()].map((service) => service.refreshCommands()));
     },
     stop(): void {
       for (const service of services.values()) service.stop();

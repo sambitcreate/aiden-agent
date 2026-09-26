@@ -14,7 +14,7 @@ test("built-in providers show readiness beside the name without duplicating setu
     source.indexOf("export function ProvidersSettings"),
   );
 
-  assert.match(statusBadge, /p\.hasKey \? <Badge color="green">Ready<\/Badge> : null/u);
+  assert.match(statusBadge, /p\.hasKey \? <Badge color="green" icon=\{<Check \/>\}>Ready<\/Badge> : null/u);
   assert.doesNotMatch(statusBadge, /Set up/u);
   assert.match(builtinRows, /provider\.hasKey \? "Manage" : "Set up"/u);
 });

@@ -257,7 +257,8 @@ function ModelHoverDetails({
   ].filter((row): row is [string, string] => Boolean(row));
 
   return (
-    <aside className="pointer-events-none absolute left-[calc(100%+0.5rem)] top-0 w-56 rounded-popover bg-popover p-3 text-primary shadow-popover">
+    <aside className="pointer-events-auto flex h-[min(22.5rem,70vh)] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
       <div className="flex min-w-0 items-start gap-2">
         <span className="mt-0.5 shrink-0 text-tertiary">
           <ProviderIcon
@@ -311,7 +312,7 @@ function ModelHoverDetails({
 
       <div className="mt-2 border-t border-separator pt-2">
         <div
-          className="truncate font-mono text-[10px] leading-4 text-quaternary"
+          className="truncate font-mono text-mini leading-4 text-quaternary"
           title={model.model}
         >
           {model.model}
@@ -321,13 +322,14 @@ function ModelHoverDetails({
             href={attributionUrl}
             target="_blank"
             rel="noreferrer"
-            className="pointer-events-auto mt-1 inline-block text-[10px] leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+            className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
             {info?.benchmark
               ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
               : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
           </a>
         ) : null}
+      </div>
       </div>
     </aside>
   );
@@ -530,13 +532,8 @@ export function ModelPicker({
         side="top"
         align="end"
         sideOffset={8}
-        collisionPadding={{
-          top: 40,
-          right: showExternalDetails && (view === "list" || hasPadModels) ? 244 : 12,
-          bottom: 12,
-          left: 12,
-        }}
-        className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-visible p-0"
+        collisionPadding={{ top: 40, right: 12, bottom: 12, left: 12 }}
+        className="flex w-max max-w-[calc(100vw-1.5rem)] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
@@ -551,6 +548,7 @@ export function ModelPicker({
           });
         }}
       >
+        <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
         <div className="p-1.5 pb-0">
           <div
             className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
@@ -565,7 +563,6 @@ export function ModelPicker({
               tabIndex={view === "list" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "list" && "bg-popover shadow-control",
@@ -583,7 +580,6 @@ export function ModelPicker({
               tabIndex={view === "pad" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "pad" && "bg-popover shadow-control",
@@ -707,10 +703,8 @@ export function ModelPicker({
           </section>
         )}
 
-        {showExternalDetails && (view === "list" || hasPadModels) ? (
-          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
-        ) : activeAttribution ? (
-          <div className="border-t border-separator px-3 py-1.5 text-[10px] leading-4">
+        {!(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
+          <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
             <a
               href={activeAttribution.url}
               target="_blank"
@@ -720,6 +714,10 @@ export function ModelPicker({
               {activeAttribution.label}
             </a>
           </div>
+        ) : null}
+        </div>
+        {showExternalDetails && (view === "list" || hasPadModels) ? (
+          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
         ) : null}
       </PopoverContent>
     </Popover>

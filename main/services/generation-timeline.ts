@@ -1,4 +1,9 @@
 import {
+  isCompactionEngine,
+  compactionEngineLabel,
+  type CompactionEngine,
+} from "../../renderer/shared/compaction.js";
+import {
   GENERATION_TIMELINE_VERSION,
   isTerminalAgentStep,
   isToolStep,
@@ -10,6 +15,8 @@ import {
   type GenerationTimeline,
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
+
+import { parseProducedFile } from "../../renderer/shared/produced-file.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -73,6 +80,26 @@ function safeToolIssue(value: unknown): string | undefined {
   return typeof code === "string" && code in SAFE_TOOL_ISSUE_DETAILS
     ? SAFE_TOOL_ISSUE_DETAILS[code as SafeToolIssueCode]
     : undefined;
+}
+
+/** Count-only summary of a form_fill result — labels and values never persisted. */
+function safeFormFillOutcome(value: unknown): string | undefined {
+  const details = record(value);
+  const count = (key: string): number | undefined =>
+    Number.isSafeInteger(details[key]) ? (details[key] as number) : undefined;
+  const filled = count("filled");
+  if (filled === undefined) return undefined;
+  const parts = [`${filled} filled`];
+  const satisfied = count("alreadySatisfied");
+  if (satisfied) parts.push(`${satisfied} already satisfied`);
+  const review = count("needsReview");
+  if (review) parts.push(`${review} need${review === 1 ? "s" : ""} review`);
+  const failed = count("failed");
+  if (failed) parts.push(`${failed} failed`);
+  const notAttempted = count("notAttempted");
+  if (notAttempted) parts.push(`${notAttempted} not attempted`);
+  if (details.stoppedEarly === true) parts.push("stopped early");
+  return parts.join(" · ");
 }
 
 function firstToolResultText(result: unknown): string | undefined {
@@ -224,6 +251,10 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use Mac", detail: safeDetail(values.action) };
+    case "form_fill":
+      return { label: "Fill form fields" };
+    case "vcc_recall":
+      return { label: "Recall chat history" };
     case "compact_context":
       return { label: "Compact context" };
     case "ask_user_question":
@@ -240,8 +271,10 @@ export class GenerationTimelineProjector {
   private readonly stepIndex = new Map<string, number>();
   private toolSequence = 0;
   private thinkingSequence = 0;
+  private thinkingMergeFloor = 0;
   private compactionSequence = 0;
   private contentOffset = 0;
+  private reasoningOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -310,10 +343,12 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
-    if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
+    if (last && !isToolStep(last) && last.order >= this.thinkingMergeFloor &&
+      last.contentOffset === this.contentOffset) {
       // The stretch reopened on the merged thinking step: mark it open again so
       // the live timeline reflects reasoning in progress.
       delete last.finishedAt;
+      delete last.reasoningEndOffset;
       last.updatedAt = timestamp;
       this.openThinking = {
         index: this.timeline.steps.length - 1,
@@ -346,6 +381,75 @@ export class GenerationTimelineProjector {
     this.emit();
   }
 
+  stepCount(): number {
+    return this.timeline.steps.length;
+  }
+
+  beginAssistantMessage(): number {
+    this.thinkingMergeFloor = this.timeline.steps.length;
+    return this.thinkingMergeFloor;
+  }
+
+  /** Only readable reasoning deltas can open a public reasoning span. */
+  reasoningDelta(start: number, end: number): void {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) return;
+    this.reasoningOffset = end;
+    const open = this.openThinking;
+    const step = open && this.timeline.steps[open.index];
+    if (!step || isToolStep(step) || start === end) return;
+    if (step.reasoningStartOffset === undefined) {
+      step.reasoningStartOffset = start;
+      this.emit();
+    }
+  }
+
+  /** Rebase the current assistant message against canonical, public Pi blocks. */
+  reconcileReasoningSegments(
+    firstStepIndex: number,
+    segments: readonly { start: number; end: number }[],
+    reasoningLength: number,
+  ): void {
+    const steps = this.timeline.steps.slice(firstStepIndex).filter(
+      (step): step is AgentThinkingStep => !isToolStep(step),
+    );
+    const safe = steps.length === segments.length && segments.every(
+      (span, index) => Number.isSafeInteger(span.start) && Number.isSafeInteger(span.end) &&
+        span.start >= 0 && span.end >= span.start && span.end <= reasoningLength &&
+        (index === 0 || span.start >= segments[index - 1]!.end),
+    );
+    let changed = false;
+    for (const [index, step] of steps.entries()) {
+      const span = safe ? segments[index] : undefined;
+      const start = span && span.end > span.start ? span.start : undefined;
+      const end = start === undefined ? undefined : span!.end;
+      if (step.reasoningStartOffset !== start || step.reasoningEndOffset !== end) changed = true;
+      if (start === undefined) delete step.reasoningStartOffset;
+      else step.reasoningStartOffset = start;
+      if (end === undefined) delete step.reasoningEndOffset;
+      else step.reasoningEndOffset = end;
+    }
+    this.reasoningOffset = reasoningLength;
+    if (changed) this.emit();
+  }
+
+  rewindReasoningOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (isToolStep(step)) continue;
+      if (step.reasoningStartOffset !== undefined && step.reasoningStartOffset >= offset) {
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
+        changed = true;
+      } else if (step.reasoningEndOffset !== undefined && step.reasoningEndOffset > offset) {
+        step.reasoningEndOffset = offset;
+        changed = true;
+      }
+    }
+    this.reasoningOffset = offset;
+    if (changed) this.emit();
+  }
+
   compactionStarted(): string {
     this.compactionSequence += 1;
     const id = `pi-compaction-${this.compactionSequence}`;
@@ -357,7 +461,32 @@ export class GenerationTimelineProjector {
   compactionFinished(
     id: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "cancelled">,
+    metrics?: {
+      engine?: CompactionEngine;
+      durationMs?: number;
+      tokensBefore: number;
+      estimatedTokensAfter: number;
+    },
   ): void {
+    const index = this.stepIndex.get(id);
+    const step = index === undefined ? undefined : this.timeline.steps[index];
+    // Publish only explicitly selected, bounded metrics, never the private result.
+    if (
+      step &&
+      isToolStep(step) &&
+      status === "completed" &&
+      metrics &&
+      isCompactionEngine(metrics.engine) &&
+      [metrics.durationMs, metrics.tokensBefore, metrics.estimatedTokensAfter].every(
+        (value) =>
+          typeof value === "number" &&
+          Number.isSafeInteger(value) &&
+          value >= 0 &&
+          value <= 1_000_000_000,
+      )
+    ) {
+      step.detail = `${compactionEngineLabel(metrics.engine)} · ${(metrics.durationMs! / 1000).toFixed(1)}s · ~${metrics.tokensBefore} → ${metrics.estimatedTokensAfter} tokens`;
+    }
     this.toolFinished(id, status);
   }
 
@@ -367,27 +496,59 @@ export class GenerationTimelineProjector {
     this.contentOffset = offset;
   }
 
-  /**
-   * Terminal Pi content can replace a streamed assistant turn. Clamp activity
-   * that was observed beyond the canonical turn end before anchoring later work.
-   */
-  reconcileContentOffset(turnStart: number, turnEnd: number): void {
+  /** Re-anchor streamed activity after Pi replaces this turn's visible text. */
+  reconcileContentOffset(
+    turnStart: number,
+    streamedTurn: string,
+    canonicalTurn: string,
+    anchors?: { stepStart: number; textStart: number; thinkingOffsets: number[]; toolOffsets: Map<string, number> },
+  ): void {
     if (
       !Number.isSafeInteger(turnStart) ||
-      turnStart < 0 ||
-      !Number.isSafeInteger(turnEnd) ||
-      turnEnd < turnStart
+      turnStart < 0
     ) {
       return;
     }
+    const turnEnd = turnStart + canonicalTurn.length;
+    let prefix = 0;
+    while (prefix < streamedTurn.length && prefix < canonicalTurn.length &&
+      streamedTurn[prefix] === canonicalTurn[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < streamedTurn.length - prefix && suffix < canonicalTurn.length - prefix &&
+      streamedTurn[streamedTurn.length - suffix - 1] === canonicalTurn[canonicalTurn.length - suffix - 1]) {
+      suffix += 1;
+    }
     let changed = false;
-    for (const step of this.timeline.steps) {
-      if (
-        step.contentOffset !== undefined &&
-        step.contentOffset >= turnStart &&
-        step.contentOffset > turnEnd
-      ) {
-        step.contentOffset = turnEnd;
+    const toolAnchors = new Map<number, number>();
+    if (anchors) {
+      for (const [rawId, offset] of anchors.toolOffsets) {
+        const index = this.stepIndex.get(rawId);
+        if (index !== undefined && index >= anchors.stepStart) toolAnchors.set(index, offset);
+      }
+    }
+    let thinkingOrdinal = 0;
+    for (const [index, step] of this.timeline.steps.entries()) {
+      if (step.contentOffset === undefined || step.contentOffset < turnStart) continue;
+      const streamedOffset = Math.min(step.contentOffset - turnStart, streamedTurn.length);
+      const fallbackOffset = streamedOffset <= prefix
+        ? turnStart + streamedOffset
+        : streamedOffset >= streamedTurn.length - suffix
+          ? turnEnd - (streamedTurn.length - streamedOffset)
+          : turnStart + prefix;
+      let canonicalAnchor: number | undefined;
+      if (anchors && index >= anchors.stepStart) {
+        if (step.kind === "thinking") {
+          canonicalAnchor = anchors.thinkingOffsets[thinkingOrdinal];
+          thinkingOrdinal += 1;
+        } else if (step.kind === "tool") {
+          canonicalAnchor = toolAnchors.get(index);
+        }
+      }
+      const nextOffset = canonicalAnchor === undefined
+        ? fallbackOffset
+        : Math.min(turnEnd, turnStart + anchors!.textStart + canonicalAnchor);
+      if (step.contentOffset !== nextOffset) {
+        step.contentOffset = nextOffset;
         changed = true;
       }
     }
@@ -422,6 +583,18 @@ export class GenerationTimelineProjector {
 
   toolRunning(toolCallId: string): void {
     this.updateTool(toolCallId, "running");
+  }
+
+  /** Bounded non-terminal detail update for a running tool step (counts only). */
+  toolDetail(toolCallId: string, detail: string): void {
+    if (this.timeline.status !== "running") return;
+    const index = this.stepIndex.get(toolCallId);
+    if (index === undefined) return;
+    const step = this.timeline.steps[index];
+    if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
+    step.detail = detail;
+    step.updatedAt = this.now();
+    this.emit();
   }
 
   toolFinished(
@@ -477,6 +650,9 @@ export class GenerationTimelineProjector {
     step.durationMs = (step.durationMs ?? 0) + Math.max(0, timestamp - open.startedAt);
     step.updatedAt = timestamp;
     step.finishedAt = timestamp;
+    if (step.reasoningStartOffset !== undefined) {
+      step.reasoningEndOffset = this.reasoningOffset;
+    }
   }
 
   private updateTool(
@@ -503,6 +679,12 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
+        const producedFile = lineChanges && parseProducedFile(record(resultDetails).producedFile, step.toolName);
+        if (producedFile) step.producedFile = producedFile;
+        if (step.toolName === "form_fill") {
+          const outcome = safeFormFillOutcome(resultDetails);
+          if (outcome) step.detail = outcome;
+        }
       } else {
         const issue = safeToolIssue(resultDetails);
         if (issue) step.detail = issue;

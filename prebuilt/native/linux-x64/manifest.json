@@ -1,6 +1,6 @@
 {
   "target": "linux-x64",
-  "builtAt": "2026-09-14T05:31:58.920Z",
+  "builtAt": "2026-09-26T06:00:49.395Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "c3c691c50af9b4f767d527c80d9b11cec341b7cb92821b9625d8e992cc89141d",
@@ -12,11 +12,11 @@
     },
     "subagent-shell-runner": {
       "sha256": "40cdc4d9bfeee083a24d52c4596f84800823d794729b73dddae835128dacb7e9",
-      "source": "ecbcd55c706e2ab0898f7370c3ec949fb4add265eb9c00ce15eb1a4a12d00ea1"
+      "source": "d67b43ec01bb874c5e76dccfa226cea8c11d5c949a01d7810672234a51641db4"
     },
     "subagent-file-mutator": {
-      "sha256": "3a5609978c2b4970afaa6280d348a611d2418f0809462a33d0e1edfaeda564f9",
-      "source": "297f972a6434abd702a65f8a1b17d4c4efe5d4f8781407584f37a8f3570a78b8"
+      "sha256": "408a489f05eddb1c128f7f019a1f8056a62a7cb605d70d9c637ed664bf6e51eb",
+      "source": "aaa78b7513e024368149e0fb91f9237e90cde58bc2622036300c53adee7728dd"
     }
   }
 }

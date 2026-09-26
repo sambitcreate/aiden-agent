@@ -1,6 +1,6 @@
 import type { WorkspacePermission } from "../types.js";
 
-export const SUBAGENT_ROLES = ["scout", "planner", "reviewer"] as const;
+export const SUBAGENT_ROLES = ["scout", "planner", "reviewer", "implementer"] as const;
 export type SubagentRole = (typeof SUBAGENT_ROLES)[number];
 
 export const SUBAGENT_READ_TOOL_NAMES = ["read_file", "list_dir", "glob", "grep"] as const;
@@ -10,6 +10,7 @@ const ROLE_TOOL_POLICY: Readonly<Record<SubagentRole, readonly SubagentReadToolN
   scout: SUBAGENT_READ_TOOL_NAMES,
   planner: SUBAGENT_READ_TOOL_NAMES,
   reviewer: SUBAGENT_READ_TOOL_NAMES,
+  implementer: SUBAGENT_READ_TOOL_NAMES,
 };
 
 export interface SubagentCapabilityRequest {

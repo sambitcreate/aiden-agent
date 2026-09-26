@@ -1,7 +1,11 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Unified workspace/chat sidebar with alternate workspace-grouped and recent
 // projections, route-driven selection, and workspace/chat management actions.
 
 import * as React from "react";
+import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
+import { WorkspacePathLabel } from "./workspace-path-label";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -22,6 +26,9 @@ import {
   DropdownMenuTrigger,
   EmptyState,
   Input,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Sidebar,
   SidebarFooter,
   SidebarList,
@@ -32,12 +39,17 @@ import {
   toast,
 } from "./ui";
 import {
+  AlertCircle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  CircleDashed,
   Clock3,
+  ExternalLink,
   Folder,
   FolderPlus,
   FolderGit2,
+  GitPullRequest,
   ListTree,
   Loader2,
   MoreHorizontal,
@@ -60,10 +72,10 @@ import {
   createSidebarChatShortcutAssignments,
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
-import { queryKeys, useAllRegularChats, useFoundationModelsConnection } from "../lib/queries";
+import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
-import type { ChatMeta, Workspace } from "../lib/types";
+import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
 import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
@@ -89,17 +101,8 @@ interface ChatSidebarProps {
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
-function workspaceSecondaryLabel(workspace: Workspace): string {
-  if (workspace.managedWorktree?.branch) {
-    return workspace.folderPath
-      ? `${workspace.managedWorktree.branch} · ${workspace.folderPath}`
-      : workspace.managedWorktree.branch;
-  }
-  return workspace.folderPath ?? `No folder · ${workspace.id.slice(0, 8)}`;
-}
-
-function workspaceAccessibleName(workspace: Workspace): string {
-  return `${workspace.name}, ${workspaceSecondaryLabel(workspace)}`;
+function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+  return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
 }
 
 function SidebarOverflowMenu({
@@ -193,6 +196,227 @@ function SidebarOverflowMenu({
   );
 }
 
+function pullRequestChecksLabel(state: GitHubPullRequestChecksState | null | undefined, checkCount = 0): string {
+  switch (state) {
+    case "passing":
+      return "All checks have passed";
+    case "failing":
+      return "Some checks were not successful";
+    case "pending":
+      return "Some checks haven’t completed yet";
+    default:
+      return checkCount > 0 ? "Checks did not run" : "No checks reported";
+  }
+}
+
+function pullRequestChecksTone(state: GitHubPullRequestChecksState | null | undefined): string {
+  switch (state) {
+    case "passing":
+      return "bg-status-green-surface text-status-green";
+    case "failing":
+      return "bg-status-red-surface text-status-red";
+    case "pending":
+      return "bg-status-warning-surface text-status-warning";
+    default:
+      return "bg-control text-secondary";
+  }
+}
+
+function pullRequestChecksIconTone(state: GitHubPullRequestChecksState | null | undefined): string {
+  switch (state) {
+    case "passing":
+      return "text-status-green";
+    case "failing":
+      return "text-status-red";
+    case "pending":
+      return "text-status-warning";
+    default:
+      return "text-secondary";
+  }
+}
+
+function checkStatusLabel(check: GitHubPullRequestCheck): string {
+  if (check.status === "action-required" && /\/actions\/runs\/\d+/u.test(check.url ?? "")) {
+    return "Awaiting approval";
+  }
+  switch (check.status) {
+    case "success":
+      return "Passed";
+    case "failure":
+      return "Failed";
+    case "pending":
+      return "Running";
+    case "action-required":
+      return "Awaiting action";
+    case "cancelled":
+      return "Cancelled";
+    case "skipped":
+      return "Skipped";
+    case "neutral":
+      return "Neutral";
+  }
+}
+
+function checkStatusTone(check: GitHubPullRequestCheck): string {
+  switch (check.status) {
+    case "success":
+      return "text-status-green";
+    case "failure":
+      return "text-status-red";
+    case "pending":
+    case "action-required":
+      return "text-status-warning";
+    case "cancelled":
+    case "skipped":
+    case "neutral":
+      return "text-tertiary";
+  }
+}
+
+function checksIcon(state: GitHubPullRequestChecksState | null | undefined) {
+  if (state === "passing") return <CheckCircle2 className="size-3.5" />;
+  if (state === "failing") return <AlertCircle className="size-3.5" />;
+  return <CircleDashed className="size-3.5" />;
+}
+
+function openExternal(url: string): void {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: boolean): string | null {
+  if (state === "merged") return "Merged";
+  if (state === "closed") return "Closed";
+  if (isDraft) return "Draft";
+  return null;
+}
+
+function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
+  const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
+  const status = useGitPullRequestStatus(workspace.id, enabled);
+  const pullRequest = status.data?.pullRequest;
+  if (!enabled || status.isLoading) return null;
+
+  if (!pullRequest) {
+    const message = status.data?.message;
+    if (
+      !message ||
+      status.data?.availability === "no-pull-request" ||
+      status.data?.availability === "not-repo" ||
+      status.data?.availability === "not-github"
+    ) return null;
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            className="text-status-red"
+            aria-label={`${accessibilityName} GitHub pull request status: ${message}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <AlertCircle aria-hidden="true" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
+          <p className="text-small-strong text-primary">GitHub status unavailable</p>
+          <p className="mt-1 text-small text-secondary">{message}</p>
+          <div className="mt-3 flex justify-end">
+            <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+              {status.isFetching ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  const stateLabel = pullRequestStateLabel(pullRequest.state, pullRequest.isDraft);
+  const displayChecksState = stateLabel ? undefined : pullRequest.checksState;
+  const checkLabel = pullRequestChecksLabel(pullRequest.checksState, pullRequest.checks.length);
+  const label = stateLabel ? `${stateLabel}; ${checkLabel}` : checkLabel;
+  const visibleChecks = pullRequest.checks.slice(0, 6);
+  const remainingChecks = pullRequest.checks.length - visibleChecks.length;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          className={pullRequestChecksIconTone(displayChecksState)}
+          aria-label={`${accessibilityName} pull request #${pullRequest.number}: ${label}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <GitPullRequest aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-3" align="start" aria-label={`Pull request #${pullRequest.number} checks`}>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-small-strong text-primary">
+              <GitPullRequest className="size-4 shrink-0 text-secondary" aria-hidden="true" />
+              <span className="truncate">PR #{pullRequest.number}</span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-regular text-primary">{pullRequest.title}</p>
+            <p className="mt-1 truncate text-small text-tertiary">
+              {pullRequest.headBranch} → {pullRequest.baseBranch}
+            </p>
+            {stateLabel ? <span className="mt-2 inline-flex rounded-control bg-control px-2 py-0.5 text-small-strong text-secondary">{stateLabel}</span> : null}
+          </div>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label={`Open pull request #${pullRequest.number}`}
+            onClick={() => openExternal(pullRequest.url)}
+          >
+            <ExternalLink />
+          </Button>
+        </div>
+        <div className={`mt-3 flex items-center gap-2 rounded-control px-2.5 py-2 text-small ${pullRequestChecksTone(displayChecksState)}`} role="status">
+          {checksIcon(displayChecksState)}
+          <span>{checkLabel}</span>
+        </div>
+        {visibleChecks.length > 0 ? (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {visibleChecks.map((check) => (
+              <div key={`${check.name}:${check.status}:${check.url ?? ""}`} className="flex min-w-0 items-center gap-2 text-small">
+                <span className={`size-1.5 shrink-0 rounded-full bg-current ${checkStatusTone(check)}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-primary" title={check.description ?? check.name}>{check.name}</span>
+                <span className={`shrink-0 ${checkStatusTone(check)}`}>{checkStatusLabel(check)}</span>
+                {check.url ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label={`Open details for ${check.name}`}
+                    onClick={() => openExternal(check.url!)}
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+            {remainingChecks > 0 ? (
+              <p className="text-small text-tertiary">
+                {remainingChecks === 1 ? "1 more check on GitHub." : `${remainingChecks} more checks on GitHub.`}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="mt-3 flex items-center justify-between gap-2">
+          {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
+          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+            Refresh
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function updateRestartError(result: AppUpdateRestartResult): string | null {
   if (result.accepted) return null;
   switch (result.reason) {
@@ -236,7 +460,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
   }, [bannerKey, snapshot.status]);
 
   // Keep the banner mounted through its exit animation, matching Aiden's
-  // environment summary and assistant dock presence primitives.
+  // Quick View and assistant dock presence primitives.
   React.useLayoutEffect(() => {
     if (open) {
       setDisplayedSnapshot(snapshot);
@@ -487,6 +711,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 }
 
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
+  const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -745,7 +970,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     return () => unregister.forEach((dispose) => dispose());
   }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
 
-  // Move to a workspace and land on one of its chats (creating one if empty).
+  // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
     async (id: string, allowDirtyDiscard = false) => {
       if (environmentPanel.gitOperationBusy) {
@@ -766,13 +991,13 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         toast.error("Reload Aiden before creating a chat in this workspace.");
         return false;
       }
-      const target = list[0] ?? (await chatsApi.create({ workspaceId: id }));
-      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      const target = list[0] ?? createChatDraft(id).chat;
       const previousWorkspaceId = activeId;
       select(id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
       } catch (error) {
+        if (!list.length) discardChatDraft(target.id);
         if (previousWorkspaceId) select(previousWorkspaceId);
         throw error;
       }
@@ -939,11 +1164,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         if (workspaceId !== activeId && environmentPanel.agentBusy) {
           environmentPanel.cancelAgent?.();
         }
-        const created = await chatsApi.create({ workspaceId });
-        await qc.invalidateQueries({ queryKey: queryKeys.chats });
+        const created = createChatDraft(workspaceId).chat;
         select(workspaceId);
         setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
-        await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        try {
+          await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        } catch (error) {
+          discardChatDraft(created.id);
+          throw error;
+        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
       }
@@ -1236,9 +1465,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 />
               ) : (
                 projection.groups.map((group) => {
-                  const secondaryLabel = workspaceSecondaryLabel(group.workspace);
+                  const secondaryLabel = workspaceSecondaryLabel(group.workspace, pathPreferences);
+                  const explicitlyExpanded = expandedWorkspaceIds.has(group.workspace.id);
                   const expanded =
-                    Boolean(search.trim()) || expandedWorkspaceIds.has(group.workspace.id);
+                    Boolean(search.trim()) || explicitlyExpanded;
                   const revealAll =
                     Boolean(search.trim()) || fullyRevealedWorkspaceIds.has(group.workspace.id);
                   const visibleChats = revealAll
@@ -1258,69 +1488,85 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{group.workspace.name}</span>
-                              <span className="truncate text-small text-tertiary">
-                                {secondaryLabel}
-                              </span>
+                              <span className="truncate">{workspaceDisplayName(group.workspace, workspaces)}</span>
+                              {group.workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                                  {group.workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{group.workspace.managedWorktree.branch} ·</span> : null}
+                                  <WorkspacePathLabel path={group.workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                                </span>
+                              ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                             </span>
                           }
-                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace)}`}
+                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(group.workspace.id)}
                         />
-                        <SidebarOverflowMenu
-                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace)}`}
-                          triggerClassName="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                          contentClassName="w-64"
-                        >
-                          <DropdownMenuItem
-                            disabled={
-                              Boolean(settingsBlockedReason) || appendReconciliationRequired
-                            }
-                            onSelect={() => void newAgentInWorkspace(group.workspace.id)}
+                        <div className="group/workspace-actions relative size-7 shrink-0">
+                          <div className="absolute inset-0 group-hover/workspace:invisible group-has-[.workspace-overflow-trigger:focus-visible]/workspace-actions:invisible group-has-[.workspace-overflow-trigger[data-state=open]]/workspace-actions:invisible">
+                            <WorkspacePullRequestIndicator
+                              workspace={group.workspace}
+                              visible={explicitlyExpanded}
+                              accessibilityName={workspaceAccessibleName(
+                                group.workspace,
+                                pathPreferences,
+                                workspaces,
+                              )}
+                            />
+                          </div>
+                          <SidebarOverflowMenu
+                            ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
+                            triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
+                            contentClassName="w-64"
                           >
-                            New chat
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={workspaceSwitchBlocked || group.chats.length === 0}
-                            title={
-                              group.chats.length === 0
-                                ? "Choose New chat to start this workspace."
-                                : undefined
-                            }
-                            onSelect={() => void openChat(group.chats[0])}
-                          >
-                            Open latest chat
-                          </DropdownMenuItem>
-                          {group.workspace.folderPath ? (
                             <DropdownMenuItem
-                              onSelect={() => void revealWorkspace(group.workspace)}
+                              disabled={
+                                Boolean(settingsBlockedReason) || appendReconciliationRequired
+                              }
+                              onSelect={() => void newAgentInWorkspace(group.workspace.id)}
                             >
-                              Show in Finder
+                              New chat
                             </DropdownMenuItem>
-                          ) : null}
-                          {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
-                          {workspaces.length > 1 && group.workspace.managedWorktree ? (
                             <DropdownMenuItem
-                              disabled={workspaceActionBlocked}
-                              icon="trash"
-                              color="red"
-                              onSelect={() => setDeletingWorktree(group.workspace)}
+                              disabled={workspaceSwitchBlocked || group.chats.length === 0}
+                              title={
+                                group.chats.length === 0
+                                  ? "Choose New chat to start this workspace."
+                                  : undefined
+                              }
+                              onSelect={() => void openChat(group.chats[0])}
                             >
-                              Delete worktree…
+                              Open latest chat
                             </DropdownMenuItem>
-                          ) : null}
-                          {workspaces.length > 1 && !group.workspace.managedWorktree ? (
-                            <DropdownMenuItem
-                              disabled={workspaceActionBlocked}
-                              icon="trash"
-                              color="red"
-                              onSelect={() => setRemovingWorkspace(group.workspace)}
-                            >
-                              Remove “{group.workspace.name}”
-                            </DropdownMenuItem>
-                          ) : null}
-                        </SidebarOverflowMenu>
+                            {group.workspace.folderPath ? (
+                              <DropdownMenuItem
+                                onSelect={() => void revealWorkspace(group.workspace)}
+                              >
+                                Show in Finder
+                              </DropdownMenuItem>
+                            ) : null}
+                            {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
+                            {workspaces.length > 1 && group.workspace.managedWorktree ? (
+                              <DropdownMenuItem
+                                disabled={workspaceActionBlocked}
+                                icon="trash"
+                                color="red"
+                                onSelect={() => setDeletingWorktree(group.workspace)}
+                              >
+                                Delete worktree…
+                              </DropdownMenuItem>
+                            ) : null}
+                            {workspaces.length > 1 && !group.workspace.managedWorktree ? (
+                              <DropdownMenuItem
+                                disabled={workspaceActionBlocked}
+                                icon="trash"
+                                color="red"
+                                onSelect={() => setRemovingWorkspace(group.workspace)}
+                              >
+                                Remove “{group.workspace.name}”
+                              </DropdownMenuItem>
+                            ) : null}
+                          </SidebarOverflowMenu>
+                        </div>
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
@@ -1470,7 +1716,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
               deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
-              Dirty worktrees are refused. Target: {workspaceSecondaryLabel(deletingWorktree)}.
+              Dirty worktrees are refused. Target: {deletingWorktree.folderPath ?? deletingWorktree.name}.
               {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
@@ -1494,7 +1740,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <Text variant="small" color="secondary">
               “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be
               listed. The folder itself is not touched. Target:{" "}
-              {workspaceSecondaryLabel(removingWorkspace)}.
+              {removingWorkspace.folderPath ?? removingWorkspace.name}.
               {environmentPanel.editorState.workspaceId === removingWorkspace.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`

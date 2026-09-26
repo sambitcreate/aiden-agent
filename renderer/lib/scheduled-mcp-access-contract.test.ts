@@ -73,3 +73,16 @@ test("desktop scheduling keeps natural language and human cadence controls prima
   assert.match(editor, /Advanced schedule/u);
   assert.doesNotMatch(editor, /Five-part cron/u);
 });
+
+
+test("schedule creation requires a final review and retains errors for correction", () => {
+  const editor = source("../components/scheduled-task-editor.tsx");
+  const view = source("../components/scheduled-tasks-view.tsx");
+  assert.match(editor, /if \(!reviewing\)/u);
+  assert.match(editor, /Review your task/u);
+  assert.match(editor, /Edit choices/u);
+  assert.match(editor, /Runs without asking you each time/u);
+  assert.match(editor, /saveError/u);
+  assert.match(editor, /await onSave\(draft\)/u);
+  assert.match(view, /toast\.error[\s\S]*throw error/u);
+});

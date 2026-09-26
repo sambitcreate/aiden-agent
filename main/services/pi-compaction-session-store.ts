@@ -1,19 +1,23 @@
-import { randomUUID } from "node:crypto";
-import { chmod, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentMessage,
+  buildSessionContext,
 } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
 import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
-import type { PiPersistentSessionMetadata, PiSessionPort } from "./pi-session-port.js";
+import type { PiPersistentSessionMetadata, PiSessionMetadata, PiSessionPort, PiSessionEntry, PiEntryProjector } from "./pi-session-port.js";
 import {
   createCurrentPiSessionRepository,
   type PiSessionRepositoryPort,
 } from "./pi-session-repository-port.js";
-import { migratePiSessionJournal } from "./pi-session-migration.js";
+import { migratePiSessionJournal, parsePiSessionMigrationReceipt } from "./pi-session-migration.js";
+import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { decodeLegacyPiSession } from "./pi-legacy-session.js";
 import {
   piUpgradeBehaviorEnabledAtStartup,
@@ -164,6 +168,86 @@ function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boole
   }
 }
 
+/** Read a stable descriptor without decoding or retaining the private journal body. */
+async function inspectJournalHistory(filePath: string): Promise<{ chatId: string; hasBody: boolean }> {
+  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error("Pi journal history is not a regular file.");
+    const buffer = Buffer.alloc(JOURNAL_HEADER_SCAN_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const bytes = buffer.subarray(0, bytesRead);
+    const newline = bytes.indexOf(10);
+    const prefix = decodeUtf8(newline >= 0 ? bytes.subarray(0, newline) : bytes);
+    const header: unknown = JSON.parse(prefix);
+    const id = header && typeof header === "object" && !Array.isArray(header)
+      ? (header as { id?: unknown }).id : undefined;
+    if (typeof id !== "string" || !(journalHeaderOwnsChat(prefix, id) || currentJournalHeaderOwnsChat(prefix, id))) {
+      throw new Error("Pi journal history contains an unreadable session header.");
+    }
+    // Even a malformed body is private state worth preserving. Only an exact
+    // validated header followed by ASCII JSON whitespace counts as empty.
+    const hasContent = (chunk: Buffer) => chunk.some((byte) => byte !== 9 && byte !== 10 && byte !== 13 && byte !== 32);
+    if (newline >= 0 && hasContent(bytes.subarray(newline + 1))) return { chatId: id, hasBody: true };
+    let position = bytesRead;
+    while (true) {
+      const next = await handle.read(buffer, 0, buffer.length, position);
+      if (next.bytesRead === 0) return { chatId: id, hasBody: false };
+      if (hasContent(buffer.subarray(0, next.bytesRead))) return { chatId: id, hasBody: true };
+      position += next.bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Only the exact scaffolding produced by a completed migration of an empty v3 journal is disposable. */
+async function isCompletedEmptyMigration(promotedPath: string, chatId: string, root: string): Promise<boolean> {
+  const backupPath = `${promotedPath}.v3-backup`;
+  const receiptPath = `${promotedPath}.migration-v1.json`;
+  if (!path.resolve(promotedPath).startsWith(`${path.resolve(root)}${path.sep}`)) return false;
+  try {
+    const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(receiptPath, JOURNAL_HEADER_SCAN_BYTES))));
+    if (receipt.chatId !== chatId || receipt.validation !== "passed" ||
+        path.resolve(receipt.promotedPath) !== path.resolve(promotedPath) ||
+        path.resolve(receipt.backupPath) !== path.resolve(backupPath) ||
+        Object.values(receipt.counts).some((count) => count !== 0)) return false;
+    const backup = await readRegularFile(backupPath, JOURNAL_HEADER_SCAN_BYTES);
+    if (createHash("sha256").update(backup).digest("hex") !== receipt.sourceSha256) return false;
+    const backupText = decodeUtf8(backup);
+    if (backupText.split("\n").filter((line) => line.trim()).length !== 1) return false;
+    const legacy = decodeLegacyPiSession(backupText);
+    if (legacy.header.id !== chatId || legacy.entries.length !== 0 || legacy.tornFinalLine ||
+        !journalHeaderOwnsChat(backupText.split("\n", 1)[0]!, chatId)) return false;
+    const current = decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
+    const records: unknown[] = current.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+    if (records.length !== 4 || !current.endsWith("\n")) return false;
+    const [header, lane, startedValue, finishedValue] = records;
+    if (!startedValue || typeof startedValue !== "object" || !finishedValue || typeof finishedValue !== "object") return false;
+    const started = startedValue as Record<string, unknown>;
+    const finished = finishedValue as Record<string, unknown>;
+    const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+    if (typeof started.id !== "string" || !new RegExp(`^migration-${uuid}$`, "u").test(started.id) ||
+        typeof finished.id !== "string" || !new RegExp(`^migration-finished-${uuid}$`, "u").test(finished.id) ||
+        !Number.isSafeInteger(started.timestamp) || Number(started.timestamp) < 0 ||
+        !Number.isSafeInteger(finished.timestamp) || Number(finished.timestamp) < Number(started.timestamp)) return false;
+    return isDeepStrictEqual(header, {
+      kind: "header", version: 4, id: chatId, createdAt: Date.parse(legacy.header.timestamp), cwd: legacy.header.cwd,
+      ...(legacy.header.parentSession === undefined ? {} : { legacyParentSessionPath: legacy.header.parentSession }),
+      ...(legacy.header.metadata === undefined ? {} : { metadata: legacy.header.metadata }),
+    }) && isDeepStrictEqual(lane, { kind: "lane", seq: 1, lane: "main", leafId: null }) &&
+      isDeepStrictEqual(started, {
+        kind: "record", seq: 2, id: started.id, lane: "main", type: "operation_started", timestamp: started.timestamp,
+        sourceLeafId: null, intent: { kind: "navigation", targetId: null, summarize: false },
+      }) && isDeepStrictEqual(finished, {
+        kind: "record", seq: 3, id: finished.id, lane: "main", type: "operation_finished", timestamp: finished.timestamp,
+        runId: started.id, outcome: "completed",
+      });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     return (await stat(filePath)).isFile();
@@ -270,6 +354,59 @@ export async function syncChatMessagesToPiSession(
     });
     synchronized.add(message.id);
   }
+}
+
+/**
+ * Execute from visible history while skills are disabled. Old journal messages
+ * may contain expanded skill inputs, tool results, or summaries of those values.
+ * They stay durable but must not enter inference, compaction, or history recall.
+ * New messages still append to the real journal, including normal tool pairs.
+ */
+export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMetadata>(
+  session: PiSessionPort<M>,
+  messages: readonly ChatMessage[],
+  model: Model<Api>,
+): Promise<PiSessionPort<M>> {
+  const originalEntries = await session.getEntries();
+  const originalLeafId = await session.getLeafId();
+  const cutoff = originalEntries.reduce((latest, entry) => Math.max(latest, entry.seq), -1);
+  const visible: PiSessionEntry[] = messages.flatMap((message, index) => {
+    const id = `visible-skill-free-${message.id}`;
+    const parentId = index === 0 ? null : `visible-skill-free-marker-${messages[index - 1]!.id}`;
+    return [
+      { type: "message" as const, id, parentId, seq: index * 2 - messages.length * 2,
+        timestamp: message.createdAt, message: chatMessageToPiMessage(message, model, true) },
+      { type: "custom" as const, id: `visible-skill-free-marker-${message.id}`, parentId: id,
+        seq: index * 2 + 1 - messages.length * 2, timestamp: message.createdAt,
+        customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id } },
+    ];
+  });
+  // Compaction fences writes against the real durable leaf. Keep that identity
+  // as an inert boundary after the synthetic prefix, without exposing its data.
+  if (originalLeafId) visible.push({
+    type: "custom", id: originalLeafId, parentId: visible[visible.length - 1]?.id ?? null,
+    seq: cutoff, timestamp: 0, customType: "aiden.skills-hidden-context-boundary.v1",
+  });
+  const view = (projectors: Readonly<Record<string, PiEntryProjector>> = {}): PiSessionPort<M> => {
+    const getBranch = async () => [
+      ...structuredClone(visible),
+      ...(await session.getBranch()).filter((entry) => entry.seq > cutoff),
+    ];
+    return {
+      appendMessage: (message) => session.appendMessage(message),
+      appendCustomEntry: (type, data) => session.appendCustomEntry(type, data),
+      appendCompaction: (input) => session.appendCompaction(input),
+      getBranch,
+      // Recall must not bypass the projection by traversing historical branches.
+      getEntries: getBranch,
+      buildContext: async () => buildSessionContext(await getBranch(), { entryProjectors: projectors }),
+      getLeafId: () => session.getLeafId(),
+      getMetadata: () => session.getMetadata(),
+      moveTo: (entryId) => session.moveTo(entryId),
+      withEntryProjectors: (additional) => view({ ...projectors, ...additional }),
+    };
+  };
+  return view();
 }
 
 async function appendPiTransaction<T>(
@@ -475,12 +612,23 @@ export async function recordPiEffectRecoveryBoundary(
 
 export interface PiCompactionSessionStoreOptions {
   root: () => Promise<string>;
+  /** Resolve the location without creating it when inspecting cleanup eligibility. */
+  readOnlyRoot?: () => Promise<string>;
   rollout?: {
     load(): Promise<PiUpgradeRolloutDocument>;
     development: boolean;
     behaviorEnabled: boolean;
   };
 }
+
+/**
+ * Outcome of the rollout-aware open probe. Generation callers run the turn
+ * journalless when the probe reports a reason instead of a session, while
+ * `openChat` keeps its fail-closed throws for background callers.
+ */
+export type PiOpenChatIfEligibleResult =
+  | { session: PiSessionPort<PiPersistentSessionMetadata> }
+  | { session: undefined; reason: "v4_creation_rollout" | "legacy_migration_deferred" };
 
 /** Durable, private Pi JSONL journals keyed one-to-one with Aiden chats. */
 export class PiCompactionSessionStore {
@@ -489,10 +637,7 @@ export class PiCompactionSessionStore {
     root: string;
   }>;
   private readonly sessions = new Map<string, PiSessionPort<PiPersistentSessionMetadata>>();
-  private readonly opening = new Map<
-    string,
-    Promise<PiSessionPort<PiPersistentSessionMetadata>>
-  >();
+  private readonly opening = new Map<string, Promise<PiOpenChatIfEligibleResult>>();
   private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
 
@@ -596,103 +741,225 @@ export class PiCompactionSessionStore {
     const existing = this.sessions.get(chatId);
     if (existing) return existing;
     const inFlight = this.opening.get(chatId);
+    if (inFlight) return this.sessionFromOpenChatOutcome(await inFlight);
+
+    const opening = this.openChatInner(chatId, chat);
+    this.opening.set(chatId, opening);
+    try {
+      return this.sessionFromOpenChatOutcome(await opening);
+    } finally {
+      this.opening.delete(chatId);
+    }
+  }
+
+  /**
+   * Rollout-aware open probe for the generation path. Mirrors {@link openChat}
+   * exactly: invalid identities, quarantined chats, and migration corruption
+   * still throw the same errors. The two rollout gates are reported as a
+   * structured reason instead of throwing, and a journal is only ever created
+   * through the shared open continuation (`openChatInner`).
+   */
+  async openChatIfEligible(
+    chatId: string,
+    chat?: { createdAt: number },
+  ): Promise<PiOpenChatIfEligibleResult> {
+    if (!SAFE_SESSION_ID.test(chatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    this.assertNotQuarantined(chatId);
+    const existing = this.sessions.get(chatId);
+    if (existing) return { session: existing };
+    const inFlight = this.opening.get(chatId);
     if (inFlight) return inFlight;
 
-    const opening = (async () => {
-      const { repo, root } = await this.repository();
-      const rollout = await this.options.rollout?.load();
-      const rolloutOptions = this.options.rollout && {
-        development: this.options.rollout.development,
-        behaviorEnabled: this.options.rollout.behaviorEnabled,
-      };
-      const migrationFailures: Array<{ path: string; error: unknown }> = [];
-      const deferredMigrations: string[] = [];
-      const migrationPaths = await findMigrationJournals(root, chatId);
-      for (const migrationPath of migrationPaths) {
-        try {
-          if (rollout && rolloutOptions) {
-            const header = await readJournalPrefix(migrationPath);
-            const legacySource = journalHeaderOwnsChat(header, chatId)
-              ? migrationPath
-              : `${migrationPath}.v3-backup`;
-            const legacy = decodeLegacyPiSession(await readFile(legacySource, "utf8"));
-            if (!piUpgradeLegacyMigrationEligible(rollout, legacy.entries.length, rolloutOptions)) {
-              deferredMigrations.push(migrationPath);
-              continue;
-            }
-          }
-          const migration = await migratePiSessionJournal(migrationPath, chatId);
-          await this.rememberPath(root, chatId, migration.receipt.backupPath);
-          await this.rememberPath(root, chatId, migration.receiptPath);
-        } catch (error) {
-          migrationFailures.push({ path: migrationPath, error });
-        }
-      }
-      const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
-      const matches = (await repo.list()).filter(
-        (metadata) =>
-          metadata.id === chatId &&
-          metadata.metadata?.kind === SESSION_METADATA_KIND &&
-          !failedPaths.has(path.resolve(metadata.path)),
-      );
-      // Pi lists newest sessions first. Validate the whole body and quarantine
-      // a malformed duplicate before falling back to the next valid journal.
-      let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
-      for (const metadata of matches) {
-        try {
-          const candidate = await repo.open(metadata);
-          await candidate.getBranch();
-          session = candidate;
-          break;
-        } catch {
-          if (await repairTornFinalLine(metadata.path).catch(() => false)) {
-            try {
-              const repaired = await repo.open(metadata);
-              await repaired.getBranch();
-              session = repaired;
-              break;
-            } catch {
-              // A complete-but-invalid prefix is not safe to guess at.
-            }
-          }
-          await this.quarantine(root, chatId, metadata.path);
-        }
-      }
-      if (session) {
-        for (const failure of migrationFailures) {
-          await this.quarantine(root, chatId, failure.path);
-        }
-      } else if (migrationFailures[0]) {
-        throw migrationFailures[0].error;
-      }
-      if (!session && deferredMigrations.length > 0) {
-        throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
-      }
-      if (
-        !session && rollout && rolloutOptions &&
-        !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
-      ) {
-        throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
-      }
-      session ??= await repo.create({
-        id: chatId,
-        cwd: root,
-        metadata: { kind: SESSION_METADATA_KIND, chatId },
-      });
-      await recoverUncommittedTransaction(session);
-      const persisted = await session.getMetadata();
-      await chmod(path.dirname(persisted.path), 0o700);
-      await chmod(persisted.path, 0o600);
-      await this.rememberPath(root, chatId, persisted.path);
-      this.sessions.set(chatId, session);
-      return session;
-    })();
+    const opening = this.openChatInner(chatId, chat);
     this.opening.set(chatId, opening);
     try {
       return await opening;
     } finally {
       this.opening.delete(chatId);
     }
+  }
+
+  private sessionFromOpenChatOutcome(
+    outcome: PiOpenChatIfEligibleResult,
+  ): PiSessionPort<PiPersistentSessionMetadata> {
+    if (outcome.session) return outcome.session;
+    if (outcome.reason === "legacy_migration_deferred") {
+      throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
+    }
+    throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
+  }
+
+  private async openChatInner(
+    chatId: string,
+    chat: { createdAt: number } | undefined,
+  ): Promise<PiOpenChatIfEligibleResult> {
+    const { repo, root } = await this.repository();
+    const rollout = await this.options.rollout?.load();
+    const rolloutOptions = this.options.rollout && {
+      development: this.options.rollout.development,
+      behaviorEnabled: this.options.rollout.behaviorEnabled,
+    };
+    const migrationFailures: Array<{ path: string; error: unknown }> = [];
+    const deferredMigrations: string[] = [];
+    const migrationPaths = await findMigrationJournals(root, chatId);
+    for (const migrationPath of migrationPaths) {
+      try {
+        if (rollout && rolloutOptions) {
+          const header = await readJournalPrefix(migrationPath);
+          const legacySource = journalHeaderOwnsChat(header, chatId)
+            ? migrationPath
+            : `${migrationPath}.v3-backup`;
+          const legacy = decodeLegacyPiSession(await readFile(legacySource, "utf8"));
+          if (!piUpgradeLegacyMigrationEligible(rollout, legacy.entries.length, rolloutOptions)) {
+            deferredMigrations.push(migrationPath);
+            continue;
+          }
+        }
+        const migration = await migratePiSessionJournal(migrationPath, chatId);
+        await this.rememberPath(root, chatId, migration.receipt.backupPath);
+        await this.rememberPath(root, chatId, migration.receiptPath);
+      } catch (error) {
+        migrationFailures.push({ path: migrationPath, error });
+      }
+    }
+    const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
+    const matches = (await repo.list()).filter(
+      (metadata) =>
+        metadata.id === chatId &&
+        metadata.metadata?.kind === SESSION_METADATA_KIND &&
+        !failedPaths.has(path.resolve(metadata.path)),
+    );
+    // Pi lists newest sessions first. Validate the whole body and quarantine
+    // a malformed duplicate before falling back to the next valid journal.
+    let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
+    for (const metadata of matches) {
+      try {
+        const candidate = await repo.open(metadata);
+        await candidate.getBranch();
+        session = candidate;
+        break;
+      } catch {
+        if (await repairTornFinalLine(metadata.path).catch(() => false)) {
+          try {
+            const repaired = await repo.open(metadata);
+            await repaired.getBranch();
+            session = repaired;
+            break;
+          } catch {
+            // A complete-but-invalid prefix is not safe to guess at.
+          }
+        }
+        await this.quarantine(root, chatId, metadata.path);
+      }
+    }
+    if (session) {
+      for (const failure of migrationFailures) {
+        await this.quarantine(root, chatId, failure.path);
+      }
+    } else if (migrationFailures[0]) {
+      throw migrationFailures[0].error;
+    }
+    if (!session && deferredMigrations.length > 0) {
+      return { session: undefined, reason: "legacy_migration_deferred" };
+    }
+    if (
+      !session && rollout && rolloutOptions &&
+      !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
+    ) {
+      return { session: undefined, reason: "v4_creation_rollout" };
+    }
+    session ??= await repo.create({
+      id: chatId,
+      cwd: root,
+      metadata: { kind: SESSION_METADATA_KIND, chatId },
+    });
+    await recoverUncommittedTransaction(session);
+    const persisted = await session.getMetadata();
+    await chmod(path.dirname(persisted.path), 0o700);
+    await chmod(persisted.path, 0o600);
+    await this.rememberPath(root, chatId, persisted.path);
+    this.sessions.set(chatId, session);
+    return { session };
+  }
+
+  /** Conservatively inspect private history without creating, repairing, or migrating a session. */
+  async hasChatHistory(chatId: string): Promise<boolean> {
+    if (!SAFE_SESSION_ID.test(chatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    if (this.sessions.has(chatId) || this.opening.has(chatId) || this.quarantined.has(chatId)) return true;
+    await this.indexMutation;
+    const root = await (this.options.readOnlyRoot ?? this.options.root)();
+    try {
+      if (!(await lstat(root)).isDirectory()) throw new Error("Pi journal history root is not a directory.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    let indexBytes: Buffer | undefined;
+    try {
+      indexBytes = await readRegularFile(path.join(root, JOURNAL_INDEX_FILE), 16 * 1024 * 1024);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (indexBytes) {
+      const index: unknown = JSON.parse(decodeUtf8(indexBytes));
+      if (!index || typeof index !== "object" || Array.isArray(index) ||
+          (index as Partial<JournalIndex>).version !== 1) {
+        throw new Error("Pi journal history index could not be read safely.");
+      }
+      const chats = (index as Partial<JournalIndex>).chats;
+      if (!chats || typeof chats !== "object" || Array.isArray(chats) ||
+          Object.values(chats).some((paths) => !Array.isArray(paths) || paths.some((file) => typeof file !== "string" || !file))) {
+        throw new Error("Pi journal history index could not be read safely.");
+      }
+      if (Object.prototype.hasOwnProperty.call(chats, chatId)) {
+        for (const indexedPath of chats[chatId]!) {
+          const candidate = path.resolve(indexedPath);
+          if (!candidate.startsWith(`${path.resolve(root)}${path.sep}`)) {
+            throw new Error("Pi journal history index escaped its private storage root.");
+          }
+          if (candidate.endsWith(".jsonl.v3-backup") || candidate.endsWith(".jsonl.migration-v1.json")) {
+            const promoted = candidate.replace(/\.(?:v3-backup|migration-v1\.json)$/u, "");
+            if (!(await isCompletedEmptyMigration(promoted, chatId, root))) return true;
+            continue;
+          }
+          if (!candidate.endsWith(".jsonl")) return true;
+          try {
+            const history = await inspectJournalHistory(candidate);
+            if (history.chatId !== chatId || (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+            throw error;
+          }
+        }
+      }
+    }
+    const directories = [root];
+    while (directories.length > 0) {
+      const directory = directories.pop()!;
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const candidate = path.join(directory, entry.name);
+        if (entry.isSymbolicLink()) throw new Error("Pi journal history contains an uninspectable symbolic link.");
+        if (entry.isDirectory()) { directories.push(candidate); continue; }
+        if (!entry.name.includes(".jsonl")) continue;
+        if (entry.name.endsWith(".migration-v1.json")) {
+          const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(candidate, 65_536))));
+          if (receipt.chatId === chatId && !(await isCompletedEmptyMigration(candidate.slice(0, -".migration-v1.json".length), chatId, root))) return true;
+          continue;
+        }
+        const history = await inspectJournalHistory(candidate);
+        if (history.chatId === chatId) {
+          if (entry.name.endsWith(".jsonl.v3-backup")) {
+            if (!(await isCompletedEmptyMigration(candidate.slice(0, -".v3-backup".length), chatId, root))) return true;
+          } else if (!entry.name.endsWith(".jsonl") ||
+              (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
+        }
+      }
+    }
+    return false;
   }
 
   async deleteChat(chatId: string): Promise<void> {
@@ -760,6 +1027,7 @@ export class PiCompactionSessionStore {
 
 export const piCompactionSessionStore = new PiCompactionSessionStore({
   root: () => ensureUserDataDir("pi-compaction-sessions"),
+  readOnlyRoot: async () => path.join((await import("../platform.js")).app.getPath("userData"), "pi-compaction-sessions"),
   rollout: {
     load: () => piUpgradeRolloutStore.load(),
     development: isDevelopmentRuntime(process.env, Boolean(process.versions.electron)),

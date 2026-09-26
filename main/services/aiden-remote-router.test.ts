@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
-import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
+import { connect } from "node:net";
+import {
+  AIDEN_REMOTE_ROUTE_TEMPLATES,
+  createAidenRemoteRequestHandler,
+  createAidenRemoteUpgradeHandler,
+  remoteRouteTemplate,
+} from "./aiden-remote-router.js";
+import {
+  AidenRemoteSimulatorRelay,
+  type AidenRemoteSimulatorHost,
+} from "./aiden-remote-simulators.js";
+import type { AidenRemoteRouteLabel } from "./aiden-remote-router.js";
 import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-remote-chats.js";
 import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
@@ -15,6 +27,8 @@ async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
+  acceptsProgressCapabilities?: boolean;
+  progressAvailable?: boolean;
   authorizationBlocked?: () => boolean;
   botChat?: boolean;
   botArchived?: boolean;
@@ -26,6 +40,8 @@ async function fixture(options: {
   oversizedChatResponse?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
+  deviceType?: "iphone" | "mac" | "linux";
+  simulators?: AidenRemoteSimulatorRelay;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -103,7 +119,7 @@ async function fixture(options: {
       return false;
     }
   };
-  const handler = createAidenRemoteRequestHandler({
+  const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
@@ -127,6 +143,9 @@ async function fixture(options: {
           name: "iPhone",
           revoked: options.authenticate === "revoked",
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
+          acceptsProgressCapabilities:
+            options.acceptsProgressCapabilities === true,
+          ...(options.deviceType ? { type: options.deviceType } : {}),
           capabilities: new Set(
             options.authenticate === "denied"
               ? []
@@ -142,6 +161,32 @@ async function fixture(options: {
           type: "iphone" as const,
           clientVersion: "1.0",
           capabilities: options.capabilities ?? ["server:read" as const],
+          createdAt: 500,
+          lastSeenAt: 1_000,
+        };
+      },
+      upgradeDeviceCapabilities: async (deviceId, accepts) => {
+        calls.push(`device-capabilities:${deviceId}:${accepts.join(",")}`);
+        if (options.authenticate === "revoked") return null;
+        if (
+          accepts.some(
+            (capability) =>
+              capability !== "tasks:read" &&
+              capability !== "agents:read" &&
+              capability !== "simulators:control",
+          )
+        ) {
+          return null;
+        }
+        return {
+          id: deviceId,
+          name: "iPhone",
+          type: "iphone" as const,
+          clientVersion: "1.0",
+          capabilities: [
+            ...(options.capabilities ?? ["server:read" as const]),
+            ...accepts,
+          ] as AidenRemoteCapability[],
           createdAt: 500,
           lastSeenAt: 1_000,
         };
@@ -302,6 +347,40 @@ async function fixture(options: {
         return { bytes: Buffer.from("fixture"), mimeType: "image/png" };
       },
     },
+    chatProgress: options.progressAvailable === false
+      ? undefined
+      : {
+          taskSnapshot: async (_deviceId, chatId) => {
+            calls.push(`task-snapshot:${chatId}`);
+            return {
+              version: 1,
+              chatId,
+              availability: "ready" as const,
+              epoch: "epoch_fixture_01",
+              revision: 3,
+              updatedAt: new Date(4_000).toISOString(),
+              tasks: [],
+            };
+          },
+          agentRoster: async (_deviceId, chatId, turnId) => {
+            calls.push(`agent-roster:${chatId}:${turnId ?? ""}`);
+            return {
+              version: 1,
+              chatId,
+              ...(turnId === undefined ? {} : { turnId }),
+              availability: "ready" as const,
+              epoch: "epoch_fixture_01",
+              revision: 2,
+              updatedAt: new Date(4_000).toISOString(),
+              agents: [],
+            };
+          },
+          openEvents: async (_deviceId, chatId, grants, after, response) => {
+            calls.push(`progress-events:${chatId}:${after}:${[...grants].join(",")}`);
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.end();
+          },
+        },
     models: {
       list: async () => ({
         providers: [{
@@ -377,15 +456,21 @@ async function fixture(options: {
         calls.push(`bots:restore:${deviceId}:${botId}:${revision}:${key}`);
         return { ...botDetail, id: botId, revision: "bot_revision_3" };
       },
-      capabilityCatalog: async (deviceId) => {
-        calls.push(`bots:catalog:${deviceId}`);
+      capabilityCatalog: async (deviceId, botId) => {
+        calls.push(`bots:catalog:${deviceId}:${botId ?? "generic"}`);
+        if (botId === "bot-missing") {
+          throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+        }
         return {
           revision: "bot_catalog_revision_1",
           providers: [],
           fileScopes: [],
           shellAvailable: true,
           connections: [],
-          skills: [],
+          skills: botId === undefined
+            ? []
+            : [{ id: `skill_saved_${botId}`, label: "Saved skill", available: false }],
+          skillsEnabled: false,
           otherCapabilities: [],
           notice,
         };
@@ -693,8 +778,11 @@ async function fixture(options: {
     connectionMode: () => "lan",
     now: () => 1_000,
     log: (entry) => logs.push(entry),
-  });
+    ...(options.simulators ? { simulators: options.simulators } : {}),
+  };
+  const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
+  server.on("upgrade", createAidenRemoteUpgradeHandler(dependencies));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -757,9 +845,295 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.deepEqual(server.capabilities, ["server:read"]);
     assert.equal(server.serverCapabilities.includes("bot:read"), true);
     assert.equal(server.serverCapabilities.includes("bot:write"), true);
+    assert.equal(server.serverCapabilities.includes("tasks:read"), false);
+    assert.equal(server.serverCapabilities.includes("agents:read"), false);
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
   } finally {
     await app.close();
+  }
+});
+
+test("chat progress reads and its dedicated stream require negotiated grants", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const legacy = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read"],
+  });
+  try {
+    const serverResponse = await fetch(`${legacy.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.deepEqual(server.capabilities, ["server:read", "chat:read"]);
+    assert.equal("serverCapabilities" in server, false);
+    assert.equal(server.features.includes("chat-tasks-v1"), true);
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+
+    const taskResponse = await fetch(`${legacy.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(taskResponse.status, 403);
+    const eventsResponse = await fetch(
+      `${legacy.base}/chats/chat-1/progress/events?after=0`,
+      { headers },
+    );
+    assert.equal(eventsResponse.status, 403);
+    assert.equal(legacy.calls.some((call) => call.startsWith("task-snapshot:")), false);
+    assert.equal(legacy.calls.some((call) => call.startsWith("progress-events:")), false);
+  } finally {
+    await legacy.close();
+  }
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const serverResponse = await fetch(`${negotiated.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.equal(server.serverCapabilities.includes("tasks:read"), true);
+    assert.equal(server.serverCapabilities.includes("agents:read"), true);
+    assert.equal(server.features.includes("chat-tasks-v1"), true);
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+
+    const tasks = await fetch(`${negotiated.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 200);
+    assert.deepEqual(await tasks.json(), {
+      version: 1,
+      chatId: "chat-1",
+      availability: "ready",
+      epoch: "epoch_fixture_01",
+      revision: 3,
+      updatedAt: new Date(4_000).toISOString(),
+      tasks: [],
+    });
+
+    const agents = await fetch(`${negotiated.base}/chats/chat-1/agents`, { headers });
+    assert.equal(agents.status, 200);
+    assert.deepEqual(await agents.json(), {
+      version: 1,
+      chatId: "chat-1",
+      availability: "ready",
+      epoch: "epoch_fixture_01",
+      revision: 2,
+      updatedAt: new Date(4_000).toISOString(),
+      agents: [],
+    });
+
+    const historical = await fetch(
+      `${negotiated.base}/chats/chat-1/agents?turnId=turn-archive`,
+      { headers },
+    );
+    assert.equal(historical.status, 200);
+    assert.equal((await historical.json()).turnId, "turn-archive");
+    assert.equal(
+      negotiated.calls.includes("agent-roster:chat-1:turn-archive"),
+      true,
+    );
+
+    const duplicateQuery = await fetch(
+      `${negotiated.base}/chats/chat-1/agents?turnId=turn-1&turnId=turn-2`,
+      { headers },
+    );
+    assert.equal(duplicateQuery.status, 400);
+
+    const progressEvents = await fetch(
+      `${negotiated.base}/chats/chat-1/progress/events?after=7`,
+      { headers },
+    );
+    assert.equal(progressEvents.status, 200);
+    await progressEvents.text();
+    assert.equal(
+      negotiated.calls.includes(
+        "progress-events:chat-1:7:tasks:read,agents:read",
+      ),
+      true,
+    );
+  } finally {
+    await negotiated.close();
+  }
+});
+
+test("bot chats still require bot authority on progress reads and events", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  // A device with negotiated progress grants but no bot:read can never reach
+  // a retained bot chat's progress projections.
+  const withoutBotRead = await fixture({
+    botChat: true,
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${withoutBotRead.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      withoutBotRead.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await withoutBotRead.close();
+  }
+
+  // bot:read alone is not enough: the retained bot chat authorization must
+  // also pass before any progress projection or stream opens.
+  const unauthorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: () => false,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${unauthorized.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      unauthorized.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await unauthorized.close();
+  }
+
+  // A fully authorized bot chat serves progress projections through the same
+  // negotiated-grant path as a workspace chat.
+  const authorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: (request) =>
+      request.botId === "bot-1" && request.access === "read",
+  });
+  try {
+    const tasks = await fetch(`${authorized.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 200);
+    await tasks.json();
+    const agents = await fetch(`${authorized.base}/chats/chat-1/agents`, { headers });
+    assert.equal(agents.status, 200);
+    await agents.json();
+    const events = await fetch(
+      `${authorized.base}/chats/chat-1/progress/events?after=0`,
+      { headers },
+    );
+    assert.equal(events.status, 200);
+    await events.text();
+    assert.equal(
+      authorized.calls.includes("task-snapshot:chat-1") &&
+        authorized.calls.includes("agent-roster:chat-1:") &&
+        authorized.calls.includes(
+          "progress-events:chat-1:0:tasks:read,agents:read",
+        ),
+      true,
+    );
+  } finally {
+    await authorized.close();
+  }
+});
+
+test("progress stream forwards only the granted progress projections", async () => {
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const response = await fetch(`${app.base}/chats/chat-1/progress/events`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    assert.equal(
+      app.calls.includes("progress-events:chat-1:0:tasks:read"),
+      true,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("progress support is advertised and upgraded only when the Mac can serve it", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  const unsupported = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+    progressAvailable: false,
+  });
+  try {
+    const serverResponse = await fetch(`${unsupported.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.deepEqual(server.serverCapabilities, [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "files:read",
+      "files:write",
+      "git:read",
+      "git:write",
+      "schedule:read",
+      "schedule:write",
+    ]);
+    assert.equal(server.features.includes("chat-tasks-v1"), false);
+    assert.equal(server.features.includes("chat-agents-v1"), false);
+
+    const read = await fetch(`${unsupported.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(read.status, 404);
+    const upgrade = await fetch(`${unsupported.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(upgrade.status, 404);
+    assert.equal(unsupported.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await unsupported.close();
   }
 });
 
@@ -800,8 +1174,93 @@ test("an authenticated client can refresh only its own display identity", async 
   }
 });
 
+test("post-pairing capability upgrade accepts only the progress vocabulary", async () => {
+  const app = await fixture();
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  try {
+    const response = await fetch(`${app.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read", "agents:read"] }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      capabilities: ["server:read", "tasks:read", "agents:read"],
+    });
+    assert.deepEqual(app.calls, [
+      "device-capabilities:device-authorized-12345678:tasks:read,agents:read",
+    ]);
+
+    for (const accepts of [
+      ["bot:read"],
+      ["chat:write"],
+      ["server:read"],
+      ["tasks:read", "tasks:read"],
+      ["unknown:read"],
+      [],
+    ]) {
+      const rejected = await fetch(`${app.base}/device/capabilities`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ accepts }),
+      });
+      assert.equal(rejected.status, 400, JSON.stringify(accepts));
+    }
+
+    const unexpectedField = await fetch(`${app.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"], deviceId: "other" }),
+    });
+    assert.equal(unexpectedField.status, 400);
+    assert.deepEqual(app.calls, [
+      "device-capabilities:device-authorized-12345678:tasks:read,agents:read",
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("capability upgrade requires server:read and a live device", async () => {
+  const denied = await fixture({ authenticate: "denied" });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  try {
+    const response = await fetch(`${denied.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await denied.close();
+  }
+
+  const revoked = await fixture({ authenticate: "revoked" });
+  try {
+    const response = await fetch(`${revoked.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await revoked.close();
+  }
+});
+
 test("paired devices explicitly acknowledge the one-time Bot notice under their stable device id", async () => {
-  const app = await fixture({ capabilities: ["bot:read", "bot:write"] });
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
     "aiden-protocol-version": "1",
@@ -848,7 +1307,10 @@ test("paired devices explicitly acknowledge the one-time Bot notice under their 
 });
 
 test("Bot notice acknowledgement requires both Bot grants and exact foreground disclosure", async () => {
-  const app = await fixture({ capabilities: ["bot:write"] });
+  const app = await fixture({
+    capabilities: ["bot:write"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(
       `${app.base}/bot-access-notice/acknowledgement`,
@@ -905,7 +1367,7 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
     });
     assert.equal(response.status, 200);
     const server = await response.json();
-    assert.deepEqual(server.capabilities, ["server:read", "bot:read"]);
+    assert.deepEqual(server.capabilities, ["server:read"]);
     assert.equal("serverCapabilities" in server, false);
   } finally {
     await app.close();
@@ -915,6 +1377,7 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
 test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favorites contract", async () => {
   const app = await fixture({
     capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
   });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
@@ -993,7 +1456,7 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
 
     assert.deepEqual(app.calls.filter((call) => call.startsWith("bots:")), [
       "bots:list:true",
-      "bots:catalog:device-authorized-12345678",
+      "bots:catalog:device-authorized-12345678:generic",
       "bots:favorites:get",
       "bots:create:device-authorized-12345678:bot-create-key-0001",
       "bots:get:bot-1",
@@ -1011,9 +1474,60 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
   }
 });
 
+test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
+  const app = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const generic = await fetch(`${app.base}/bot-capabilities`, { headers });
+    assert.equal(generic.status, 200);
+    const genericBody = await generic.json();
+    assert.equal(genericBody.skillsEnabled, false);
+    assert.deepEqual(genericBody.skills, []);
+
+    const target = await fetch(`${app.base}/bot-capabilities?botId=bot-1`, { headers });
+    assert.equal(target.status, 200);
+    assert.deepEqual((await target.json()).skills, [
+      { id: "skill_saved_bot-1", label: "Saved skill", available: false },
+    ]);
+    assert.ok(app.calls.includes("bots:catalog:device-authorized-12345678:bot-1"));
+
+    const otherTarget = await fetch(`${app.base}/bot-capabilities?botId=bot-2`, { headers });
+    assert.equal(otherTarget.status, 200);
+    assert.deepEqual((await otherTarget.json()).skills, [
+      { id: "skill_saved_bot-2", label: "Saved skill", available: false },
+    ]);
+
+    for (const query of [
+      "botId=bot-1&botId=bot-2",
+      "target=bot-1",
+      "botId=",
+      `botId=${"b".repeat(161)}`,
+      "botId=bot/id",
+      "botId=bot-1&",
+    ]) {
+      const response = await fetch(`${app.base}/bot-capabilities?${query}`, { headers });
+      assert.equal(response.status, 400, query);
+      assert.equal((await response.json()).error.code, "invalid_request", query);
+    }
+
+    const missing = await fetch(`${app.base}/bot-capabilities?botId=bot-missing`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Bot inbox and avatar routes preserve device grants, approval ownership, and binary headers", async () => {
   const app = await fixture({
     capabilities: ["bot:read", "bot:write", "chat:read"],
+    acceptsBotCapabilities: true,
   });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
@@ -1073,7 +1587,10 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
     await app.close();
   }
 
-  const denied = await fixture({ capabilities: ["bot:read"] });
+  const denied = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(`${denied.base}/bot-conversations`, {
       headers,
@@ -1090,7 +1607,10 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
 });
 
 test("Bot mutations require every declared device grant before body effects", async () => {
-  const app = await fixture({ capabilities: ["bot:write", "chat:write"] });
+  const app = await fixture({
+    capabilities: ["bot:write", "chat:write"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(`${app.base}/bots`, {
       method: "POST",
@@ -1419,6 +1939,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const noAuthority = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
   });
   try {
     const chat = await fetch(`${noAuthority.base}/chats/chat-1`, { headers });
@@ -1447,6 +1968,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const writeOnly = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1464,6 +1986,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const readOnly = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1499,6 +2022,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const allowed = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1550,6 +2074,7 @@ test("Bot write authority is rechecked inside the mutation gate before effects",
   const app = await fixture({
     botChat: true,
     capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: (request) => {
       if (request.access !== "write") return true;
       writeChecks += 1;
@@ -1582,6 +2107,7 @@ test("ordinary move-to-workspace rejects authorized Bot chats", async () => {
   const app = await fixture({
     botChat: true,
     capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1618,6 +2144,7 @@ test("authorized archived Bot chats preserve reads and reject every retained mut
       "bot:read",
       "bot:write",
     ],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   const headers = {
@@ -2219,6 +2746,7 @@ test("a stalled Bot mutation body is parsed before revocation admission", async 
   let blocked = false;
   const app = await fixture({
     capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     authorizationBlocked: () => blocked,
   });
   try {
@@ -2335,5 +2863,372 @@ test("unknown routes and query aliases fail without reflecting untrusted input",
     assert.equal((await missing.json()).error.code, "not_found");
   } finally {
     await app.close();
+  }
+});
+
+test("request logs carry the HTTP method and a query-free canonical route template", async () => {
+  const app = await fixture({ capabilities: ["chat:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    // A matched route failing after resolution still reports the concrete
+    // method and canonical route template (never the literal chat id).
+    const denied = await fetch(`${app.base}/chats/chat-1`, {
+      headers: { "aiden-protocol-version": "1" },
+    });
+    assert.equal(denied.status, 401);
+    let entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "chat");
+    assert.equal(entry.routePath, "/chats/:id");
+    assert.equal(JSON.stringify(app.logs).includes("chat-1"), false);
+
+    // Query strings are never reflected into the recorded route.
+    const listed = await fetch(`${app.base}/chats?workspaceId=workspace-1`, { headers });
+    assert.equal(listed.status, 200);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.routePath, "/chats");
+    assert.equal(JSON.stringify(app.logs).includes("workspaceId"), false);
+    assert.equal(JSON.stringify(app.logs).includes("?"), false);
+
+    // Unknown routes omit the canonical route and never echo the raw path.
+    const missing = await fetch(`${app.base}/missing`);
+    assert.equal(missing.status, 404);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "unknown");
+    assert.equal("routePath" in entry, false);
+    assert.equal(JSON.stringify(app.logs).includes("/missing"), false);
+  } finally {
+    await app.close();
+  }
+});
+
+const ROUTE_METHOD_CANDIDATES = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+/**
+ * Instantiate a declared route template with one concrete request path. `:param`
+ * segments receive tokens that satisfy the matching capture grammars in the
+ * router (plain ids accept `x1`; `:fileId`, `:attachmentId`, and
+ * `:avatarRevision` carry required prefixes; the git/scheduled `:action`
+ * families require one of their fixed action literals).
+ */
+function concreteRequestPath(template: string): string {
+  let parameterIndex = 0;
+  return template
+    .split("/")
+    .map((segment) => {
+      if (!segment.startsWith(":")) return segment;
+      parameterIndex += 1;
+      switch (segment) {
+        case ":fileId":
+          return `file_${"f".repeat(43)}`;
+        case ":attachmentId":
+          return `att_${"a".repeat(43)}`;
+        case ":avatarRevision":
+          return `avatar_revision_${"a".repeat(32)}`;
+        case ":attachmentName":
+          return `x${parameterIndex}.png`;
+        case ":action":
+          return template.includes("/git/") ? "review" : "run";
+        default:
+          return `x${parameterIndex}`;
+      }
+    })
+    .join("/");
+}
+
+test("every declared remote route template resolves to its own label and exact routePath", async () => {
+  const app = await fixture({
+    capabilities: ["chat:read", "chat:write", "schedule:read", "schedule:write"],
+  });
+  const failures: string[] = [];
+  try {
+    for (const [label, templates] of Object.entries(AIDEN_REMOTE_ROUTE_TEMPLATES) as Array<
+      [AidenRemoteRouteLabel, readonly string[]]
+    >) {
+      if (label === "unknown") continue;
+      for (const template of templates) {
+        const path = concreteRequestPath(template);
+        let resolved = false;
+        for (const method of ROUTE_METHOD_CANDIDATES) {
+          const response = await fetch(`${app.base}${path}`, { method });
+          await response.arrayBuffer();
+          const entry = app.logs[app.logs.length - 1] as
+            | Record<string, unknown>
+            | undefined;
+          if (entry?.route === label && entry?.routePath === template) {
+            assert.equal(
+              remoteRouteTemplate(label, path),
+              template,
+              `${label} ${template} must derive its own canonical route`,
+            );
+            resolved = true;
+            break;
+          }
+        }
+        if (!resolved) {
+          failures.push(`${label}: ${template} (instantiated as ${path})`);
+        }
+      }
+    }
+    assert.deepEqual(
+      failures,
+      [],
+      "a declared template with no matching router route is a mistranscription",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+/** Split a template or matcher literal into per-segment route shapes (`:x` for params). */
+function routeShapeSegments(literal: string): string[] {
+  let body = literal;
+  if (body.startsWith("^")) body = body.slice(1);
+  if (body.endsWith("$")) body = body.slice(0, -1);
+  body = body.replace(/\\/gu, "");
+  const segments = body.split("/");
+  if (segments[0] === "") segments.shift();
+  return segments.map((segment) => (segment.includes("(") || segment.startsWith(":") ? ":x" : segment));
+}
+
+/** True when every literal segment of the matcher shape matches the template. */
+function matcherCoveredByTemplate(matcher: string[], template: string[]): boolean {
+  if (matcher.length !== template.length) return false;
+  return matcher.every((segment, index) => {
+    const declared = template[index];
+    return declared === ":x" || declared === segment;
+  });
+}
+
+test("every matcher path pattern in the router source is declared as a route template", () => {
+  const source = readFileSync(
+    new URL("./aiden-remote-router.ts", import.meta.url),
+    "utf8",
+  );
+  // The template table above the handler duplicates these matcher shapes by
+  // hand; this scan starts at the handler so table literals never satisfy it.
+  const handler = source.slice(
+    source.indexOf("export function createAidenRemoteRequestHandler("),
+  );
+  const matcherShapes = new Set<string>();
+  const recordShape = (literal: string) => {
+    const segments = routeShapeSegments(literal);
+    if (segments.length > 0) matcherShapes.add(segments.join("/"));
+  };
+  // String-literal matchers (`path === "/scheduled-tasks/scripts"` and friends).
+  // The handler body's only leading-slash string literals are route equality
+  // checks, so single-segment routes (`/health`, `/chats`) are scanned too.
+  for (const match of handler.matchAll(/["']((?:[^"'\\]|\\.)*)["']/gu)) {
+    const literal = match[1] ?? "";
+    if (literal.startsWith("/")) {
+      recordShape(literal);
+    }
+  }
+  // Regex matcher literals bound to `.exec(path)` (the `const XxxMatch` family).
+  for (const match of handler.matchAll(
+    /\bconst\s+[A-Za-z0-9_]+Match\s*=\s*\/([^\n]*?)\/u\.exec\(path\);/gu,
+  )) {
+    recordShape(match[1] ?? "");
+  }
+  const declaredShapes = Object.values(AIDEN_REMOTE_ROUTE_TEMPLATES)
+    .flat()
+    .map((template) => routeShapeSegments(template));
+  // No allowlist is needed: the scan is confined to the handler body, where
+  // every leading-slash literal is a route matcher rather than a header name,
+  // internal prefix, or `path.includes("//")` guard.
+  const uncovered = [...matcherShapes].filter(
+    (shape) =>
+      !declaredShapes.some((declared) =>
+        matcherCoveredByTemplate(shape.split("/"), declared),
+      ),
+  );
+  assert.deepEqual(
+    uncovered,
+    [],
+    "every router matcher path must have a declared route template for routePath evidence",
+  );
+});
+
+function simulatorHost(sharing = true): AidenRemoteSimulatorHost {
+  return {
+    sharing: () => sharing,
+    list: async () => ({ sharing, status: "ready", devices: [] }),
+    open: async () => {
+      throw new Error("unused");
+    },
+    shutdown: async () => undefined,
+    settings: async () => ({}),
+    action: async () => ({}),
+    hubOrigin: () => null,
+    isKnownDevice: () => false,
+    onSharingChanged: () => () => undefined,
+  };
+}
+
+const SIMULATOR_HEADERS = {
+  authorization: `Bearer ${"a".repeat(43)}`,
+  "aiden-protocol-version": "1",
+  "content-type": "application/json",
+};
+
+test("only paired desktops negotiate simulator control, and only where it exists", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  const accepts = JSON.stringify({ accepts: ["simulators:control"] });
+  const phone = await fixture({ simulators: relay, deviceType: "iphone" });
+  try {
+    const response = await fetch(`${phone.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+    assert.equal(phone.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await phone.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "mac" });
+  try {
+    const response = await fetch(`${mac.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+    assert.equal(response.status, 200);
+    assert.deepEqual(mac.calls, ["device-capabilities:device-authorized-12345678:simulators:control"]);
+  } finally {
+    await mac.close();
+  }
+  for (const simulators of [undefined, new AidenRemoteSimulatorRelay(() => null)]) {
+    const off = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "mac" });
+    try {
+      const response = await fetch(`${off.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 404);
+    } finally {
+      await off.close();
+    }
+    // A phone gets the same refusal whether or not this Mac has simulators.
+    const phoneOff = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "iphone" });
+    try {
+      const response = await fetch(`${phoneOff.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    } finally {
+      await phoneOff.close();
+    }
+  }
+});
+
+test("simulator routes require a desktop holding simulator control", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost(false));
+  const granted = ["server:read", "simulators:control"] as AidenRemoteCapability[];
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: granted });
+  try {
+    const response = await fetch(`${phone.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+  } finally {
+    await phone.close();
+  }
+  const untyped = await fixture({ simulators: relay, capabilities: granted });
+  try {
+    assert.equal((await fetch(`${untyped.base}/simulators`, { headers: SIMULATOR_HEADERS })).status, 403);
+  } finally {
+    await untyped.close();
+  }
+  const ungranted = await fixture({ simulators: relay, deviceType: "mac" });
+  try {
+    assert.equal((await fetch(`${ungranted.base}/simulators`, { headers: SIMULATOR_HEADERS })).status, 403);
+  } finally {
+    await ungranted.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "linux", capabilities: granted });
+  try {
+    const response = await fetch(`${mac.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { sharing: false, status: "ready", devices: [] });
+    const opened = await fetch(`${mac.base}/simulators/open`, {
+      method: "POST",
+      headers: SIMULATOR_HEADERS,
+      body: JSON.stringify({ deviceId: "UDID-1" }),
+    });
+    assert.equal(opened.status, 404);
+    assert.ok(mac.logs.some((entry) => (entry as { route?: string }).route === "simulators"));
+  } finally {
+    await mac.close();
+  }
+});
+
+test("hub WebSocket upgrades authenticate before reaching the relay", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  const granted = ["server:read", "simulators:control"] as AidenRemoteCapability[];
+  const statusLine = (base: string, path: string, headers: Record<string, string>) =>
+    new Promise<string>((resolve) => {
+      const url = new URL(`${base}${path}`);
+      const socket = connect({ host: url.hostname, port: Number(url.port) });
+      let text = "";
+      socket.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+      socket.on("close", () => resolve(text.split("\r\n")[0] ?? ""));
+      socket.on("error", () => undefined);
+      const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+      socket.write(
+        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+          `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n${extra}\r\n`,
+      );
+    });
+  const auth = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const path = "/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1";
+
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: granted });
+  try {
+    assert.equal(await statusLine(phone.base, path, auth), "HTTP/1.1 403 Refused");
+  } finally {
+    await phone.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "mac", capabilities: granted });
+  try {
+    assert.equal(await statusLine(mac.base, path, {}), "HTTP/1.1 400 Refused");
+    assert.equal(await statusLine(mac.base, path, { ...auth, origin: "https://evil.example" }), "HTTP/1.1 403 Refused");
+    assert.equal(await statusLine(mac.base, "/chats", auth), "HTTP/1.1 404 Not Found");
+    // Authenticated, but the device is not in this Mac's listing.
+    assert.equal(await statusLine(mac.base, path, auth), "HTTP/1.1 404 Not Found");
+    const logged = mac.logs.filter((entry) => (entry as { route?: string }).route === "simulatorHub");
+    assert.equal(logged.length, 4);
+    // A relay refusal is logged with its real status, never as a switch.
+    assert.deepEqual(
+      logged.map((entry) => (entry as { status?: number }).status),
+      [400, 403, 404, 404],
+    );
+    assert.ok(logged.every((entry) => !("routePath" in (entry as object))));
+  } finally {
+    await mac.close();
+  }
+  const blocked = await fixture({
+    simulators: relay,
+    deviceType: "mac",
+    capabilities: granted,
+    authorizationBlocked: () => true,
+  });
+  try {
+    assert.equal(await statusLine(blocked.base, path, auth), "HTTP/1.1 403 Refused");
+  } finally {
+    await blocked.close();
+  }
+});
+
+test("the simulator vocabulary is advertised only to paired desktops", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  for (const [deviceType, simulators, expected] of [
+    ["mac", relay, true],
+    ["linux", relay, true],
+    ["iphone", relay, false],
+    ["mac", new AidenRemoteSimulatorRelay(() => null), false],
+  ] as const) {
+    const server = await fixture({ simulators, deviceType, acceptsProgressCapabilities: true });
+    try {
+      const response = await fetch(`${server.base}/server`, { headers: SIMULATOR_HEADERS });
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { serverCapabilities?: string[] };
+      assert.equal(body.serverCapabilities?.includes("simulators:control"), expected, deviceType);
+    } finally {
+      await server.close();
+    }
   }
 });

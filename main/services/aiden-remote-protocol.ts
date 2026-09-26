@@ -45,12 +45,50 @@ export const AIDEN_REMOTE_BOT_CAPABILITIES = [
   "bot:write",
 ] as const;
 
+export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
+  "tasks:read",
+  "agents:read",
+] as const;
+
+export type AidenRemoteProgressCapability =
+  (typeof AIDEN_REMOTE_PROGRESS_CAPABILITIES)[number];
+
+/**
+ * Desktop-only opt-in: watching and controlling the serving Mac's iOS
+ * Simulators. Only `mac` and `linux` device records may hold it, and the
+ * serving owner's "Share with paired Macs" consent must also be on.
+ */
+export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
+  "simulators:control",
+] as const;
+
+export type AidenRemoteSimulatorCapability =
+  (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
+
+/** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
+export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
+  ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+] as const;
+
+export type AidenRemoteNegotiableCapability =
+  (typeof AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES)[number];
+
 export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
+  ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
+
+export const AIDEN_REMOTE_CHAT_TASKS_FEATURE = "chat-tasks-v1" as const;
+export const AIDEN_REMOTE_CHAT_AGENTS_FEATURE = "chat-agents-v1" as const;
+export const AIDEN_REMOTE_PROGRESS_FEATURES = [
+  AIDEN_REMOTE_CHAT_TASKS_FEATURE,
+  AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
+] as const;
 
 export const AIDEN_REMOTE_EVENT_TYPES = [
   "snapshot",
@@ -61,6 +99,8 @@ export const AIDEN_REMOTE_EVENT_TYPES = [
   "tool_finished",
   "timeline",
   "approval_required",
+  "task_update",
+  "agents_update",
   "done",
   "error",
   "cancelled",
@@ -138,6 +178,211 @@ export interface AidenRemoteStreamEvent {
   type: AidenRemoteEventType;
   terminal: boolean;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Public chat task-progress contract (version 1). This is a bounded,
+ * renderer-safe projection of the Mac-owned durable todo view; it is never a
+ * transcript, private journal, or child-history channel.
+ */
+export const AIDEN_REMOTE_CHAT_TASK_PROGRESS_VERSION = 1 as const;
+export const AIDEN_REMOTE_CHAT_AGENT_ROSTER_VERSION = 1 as const;
+export const AIDEN_REMOTE_CHAT_PROGRESS_EPOCH_MAX_LENGTH = 64;
+export const AIDEN_REMOTE_CHAT_MAX_TASKS = 256;
+export const AIDEN_REMOTE_CHAT_MAX_AGENTS = 64;
+export const AIDEN_REMOTE_CHAT_TASK_MAX_SUBJECT_CHARACTERS = 512;
+export const AIDEN_REMOTE_CHAT_TASK_MAX_ACTIVE_FORM_CHARACTERS = 512;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_DEPTH = 8;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_LABEL_CHARACTERS = 120;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_TASK_PREVIEW_CHARACTERS = 240;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_ACTIVITY_CHARACTERS = 160;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_MODEL_ID_CHARACTERS = 160;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_ERROR_CHARACTERS = 240;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_WARNINGS = 5;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_WARNING_CHARACTERS = 240;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_MILESTONES = 12;
+export const AIDEN_REMOTE_CHAT_AGENT_MAX_NOTICES = 3;
+export const AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS = 16;
+
+export const AIDEN_REMOTE_CHAT_TASK_STATUSES = [
+  "pending",
+  "in_progress",
+  "completed",
+  "deleted",
+] as const;
+export type AidenRemoteChatTaskStatus =
+  (typeof AIDEN_REMOTE_CHAT_TASK_STATUSES)[number];
+
+export const AIDEN_REMOTE_CHAT_TASK_UNAVAILABLE_REASONS = [
+  "storage_not_enabled",
+  "invalid_snapshot",
+  "unsupported",
+] as const;
+export type AidenRemoteChatTaskUnavailableReason =
+  (typeof AIDEN_REMOTE_CHAT_TASK_UNAVAILABLE_REASONS)[number];
+
+export interface AidenRemoteChatTask {
+  id: number;
+  subject: string;
+  status: AidenRemoteChatTaskStatus;
+  activeForm?: string;
+  blockedBy?: number[];
+}
+
+interface AidenRemoteChatTaskProgressBase {
+  version: typeof AIDEN_REMOTE_CHAT_TASK_PROGRESS_VERSION;
+  chatId: string;
+  /**
+   * Opaque projection-authority epoch. It changes when the Mac rebuilds its
+   * progress projection (for example after restart); clients reset revision
+   * comparisons whenever it changes.
+   */
+  epoch: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export type AidenRemoteChatTaskProgress = AidenRemoteChatTaskProgressBase & (
+  | {
+      availability: "ready";
+      tasks: AidenRemoteChatTask[];
+    }
+  | {
+      availability: "unavailable";
+      unavailableReason: AidenRemoteChatTaskUnavailableReason;
+      tasks: [];
+    }
+);
+
+export const AIDEN_REMOTE_CHAT_AGENT_STATES = [
+  "queued",
+  "starting",
+  "running",
+  "needs_attention",
+  "completed",
+  "failed",
+  "timed_out",
+  "interrupted",
+  "stopped",
+  "unknown",
+] as const;
+export type AidenRemoteChatAgentState =
+  (typeof AIDEN_REMOTE_CHAT_AGENT_STATES)[number];
+
+export const AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES = new Set<AidenRemoteChatAgentState>([
+  "completed",
+  "failed",
+  "timed_out",
+  "interrupted",
+  "stopped",
+  "unknown",
+]);
+
+export const AIDEN_REMOTE_CHAT_AGENT_ROLES = [
+  "scout",
+  "planner",
+  "reviewer",
+  "implementer",
+] as const;
+export type AidenRemoteChatAgentRole =
+  (typeof AIDEN_REMOTE_CHAT_AGENT_ROLES)[number];
+
+export const AIDEN_REMOTE_CHAT_AGENT_MILESTONES = [
+  "reading",
+  "listing",
+  "matching",
+  "searching",
+  "inspecting",
+  "composing",
+] as const;
+export type AidenRemoteChatAgentMilestone =
+  (typeof AIDEN_REMOTE_CHAT_AGENT_MILESTONES)[number];
+
+export const AIDEN_REMOTE_CHAT_AGENT_NOTICES = [
+  "task_truncated",
+  "report_truncated",
+  "display_filtered",
+] as const;
+export type AidenRemoteChatAgentNotice =
+  (typeof AIDEN_REMOTE_CHAT_AGENT_NOTICES)[number];
+
+export const AIDEN_REMOTE_CHAT_AGENT_ROSTER_UNAVAILABLE_REASONS = [
+  "unsupported",
+  "invalid_snapshot",
+] as const;
+export type AidenRemoteChatAgentRosterUnavailableReason =
+  (typeof AIDEN_REMOTE_CHAT_AGENT_ROSTER_UNAVAILABLE_REASONS)[number];
+
+/**
+ * One delegated-agent record in the public roster. `agentId` is a
+ * projection-minted public identifier; private run/session/group/generation/
+ * child/workspace identifiers never cross this boundary.
+ */
+export interface AidenRemoteChatAgent {
+  agentId: string;
+  parentAgentId?: string;
+  depth: number;
+  revision: number;
+  role: AidenRemoteChatAgentRole;
+  label: string;
+  taskPreview: string;
+  state: AidenRemoteChatAgentState;
+  activity?: string;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  modelId: string;
+  turns: number;
+  tools: number;
+  tokens: number;
+  milestones?: AidenRemoteChatAgentMilestone[];
+  notices?: AidenRemoteChatAgentNotice[];
+  error?: string;
+  warnings?: string[];
+}
+
+/**
+ * One historical public turn that can be selected when reloading an agent
+ * roster. It carries no transcript or private generation identity.
+ */
+export interface AidenRemoteChatPreviousTurn {
+  turnId: string;
+  startedAt: string;
+}
+
+interface AidenRemoteChatAgentRosterBase {
+  version: typeof AIDEN_REMOTE_CHAT_AGENT_ROSTER_VERSION;
+  chatId: string;
+  turnId?: string;
+  previousTurns?: AidenRemoteChatPreviousTurn[];
+  epoch: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export type AidenRemoteChatAgentRoster = AidenRemoteChatAgentRosterBase & (
+  | {
+      availability: "ready";
+      agents: AidenRemoteChatAgent[];
+    }
+  | {
+      availability: "unavailable";
+      unavailableReason: AidenRemoteChatAgentRosterUnavailableReason;
+      agents: [];
+    }
+);
+
+/**
+ * Additive post-pairing capability negotiation. `accepts` may only name
+ * members of `AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES`; the response returns the
+ * device's complete updated grant list.
+ */
+export interface AidenRemoteDeviceCapabilitiesUpdateRequest {
+  accepts: AidenRemoteNegotiableCapability[];
+}
+
+export interface AidenRemoteDeviceCapabilitiesUpdateResponse {
+  capabilities: AidenRemoteCapability[];
 }
 
 export const AIDEN_REMOTE_BOT_HEALTH_STATES = [
@@ -343,6 +588,8 @@ export interface AidenRemoteBotCapabilityCatalog {
   shellAvailable: boolean;
   connections: AidenRemoteBotCapabilityOption[];
   skills: AidenRemoteBotCapabilityOption[];
+  /** Legacy omission means enabled; false temporarily suppresses saved grants. */
+  skillsEnabled?: boolean;
   otherCapabilities: AidenRemoteBotCapabilityOption[];
   notice: AidenRemoteBotAccessNoticeStatus;
 }
@@ -449,6 +696,11 @@ export interface AidenRemoteBotAvatarUploadFixture {
   response: AidenRemoteBotAvatarAsset;
 }
 
+export interface AidenRemoteDeviceCapabilitiesUpdateFixture {
+  request: AidenRemoteDeviceCapabilitiesUpdateRequest;
+  response: AidenRemoteDeviceCapabilitiesUpdateResponse;
+}
+
 export interface AidenRemoteLegacyNonNegotiatingFixture {
   pairingExchange: {
     protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
@@ -550,6 +802,10 @@ export interface AidenRemoteContractFixture {
   botNoticeAcknowledgement: AidenRemoteBotNoticeAcknowledgementFixture;
   botAvatarUpload: AidenRemoteBotAvatarUploadFixture;
   botAvatarMetadata: AidenRemoteBotAvatarAsset;
+  taskProgress: AidenRemoteChatTaskProgress;
+  agentRoster: AidenRemoteChatAgentRoster;
+  deviceCapabilitiesUpdate: AidenRemoteDeviceCapabilitiesUpdateFixture;
+  chatProgressEvents: AidenRemoteStreamEvent[];
   legacyNonNegotiating: AidenRemoteLegacyNonNegotiatingFixture;
   error: AidenRemoteErrorEnvelope;
 }
@@ -650,6 +906,10 @@ const AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_PARTS = [
   "generations",
   "workspaces",
   "milestones",
+  "transcripts",
+  "transcript",
+  "sessions",
+  "session",
   "interrupted",
   "completed",
   "authority",
@@ -749,6 +1009,10 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "botNoticeAcknowledgement",
   "botAvatarUpload",
   "botAvatarMetadata",
+  "taskProgress",
+  "agentRoster",
+  "deviceCapabilitiesUpdate",
+  "chatProgressEvents",
 ]);
 
 function normalizedPrivateWireKey(key: string): string {
@@ -1068,6 +1332,8 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   tool_finished: ["toolId", "status"],
   timeline: ["timeline"],
   approval_required: ["approvalId", "summary", "expiresAt"],
+  task_update: [],
+  agents_update: [],
   done: ["messageId"],
   error: ["code", "message"],
   cancelled: ["source"],
@@ -1734,6 +2000,15 @@ export function parseAidenRemoteChatProjection(
         200_000,
         true,
       );
+      if (hasOwn(entry, "reasoning") && (entry.role !== "assistant" || hasOwn(value, "botId"))) {
+        throw new Error(`${label} message ${index} reasoning is regular-assistant-only.`);
+      }
+      const reasoning = hasOwn(entry, "reasoning")
+        ? boundedText(entry.reasoning, `${label} message ${index} reasoning`, 100_000)
+        : undefined;
+      if (reasoning !== undefined && reasoning.length > 100_000) {
+        throw new Error(`${label} message ${index} reasoning exceeds the UTF-16 limit.`);
+      }
       const message: AidenRemoteChatProjection["messages"][number] = {
         id: boundedText(entry.id, `${label} message ${index} id`, 128),
         role: enumMember(
@@ -1742,6 +2017,7 @@ export function parseAidenRemoteChatProjection(
           `${label} message ${index} role`,
         ),
         text,
+        ...(reasoning === undefined ? {} : { reasoning }),
         createdAt: dateTimeValue(entry.createdAt, `${label} message ${index} createdAt`),
         ...(hasOwn(entry, "attachments")
           ? {
@@ -1771,7 +2047,7 @@ export function parseAidenRemoteChatProjection(
       if (hasOwn(entry, "timeline")) {
         // Generation timeline offsets are persisted as JavaScript UTF-16 code
         // units, while the public text ceiling remains Unicode-scalar based.
-        const timeline = parseGenerationTimeline(entry.timeline, text.length);
+        const timeline = parseGenerationTimeline(entry.timeline, text.length, message.reasoning?.length);
         if (!timeline) throw new Error(`${label} message ${index} timeline is invalid.`);
         message.timeline = timeline;
       }
@@ -2053,6 +2329,9 @@ export function parseAidenRemoteBotCapabilityCatalog(
     shellAvailable: requiredBooleanValue(value.shellAvailable, "Bot catalog shellAvailable"),
     connections,
     skills,
+    ...(value.skillsEnabled === undefined ? {} : {
+      skillsEnabled: requiredBooleanValue(value.skillsEnabled, "Bot catalog skillsEnabled"),
+    }),
     otherCapabilities,
     notice: parseBotAccessNoticeStatus(value.notice),
   };
@@ -2142,7 +2421,11 @@ function validateBotSelectionAgainstCatalog(
   };
   requireCatalogOption(selection.fileScopeIds, catalog.fileScopes, "file scope");
   requireCatalogOption(selection.connectionIds, catalog.connections, "connection");
-  requireCatalogOption(selection.skillIds, catalog.skills, "skill");
+  requireCatalogOption(
+    selection.skillIds,
+    catalog.skills.map((option) => ({ ...option, available: option.available || catalog.skillsEnabled === false })),
+    "skill",
+  );
   requireCatalogOption(
     selection.otherCapabilityIds,
     catalog.otherCapabilities,
@@ -2577,6 +2860,551 @@ export function parseAidenRemoteBotAvatarUploadRequest(
   return { mimeType, data };
 }
 
+const AIDEN_REMOTE_PROGRESS_IDENTIFIER = /^[A-Za-z0-9._:-]+$/u;
+
+function progressIdentifier(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+  maximum = AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH,
+): string {
+  const value = assertBoundedString(record, key, maximum);
+  if (!AIDEN_REMOTE_PROGRESS_IDENTIFIER.test(value)) {
+    throw new Error(`${label} ${key} must use the safe identifier grammar.`);
+  }
+  return value;
+}
+
+function nonNegativeIntegerField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): number {
+  const value = requiredInteger(record, key);
+  if (value < 0) throw new Error(`${label} ${key} must be a non-negative integer.`);
+  return value;
+}
+
+function progressTimestamp(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = requiredString(record, key);
+  parseStrictRfc3339(value, `${label} ${key}`);
+  return value;
+}
+
+function uniqueBoundedStrings<Kind extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  values: readonly Kind[],
+  maximum: number,
+  label: string,
+): Kind[] | undefined {
+  if (!hasOwn(record, key)) return undefined;
+  const entries = record[key];
+  if (
+    !Array.isArray(entries) ||
+    entries.length > maximum ||
+    new Set(entries).size !== entries.length ||
+    entries.some(
+      (entry) =>
+        typeof entry !== "string" ||
+        !(values as readonly string[]).includes(entry),
+    )
+  ) {
+    throw new Error(`${label} ${key} must be a bounded list of unique known values.`);
+  }
+  return entries as Kind[];
+}
+
+function parseAidenRemoteChatTask(
+  value: unknown,
+  label: string,
+): AidenRemoteChatTask {
+  if (!isRecord(value)) throw new Error(`${label} task must be an object.`);
+  assertExactKeys(
+    value,
+    ["id", "subject", "status", "activeForm", "blockedBy"],
+    `${label} task`,
+  );
+  const id = requiredInteger(value, "id");
+  if (id < 1) throw new Error(`${label} task id must be a positive integer.`);
+  const subject = boundedText(
+    value.subject,
+    `${label} task subject`,
+    AIDEN_REMOTE_CHAT_TASK_MAX_SUBJECT_CHARACTERS,
+  );
+  const status = enumMember(
+    value.status,
+    AIDEN_REMOTE_CHAT_TASK_STATUSES,
+    `${label} task status`,
+  );
+  const activeForm = optionalBoundedText(
+    value,
+    "activeForm",
+    `${label} task activeForm`,
+    AIDEN_REMOTE_CHAT_TASK_MAX_ACTIVE_FORM_CHARACTERS,
+  );
+  let blockedBy: number[] | undefined;
+  if (hasOwn(value, "blockedBy")) {
+    const entries = value.blockedBy;
+    if (
+      !Array.isArray(entries) ||
+      entries.length > AIDEN_REMOTE_CHAT_MAX_TASKS ||
+      new Set(entries).size !== entries.length ||
+      entries.some(
+        (entry) => !Number.isSafeInteger(entry) || (entry as number) < 1,
+      )
+    ) {
+      throw new Error(`${label} task blockedBy must be unique positive integers.`);
+    }
+    blockedBy = entries as number[];
+  }
+  return {
+    id,
+    subject,
+    status,
+    ...(activeForm === undefined ? {} : { activeForm }),
+    ...(blockedBy === undefined ? {} : { blockedBy }),
+  };
+}
+
+/**
+ * Strict parser for the public chat task-progress projection. Unavailable
+ * projections carry a closed reason and an empty task list; every field is
+ * bounded and private child/transcript fields are rejected before decoding.
+ */
+export function parseAidenRemoteChatTaskProgress(
+  value: unknown,
+  label = "Chat task progress",
+): AidenRemoteChatTaskProgress {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertNoPrivateChildProjectionFields(value, label);
+  assertExactKeys(
+    value,
+    [
+      "version",
+      "chatId",
+      "availability",
+      "unavailableReason",
+      "epoch",
+      "revision",
+      "updatedAt",
+      "tasks",
+    ],
+    label,
+  );
+  if (value.version !== AIDEN_REMOTE_CHAT_TASK_PROGRESS_VERSION) {
+    throw new Error(`${label} has an unsupported version.`);
+  }
+  const chatId = assertBoundedString(
+    value,
+    "chatId",
+    AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH,
+  );
+  const availability = enumMember(
+    value.availability,
+    ["ready", "unavailable"] as const,
+    `${label} availability`,
+  );
+  const epoch = progressIdentifier(
+    value,
+    "epoch",
+    label,
+    AIDEN_REMOTE_CHAT_PROGRESS_EPOCH_MAX_LENGTH,
+  );
+  const revision = requiredInteger(value, "revision");
+  if (revision < 1) throw new Error(`${label} revision must be a positive integer.`);
+  const updatedAt = progressTimestamp(value, "updatedAt", label);
+  if (
+    !Array.isArray(value.tasks) ||
+    value.tasks.length > AIDEN_REMOTE_CHAT_MAX_TASKS
+  ) {
+    throw new Error(`${label} tasks must be a bounded array.`);
+  }
+  const tasks = value.tasks.map((task) => parseAidenRemoteChatTask(task, label));
+  const taskIds = new Set(tasks.map((task) => task.id));
+  if (taskIds.size !== tasks.length) {
+    throw new Error(`${label} task ids must be unique.`);
+  }
+  if (tasks.filter((task) => task.status === "in_progress").length > 1) {
+    throw new Error(`${label} may contain at most one in_progress task.`);
+  }
+  for (const task of tasks) {
+    for (const dependency of task.blockedBy ?? []) {
+      if (dependency === task.id || !taskIds.has(dependency)) {
+        throw new Error(`${label} task blockedBy must reference a distinct listed task.`);
+      }
+    }
+  }
+  const visiting = new Set<number>();
+  const visited = new Set<number>();
+  const dependenciesByTask = new Map(
+    tasks.map((task) => [task.id, task.blockedBy ?? []] as const),
+  );
+  const visit = (id: number): void => {
+    if (visiting.has(id)) {
+      throw new Error(`${label} task blockedBy relationships must be acyclic.`);
+    }
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of dependenciesByTask.get(id) ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const task of tasks) visit(task.id);
+  const base = { version: AIDEN_REMOTE_CHAT_TASK_PROGRESS_VERSION, chatId, epoch, revision, updatedAt };
+  if (availability === "ready") {
+    if (hasOwn(value, "unavailableReason")) {
+      throw new Error(`${label} unavailableReason is only valid when unavailable.`);
+    }
+    return { ...base, availability, tasks };
+  }
+  const unavailableReason = enumMember(
+    value.unavailableReason,
+    AIDEN_REMOTE_CHAT_TASK_UNAVAILABLE_REASONS,
+    `${label} unavailableReason`,
+  );
+  if (tasks.length !== 0) {
+    throw new Error(`${label} tasks must be empty when unavailable.`);
+  }
+  return { ...base, availability, unavailableReason, tasks: [] };
+}
+
+function parseAidenRemoteChatAgent(
+  value: unknown,
+  label: string,
+): AidenRemoteChatAgent {
+  if (!isRecord(value)) throw new Error(`${label} agent must be an object.`);
+  assertExactKeys(
+    value,
+    [
+      "agentId",
+      "parentAgentId",
+      "depth",
+      "revision",
+      "role",
+      "label",
+      "taskPreview",
+      "state",
+      "activity",
+      "startedAt",
+      "updatedAt",
+      "finishedAt",
+      "modelId",
+      "turns",
+      "tools",
+      "tokens",
+      "milestones",
+      "notices",
+      "error",
+      "warnings",
+    ],
+    `${label} agent`,
+  );
+  const agentId = progressIdentifier(value, "agentId", label);
+  const parentAgentId = hasOwn(value, "parentAgentId")
+    ? progressIdentifier(value, "parentAgentId", label)
+    : undefined;
+  const depth = requiredInteger(value, "depth");
+  if (depth < 1 || depth > AIDEN_REMOTE_CHAT_AGENT_MAX_DEPTH) {
+    throw new Error(`${label} agent depth must be 1–${AIDEN_REMOTE_CHAT_AGENT_MAX_DEPTH}.`);
+  }
+  if ((depth >= 2) !== (parentAgentId !== undefined)) {
+    throw new Error(`${label} agent parentAgentId is required exactly when depth is at least 2.`);
+  }
+  if (parentAgentId !== undefined && parentAgentId === agentId) {
+    throw new Error(`${label} agent must not be its own parent.`);
+  }
+  const revision = requiredInteger(value, "revision");
+  if (revision < 1) throw new Error(`${label} agent revision must be a positive integer.`);
+  const role = enumMember(value.role, AIDEN_REMOTE_CHAT_AGENT_ROLES, `${label} agent role`);
+  const agentLabel = boundedText(
+    value.label,
+    `${label} agent label`,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_LABEL_CHARACTERS,
+  );
+  const taskPreview = boundedText(
+    value.taskPreview,
+    `${label} agent taskPreview`,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_TASK_PREVIEW_CHARACTERS,
+  );
+  const state = enumMember(value.state, AIDEN_REMOTE_CHAT_AGENT_STATES, `${label} agent state`);
+  const activity = optionalBoundedText(
+    value,
+    "activity",
+    `${label} agent activity`,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_ACTIVITY_CHARACTERS,
+  );
+  const startedAt = progressTimestamp(value, "startedAt", label);
+  const updatedAt = progressTimestamp(value, "updatedAt", label);
+  if (compareStrictRfc3339(updatedAt, `${label} updatedAt`, startedAt, `${label} startedAt`) < 0) {
+    throw new Error(`${label} agent updatedAt must not precede startedAt.`);
+  }
+  let finishedAt: string | undefined;
+  if (hasOwn(value, "finishedAt")) {
+    finishedAt = progressTimestamp(value, "finishedAt", label);
+    if (compareStrictRfc3339(finishedAt, `${label} finishedAt`, startedAt, `${label} startedAt`) < 0) {
+      throw new Error(`${label} agent finishedAt must not precede startedAt.`);
+    }
+  }
+  const modelId = boundedText(
+    value.modelId,
+    `${label} agent modelId`,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_MODEL_ID_CHARACTERS,
+  );
+  const turns = nonNegativeIntegerField(value, "turns", `${label} agent`);
+  const tools = nonNegativeIntegerField(value, "tools", `${label} agent`);
+  const tokens = nonNegativeIntegerField(value, "tokens", `${label} agent`);
+  const milestones = uniqueBoundedStrings(
+    value,
+    "milestones",
+    AIDEN_REMOTE_CHAT_AGENT_MILESTONES,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_MILESTONES,
+    `${label} agent`,
+  );
+  const notices = uniqueBoundedStrings(
+    value,
+    "notices",
+    AIDEN_REMOTE_CHAT_AGENT_NOTICES,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_NOTICES,
+    `${label} agent`,
+  );
+  const error = optionalBoundedText(
+    value,
+    "error",
+    `${label} agent error`,
+    AIDEN_REMOTE_CHAT_AGENT_MAX_ERROR_CHARACTERS,
+  );
+  let warnings: string[] | undefined;
+  if (hasOwn(value, "warnings")) {
+    const entries = value.warnings;
+    if (
+      !Array.isArray(entries) ||
+      entries.length > AIDEN_REMOTE_CHAT_AGENT_MAX_WARNINGS
+    ) {
+      throw new Error(`${label} agent warnings must be a bounded array.`);
+    }
+    warnings = entries.map((warning) =>
+      boundedText(
+        warning,
+        `${label} agent warning`,
+        AIDEN_REMOTE_CHAT_AGENT_MAX_WARNING_CHARACTERS,
+      ),
+    );
+  }
+  const terminal = AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES.has(state);
+  if (terminal !== (finishedAt !== undefined)) {
+    throw new Error(`${label} agent finishedAt is required exactly for terminal states.`);
+  }
+  if (!terminal && (error !== undefined || (warnings !== undefined && warnings.length > 0))) {
+    throw new Error(`${label} agent terminal fields are invalid on an active state.`);
+  }
+  if (!terminal && notices?.includes("report_truncated")) {
+    throw new Error(`${label} agent report notices are terminal facts.`);
+  }
+  return {
+    agentId,
+    ...(parentAgentId === undefined ? {} : { parentAgentId }),
+    depth,
+    revision,
+    role,
+    label: agentLabel,
+    taskPreview,
+    state,
+    ...(activity === undefined ? {} : { activity }),
+    startedAt,
+    updatedAt,
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+    modelId,
+    turns,
+    tools,
+    tokens,
+    ...(milestones === undefined ? {} : { milestones }),
+    ...(notices === undefined ? {} : { notices }),
+    ...(error === undefined ? {} : { error }),
+    ...(warnings === undefined ? {} : { warnings }),
+  };
+}
+
+function parseAidenRemoteChatPreviousTurns(
+  value: Record<string, unknown>,
+  label: string,
+  currentTurnId: string | undefined,
+): AidenRemoteChatPreviousTurn[] | undefined {
+  if (!hasOwn(value, "previousTurns")) return undefined;
+  if (
+    !Array.isArray(value.previousTurns) ||
+    value.previousTurns.length > AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS
+  ) {
+    throw new Error(
+      `${label} previousTurns must be a bounded array of at most ${AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS} entries.`,
+    );
+  }
+  const previousTurns = value.previousTurns.map((entry, index) => {
+    const entryLabel = `${label} previousTurns[${index}]`;
+    if (!isRecord(entry)) throw new Error(`${entryLabel} must be an object.`);
+    assertExactKeys(entry, ["turnId", "startedAt"], entryLabel);
+    return {
+      turnId: progressIdentifier(entry, "turnId", entryLabel),
+      startedAt: progressTimestamp(entry, "startedAt", entryLabel),
+    };
+  });
+  if (new Set(previousTurns.map((turn) => turn.turnId)).size !== previousTurns.length) {
+    throw new Error(`${label} previousTurns turnIds must be unique.`);
+  }
+  if (currentTurnId !== undefined && previousTurns.some((turn) => turn.turnId === currentTurnId)) {
+    throw new Error(`${label} previousTurns must exclude the current turn.`);
+  }
+  for (let index = 1; index < previousTurns.length; index += 1) {
+    const prior = previousTurns[index - 1]!;
+    const current = previousTurns[index]!;
+    if (
+      compareStrictRfc3339(
+        prior.startedAt,
+        `${label} previousTurns[${index - 1}] startedAt`,
+        current.startedAt,
+        `${label} previousTurns[${index}] startedAt`,
+      ) < 0
+    ) {
+      throw new Error(`${label} previousTurns must be ordered newest-first.`);
+    }
+  }
+  return previousTurns;
+}
+
+/**
+ * Strict parser for the public delegated-agent roster. The roster is a
+ * bounded projection of renderer-safe child-run state; private run/session/
+ * group/generation/child/workspace identifiers and content fields never
+ * cross this boundary.
+ */
+export function parseAidenRemoteChatAgentRoster(
+  value: unknown,
+  label = "Chat agent roster",
+): AidenRemoteChatAgentRoster {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertNoPrivateChildProjectionFields(value, label);
+  assertExactKeys(
+    value,
+    [
+      "version",
+      "chatId",
+      "turnId",
+      "previousTurns",
+      "availability",
+      "unavailableReason",
+      "epoch",
+      "revision",
+      "updatedAt",
+      "agents",
+    ],
+    label,
+  );
+  if (value.version !== AIDEN_REMOTE_CHAT_AGENT_ROSTER_VERSION) {
+    throw new Error(`${label} has an unsupported version.`);
+  }
+  const chatId = assertBoundedString(
+    value,
+    "chatId",
+    AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH,
+  );
+  const availability = enumMember(
+    value.availability,
+    ["ready", "unavailable"] as const,
+    `${label} availability`,
+  );
+  const turnId = hasOwn(value, "turnId")
+    ? progressIdentifier(value, "turnId", label)
+    : undefined;
+  const previousTurns = parseAidenRemoteChatPreviousTurns(value, label, turnId);
+  const epoch = progressIdentifier(
+    value,
+    "epoch",
+    label,
+    AIDEN_REMOTE_CHAT_PROGRESS_EPOCH_MAX_LENGTH,
+  );
+  const revision = requiredInteger(value, "revision");
+  if (revision < 1) throw new Error(`${label} revision must be a positive integer.`);
+  const updatedAt = progressTimestamp(value, "updatedAt", label);
+  if (
+    !Array.isArray(value.agents) ||
+    value.agents.length > AIDEN_REMOTE_CHAT_MAX_AGENTS
+  ) {
+    throw new Error(`${label} agents must be a bounded array.`);
+  }
+  const agents = value.agents.map((agent) =>
+    parseAidenRemoteChatAgent(agent, label),
+  );
+  const agentIds = new Set(agents.map((agent) => agent.agentId));
+  if (agentIds.size !== agents.length) {
+    throw new Error(`${label} agent ids must be unique.`);
+  }
+  for (const agent of agents) {
+    if (
+      agent.parentAgentId !== undefined &&
+      !agentIds.has(agent.parentAgentId)
+    ) {
+      throw new Error(`${label} agent parent must appear in the same roster.`);
+    }
+  }
+  const base = {
+    version: AIDEN_REMOTE_CHAT_AGENT_ROSTER_VERSION,
+    chatId,
+    ...(turnId === undefined ? {} : { turnId }),
+    ...(previousTurns === undefined ? {} : { previousTurns }),
+    epoch,
+    revision,
+    updatedAt,
+  };
+  if (availability === "ready") {
+    if (hasOwn(value, "unavailableReason")) {
+      throw new Error(`${label} unavailableReason is only valid when unavailable.`);
+    }
+    if (agents.length > 0 && turnId === undefined) {
+      throw new Error(`${label} turnId is required while agents are listed.`);
+    }
+    return { ...base, availability, agents };
+  }
+  const unavailableReason = enumMember(
+    value.unavailableReason,
+    AIDEN_REMOTE_CHAT_AGENT_ROSTER_UNAVAILABLE_REASONS,
+    `${label} unavailableReason`,
+  );
+  if (agents.length !== 0) {
+    throw new Error(`${label} agents must be empty when unavailable.`);
+  }
+  return { ...base, availability, unavailableReason, agents: [] };
+}
+
+export function parseAidenRemoteDeviceCapabilitiesUpdateRequest(
+  value: unknown,
+): AidenRemoteDeviceCapabilitiesUpdateRequest {
+  if (!isRecord(value)) {
+    throw new Error("Device capabilities update request must be an object.");
+  }
+  assertExactKeys(value, ["accepts"], "Device capabilities update request");
+  const entries = value.accepts;
+  if (
+    !Array.isArray(entries) ||
+    entries.length < 1 ||
+    entries.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
+    new Set(entries).size !== entries.length ||
+    entries.some(
+      (entry) =>
+        typeof entry !== "string" ||
+        !(AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES as readonly string[]).includes(entry),
+    )
+  ) {
+    throw new Error(
+      "Device capabilities update accepts must list known negotiable capabilities.",
+    );
+  }
+  return { accepts: entries as AidenRemoteNegotiableCapability[] };
+}
+
 function parseLegacyNonNegotiatingFixture(
   value: unknown,
   canonical: {
@@ -2697,7 +3525,21 @@ function parseLegacyNonNegotiatingFixture(
   };
 }
 
-function validateEventPayload(type: AidenRemoteEventType, payload: Record<string, unknown>): void {
+function validateEventPayload(type: AidenRemoteEventType, payload: Record<string, unknown>, streamId: string): void {
+  if (type === "task_update") {
+    const progress = parseAidenRemoteChatTaskProgress(payload, "task_update payload");
+    if (progress.chatId !== streamId) {
+      throw new Error("task_update payload chatId must match the event streamId.");
+    }
+    return;
+  }
+  if (type === "agents_update") {
+    const roster = parseAidenRemoteChatAgentRoster(payload, "agents_update payload");
+    if (roster.chatId !== streamId) {
+      throw new Error("agents_update payload chatId must match the event streamId.");
+    }
+    return;
+  }
   const keys = EVENT_PAYLOAD_KEYS[type];
   assertExactKeys(payload, keys, `${type} payload`);
   for (const key of keys) {
@@ -2898,7 +3740,7 @@ export function parseAidenRemoteStreamEvent(value: unknown): AidenRemoteStreamEv
   if (value.terminal !== TERMINAL_EVENT_TYPES.has(knownType)) {
     throw new Error(`Aiden Remote event ${type} has an invalid terminal classification.`);
   }
-  validateEventPayload(knownType, value.payload);
+  validateEventPayload(knownType, value.payload, streamId);
   assertNoForbiddenWireKeys(value, "event");
   return {
     protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -2938,8 +3780,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Aiden Remote contract fixture protocolVersion must be 1.");
   }
   const contractRevision = requiredInteger(value, "contractRevision");
-  if (contractRevision < 10) {
-    throw new Error("The canonical summary fixture requires contractRevision 10 or newer.");
+  if (contractRevision < 11) {
+    throw new Error("The canonical progress fixture requires contractRevision 11 or newer.");
   }
   if (value.generated !== false) throw new Error("The canonical fixture must be synthetic.");
   const fixtureNotice = boundedText(value.notice, "Fixture notice", 280);
@@ -2981,6 +3823,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "protocolVersion",
       "instanceId",
       "name",
+      "deviceName",
       "appVersion",
       "capabilities",
       "serverCapabilities",
@@ -2998,6 +3841,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Fixture server instance does not match bootstrap.");
   }
   assertBoundedString(server, "name", 80);
+  if (server.deviceName !== undefined) {
+    assertBoundedString(server, "deviceName", 80);
+  }
   assertBoundedString(server, "appVersion", 40);
   if (server.minimumClientVersion !== undefined) {
     assertBoundedString(server, "minimumClientVersion", 40);
@@ -3022,6 +3868,11 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SUMMARY_FEATURE)) {
     throw new Error("Fixture server must advertise chat summaries.");
+  }
+  for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
+    if (!serverFeatures.includes(feature)) {
+      throw new Error(`Fixture server must advertise ${feature}.`);
+    }
   }
   if (!deviceCapabilities.every((capability) => serverCapabilities.includes(capability))) {
     throw new Error("Fixture device capabilities must be a subset of server-supported capabilities.");
@@ -3180,6 +4031,54 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     response: parseBotAvatarAsset(botAvatarUploadRecord.response),
   };
   const botAvatarMetadata = parseBotAvatarAsset(value.botAvatarMetadata);
+  const taskProgress = parseAidenRemoteChatTaskProgress(
+    value.taskProgress,
+    "Fixture chat task progress",
+  );
+  const agentRoster = parseAidenRemoteChatAgentRoster(
+    value.agentRoster,
+    "Fixture chat agent roster",
+  );
+  const deviceCapabilitiesUpdateRecord = isRecord(value.deviceCapabilitiesUpdate)
+    ? value.deviceCapabilitiesUpdate
+    : null;
+  if (!deviceCapabilitiesUpdateRecord) {
+    throw new Error("Device capabilities update fixture must be an object.");
+  }
+  assertExactKeys(
+    deviceCapabilitiesUpdateRecord,
+    ["request", "response"],
+    "Device capabilities update fixture",
+  );
+  const deviceCapabilitiesUpdate: AidenRemoteDeviceCapabilitiesUpdateFixture = {
+    request: parseAidenRemoteDeviceCapabilitiesUpdateRequest(
+      deviceCapabilitiesUpdateRecord.request,
+    ),
+    response: (() => {
+      const response = deviceCapabilitiesUpdateRecord.response;
+      if (!isRecord(response)) {
+        throw new Error("Device capabilities update response must be an object.");
+      }
+      assertExactKeys(
+        response,
+        ["capabilities"],
+        "Device capabilities update response",
+      );
+      return {
+        capabilities: parseCapabilityList(
+          response.capabilities,
+          "device capabilities update",
+        ),
+      };
+    })(),
+  };
+  if (!Array.isArray(value.chatProgressEvents)) {
+    throw new Error("Fixture chat progress events must be an array.");
+  }
+  const chatProgressEvents = value.chatProgressEvents
+    .map(parseAidenRemoteStreamEvent)
+    .filter((event): event is AidenRemoteStreamEvent => event !== null);
+  assertOrderedAidenRemoteEvents(chatProgressEvents);
   const legacyNonNegotiating = parseLegacyNonNegotiatingFixture(
     value.legacyNonNegotiating,
     { instanceId },
@@ -3510,9 +4409,75 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   ) {
     throw new Error("Canonical Bot avatar metadata fixtures do not agree.");
   }
+  if (taskProgress.chatId !== chat.id || agentRoster.chatId !== chat.id) {
+    throw new Error("Canonical chat progress fixtures must target the canonical Chat.");
+  }
+  if (taskProgress.epoch !== agentRoster.epoch) {
+    throw new Error("Canonical chat progress fixtures must share one projection epoch.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.turnId === "string" &&
+    agentRoster.turnId !== undefined &&
+    agentRoster.turnId !== value.turnStart.turnId
+  ) {
+    throw new Error("Canonical agent roster must target the canonical turn.");
+  }
+  if (
+    JSON.stringify(deviceCapabilitiesUpdate.response.capabilities) !==
+      JSON.stringify(deviceCapabilities) ||
+    !deviceCapabilitiesUpdate.request.accepts.every((capability) =>
+      deviceCapabilities.includes(capability))
+  ) {
+    throw new Error(
+      "Device capabilities update fixture must return the canonical device grants.",
+    );
+  }
+  const progressEventTypes = new Set<AidenRemoteEventType>([
+    "task_update",
+    "agents_update",
+  ]);
+  for (const event of chatProgressEvents) {
+    if (
+      event.terminal ||
+      !progressEventTypes.has(event.type) ||
+      event.streamId !== chat.id
+    ) {
+      throw new Error(
+        "Chat progress events must be nonterminal updates on the canonical Chat channel.",
+      );
+    }
+    if (
+      (event.type === "task_update" &&
+        JSON.stringify(
+          parseAidenRemoteChatTaskProgress(event.payload, "Chat progress event"),
+        ) !== JSON.stringify(taskProgress)) ||
+      (event.type === "agents_update" &&
+        JSON.stringify(
+          parseAidenRemoteChatAgentRoster(event.payload, "Chat progress event"),
+        ) !== JSON.stringify(agentRoster))
+    ) {
+      throw new Error(
+        "Chat progress events must carry the canonical projections.",
+      );
+    }
+  }
+  if (
+    !chatProgressEvents.some((event) => event.type === "task_update") ||
+    !chatProgressEvents.some((event) => event.type === "agents_update")
+  ) {
+    throw new Error(
+      "Canonical chat progress events must include task and agent projections.",
+    );
+  }
   if (!Array.isArray(value.events)) throw new Error("Fixture events must be an array.");
   const events = value.events.map(parseAidenRemoteStreamEvent).filter((event): event is AidenRemoteStreamEvent => event !== null);
   assertOrderedAidenRemoteEvents(events);
+  if (events.some((event) => event.type === "task_update" || event.type === "agents_update")) {
+    throw new Error(
+      "Ordinary turn streams must not carry chat progress projections.",
+    );
+  }
   if (!isRecord(value.error) || !isRecord(value.error.error)) {
     throw new Error("Fixture error envelope is invalid.");
   }
@@ -3605,6 +4570,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botNoticeAcknowledgement,
     botAvatarUpload,
     botAvatarMetadata,
+    taskProgress,
+    agentRoster,
+    deviceCapabilitiesUpdate,
+    chatProgressEvents,
     legacyNonNegotiating,
     events,
     error: value.error as unknown as AidenRemoteErrorEnvelope,

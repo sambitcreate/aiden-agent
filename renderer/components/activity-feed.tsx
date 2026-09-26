@@ -1,6 +1,5 @@
 // Live account of what the agent is doing. While a turn runs the feed is a
-// three-row ticker: the newest line rises in from below and older lines drift
-// up under a fade mask. When the turn settles it collapses to one deterministic
+// three-row ticker with stable row identities and quiet, opacity-only arrivals. When the turn settles it collapses to one deterministic
 // summary of the work, expandable to the full trail.
 
 import * as React from "react";
@@ -10,6 +9,7 @@ import {
   activityIssueCount,
   activityLine,
   activityLineText,
+  isCompactContextOnly,
   summarizeActivity,
   type ActivityLine,
 } from "../lib/agent-steps";
@@ -56,6 +56,11 @@ function StepLine({ step }: { step: AgentStep }) {
       <span className={`${toneClass(line.tone)} font-medium`}>{line.verb}</span>
       {line.object ? <span className="font-normal text-tertiary"> {line.object}</span> : null}
       {isToolStep(step) && step.lineChanges ? <LineChanges {...step.lineChanges} /> : null}
+      {isToolStep(step) && step.producedFile ? (
+        <span className="ml-2 rounded-control bg-list-hover px-2 py-0.5 text-mini text-secondary" title={step.producedFile.relativePath}>
+          File {step.producedFile.operation} · {step.producedFile.relativePath.split("/").pop()}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -132,15 +137,78 @@ export function ActivityFeed({
 
   if (!visible?.steps.length) return null;
   const running = visible.status === "running";
-  const showTicker = running && !open;
+  const issues = activityIssueCount(visible);
+  const compactOnly = isCompactContextOnly(visible.steps);
+  // A healthy lone compaction is fully told by its own line in the header, so a
+  // trail would only repeat it. A claim check still needs the disclosure body.
+  const stepInHeader = compactOnly && issues === 0;
+  const disclosure = !stepInHeader || Boolean(visible.claimCheck);
+  const showTicker = running && (!open || !disclosure);
   const rows = visible.steps.slice(-TICKER_ROWS);
   const newest = visible.steps[visible.steps.length - 1];
-  const issues = activityIssueCount(visible);
+  const presence = exiting ? "exiting" : "visible";
+  const header = (
+    <>
+      {showTicker && newest ? (
+        <div
+          className="activity-feed-window min-w-0 flex-1 overflow-hidden"
+          data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
+          role="status"
+          aria-live="polite"
+          aria-label={activityLineText(newest)}
+        >
+          <div className="activity-feed-stack flex flex-col">
+            {rows.map((step) => (
+              <TickerRow key={step.id} step={step} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <Text
+          variant="small-strong"
+          color="secondary"
+          className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
+            running ? "agent-thinking-shimmer" : ""
+          }`}
+        >
+          {stepInHeader && newest ? (
+            <StepLine step={newest} />
+          ) : (
+            summarizeActivity(visible)
+          )}
+        </Text>
+      )}
+      {issues ? (
+        <Text variant="small-strong" className="shrink-0 text-support-warning">
+          {issues === 1 ? "1 issue" : `${issues} issues`}
+        </Text>
+      ) : null}
+    </>
+  );
+
+  if (!disclosure) {
+    return (
+      <div
+        className="activity-feed min-w-0"
+        data-presence={presence}
+        data-animate={animate ? "true" : "false"}
+        data-state="closed"
+      >
+        <div
+          className={`-mx-1.5 flex min-w-0 gap-2 rounded-control px-1.5 py-0.5 ${
+            showTicker ? "items-end" : "items-center"
+          }`}
+        >
+          {header}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <details
       className="activity-feed group/activity min-w-0"
-      data-presence={exiting ? "exiting" : "visible"}
+      data-presence={presence}
       data-animate={animate ? "true" : "false"}
       data-state={open ? "open" : "closed"}
       open={open}
@@ -151,58 +219,31 @@ export function ActivityFeed({
           showTicker ? "items-end" : "items-center"
         }`}
       >
-        {showTicker && newest ? (
-          <div
-            className="activity-feed-window min-w-0 flex-1 overflow-hidden"
-            data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
-            role="status"
-            aria-live="polite"
-            aria-label={activityLineText(newest)}
-          >
-            <div className="activity-feed-stack flex flex-col" key={newest.id}>
-              {rows.map((step) => (
-                <TickerRow key={step.id} step={step} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <Text
-            variant="small-strong"
-            color="secondary"
-            className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
-              running ? "agent-thinking-shimmer" : ""
-            }`}
-          >
-            {summarizeActivity(visible)}
-          </Text>
-        )}
-        {issues ? (
-          <Text variant="small-strong" className="shrink-0 text-support-warning">
-            {issues === 1 ? "1 issue" : `${issues} issues`}
-          </Text>
-        ) : null}
+        {header}
         <ChevronRight
           className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
           aria-hidden="true"
         />
       </summary>
       <div className="mt-0.5 flex flex-col">
-        <div className="flex flex-col" role="list">
-          {visible.steps.map((step) => (
-            <TrailRow key={step.id} step={step} />
-          ))}
-        </div>
+        {stepInHeader ? null : (
+          <div className="flex flex-col" role="list">
+            {visible.steps.map((step) => (
+              <TrailRow key={step.id} step={step} />
+            ))}
+          </div>
+        )}
         {visible.claimCheck ? (
           <div
-            className="mt-1.5 flex items-start gap-2 rounded-control bg-support-warning/[0.08] px-2.5 py-2"
+            className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
             role={animate ? "alert" : "note"}
           >
             <CircleAlert
-              className="mt-0.5 size-3.5 shrink-0 text-support-warning"
+              className="mt-0.5 size-3.5 shrink-0 text-status-warning"
               aria-hidden="true"
             />
             <span className="min-w-0">
-              <Text as="span" variant="small-strong" className="block text-support-warning">
+              <Text as="span" variant="small-strong" className="block text-status-warning">
                 Success not verified
               </Text>
               <Text as="span" variant="small" color="secondary" className="mt-0.5 block">

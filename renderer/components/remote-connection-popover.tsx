@@ -54,7 +54,7 @@ function DeviceRow({
           className="block"
           title={state === "pending" ? "Waiting for the first authenticated connection" : new Date(timestamp).toLocaleString()}
         >
-          {device.type === "ipad" ? "iPad" : "iPhone"} · {detail}
+          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {detail}
         </Text>
       </div>
       <span

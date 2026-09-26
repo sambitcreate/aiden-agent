@@ -24,7 +24,7 @@ if (process.platform !== "darwin" && process.platform !== "linux") {
 await mkdir(path.dirname(output), { recursive: true });
 const linux = process.platform === "linux";
 const args = [
-  ...(linux ? [] : ["clang"]),
+  ...(linux ? [] : ["--sdk", "macosx", "clang"]),
   "-std=c17",
   "-Wall",
   "-Wextra",

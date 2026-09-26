@@ -66,7 +66,10 @@ final class AidenNativeIntegrationTests: XCTestCase {
             return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
         }
         do {
-            _ = try await client.botAvatar(botId: "bot-1", assetRevision: "revision-1")
+            _ = try await client.botAvatar(
+                botId: "bot-1",
+                assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
+            )
             XCTFail("Expected the avatar cache/security contract to be rejected.")
         } catch AidenRemoteClientError.invalidResponse {}
 
@@ -527,7 +530,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenPairingAlertCopy.title, "Aiden On The Go")
         XCTAssertEqual(
             AidenPairingAlertCopy.fallbackMessage,
-            "Try again from Aiden Agent Remote Access settings."
+            "Try again from Aiden Agent → Settings → Aiden On The Go."
         )
     }
 

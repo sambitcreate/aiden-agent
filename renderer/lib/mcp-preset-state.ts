@@ -27,7 +27,7 @@ export function mcpPresetConnectionBadge(
     };
   }
   if (!state.enabled) return { label: "Disabled", color: "secondary" };
-  return { label: "Ready", color: "green" };
+  return { label: "Configured", color: "green" };
 }
 
 export function mcpServerEditorKind(

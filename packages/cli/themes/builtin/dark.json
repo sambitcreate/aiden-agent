@@ -4,7 +4,7 @@
 		"cyan": "#91E9EE",
 		"blue": "#60A9F8",
 		"green": "#32D17A",
-		"red": "#FF5E57",
+		"red": "#FF726C",
 		"yellow": "#FFB020",
 		"text": "#D1D4DA",
 		"gray": "#A9B1BA",
@@ -15,7 +15,7 @@
 		"userMsgBg": "#23262C",
 		"toolPendingBg": "#1F2228",
 		"toolSuccessBg": "#1B2D2A",
-		"toolErrorBg": "#2F2226",
+		"toolErrorBg": "#2F2429",
 		"customMsgBg": "#1B2532"
 	},
 	"colors": {

@@ -1,4 +1,5 @@
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
+import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
 
 const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
 const MAX_CATALOG_BYTES = 5 * 1024 * 1024;
@@ -284,7 +285,7 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
   const now = options.now ?? Date.now;
   const localGeneratedAt = options.localGeneratedAt ?? AIDEN_PI_CATALOG_GENERATED_AT;
   let dynamicModels: readonly Model<Api>[] = [];
-  let activeNetworkRefresh: Promise<void> | null = null;
+  let activeNetworkRefresh: { task: Promise<void>; signal: AbortSignal } | null = null;
 
   const restoredCatalog = (
     entry: ModelsStoreEntry | undefined,
@@ -318,14 +319,16 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
 
   const wrapped: Provider = {
     ...provider,
-    getModels: () => mergeModels(baseline, dynamicModels),
+    getModels: () => mergeModels(baseline, dynamicModels).filter(
+      (model) => provider.id !== GOOGLE_PROVIDER_ID || isSelectableGoogleCatalogModel(model.id),
+    ),
     refreshModels: async (context) => {
       const stored = context.stored as PersistedRemoteCatalog | undefined;
       const restored = restoredCatalog(stored);
       dynamicModels = restored?.models ?? [];
       if (!context.allowNetwork || context.signal?.aborted) return;
       if (!context.force && cacheIsFresh(stored)) return;
-      if (activeNetworkRefresh) return activeNetworkRefresh;
+      if (activeNetworkRefresh && !activeNetworkRefresh.signal.aborted) return activeNetworkRefresh.task;
 
       const task = (async () => {
         const validator = restored ? stored?.etag : undefined;
@@ -404,8 +407,9 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
           },
         });
       })();
-      activeNetworkRefresh = task;
-      try { await task; } finally { if (activeNetworkRefresh === task) activeNetworkRefresh = null; }
+      const active = { task, signal: context.signal };
+      activeNetworkRefresh = active;
+      try { await task; } finally { if (activeNetworkRefresh === active) activeNetworkRefresh = null; }
     },
   };
   remoteCatalogFreshness.set(wrapped, cacheIsFresh);

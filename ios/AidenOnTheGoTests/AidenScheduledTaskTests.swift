@@ -251,37 +251,41 @@ final class AidenScheduledTaskTests: XCTestCase {
     func testScheduledTaskPresentationHumanizesCommonCadencesWithoutExposingUnknownCron() {
         let locale = Locale(identifier: "en_US")
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "*/15 * * * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "*/15 * * * *", locale: locale)),
             "Every 15 minutes"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 */2 * * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "0 */2 * * *", locale: locale)),
             "Every 2 hours"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "20 * * * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "20 * * * *", locale: locale)),
             "Every hour at 20 minutes past"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * *", locale: locale)),
             "Every day at 9:00 AM"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 16 * * 1-5", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "0 16 * * 1-5", locale: locale)),
             "Weekdays at 4:00 PM"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * 1", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * 1", locale: locale)),
             "Every Monday at 9:00 AM"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 1 * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "0 9 1 * *", locale: locale)),
             "Custom schedule"
         )
         XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "5 0 9 * * *", locale: locale),
+            normalizedWhitespace(AidenScheduledTaskPresentation.cadence(schedule: "5 0 9 * * *", locale: locale)),
             "Custom schedule"
         )
+    }
+
+    private func normalizedWhitespace(_ value: String) -> String {
+        value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     func testScheduledMcpSelectionEnforcesFullGlobalScopeCapAndUnavailableNarrowing() {

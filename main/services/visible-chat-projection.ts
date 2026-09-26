@@ -37,8 +37,9 @@ export interface VisibleChatMessage {
 /** Strip private provider protocol before a Chat crosses into the renderer. */
 export function chatForRenderer(chat: Chat | null): Chat | null {
   if (!chat) return null;
+  const { firstMessageCommit: _privateFirstMessageCommit, ...visibleChat } = chat;
   return {
-    ...chat,
+    ...visibleChat,
     messages: chat.messages.map((message) => {
       const { pi: _privatePiProtocol, ...visible } = message;
       return {

@@ -12,11 +12,17 @@ The current plan inventory and status live in [`docs/plans/README.md`](docs/plan
 
 ## UI design references
 
+Follow `docs/design-guide.md` for reusable action shapes, semantic tokens, and accessibility. Reuse the shared squircle button treatment for new and existing actions rather than introducing per-screen button geometry.
+
 Before adding or materially restyling any UI element or component, always review both `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html` for interaction, styling, state, motion, and accessibility inspiration. Adapt the references to Aiden's existing visual language rather than copying them blindly, and use the semantic design tokens in `renderer/styles.css` and `renderer/shared/appearance.ts` instead of introducing one-off colors.
 
 Do not put decorative borders or outlines around radio-button choice cards. Communicate selection with the radio control and existing background-state tokens instead. Always preserve visible keyboard `focus-visible` rings or outlines for accessibility.
 
+Keep status colors in soft semantic fills, labels, and icons. Do not add decorative colored borders or outlines to badges, alerts, selection cards, or controls. Non-text keyboard focus uses the neutral focus-ring token.
+
 Text-entry controls must not add an accent border, outline, or ring when focused. Keep their resting border unchanged and communicate focus with the existing input-background and caret states. This rule applies to inputs, textareas, and search-field wrappers, not to non-text keyboard controls that still require a visible `focus-visible` treatment.
+
+Settings must follow [`docs/settings-design-system.md`](docs/settings-design-system.md): use the shared page headings, grouped card surfaces, inset separators, and trailing controls derived from Appearance. Use the SD-card `MemoryCardIcon` for Memory. Never introduce brain icons or brain illustrations anywhere in the app.
 
 ## Release model metadata
 
@@ -41,7 +47,19 @@ For complex workflows, record concise implementation friction in `.papercuts/tro
 
 When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
 
+"Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
+
 Changes to shared server contracts or transcript/activity UI must also be checked against both native clients. Inspect iOS and Android consumers, update their implementations and focused tests when behavior is shared, and run the applicable mobile suites even when the originating change is on desktop or server.
+
+When writing or extending tests (TDD or otherwise): tautological tests are harmful. Do not assert the same expression or logic as the system under test, loop an exported constant list through a guard defined from that list and only expect true, or assert that a mock was called with exactly the object the test just constructed with no independent invariant.
+
+Change-detector tests are harmful. Do not lock incidental implementation: exact Tailwind or `className` strings, full JSX snippets, CSS keyframe bodies, private setter call text, rename-sensitive helper spellings, or large snapshots of strings or DOM with no behavioral claim.
+
+Do not create regression tests for bug fixes without a genuine gap in behavior testing. A test must reproduce the user-visible or API-visible failure mode, or provide an independent oracle for the fixed invariant. `doesNotThrow`, "still works", and ticket-ID-only stubs are not enough. Prefer extending an existing behavioral suite over a one-off that only locks the fix's source shape.
+
+Do not add or extend tests that `readFileSync` production `.ts` / `.tsx` / `.css` (or handler sources) and `assert.match` / `assert.doesNotMatch` / substring counts against that source as the primary oracle. Prefer calling the real function with fixtures; rendering (`renderToStaticMarkup` / Testing Library) and asserting structure or behavior; Playwright e2e for user-visible flows; and, for IPC, register-and-invoke or AST-based channel inventory rather than grepping channel string literals out of handler files. Existing `*contract*.test.ts` files that already grep source may stay until a follow-up cleanup. Do not grow them. When you change a surface that is only covered by a source-grep contract, replace or supplement that coverage with a behavioral test in the same PR rather than adding more `assert.match` lines.
+
+House-style examples to emulate (do not rewrite these files as part of instruction-only work): `renderer/lib/chat-message-queue.test.ts`, `main/services/portable-config-core.test.ts`, `main/services/data-store.resilience.test.ts`, and focused parse/validate handler tests that call parsers.
 
 ## Onboarding
 

@@ -1071,6 +1071,8 @@ export function bindBotCustomSelection(input: {
   selection: unknown;
   catalogRevision: string;
   snapshot: BotCapabilityCatalogSnapshot;
+  /** Main-owned current binding, never supplied by the editing client. */
+  retainedBinding?: BoundBotCustomSelection;
 }): BoundBotCustomSelection {
   if (input.catalogRevision !== input.snapshot.catalog.revision) {
     throw new BotCapabilityValidationError(
@@ -1078,7 +1080,10 @@ export function bindBotCustomSelection(input: {
     );
   }
   const selection = parseBotCustomSelection(input.selection);
-  validateSelectionAgainstCatalog(selection, input.snapshot.catalog);
+  const retained = input.retainedBinding && parseBoundBotCustomSelection(input.retainedBinding);
+  validateSelectionAgainstCatalog(selection, input.snapshot.catalog, {
+    retainedSkillIds: retained?.selection.skillIds,
+  });
   if (!fileSelectionIsCoherent(selection, input.snapshot)) {
     throw new BotCapabilityValidationError(BOT_FILE_SCOPE_SELECTION_GUIDANCE);
   }
@@ -1106,7 +1111,9 @@ export function bindBotCustomSelection(input: {
     selection.connectionIds,
     "connection",
   );
-  const skills = byOptionId(input.snapshot.resources.skills, selection.skillIds, "skill");
+  const skills = input.snapshot.catalog.skillsEnabled === false
+    ? (retained?.skills ?? []).filter(({ option }) => selection.skillIds.includes(option.id))
+    : byOptionId(input.snapshot.resources.skills, selection.skillIds, "skill");
   const otherCapabilities = byOptionId(
     input.snapshot.resources.otherCapabilities,
     selection.otherCapabilityIds,
@@ -1247,6 +1254,7 @@ function findOrAdoptByIdentity<T extends { option: { id: string } }>(
 export function botCustomSelectionDrift(
   binding: BoundBotCustomSelection,
   current: BotCapabilityCatalogSnapshot,
+  options: { skillsEnabled?: boolean } = {},
 ): BotCapabilityDriftIssue[] {
   binding = parseBoundBotCustomSelection(binding);
   const issues: BotCapabilityDriftIssue[] = [];
@@ -1306,12 +1314,14 @@ export function botCustomSelectionDrift(
       : resourceIssue("connection", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
-  for (const bound of binding.skills) {
-    const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
-    const foundIssue = found?.sourceId !== bound.sourceId
-      ? issue("skill", bound.option.id, "changed_or_removed")
-      : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
-    if (foundIssue) issues.push(foundIssue);
+  if ((options.skillsEnabled ?? current.catalog.skillsEnabled) !== false) {
+    for (const bound of binding.skills) {
+      const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
+      const foundIssue = found?.sourceId !== bound.sourceId
+        ? issue("skill", bound.option.id, "changed_or_removed")
+        : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
+      if (foundIssue) issues.push(foundIssue);
+    }
   }
   for (const bound of binding.otherCapabilities) {
     const found = current.resources.otherCapabilities.find(
@@ -1336,8 +1346,9 @@ export function botCustomSelectionDrift(
 export function assertBoundBotCustomSelectionCurrent(
   binding: BoundBotCustomSelection,
   current: BotCapabilityCatalogSnapshot,
+  options: { skillsEnabled?: boolean } = {},
 ): void {
-  const issues = botCustomSelectionDrift(binding, current);
+  const issues = botCustomSelectionDrift(binding, current, options);
   if (issues.length > 0) throw new BotCapabilityBindingDriftError(issues);
 }
 
@@ -1477,6 +1488,7 @@ export function withBotCapabilityTombstones(
   resources.skills.sort((left, right) => compareText(left.option.id, right.option.id));
   resources.otherCapabilities.sort((left, right) => compareText(left.option.id, right.option.id));
   const catalog = finalizeBotCapabilityCatalog({
+    ...(current.catalog.skillsEnabled === undefined ? {} : { skillsEnabled: current.catalog.skillsEnabled }),
     providers: resources.providers.map(({ option }) => structuredClone(option)),
     fileScopes: resources.fileScopes.map(({ option }) => ({ ...option })),
     shellAvailable: resources.shell.available,

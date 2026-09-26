@@ -1,7 +1,10 @@
+import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import {
@@ -56,8 +59,10 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
-import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
-import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
+import {
+  normalizeProviderArtworkInput,
+  persistableProviderArtwork,
+} from "../services/provider-artwork.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
@@ -110,6 +115,8 @@ function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadat
       modelId,
       {
         source,
+        overrides: parseCustomModelOptions(metadata.overrides),
+        manuallyAdded: metadata.manuallyAdded === true ? true : undefined,
         name: typeof metadata.name === "string" && metadata.name ? metadata.name : undefined,
         type: optionalModelType(metadata.type),
         vision: typeof metadata.vision === "boolean" ? metadata.vision : undefined,
@@ -156,7 +163,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
-    artwork: normalizeProviderArtwork(p.artwork),
+    artwork: persistableProviderArtwork(p.artwork),
     baseUrl,
     models,
     modelMetadata,
@@ -511,7 +518,15 @@ export function registerProviderHandlers(): void {
     if (typeof p.dictationSounds === "boolean") next.dictationSounds = p.dictationSounds;
     if (typeof p.showLocalModelReasoning === "boolean")
       next.showLocalModelReasoning = p.showLocalModelReasoning;
+    if (p.compactionEngine !== undefined) {
+      if (!isCompactionEngine(p.compactionEngine)) throw new Error("Invalid compaction engine.");
+      next.compactionEngine = p.compactionEngine;
+    }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    if (p.skillsEnabled !== undefined) {
+      if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
+      next.skillsEnabled = p.skillsEnabled;
+    }
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (
@@ -523,6 +538,19 @@ export function registerProviderHandlers(): void {
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     const saved = await configStore.setSettings(next);
+    if (next.skillsEnabled !== undefined) {
+      skillRegistry.invalidate();
+      invalidateBotRuntimeInventoryAuthority("skill_configuration");
+      if (!next.skillsEnabled) {
+        const { llmClient } = await import("../services/llm-client.js");
+        llmClient.cancelForSkillsDisabled();
+        const { contextLifecycleService } =
+          await import("../services/context-lifecycle-service-main.js");
+        contextLifecycleService.cancelForSkillsDisabled();
+      }
+      const { telegramService } = await import("../services/telegram/telegram-service.js");
+      void telegramService.refreshCommands();
+    }
     if (next.appearance) {
       const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
       ipcMain.broadcast("settings:appearance-changed", appearance);

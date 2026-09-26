@@ -4,6 +4,14 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+The locked electron-builder 26.15.3 signing implementation receives a guarded
+postinstall backport of [upstream #10101](https://github.com/electron-userland/electron-builder/pull/10101).
+It uses the temporary keychain password for partition access while retaining
+each certificate password for import. The stable v26 packages inspected during
+the 0.38.1 release still lacked this fix. Remove the backport only after an
+explicit builder upgrade includes it; the branding suite checks both password
+paths, idempotence, and rejection of unexpected source/version changes.
+
 ## Model catalog refreshes
 
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
@@ -69,6 +77,23 @@ authority. Ordinary model reads and application startup remain offline.
 
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
+
+## A signed app that never opens on macOS 27 beta
+
+On macOS 27 beta, a valid Developer ID app can be held before its first instruction executes.
+The visible symptoms are a Dock icon with no window, no new Aiden diagnostic events, a process
+sample containing only `_dyld_start`, and `vmmap -summary <pid>` reporting that the process is
+`launched-suspended`. `spctl`, strict deep code-sign verification, notarization, and stapling can
+all still pass. This is an operating-system launch-policy failure, not an Aiden profile migration;
+do not delete `~/Library/Application Support/Aiden Agent` or `~/.aiden` while diagnosing it.
+
+First stop every suspended Aiden and ShipIt process, restart the Mac, and install the newest DMG
+after moving the old application bundle aside rather than overwriting it. If newly installed
+Electron apps from other vendors also remain at `_dyld_start`, update to a newer macOS 27 beta or
+return to the current stable macOS release before judging the Aiden artifact. Keep the old bundle
+and `~/Library/Caches/com.sambitcreate.aiden-agent.ShipIt` logs until the replacement launches.
+Release acceptance must record this OS boundary separately from the hosted signing, notarization,
+package, and disposable-profile gates.
 
 ## Physical Mac acceptance on a personal Mac Studio
 

@@ -56,7 +56,7 @@ The first implementation milestone should therefore be **data safety and bounded
 | P1 | Scheduled catch-up has per-task overlap protection but no global budget or battery/lock policy | `main/services/schedule-service-core.ts` | Multiple missed tasks can stampede after startup/resume |
 | P2 | The closed model picker queries every provider and rebuilds/sorts catalog structures during parent renders | `renderer/components/model-picker.tsx`, `renderer/lib/queries.ts` | Stream-frame work scales with provider/model count |
 | P2 | Startup waits for provider enumeration/auth state before the first React render | `renderer/main/index.tsx`, `main/services/provider-registry.ts` | A slow keychain/provider probe delays visible app chrome |
-| P2 | Routes, settings, xterm, KaTeX, and full Highlight.js are in an eager startup graph | `renderer/main/router.tsx`, `renderer/main/settings-view.tsx`, `renderer/components/code-block.tsx` | Larger parse/compile/startup and update payload |
+| P2 | Routes, settings, terminal, KaTeX, and full Highlight.js are in an eager startup graph | `renderer/main/router.tsx`, `renderer/main/settings-view.tsx`, `renderer/components/code-block.tsx` | Larger parse/compile/startup and update payload |
 | P2 | Terminal output and LLM deltas cross IPC at source cadence; terminal buffers repeatedly copy large strings | `main/services/terminal.ts`, `main/services/llm-client.ts` | Excess wakeups, IPC allocations, and resize churn |
 | P2 | Several realistic lists are unwindowed | files, review, chat/model palettes, transcript | Large workspaces and histories degrade nonlinearly |
 
@@ -239,7 +239,7 @@ Exit gate:
 #### 4B. Render sooner and load optional code later
 
 - Render the lightweight shell before provider enumeration. Show a truthful provider-hydration state and enable composer selection only after alias/identity migration is authoritative.
-- Dynamically import Settings/Profile/Scheduled routes, individual heavy Settings sections, terminal/xterm on first open, and other secondary panels.
+- Dynamically import Settings/Profile/Scheduled routes, individual heavy Settings sections, terminal/libghostty on first open, and other secondary panels.
 - Keep ChatLayout, transcript shell, composer, selected-model trigger, and generation bridge in the initial graph. Optionally idle-preload the next likely surface after first input readiness.
 - Use package-content allowlists. Bundle pure-JS main dependencies when safe; externalize/unpack only native/runtime-required modules.
 - Disable packaged source maps or publish hidden maps outside the app artifact. Add a test that no `.map` is shipped.

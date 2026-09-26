@@ -1,3 +1,4 @@
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -216,6 +217,25 @@ function normalizeWorkspace(w: Workspace): Workspace {
               ? { worktreeInode: w.managedWorktree.worktreeInode }
               : {}),
             createdFromHead: w.managedWorktree.createdFromHead,
+            ...(Array.isArray(w.managedWorktree.provisionedFiles)
+              ? {
+                  provisionedFiles: w.managedWorktree.provisionedFiles
+                    .filter(
+                      (entry): entry is string =>
+                        typeof entry === "string" &&
+                        entry.length > 0 &&
+                        entry.length <= 512 &&
+                        !path.isAbsolute(entry) &&
+                        !entry.includes("\\") &&
+                        !entry.includes("\u0000") &&
+                        path.posix.normalize(entry) === entry &&
+                        entry !== "." &&
+                        !entry.startsWith("../") &&
+                        entry !== "..",
+                    )
+                    .slice(0, 4_096),
+                }
+              : {}),
           }
         : undefined,
     folderPath:
@@ -680,7 +700,13 @@ export function createConfigStore(
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
-        if (idx >= 0) config.providers[idx] = { ...config.providers[idx], ...intent };
+        if (idx >= 0) {
+          config.providers[idx] = { ...config.providers[idx], ...intent };
+          // An explicit metadata save replaces user overrides, including reset.
+          if (provider.modelMetadata !== undefined && intent.customModelOptions === undefined) {
+            delete config.providers[idx].customModelOptions;
+          }
+        }
         else config.providers.push(intent);
         return structuredClone(config.providers.find((p) => p.id === intent.id)!);
       }, isCurrent);
@@ -758,6 +784,9 @@ export function createConfigStore(
       patch: Partial<AppSettings>,
       isCurrent: () => boolean = () => true,
     ): Promise<AppSettings> {
+      if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
+        throw new Error("Invalid compaction engine.");
+      }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
       // append-only migration record that a settings change never rewrites. Do

@@ -8,11 +8,13 @@ import {
 } from "./schedule-guard.js";
 import { nextScheduledRun, systemTimezone, validateTimezone } from "./schedule-store.js";
 import type {
+  AppSettings,
   McpServer,
   ScheduledRun,
   ScheduledMcpServerBinding,
   ScheduledTask,
   ScheduledTaskInput,
+  StoredProvider,
   Workspace,
 } from "./types.js";
 import {
@@ -308,6 +310,8 @@ export interface ScheduleToolDependencies {
   listMcpServers(): Promise<McpServer[]>;
   validateScript(input: { script: string; workspaceRoot?: string }): Promise<string>;
   isSchedulingEnabled(): Promise<boolean>;
+  getSettings(): Promise<AppSettings>;
+  selectionProvider(providerId: string): Promise<StoredProvider | undefined>;
 }
 
 const defaultDependencies: ScheduleToolDependencies = {
@@ -346,6 +350,10 @@ const defaultDependencies: ScheduleToolDependencies = {
     (await import("./config-store.js")).configStore
       .getSettings()
       .then((settings) => settings.scheduledTasksEnabled !== false),
+  getSettings: async () => (await import("./config-store.js")).configStore.getSettings(),
+  selectionProvider: async (providerId) =>
+    (await import("./provider-registry.js")).providerRegistry.selectionProvider(providerId) ??
+    (await import("./config-store.js")).configStore.getProvider(providerId),
 };
 
 function result(value: unknown): AgentToolResult<null> {
@@ -898,10 +906,79 @@ function sameIds(left: readonly string[] | undefined, right: readonly string[]):
   return (left?.length ?? 0) === right.length && right.every((id, index) => left?.[index] === id);
 }
 
-function standardSelection(
+const NO_PROVIDER_SET = "No provider set";
+const APP_DEFAULT = "App default";
+
+/** Settings-resolved app-default runtime selection used only for approval display. */
+interface StandardDefaultModel {
+  providerId?: string;
+  model?: string;
+  providerLabel?: string;
+  modelLabel?: string;
+}
+
+function appDefaultProviderLabel(providerLabel: string | undefined): string {
+  if (!providerLabel) return APP_DEFAULT;
+  return approvalDisplayValue(
+    `App default (${providerLabel})`,
+    ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT,
+    APP_DEFAULT,
+  );
+}
+
+async function resolveStandardDefaultModel(
+  dependencies: ScheduleToolDependencies,
+): Promise<StandardDefaultModel> {
+  const settings = await dependencies.getSettings();
+  const providerId = settings.lastProviderId?.trim();
+  if (!providerId) return {};
+  const provider = await dependencies.selectionProvider(providerId);
+  const model = settings.lastModel?.trim() || provider?.defaultModel?.trim();
+  return {
+    providerId,
+    ...(model ? { model } : {}),
+    providerLabel: provider?.label?.trim() || undefined,
+    ...(model && provider?.modelMetadata?.[model]?.name?.trim()
+      ? { modelLabel: provider.modelMetadata[model].name.trim() }
+      : {}),
+  };
+}
+
+function standardDefaultSelection(defaults: StandardDefaultModel): AssistantScheduleModelSelection {
+  if (!defaults.providerId) {
+    return {
+      providerId: "no-provider",
+      providerName: NO_PROVIDER_SET,
+      model: "no-model",
+      modelName: NO_PROVIDER_SET,
+      providerFingerprint: "sha256:unbound",
+    };
+  }
+  const model = defaults.model;
+  return {
+    providerId: approvalDisplayValue(
+      defaults.providerId,
+      ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT,
+      "no-provider",
+    ),
+    providerName: appDefaultProviderLabel(defaults.providerLabel),
+    model: approvalDisplayValue(model ?? "app-default", ASSISTANT_AUTOMATION_MODEL_ID_LIMIT, "app-default"),
+    modelName: model
+      ? approvalDisplayValue(
+          defaults.modelLabel ?? model,
+          ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT,
+          APP_DEFAULT,
+        )
+      : APP_DEFAULT,
+    providerFingerprint: "sha256:unbound",
+  };
+}
+
+async function standardSelection(
   existing: ScheduledTask | undefined,
   selection: AssistantScheduleModelSelection | undefined,
-): AssistantScheduleModelSelection {
+  defaultModel: () => Promise<StandardDefaultModel>,
+): Promise<AssistantScheduleModelSelection> {
   if (existing?.providerId && existing.model) {
     return {
       providerId: existing.providerId,
@@ -913,13 +990,7 @@ function standardSelection(
     };
   }
   if (selection) return validateAssistantScheduleModelSelection(selection);
-  return {
-    providerId: "scheduler-default",
-    providerName: "Scheduler default",
-    model: "scheduler-default",
-    modelName: "Scheduler default",
-    providerFingerprint: "sha256:unbound",
-  };
+  return standardDefaultSelection(await defaultModel());
 }
 
 async function standardScope(
@@ -1028,6 +1099,12 @@ async function resolveStandardScheduleApproval(
     }
   }
 
+  let defaultModelPromise: Promise<StandardDefaultModel> | undefined;
+  const defaultModel = (): Promise<StandardDefaultModel> => {
+    defaultModelPromise ??= resolveStandardDefaultModel(dependencies);
+    return defaultModelPromise;
+  };
+
   let input: ScheduledTaskInput;
   if (action === "create" || action === "update") {
     if (params.workspaceId?.trim() && params.clearWorkspace) {
@@ -1098,7 +1175,17 @@ async function resolveStandardScheduleApproval(
     if (workspaceId && mcpServerIds.length > 0) {
       throw new Error("Scheduled tasks must choose either one project or MCP servers, not both.");
     }
-    const selected = standardSelection(existing, selection);
+    if (mode === "llm" && !existing?.providerId && !selection) {
+      const appDefault = await defaultModel();
+      if (!appDefault.providerId && (action === "create" || existing!.mode !== "llm")) {
+        throw new Error(
+          action === "create"
+            ? "Choose a provider before creating this scheduled task (no app default is set)."
+            : "Choose a provider before switching this scheduled task to LLM mode (no app default is set).",
+        );
+      }
+    }
+    const selected = await standardSelection(existing, selection, defaultModel);
     input = {
       id: existing?.id,
       name: bounded(
@@ -1155,7 +1242,7 @@ async function resolveStandardScheduleApproval(
   } else if ((input.mcpServerIds?.length ?? 0) > 0) {
     input.mcpServerBindings = scope.mcpServerBindings;
   }
-  const selected = standardSelection(existing, selection);
+  const selected = await standardSelection(existing, selection, defaultModel);
   const schedulerEnabled = await dependencies.isSchedulingEnabled();
   const cron = required(input.cron, "cron");
   const timezone = validateTimezone(input.timezone ?? systemTimezone());

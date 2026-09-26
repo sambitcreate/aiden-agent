@@ -114,9 +114,9 @@ export function VoiceSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <FieldSet title="Voice Input">
+      <FieldSet title="Use your voice">
         <Field
-          label="Provider"
+          label="Where should your voice be processed?"
           description={
             provider === "local"
               ? "Transcribes on this Mac after an on-device model is downloaded."
@@ -128,9 +128,9 @@ export function VoiceSettings() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="openai">OpenAI</SelectItem>
-              <SelectItem value="gemini">Google Gemini</SelectItem>
-              <SelectItem value="local">On-device (Parakeet)</SelectItem>
+              <SelectItem value="openai">Online · OpenAI</SelectItem>
+              <SelectItem value="gemini">Online · Google Gemini</SelectItem>
+              <SelectItem value="local">On this Mac · Private</SelectItem>
             </SelectContent>
           </Select>
           {provider === "gemini" ? (

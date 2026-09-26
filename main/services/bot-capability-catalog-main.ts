@@ -7,6 +7,7 @@ import {
 } from "../../renderer/shared/bot-capabilities.js";
 import {
   buildBotCapabilityCatalogSnapshot,
+  finalizeBotCapabilityCatalog,
   type BotCapabilityCatalogSnapshot,
   type BotConnectionInventory,
   type BotOrdinaryCapabilityInventory,
@@ -67,6 +68,7 @@ export interface BotCapabilityInventoryPorts {
   inspectMacFiles(signal: AbortSignal): Promise<BotMacFileInventory>;
   inspectShell(signal: AbortSignal): Promise<BotShellInventory>;
   inspectConnections(signal: AbortSignal): Promise<readonly BotConnectionInventory[]>;
+  skillsEnabled?(): Promise<boolean>;
   inspectSkills(
     signal: AbortSignal,
     target?: { botId: string },
@@ -141,6 +143,7 @@ export class BotCapabilityCatalogMainService {
         connections,
         skills,
         otherCapabilities,
+        skillsEnabled,
       ] = await Promise.all([
         this.selectionKey(),
         input.notice,
@@ -162,6 +165,7 @@ export class BotCapabilityCatalogMainService {
           input.botId === undefined ? undefined : { botId: this.botId(input.botId) },
         ),
         this.ports.inspectOtherCapabilities(controller.signal),
+        this.ports.skillsEnabled?.() ?? Promise.resolve(true),
       ]);
       if (parent.aborted) throw abortReason(parent);
       const current = buildBotCapabilityCatalogSnapshot({
@@ -197,6 +201,10 @@ export class BotCapabilityCatalogMainService {
         notice,
         mintOpaqueId: createBotCapabilityOpaqueIdMint(selectionKey),
       });
+      if (!skillsEnabled) {
+        current.resources.skills = [];
+        current.catalog = finalizeBotCapabilityCatalog({ ...current.catalog, skills: [], skillsEnabled: false });
+      }
       const mintOpaqueId = createBotCapabilityOpaqueIdMint(selectionKey);
       for (const binding of input.retainedBindings ?? []) {
         assertBoundBotCustomSelectionOpaqueIds(binding, mintOpaqueId);
@@ -275,6 +283,7 @@ export class BotCapabilityCatalogMainService {
       selection: input.selection,
       catalogRevision: input.catalogRevision,
       snapshot,
+      retainedBinding: input.retainedBindings?.[0],
     });
   }
 

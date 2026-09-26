@@ -13,6 +13,69 @@ final class AidenBotCacheTests: XCTestCase {
         )
     }
 
+    func testTargetedCatalogsNeverOverwriteOrFallbackToGlobalOrAnotherBot() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-catalog-scopes-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenBotCache(root: root)
+        let generic = try fixture().botCapabilityCatalog
+        func scoped(_ id: String) throws -> AidenBotCapabilityCatalog {
+            var data = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(generic)) as? [String: Any])
+            data["revision"] = "catalog-\(id)"
+            data["skillsEnabled"] = false
+            data["skills"] = [["id": "skill-\(id)", "label": "Saved skill", "available": false]]
+            return try JSONDecoder.aidenRemote().decode(AidenBotCapabilityCatalog.self, from: JSONSerialization.data(withJSONObject: data))
+        }
+        let first = try scoped("a")
+        let second = try scoped("b")
+        let activation = await cache.activate(instanceId: "instance", deviceId: "device")
+        _ = try await cache.store(AidenBotCacheSnapshot(catalog: generic), activation: activation)
+        let legacy = await cache.load(instanceId: "instance", deviceId: "device")
+        XCTAssertEqual(legacy?.catalog(forBotID: nil), generic)
+        XCTAssertNil(legacy?.catalog(forBotID: "bot:a"), "Legacy global data is not scoped authority")
+        _ = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:a": first]), activation: activation)
+        _ = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:b": second]), activation: activation)
+        let restarted = AidenBotCache(root: root)
+        let restored = await restarted.load(instanceId: "instance", deviceId: "device")
+        XCTAssertEqual(restored?.catalog(forBotID: nil), generic)
+        XCTAssertEqual(restored?.catalog(forBotID: "bot:a"), first)
+        XCTAssertEqual(restored?.catalog(forBotID: "bot:b"), second)
+        XCTAssertNil(restored?.catalog(forBotID: "bot:unknown"))
+        let otherPairing = await restarted.load(instanceId: "instance", deviceId: "other-device")
+        XCTAssertNil(otherPairing)
+        for id in ["../bad", "bot:newline\n", "", String(repeating: "a", count: AidenRemoteProtocol.maxBotIdentifierLength + 1)] {
+            let invalid = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: [id: first]), activation: activation)
+            XCTAssertNil(invalid)
+        }
+        let afterInvalid = await cache.load(instanceId: "instance", deviceId: "device")
+        XCTAssertEqual(afterInvalid, restored)
+        let otherActivation = await cache.activate(instanceId: "other-instance", deviceId: "device")
+        let stale = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:a": second]), activation: activation)
+        XCTAssertNil(stale)
+        let current = await cache.isCurrent(otherActivation)
+        XCTAssertTrue(current)
+    }
+
+    func testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes() throws {
+        let contract = try fixture()
+        let snapshot = AidenBotCacheSnapshot(catalog: contract.botCapabilityCatalog)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var wire = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(snapshot)) as? [String: Any])
+        wire.removeValue(forKey: "catalogsByBotID")
+        let legacy = try JSONDecoder.aidenRemote().decode(AidenBotCacheSnapshot.self, from: JSONSerialization.data(withJSONObject: wire))
+        XCTAssertNil(legacy.catalogsByBotID)
+        XCTAssertEqual(legacy.catalog, contract.botCapabilityCatalog)
+        let retainedID = try XCTUnwrap(contract.botList.bots.first?.id)
+        let existing = AidenBotCacheSnapshot(catalog: contract.botCapabilityCatalog, catalogsByBotID: [
+            retainedID: contract.botCapabilityCatalog,
+            "bot:deleted": contract.botCapabilityCatalog,
+        ])
+        let pruned = AidenBotCacheSegments(list: contract.botList).applying(to: existing, savedAt: Date())
+        XCTAssertEqual(Set(pruned.catalogsByBotID?.keys ?? Dictionary<String, AidenBotCapabilityCatalog>().keys), [retainedID])
+        XCTAssertEqual(pruned.catalog, existing.catalog)
+    }
+
     func testBotCacheIsInstanceScopedAndRejectsAtoBtoAStalePublication() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-cache-\(UUID().uuidString)", directoryHint: .isDirectory)

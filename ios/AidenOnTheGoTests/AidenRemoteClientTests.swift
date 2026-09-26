@@ -118,6 +118,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertEqual(object["clientVersion"] as? String, "1.0")
             XCTAssertEqual(object["acceptsDisplayName"] as? Bool, true)
             XCTAssertEqual(object["acceptsBotCapabilities"] as? Bool, true)
+            XCTAssertNil(object["acceptsProgressCapabilities"], "Progress access is negotiated after /server feature discovery.")
             return Self.response(
                 for: request,
                 status: 200,
@@ -455,7 +456,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let fixture: AidenRemoteContractFixture = try botFixtureValue(at: [])
         let server = fixture.server
         XCTAssertTrue(server.supportsChatSummaries)
-        XCTAssertEqual(server.features, [AidenServer.chatSummariesFeature])
+        XCTAssertEqual(server.features, [AidenServer.chatSummariesFeature, AidenServer.chatTasksFeature, AidenServer.chatAgentsFeature])
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [
@@ -615,7 +616,7 @@ final class AidenRemoteClientTests: XCTestCase {
             _ = try await client.preferredChatSummaries(advertised: false)
             XCTFail("Legacy chat lists must reject private child projections.")
         } catch AidenRemoteClientError.invalidResponse {
-            // Expected.
+            // The HTTP client reports contract rejection through its public error.
         }
     }
 
@@ -1598,7 +1599,7 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         XCTAssertEqual(cachedAfterRefresh?.details.first?.visionModelSelection,
                        tools.bot?.visionModelSelection)
-        XCTAssertEqual(cachedAfterRefresh?.catalog, tools.catalog)
+        XCTAssertEqual(cachedAfterRefresh?.catalog(forBotID: botID), tools.catalog)
 
         tools.draft?.mode = .custom
         tools.draft?.skillIDs.removeAll()
@@ -2191,6 +2192,259 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTFail("Expected a non-image content type to fail closed.")
         } catch {
             XCTAssertTrue(error is AidenRemoteClientError)
+        }
+    }
+
+    func testStreamEOFDiscardsUnterminatedFramesAndReplaysFromLastCompleteEvent() async throws {
+        let client = makeClient()
+        let first = #"{"protocolVersion":1,"streamId":"stream-1","sequence":1,"timestamp":"2026-09-19T12:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"Hello"}}"#
+        let second = #"{"protocolVersion":1,"streamId":"stream-1","sequence":2,"timestamp":"2026-09-19T12:00:01Z","type":"text_delta","terminal":false,"payload":{"text":" world"}}"#
+        let terminal = #"{"protocolVersion":1,"streamId":"stream-1","sequence":2,"timestamp":"2026-09-19T12:00:01Z","type":"done","terminal":true,"payload":{"messageId":"message-1"}}"#
+
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decodeSSEEvent(from: Data(terminal.utf8)).terminal)
+
+        // Include complete JSON without a frame terminator, partial JSON, a
+        // header-only tail, and a UTF-8 scalar interrupted at the byte boundary.
+        for newline in ["\n", "\r\n"] {
+            let complete = "id: 1\(newline)data: \(first)\(newline)\(newline)"
+            let tails = [
+                Data("id: 2\(newline)data: \(second)".utf8),
+                Data("id: 2\(newline)data: \(second)\(newline)".utf8),
+                Data("id: 2\(newline)data: \(terminal)\(newline)".utf8),
+                Data("id: 2\(newline)data: {\"protocolVersion\":1".utf8),
+                Data("id: 2\(newline)".utf8),
+                Data("id: 2\(newline)data: ".utf8) + Data([0xF0, 0x9F])
+            ]
+            for tail in tails {
+                AidenRemoteMockURLProtocol.handler = { request in
+                    XCTAssertEqual(request.httpMethod, "GET")
+                    XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-1/events")
+                    let after = request.value(forHTTPHeaderField: "Last-Event-ID")
+                    let body: Data
+                    if after == "1" {
+                        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+                        XCTAssertEqual(query, [URLQueryItem(name: "after", value: "1")])
+                        body = Data("id: 2\(newline)data: \(second)\(newline)\(newline)".utf8)
+                    } else {
+                        XCTAssertNil(after)
+                        body = Data(complete.utf8) + tail
+                    }
+                    let response = HTTPURLResponse(
+                        url: try XCTUnwrap(request.url), statusCode: 200,
+                        httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+                    )!
+                    return (response, body)
+                }
+
+                var events: [AidenRemoteStreamEvent] = []
+                for try await event in client.streamEvents(id: "stream-1", after: 0) {
+                    events.append(event)
+                }
+                XCTAssertEqual(events.map(\.sequence), [1], "EOF must not acknowledge an incomplete frame.")
+                XCTAssertEqual(events.map { $0.payload?.text }, ["Hello"])
+                XCTAssertFalse(events.contains { $0.terminal })
+
+                let cursor = try XCTUnwrap(events.last?.sequence)
+                for try await event in client.streamEvents(id: "stream-1", after: cursor) {
+                    events.append(event)
+                }
+                XCTAssertEqual(events.map(\.sequence), [1, 2])
+                XCTAssertEqual(events.compactMap { $0.payload?.text }.joined(), "Hello world")
+            }
+        }
+    }
+
+    func testStreamCompleteTerminalFrameStillDispatchesAtEOF() async throws {
+        let client = makeClient()
+        let terminal = #"{"protocolVersion":1,"streamId":"stream-1","sequence":1,"timestamp":"2026-09-19T12:00:01Z","type":"done","terminal":true,"payload":{"messageId":"message-1"}}"#
+        for newline in ["\n", "\r\n"] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url), statusCode: 200,
+                    httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("id: 1\(newline)data: \(terminal)\(newline)\(newline)".utf8))
+            }
+            var events: [AidenRemoteStreamEvent] = []
+            for try await event in client.streamEvents(id: "stream-1", after: 0) {
+                events.append(event)
+            }
+            XCTAssertEqual(events.map(\.sequence), [1])
+            XCTAssertEqual(events.first?.type, .done)
+            XCTAssertEqual(events.first?.terminal, true)
+            XCTAssertEqual(events.first?.payload?.messageId, "message-1")
+        }
+    }
+
+    func testProgressClientUsesNegotiatedRoutesAndChatScopedDirectSnapshotEvents() async throws {
+        let client = makeClient()
+        let taskData = try botFixtureData(at: ["taskProgress"])
+        let rosterData = try botFixtureData(at: ["agentRoster"])
+        let progressEvents = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatProgressEvents"])
+            ) as? [[String: Any]]
+        )
+        let firstEventData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(progressEvents.first))
+        let firstEventJSON = String(decoding: firstEventData, as: UTF8.self)
+        var requests: [String] = []
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            requests.append("\(request.httpMethod ?? "?") \(path)")
+            switch (request.httpMethod, path) {
+            case ("POST", "/api/aiden/v1/device/capabilities"):
+                let body = try Self.jsonBody(request)
+                XCTAssertEqual(Set(try XCTUnwrap(body["accepts"] as? [String])), Set(["tasks:read", "agents:read"]))
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: "{\"capabilities\":[\"server:read\",\"tasks:read\",\"agents:read\"]}"
+                )
+            case ("GET", "/api/aiden/v1/chats/chat_fixture_01/tasks"):
+                XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.query)
+                return Self.response(for: request, status: 200, data: taskData)
+            case ("GET", "/api/aiden/v1/chats/chat_fixture_01/agents"):
+                let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+                XCTAssertEqual(query, [URLQueryItem(name: "turnId", value: "turn_fixture_01")])
+                return Self.response(for: request, status: 200, data: rosterData)
+            case ("GET", "/api/aiden/v1/chats/chat_fixture_01/progress/events"):
+                XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.query)
+                XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("id: 1\nevent: task_update\ndata: \(firstEventJSON)\n\n".utf8))
+            default:
+                XCTFail("Unexpected progress request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let capabilities = try await client.updateDeviceCapabilities(
+            accepts: [.tasksRead, .agentsRead]
+        )
+        XCTAssertEqual(capabilities, [.serverRead, .tasksRead, .agentsRead])
+        let taskProgress = try await client.taskProgress(chatId: "chat_fixture_01")
+        XCTAssertEqual(taskProgress.tasks.count, 3)
+        let roster = try await client.agentRoster(
+            chatId: "chat_fixture_01",
+            turnId: "turn_fixture_01"
+        )
+        XCTAssertEqual(roster.turnId, "turn_fixture_01")
+
+        var events: [AidenRemoteStreamEvent] = []
+        for try await event in client.progressEvents(chatId: "chat_fixture_01", after: 0) {
+            events.append(event)
+        }
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.streamId, "chat_fixture_01")
+        XCTAssertEqual(events.first?.type, .taskUpdate)
+        XCTAssertEqual(events.first?.taskProgress?.chatId, "chat_fixture_01")
+        XCTAssertNil(events.first?.agentRoster)
+        XCTAssertEqual(
+            requests,
+            [
+                "POST /api/aiden/v1/device/capabilities",
+                "GET /api/aiden/v1/chats/chat_fixture_01/tasks",
+                "GET /api/aiden/v1/chats/chat_fixture_01/agents",
+                "GET /api/aiden/v1/chats/chat_fixture_01/progress/events",
+            ]
+        )
+    }
+
+    func testTranscriptAndProgressStreamsRejectCrossChannelEventTypes() async throws {
+        let client = makeClient()
+        let progressEvents = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatProgressEvents"])
+            ) as? [[String: Any]]
+        )
+        let taskEventData = try JSONSerialization.data(
+            withJSONObject: try XCTUnwrap(progressEvents.first)
+        )
+        let taskJSON = String(
+            decoding: taskEventData,
+            as: UTF8.self
+        )
+        let heartbeatJSON = #"{"protocolVersion":1,"streamId":"chat_fixture_01","sequence":1,"timestamp":"2026-09-14T12:00:00Z","type":"heartbeat","terminal":false,"payload":{}}"#
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            let body: String
+            switch path {
+            case "/api/aiden/v1/streams/stream_fixture_01/events":
+                body = "id: 1\nevent: task_update\ndata: \(taskJSON)\n\n"
+            case "/api/aiden/v1/chats/chat_fixture_01/progress/events":
+                body = "id: 1\nevent: heartbeat\ndata: \(heartbeatJSON)\n\n"
+            default:
+                XCTFail("Unexpected stream path: \(path)")
+                return Self.response(for: request, status: 404, json: "{}")
+            }
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        await assertInvalidResponse {
+            var events: [AidenRemoteStreamEvent] = []
+            for try await event in client.streamEvents(id: "stream_fixture_01", after: 0) {
+                events.append(event)
+            }
+            return events
+        }
+        await assertInvalidResponse {
+            var events: [AidenRemoteStreamEvent] = []
+            for try await event in client.progressEvents(chatId: "chat_fixture_01", after: 0) {
+                events.append(event)
+            }
+            return events
+        }
+    }
+
+    func testProgressEventsRejectPayloadsBoundToAnotherChat() async throws {
+        let client = makeClient()
+        // The event's stream identity is the chat ID; a payload carrying a
+        // different chatId must fail closed even though the channel matches.
+        let mismatchedJSON = #"{"protocolVersion":1,"streamId":"chat_fixture_01","sequence":1,"timestamp":"2026-09-14T12:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_other","availability":"ready","epoch":"epoch_fixture_01","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[]}}"#
+        let mismatchedRosterJSON = #"{"protocolVersion":1,"streamId":"chat_fixture_01","sequence":1,"timestamp":"2026-09-14T12:00:00Z","type":"agents_update","terminal":false,"payload":{"version":1,"chatId":"chat_other","availability":"ready","epoch":"epoch_fixture_01","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}}"#
+
+        for (sseType, eventJSON) in [("task_update", mismatchedJSON), ("agents_update", mismatchedRosterJSON)] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("id: 1\nevent: \(sseType)\ndata: \(eventJSON)\n\n".utf8))
+            }
+            do {
+                var events: [AidenRemoteStreamEvent] = []
+                for try await event in client.progressEvents(chatId: "chat_fixture_01", after: 0) {
+                    events.append(event)
+                }
+                XCTFail("Expected invalidStreamIdentity for \(sseType).")
+            } catch {
+                XCTAssertEqual(error as? AidenRemoteContractError, .invalidStreamIdentity)
+            }
+        }
+    }
+
+    func testProgressNegotiationRejectsEmptyAndInvalidRequests() async throws {
+        let client = makeClient()
+        await assertInvalidResponse {
+            try await client.updateDeviceCapabilities(accepts: [])
+        }
+        await assertInvalidResponse {
+            try await client.agentRoster(chatId: "chat_fixture_01", turnId: "not a valid turn id")
         }
     }
 
@@ -2845,6 +3099,38 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testNegotiatedProgressPersistenceRejectsUnconfirmedSupportAndRollsBackFailedWrites() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-progress", deviceId: "device-progress", credential: "credential-progress"),
+            trust: makeSystemTrust(), name: "Progress Mac"
+        )
+        let grants: [AidenRemoteCapability] = [.serverRead, .workspaceRead, .tasksRead, .agentsRead]
+        func server(support: [AidenRemoteCapability]?) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "instance-progress", name: "Progress Mac",
+                appVersion: "1.0", capabilities: grants, serverCapabilities: support,
+                connectionMode: .lan, minimumClientVersion: nil, serverTime: Date()
+            )
+        }
+        let originalSnapshot = keychain.values[.remoteInstallations]
+        for support in [nil, [.serverRead, .workspaceRead]] as [[AidenRemoteCapability]?] {
+            XCTAssertThrowsError(try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: support)))
+            XCTAssertEqual(keychain.values[.remoteInstallations], originalSnapshot)
+        }
+        keychain.failingSaveKeys = [.remoteInstallations]
+        XCTAssertThrowsError(try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: grants)))
+        XCTAssertEqual(store.activeInstallation?.deviceCapabilities, [.serverRead, .workspaceRead])
+        XCTAssertEqual(keychain.values[.remoteInstallations], originalSnapshot)
+        keychain.failingSaveKeys = []
+        try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: grants))
+        let reloaded = AidenInstallationStore(keychain: keychain)
+        XCTAssertEqual(reloaded.activeInstallation?.deviceCapabilities, grants)
+        XCTAssertEqual(reloaded.activeInstallation?.serverCapabilities, grants)
+    }
+
+    @MainActor
     func testServerRefreshCanNarrowButNeverWidenDeviceGrants() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -3086,6 +3372,111 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(removed)
         XCTAssertFalse(coordinator.workspaces.contains(where: { $0.id == updated.id }))
         XCTAssertEqual(workspaceListRequests, 2, "Confirmed removal should reload the canonical registry in case the Mac seeded a default workspace")
+    }
+
+    @MainActor
+    func testCoordinatorNegotiatesProgressOnlyAfterServerFeatureDiscovery() async throws {
+        for outcome in ["success", "refreshFailure", "unconfirmedGrants"] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-other", deviceId: "device-other", credential: "other-credential"),
+                trust: makeSystemTrust(), name: "Other Mac"
+            )
+            let exchange = makeExchange(
+                instanceId: "instance-progress",
+                deviceId: "device-progress",
+                credential: "credential-progress"
+            )
+            _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Progress Mac")
+
+            let session = makeSession()
+            var persistedDuringRefresh: String?
+            var serverRequests = 0
+            var capabilityRequests = 0
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    serverRequests += 1
+                    if serverRequests > 1 {
+                        persistedDuringRefresh = keychain.values[.remoteInstallations]
+                        if outcome == "refreshFailure" { throw URLError(.networkConnectionLost) }
+                    }
+                    var serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-progress",
+                        "name": "Progress Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": serverRequests == 1 || outcome == "unconfirmedGrants"
+                            ? ["server:read", "workspace:read"]
+                            : ["server:read", "workspace:read", "tasks:read", "agents:read"],
+                        "features": ["chat-tasks-v1", "chat-agents-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-09-14T12:00:00.000Z",
+                    ]
+                    serverObject["serverCapabilities"] = ["server:read", "workspace:read"]
+                    if serverRequests > 1 {
+                        serverObject["serverCapabilities"] = [
+                            "server:read", "workspace:read", "tasks:read", "agents:read",
+                        ]
+                    }
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        data: try JSONSerialization.data(withJSONObject: serverObject)
+                    )
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let body = try Self.jsonBody(request)
+                    let name = try XCTUnwrap(body["name"] as? String)
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        data: try JSONSerialization.data(withJSONObject: ["name": name])
+                    )
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    capabilityRequests += 1
+                    let body = try Self.jsonBody(request)
+                    XCTAssertEqual(Set(try XCTUnwrap(body["accepts"] as? [String])), Set(["tasks:read", "agents:read"]))
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"tasks:read\",\"agents:read\"]}"
+                    )
+                default:
+                    XCTFail("Unexpected progress negotiation request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected)
+            XCTAssertEqual(serverRequests, 2)
+            XCTAssertEqual(capabilityRequests, 1)
+            // Reload the exact snapshot saved before the second request returned:
+            // a process exit here must preserve both Macs with their old grants.
+            let interruptedKeychain = AidenRemoteMemoryKeychain()
+            interruptedKeychain.values[.remoteInstallations] = try XCTUnwrap(persistedDuringRefresh)
+            let interruptedStore = AidenInstallationStore(keychain: interruptedKeychain)
+            XCTAssertEqual(interruptedStore.installations.count, 2, outcome)
+            XCTAssertEqual(interruptedStore.activeInstallation?.deviceCapabilities, [.serverRead, .workspaceRead], outcome)
+
+            let reloaded = AidenInstallationStore(keychain: keychain)
+            XCTAssertEqual(reloaded.installations.count, 2, outcome)
+            let installation = try XCTUnwrap(reloaded.activeInstallation)
+            XCTAssertEqual(installation.id, "instance-progress")
+            XCTAssertEqual(installation.deviceCapabilities.contains(.tasksRead), outcome == "success", outcome)
+            XCTAssertEqual(installation.deviceCapabilities.contains(.agentsRead), outcome == "success", outcome)
+            XCTAssertTrue(Set(installation.deviceCapabilities).isSubset(of: Set(installation.serverCapabilities ?? [])), outcome)
+        }
     }
 
     @MainActor
@@ -3705,6 +4096,47 @@ final class AidenRemoteClientTests: XCTestCase {
             chatId: "chat-race"
         )
         XCTAssertNil(restored)
+    }
+
+    func testBotCatalogRequestsUseExactTargetAndKeepLegacyCreateGeneric() async throws {
+        let client = makeClient()
+        let data = try botFixtureData(at: ["botCapabilityCatalog"])
+        let targets: [String?] = [nil, "bot:first", "bot:second"]
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            let target = targets[requests]
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-capabilities")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(query, target.map { [URLQueryItem(name: "botId", value: $0)] } ?? [])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertFalse(request.url!.absoluteString.contains("device-credential"))
+            return Self.response(for: request, status: 200, data: data)
+        }
+        _ = try await client.botCapabilityCatalog()
+        _ = try await client.botCapabilityCatalog(botId: "bot:first")
+        _ = try await client.botCapabilityCatalog(botId: "bot:second")
+        XCTAssertEqual(requests, 3)
+    }
+
+    func testBotCatalogRejectsInvalidTargetsBeforeIssuingAnyRequest() async throws {
+        let client = makeClient()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            requests += 1
+            XCTFail("Invalid Bot target reached the transport: \(request.url?.path ?? "")")
+            throw AidenRemoteClientError.invalidResponse
+        }
+        for target in ["", "../bot", "bot/other", "bot?other", "bot&other", "bot other", "bot\nother", String(repeating: "a", count: AidenRemoteProtocol.maxBotIdentifierLength + 1)] {
+            do {
+                _ = try await client.botCapabilityCatalog(botId: target)
+                XCTFail("Invalid Bot target was accepted")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError)
+            }
+        }
+        XCTAssertEqual(requests, 0)
     }
 
     private func makeClient() -> AidenRemoteClient {

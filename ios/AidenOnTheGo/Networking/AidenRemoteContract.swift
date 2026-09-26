@@ -24,6 +24,7 @@ enum AidenRemoteProtocol {
     static let maxSSEFrameBytes = maxJSONBodyBytes
     static let maxPairingPayloadBytes = 4_096
     static let maxSafeInteger = 9_007_199_254_740_991
+    static let maxChatPreviousTurns = 16
     static let maxJSONNestingDepth = 128
     static let forbiddenWireKeys: Set<String> = [
         "authorization", "credentialDigest", "providerFingerprint", "mcpServerBindings",
@@ -398,6 +399,35 @@ private func boundedString<Key: CodingKey>(
     return value
 }
 
+/// Progress projections use opaque public identifiers with a narrower grammar
+/// than ordinary chat/stream identifiers. Keep this check local to the new
+/// DTOs so existing transcript contracts retain their established rules.
+private func boundedProgressIdentifier<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key,
+    maxLength: Int,
+    field: String,
+    required: Bool = false
+) throws -> String? {
+    let value = try boundedString(
+        container,
+        forKey: key,
+        maxLength: maxLength,
+        field: field,
+        required: required
+    )
+    guard let value else { return nil }
+    guard value.unicodeScalars.allSatisfy({ scalar in
+        (scalar.value >= 48 && scalar.value <= 57) ||
+            (scalar.value >= 65 && scalar.value <= 90) ||
+            (scalar.value >= 97 && scalar.value <= 122) ||
+            scalar.value == 46 || scalar.value == 95 || scalar.value == 58 || scalar.value == 45
+    }) else {
+        throw AidenRemoteContractError.unsafePayloadField(field)
+    }
+    return value
+}
+
 private func decodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
     _ container: KeyedDecodingContainer<Key>,
     _ type: Value.Type,
@@ -602,12 +632,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     static let scheduleWrite = Self(rawValue: "schedule:write")
     static let botRead = Self(rawValue: "bot:read")
     static let botWrite = Self(rawValue: "bot:write")
+    static let tasksRead = Self(rawValue: "tasks:read")
+    static let agentsRead = Self(rawValue: "agents:read")
 
     static let v1Known: [Self] = [
         .serverRead, .chatRead, .chatWrite, .approvalRespond,
         .workspaceRead, .workspaceBrowse, .workspaceManage,
         .filesRead, .filesWrite, .gitRead, .gitWrite,
-        .scheduleRead, .scheduleWrite, .botRead, .botWrite,
+        .scheduleRead, .scheduleWrite, .botRead, .botWrite, .tasksRead, .agentsRead,
     ]
 
     init(from decoder: Decoder) throws {
@@ -643,11 +675,13 @@ struct AidenRemoteEventType: RawRepresentable, Codable, Hashable, Sendable {
     static let error = Self(rawValue: "error")
     static let cancelled = Self(rawValue: "cancelled")
     static let heartbeat = Self(rawValue: "heartbeat")
+    static let taskUpdate = Self(rawValue: "task_update")
+    static let agentsUpdate = Self(rawValue: "agents_update")
 
     static let v1Known: [Self] = [
         .snapshot, .status, .textDelta, .reasoningDelta,
         .toolStarted, .toolFinished, .timeline, .approvalRequired,
-        .done, .error, .cancelled, .heartbeat,
+        .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate,
     ]
 
     var isTerminal: Bool {
@@ -996,6 +1030,10 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
     let type: AidenRemoteEventType
     let terminal: Bool
     let payload: AidenRemoteEventPayload?
+    /// Progress events carry their versioned, direct snapshot payload here.
+    /// They intentionally do not share the turn transcript payload envelope.
+    let taskProgress: AidenRemoteChatTaskProgress?
+    let agentRoster: AidenRemoteChatAgentRoster?
 
     var shouldApply: Bool { AidenRemoteEventType.v1Known.contains(type) }
 
@@ -1039,10 +1077,32 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             guard !terminal else { throw AidenRemoteContractError.unknownTerminalEvent(type.rawValue) }
             _ = try values.decode(AidenUnknownEventPayload.self, forKey: .payload)
             payload = nil
+            taskProgress = nil
+            agentRoster = nil
             return
         }
         guard terminal == type.isTerminal else {
             throw AidenRemoteContractError.invalidTerminalClassification
+        }
+        if type == .taskUpdate {
+            let progress = try values.decode(AidenRemoteChatTaskProgress.self, forKey: .payload)
+            guard progress.chatId == streamId else {
+                throw AidenRemoteContractError.invalidStreamIdentity
+            }
+            taskProgress = progress
+            agentRoster = nil
+            payload = nil
+            return
+        }
+        if type == .agentsUpdate {
+            let roster = try values.decode(AidenRemoteChatAgentRoster.self, forKey: .payload)
+            guard roster.chatId == streamId else {
+                throw AidenRemoteContractError.invalidStreamIdentity
+            }
+            taskProgress = nil
+            agentRoster = roster
+            payload = nil
+            return
         }
         let decodedPayload = try values.decode(AidenRemoteEventPayload.self, forKey: .payload)
         let allowedKeys: Set<String>
@@ -1087,7 +1147,584 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             throw AidenRemoteContractError.unsafePayloadField("source")
         }
         payload = decodedPayload
+        taskProgress = nil
+        agentRoster = nil
     }
+}
+
+enum AidenRemoteChatTaskStatus: String, Codable, Sendable {
+    case pending
+    case inProgress = "in_progress"
+    case completed
+    case deleted
+}
+
+enum AidenRemoteChatTaskAvailability: String, Codable, Sendable {
+    case ready
+    case unavailable
+}
+
+enum AidenRemoteChatTaskUnavailableReason: String, Codable, Sendable {
+    case storageNotEnabled = "storage_not_enabled"
+    case invalidSnapshot = "invalid_snapshot"
+    case unsupported
+}
+
+struct AidenRemoteChatTask: Decodable, Equatable, Sendable, Identifiable {
+    let id: Int
+    let subject: String
+    let status: AidenRemoteChatTaskStatus
+    let activeForm: String?
+    let blockedBy: [Int]?
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(
+            dynamic,
+            allowed: Set(["id", "subject", "status", "activeForm", "blockedBy"])
+        )
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(Int.self, forKey: .id)
+        guard (1...AidenRemoteProtocol.maxSafeInteger).contains(id) else {
+            throw AidenRemoteContractError.unsafePayloadField("task.id")
+        }
+        subject = try boundedString(
+            values,
+            forKey: .subject,
+            maxLength: 512,
+            field: "task.subject",
+            required: true
+        )!
+        status = try values.decode(AidenRemoteChatTaskStatus.self, forKey: .status)
+        activeForm = try boundedString(
+            values,
+            forKey: .activeForm,
+            maxLength: 512,
+            field: "task.activeForm"
+        )
+        if values.contains(.blockedBy) {
+            let entries = try values.decode([Int].self, forKey: .blockedBy)
+            guard entries.count <= 256,
+                  Set(entries).count == entries.count,
+                  entries.allSatisfy({ (1...AidenRemoteProtocol.maxSafeInteger).contains($0) }) else {
+                throw AidenRemoteContractError.unsafePayloadField("task.blockedBy")
+            }
+            blockedBy = entries
+        } else {
+            blockedBy = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, subject, status, activeForm, blockedBy
+    }
+}
+
+struct AidenRemoteChatTaskProgress: Decodable, Equatable, Sendable {
+    let version: Int
+    let chatId: String
+    let availability: AidenRemoteChatTaskAvailability
+    let unavailableReason: AidenRemoteChatTaskUnavailableReason?
+    let epoch: String
+    let revision: Int
+    let updatedAt: AidenRemoteTimestamp
+    let tasks: [AidenRemoteChatTask]
+
+    var isAvailable: Bool { availability == .ready }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(
+            dynamic,
+            allowed: Set([
+                "version", "chatId", "availability", "unavailableReason", "epoch",
+                "revision", "updatedAt", "tasks",
+            ])
+        )
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        guard version == 1 else { throw AidenRemoteContractError.invalidProtocolVersion }
+        chatId = try boundedString(
+            values,
+            forKey: .chatId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "taskProgress.chatId",
+            required: true
+        )!
+        availability = try values.decode(AidenRemoteChatTaskAvailability.self, forKey: .availability)
+        epoch = try boundedProgressIdentifier(
+            values,
+            forKey: .epoch,
+            maxLength: 64,
+            field: "taskProgress.epoch",
+            required: true
+        )!
+        revision = try values.decode(Int.self, forKey: .revision)
+        guard (1...AidenRemoteProtocol.maxSafeInteger).contains(revision) else {
+            throw AidenRemoteContractError.unsafePayloadField("taskProgress.revision")
+        }
+        updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        tasks = try values.decode([AidenRemoteChatTask].self, forKey: .tasks)
+        guard tasks.count <= 256 else {
+            throw AidenRemoteContractError.payloadTooLarge
+        }
+        let taskIDs = Set(tasks.map(\.id))
+        guard taskIDs.count == tasks.count,
+              tasks.filter({ $0.status == .inProgress }).count <= 1,
+              tasks.allSatisfy({ task in
+                  task.blockedBy?.allSatisfy { dependency in
+                      dependency != task.id && taskIDs.contains(dependency)
+                  } ?? true
+              }) else {
+            throw AidenRemoteContractError.unsafePayloadField("taskProgress.tasks")
+        }
+        // Dependencies are a bounded DAG: each task may point only to a
+        // listed task, and a hostile cycle must never make the UI claim a
+        // meaningful order or active step.
+        var indegree = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.blockedBy?.count ?? 0) })
+        var dependents: [Int: [Int]] = [:]
+        for task in tasks {
+            for dependency in task.blockedBy ?? [] {
+                dependents[dependency, default: []].append(task.id)
+            }
+        }
+        var ready = tasks.compactMap { indegree[$0.id] == 0 ? $0.id : nil }
+        var visited = 0
+        var nextIndex = 0
+        while nextIndex < ready.count {
+            let id = ready[nextIndex]
+            nextIndex += 1
+            visited += 1
+            for dependent in dependents[id] ?? [] {
+                guard let value = indegree[dependent] else { continue }
+                let nextValue = value - 1
+                indegree[dependent] = nextValue
+                if nextValue == 0 { ready.append(dependent) }
+            }
+        }
+        guard visited == tasks.count else {
+            throw AidenRemoteContractError.unsafePayloadField("taskProgress.dependencies")
+        }
+        if values.contains(.unavailableReason) {
+            unavailableReason = try values.decode(
+                AidenRemoteChatTaskUnavailableReason.self,
+                forKey: .unavailableReason
+            )
+        } else {
+            unavailableReason = nil
+        }
+        switch availability {
+        case .ready:
+            guard unavailableReason == nil else {
+                throw AidenRemoteContractError.unsafePayloadField("taskProgress.unavailableReason")
+            }
+        case .unavailable:
+            guard unavailableReason != nil, tasks.isEmpty else {
+                throw AidenRemoteContractError.unsafePayloadField("taskProgress.unavailable")
+            }
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, chatId, availability, unavailableReason, epoch, revision, updatedAt, tasks
+    }
+}
+
+enum AidenRemoteChatAgentState: String, Codable, Sendable {
+    case queued
+    case starting
+    case running
+    case needsAttention = "needs_attention"
+    case completed
+    case failed
+    case timedOut = "timed_out"
+    case interrupted
+    case stopped
+    case unknown
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed, .timedOut, .interrupted, .stopped, .unknown:
+            return true
+        case .queued, .starting, .running, .needsAttention:
+            return false
+        }
+    }
+}
+
+enum AidenRemoteChatAgentRole: String, Codable, Sendable {
+    case scout
+    case planner
+    case reviewer
+    case implementer
+}
+
+enum AidenRemoteChatAgentMilestone: String, Codable, Sendable {
+    case reading
+    case listing
+    case matching
+    case searching
+    case inspecting
+    case composing
+}
+
+enum AidenRemoteChatAgentNotice: String, Codable, Sendable {
+    case taskTruncated = "task_truncated"
+    case reportTruncated = "report_truncated"
+    case displayFiltered = "display_filtered"
+}
+
+enum AidenRemoteChatAgentRosterUnavailableReason: String, Codable, Sendable {
+    case unsupported
+    case invalidSnapshot = "invalid_snapshot"
+}
+
+struct AidenRemoteChatPreviousTurn: Decodable, Equatable, Sendable, Identifiable {
+    let turnId: String
+    let startedAt: AidenRemoteTimestamp
+
+    var id: String { turnId }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["turnId", "startedAt"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        turnId = try boundedProgressIdentifier(
+            values,
+            forKey: .turnId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "agentRoster.previousTurns.turnId",
+            required: true
+        )!
+        startedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .startedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey { case turnId, startedAt }
+}
+
+struct AidenRemoteChatAgent: Decodable, Equatable, Sendable, Identifiable {
+    let agentId: String
+    let parentAgentId: String?
+    let depth: Int
+    let revision: Int
+    let role: AidenRemoteChatAgentRole
+    let label: String
+    let taskPreview: String
+    let state: AidenRemoteChatAgentState
+    let activity: String?
+    let startedAt: AidenRemoteTimestamp
+    let updatedAt: AidenRemoteTimestamp
+    let finishedAt: AidenRemoteTimestamp?
+    let modelId: String
+    let turns: Int
+    let tools: Int
+    let tokens: Int
+    let milestones: [AidenRemoteChatAgentMilestone]?
+    let notices: [AidenRemoteChatAgentNotice]?
+    let error: String?
+    let warnings: [String]?
+
+    var id: String { agentId }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(
+            dynamic,
+            allowed: Set([
+                "agentId", "parentAgentId", "depth", "revision", "role", "label",
+                "taskPreview", "state", "activity", "startedAt", "updatedAt", "finishedAt",
+                "modelId", "turns", "tools", "tokens", "milestones", "notices", "error", "warnings",
+            ])
+        )
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        agentId = try boundedProgressIdentifier(
+            values,
+            forKey: .agentId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "agent.agentId",
+            required: true
+        )!
+        parentAgentId = try boundedProgressIdentifier(
+            values,
+            forKey: .parentAgentId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "agent.parentAgentId"
+        )
+        depth = try values.decode(Int.self, forKey: .depth)
+        guard (1...8).contains(depth),
+              (depth >= 2) == (parentAgentId != nil),
+              parentAgentId != agentId else {
+            throw AidenRemoteContractError.unsafePayloadField("agent.depth")
+        }
+        revision = try values.decode(Int.self, forKey: .revision)
+        guard (1...AidenRemoteProtocol.maxSafeInteger).contains(revision) else {
+            throw AidenRemoteContractError.unsafePayloadField("agent.revision")
+        }
+        role = try values.decode(AidenRemoteChatAgentRole.self, forKey: .role)
+        label = try boundedString(
+            values,
+            forKey: .label,
+            maxLength: 120,
+            field: "agent.label",
+            required: true
+        )!
+        taskPreview = try boundedString(
+            values,
+            forKey: .taskPreview,
+            maxLength: 240,
+            field: "agent.taskPreview",
+            required: true
+        )!
+        state = try values.decode(AidenRemoteChatAgentState.self, forKey: .state)
+        activity = try boundedString(
+            values,
+            forKey: .activity,
+            maxLength: 160,
+            field: "agent.activity"
+        )
+        startedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .startedAt)
+        updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        guard AidenRemoteTimestamp.isOrdered(createdAt: startedAt, updatedAt: updatedAt) else {
+            throw AidenRemoteContractError.unsafePayloadField("agent.updatedAt")
+        }
+        finishedAt = try decodeOptionalNonNull(values, AidenRemoteTimestamp.self, forKey: .finishedAt)
+        if let finishedAt,
+           !AidenRemoteTimestamp.isOrdered(createdAt: startedAt, updatedAt: finishedAt) {
+            throw AidenRemoteContractError.unsafePayloadField("agent.finishedAt")
+        }
+        modelId = try boundedString(
+            values,
+            forKey: .modelId,
+            maxLength: 160,
+            field: "agent.modelId",
+            required: true
+        )!
+        turns = try Self.nonNegativeInt(values, key: .turns, field: "agent.turns")
+        tools = try Self.nonNegativeInt(values, key: .tools, field: "agent.tools")
+        tokens = try Self.nonNegativeInt(values, key: .tokens, field: "agent.tokens")
+        milestones = try Self.decodeUniqueEnums(
+            values,
+            key: .milestones,
+            maxCount: 12,
+            field: "agent.milestones"
+        )
+        notices = try Self.decodeUniqueEnums(
+            values,
+            key: .notices,
+            maxCount: 3,
+            field: "agent.notices"
+        )
+        error = try boundedString(
+            values,
+            forKey: .error,
+            maxLength: 240,
+            field: "agent.error"
+        )
+        if values.contains(.warnings) {
+            let decoded = try values.decode([String].self, forKey: .warnings)
+            guard decoded.count <= 5 else {
+                throw AidenRemoteContractError.unsafePayloadField("agent.warnings")
+            }
+            warnings = try decoded.map { warning in
+                guard !warning.isEmpty, warning.unicodeScalars.count <= 240 else {
+                    throw AidenRemoteContractError.unsafePayloadField("agent.warning")
+                }
+                return warning
+            }
+        } else {
+            warnings = nil
+        }
+        guard state.isTerminal == (finishedAt != nil) else {
+            throw AidenRemoteContractError.unsafePayloadField("agent.finishedAt")
+        }
+        if !state.isTerminal,
+           error != nil || (warnings?.isEmpty == false) || notices?.contains(.reportTruncated) == true {
+            throw AidenRemoteContractError.unsafePayloadField("agent.terminal-fields")
+        }
+    }
+
+    private static func nonNegativeInt(
+        _ values: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+        field: String
+    ) throws -> Int {
+        let value = try values.decode(Int.self, forKey: key)
+        guard (0...AidenRemoteProtocol.maxSafeInteger).contains(value) else {
+            throw AidenRemoteContractError.unsafePayloadField(field)
+        }
+        return value
+    }
+
+    private static func decodeUniqueEnums<Value: RawRepresentable & Decodable & Hashable>(
+        _ values: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+        maxCount: Int,
+        field: String
+    ) throws -> [Value]? where Value.RawValue == String {
+        guard values.contains(key) else { return nil }
+        let decoded = try values.decode([Value].self, forKey: key)
+        guard decoded.count <= maxCount, Set(decoded).count == decoded.count else {
+            throw AidenRemoteContractError.unsafePayloadField(field)
+        }
+        return decoded
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentId, parentAgentId, depth, revision, role, label, taskPreview, state, activity
+        case startedAt, updatedAt, finishedAt, modelId, turns, tools, tokens, milestones, notices
+        case error, warnings
+    }
+}
+
+struct AidenRemoteChatAgentRoster: Decodable, Equatable, Sendable {
+    let version: Int
+    let chatId: String
+    let turnId: String?
+    let previousTurns: [AidenRemoteChatPreviousTurn]
+    let availability: AidenRemoteChatTaskAvailability
+    let unavailableReason: AidenRemoteChatAgentRosterUnavailableReason?
+    let epoch: String
+    let revision: Int
+    let updatedAt: AidenRemoteTimestamp
+    let agents: [AidenRemoteChatAgent]
+
+    var isAvailable: Bool { availability == .ready }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(
+            dynamic,
+            allowed: Set([
+                "version", "chatId", "turnId", "availability", "unavailableReason", "epoch",
+                "revision", "updatedAt", "agents", "previousTurns",
+            ])
+        )
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        guard version == 1 else { throw AidenRemoteContractError.invalidProtocolVersion }
+        chatId = try boundedString(
+            values,
+            forKey: .chatId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "agentRoster.chatId",
+            required: true
+        )!
+        turnId = try boundedProgressIdentifier(
+            values,
+            forKey: .turnId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "agentRoster.turnId"
+        )
+        if values.contains(.previousTurns) {
+            previousTurns = try values.decode(
+                [AidenRemoteChatPreviousTurn].self,
+                forKey: .previousTurns
+            )
+        } else {
+            previousTurns = []
+        }
+        let decodedTurnId = turnId
+        guard previousTurns.count <= AidenRemoteProtocol.maxChatPreviousTurns,
+              Set(previousTurns.map(\.turnId)).count == previousTurns.count,
+              !previousTurns.contains(where: { $0.turnId == decodedTurnId }) else {
+            throw AidenRemoteContractError.unsafePayloadField("agentRoster.previousTurns")
+        }
+        if previousTurns.count > 1 {
+            for index in 1..<previousTurns.count {
+                guard AidenRemoteTimestamp.isOrdered(
+                    createdAt: previousTurns[index].startedAt,
+                    updatedAt: previousTurns[index - 1].startedAt
+                ) else {
+                    throw AidenRemoteContractError.unsafePayloadField("agentRoster.previousTurns")
+                }
+            }
+        }
+        availability = try values.decode(AidenRemoteChatTaskAvailability.self, forKey: .availability)
+        epoch = try boundedProgressIdentifier(
+            values,
+            forKey: .epoch,
+            maxLength: 64,
+            field: "agentRoster.epoch",
+            required: true
+        )!
+        revision = try values.decode(Int.self, forKey: .revision)
+        guard (1...AidenRemoteProtocol.maxSafeInteger).contains(revision) else {
+            throw AidenRemoteContractError.unsafePayloadField("agentRoster.revision")
+        }
+        updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        agents = try values.decode([AidenRemoteChatAgent].self, forKey: .agents)
+        guard agents.count <= 64 else { throw AidenRemoteContractError.payloadTooLarge }
+        let agentIDs = Set(agents.map(\.agentId))
+        guard agentIDs.count == agents.count,
+              agents.allSatisfy({ agent in
+                  agent.parentAgentId.map(agentIDs.contains) ?? true
+              }) else {
+            throw AidenRemoteContractError.unsafePayloadField("agentRoster.agents")
+        }
+        if values.contains(.unavailableReason) {
+            unavailableReason = try values.decode(
+                AidenRemoteChatAgentRosterUnavailableReason.self,
+                forKey: .unavailableReason
+            )
+        } else {
+            unavailableReason = nil
+        }
+        switch availability {
+        case .ready:
+            guard unavailableReason == nil,
+                  agents.isEmpty || turnId != nil else {
+                throw AidenRemoteContractError.unsafePayloadField("agentRoster.turnId")
+            }
+        case .unavailable:
+            guard unavailableReason != nil, agents.isEmpty else {
+                throw AidenRemoteContractError.unsafePayloadField("agentRoster.unavailable")
+            }
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, chatId, turnId, previousTurns, availability, unavailableReason, epoch, revision, updatedAt, agents
+    }
+}
+
+struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendable {
+    let accepts: [AidenRemoteCapability]
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["accepts"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accepts = try values.decode([AidenRemoteCapability].self, forKey: .accepts)
+        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        guard !accepts.isEmpty,
+              accepts.count <= allowed.count,
+              Set(accepts).count == accepts.count,
+              Set(accepts).isSubset(of: allowed) else {
+            throw AidenRemoteContractError.unsafePayloadField("accepts")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case accepts }
+}
+
+struct AidenRemoteDeviceCapabilitiesUpdateResponse: Decodable, Equatable, Sendable {
+    let capabilities: [AidenRemoteCapability]
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["capabilities"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
+        let known = Set(AidenRemoteCapability.v1Known)
+        guard capabilities.count <= known.count,
+              Set(capabilities).count == capabilities.count,
+              Set(capabilities).isSubset(of: known),
+              !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
+            throw AidenRemoteContractError.unsafePayloadField("capabilities")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case capabilities }
 }
 
 private func aidenBotSelectionsSemanticallyEqual(
@@ -1674,6 +2311,21 @@ struct AidenRemoteContractFixture: Decodable {
         let conversations: [ConversationTimestampProjection]
     }
 
+    struct DeviceCapabilitiesUpdateFixture: Decodable {
+        let request: AidenRemoteDeviceCapabilitiesUpdateRequest
+        let response: AidenRemoteDeviceCapabilitiesUpdateResponse
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["request", "response"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            request = try values.decode(AidenRemoteDeviceCapabilitiesUpdateRequest.self, forKey: .request)
+            response = try values.decode(AidenRemoteDeviceCapabilitiesUpdateResponse.self, forKey: .response)
+        }
+
+        private enum CodingKeys: String, CodingKey { case request, response }
+    }
+
     let contractRevision: Int
     let protocolVersion: Int
     let capabilities: [AidenRemoteCapability]
@@ -1707,6 +2359,10 @@ struct AidenRemoteContractFixture: Decodable {
     let botAvatarUpload: AidenBotAvatarUploadContractFixture
     let botAvatarMetadata: AidenBotAvatarAsset
     let legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture
+    let taskProgress: AidenRemoteChatTaskProgress?
+    let agentRoster: AidenRemoteChatAgentRoster?
+    let deviceCapabilitiesUpdate: DeviceCapabilitiesUpdateFixture?
+    let chatProgressEvents: [AidenRemoteStreamEvent]
     let streamStatus: AidenStreamStatus
     let streamApproval: AidenStreamApprovalSnapshot
     let events: [AidenRemoteStreamEvent]
@@ -1769,6 +2425,16 @@ struct AidenRemoteContractFixture: Decodable {
             AidenBotLegacyNonNegotiatingFixture.self,
             forKey: .legacyNonNegotiating
         )
+        taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
+        agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
+        deviceCapabilitiesUpdate = try values.decodeIfPresent(
+            DeviceCapabilitiesUpdateFixture.self,
+            forKey: .deviceCapabilitiesUpdate
+        )
+        chatProgressEvents = try values.decodeIfPresent(
+            [AidenRemoteStreamEvent].self,
+            forKey: .chatProgressEvents
+        ) ?? []
         streamStatus = try values.decode(AidenStreamStatus.self, forKey: .streamStatus)
         streamApproval = try values.decode(AidenStreamApprovalSnapshot.self, forKey: .streamApproval)
         events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
@@ -1981,6 +2647,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botChatSubset, botChatSubsetUpdate, botFavorites, botFavoritesUpdate
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
+        case taskProgress, agentRoster, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, events, speechStatus, speechTranscription
         case scheduleRunNotification, error
     }
@@ -2084,11 +2751,16 @@ private enum AidenBotPrivateResponseValidator {
             try validate(value, root: root, path: [])
         case .botClassifiedChat:
             try validateChildProjectionFields(value)
-            if let object = value as? [String: Any], object["botId"] is String {
-                try validate(value, root: "chat", path: [])
+            if let object = value as? [String: Any] {
+                try validate(value, root: object["botId"] is String ? "chat" : "regularChat", path: [])
             }
         case .chatList:
             try validateChildProjectionFields(value)
+            if let object = value as? [String: Any], let chats = object["chats"] as? [[String: Any]] {
+                for chat in chats {
+                    try validate(chat, root: chat["botId"] is String ? "chat" : "regularChat", path: [])
+                }
+            }
         case .sharedFixture:
             guard let object = value as? [String: Any] else {
                 throw AidenRemoteContractError.invalidJSON
@@ -2179,6 +2851,9 @@ private enum AidenBotPrivateResponseValidator {
         root: String,
         parentPath: [String]
     ) -> Bool {
+        if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
+            return true
+        }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if ["botDetail", "botArchive", "botRestore"].contains(root) {
             return parentPath.isEmpty
@@ -2423,7 +3098,7 @@ extension JSONDecoder {
 /// Retains the exact wire representation alongside Foundation's `Date` value.
 /// `Date` does not reliably preserve arbitrary fractional-second precision, so
 /// DTO invariants that compare two timestamps must compare their wire values.
-struct AidenRemoteTimestamp: Decodable, Sendable {
+struct AidenRemoteTimestamp: Decodable, Equatable, Sendable {
     let rawValue: String
     let date: Date
 

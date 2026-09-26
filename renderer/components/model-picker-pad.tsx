@@ -14,6 +14,7 @@ import {
   modelPadTopPercent,
 } from "../lib/model-pad-layout";
 import { cn } from "../lib/ui-utils";
+import { ProviderIcon } from "./provider-icon";
 
 function pointFromPointer(event: React.PointerEvent<HTMLDivElement>, rect: DOMRect): ModelPoint {
   const inset = MODEL_PAD_INSET_PERCENT / 100;
@@ -219,7 +220,7 @@ export function ModelPickerPad({
         aria-describedby={helpId}
         aria-activedescendant={active ? modelOptionId(active.value) : undefined}
         data-dragging={dragging ? "true" : "false"}
-        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none focus-visible:bg-list-selection focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
+        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -266,7 +267,7 @@ export function ModelPickerPad({
               className={cn(
                 "model-pad-model absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/45 ring-1 ring-popover/55",
                 model.confidence === "personal" && "bg-accent",
-                model.confidence === "suggested" && "bg-accent/65 ring-accent/40",
+                model.confidence === "suggested" && "bg-accent/65",
                 model.confidence === "benchmark" && "bg-accent",
                 model.confidence === "unranked" && "bg-transparent ring-primary/35",
                 isSelected && !isPreview && "size-2 bg-transparent ring-2 ring-primary/45",
@@ -284,12 +285,20 @@ export function ModelPickerPad({
           <span
             aria-hidden="true"
             data-confirmed={confirmedValue === puckPoint.value ? "true" : "false"}
-            className="model-pad-knob absolute z-10 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-popover ring-1 ring-black/20"
+            className="model-pad-knob absolute z-10 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-popover ring-1 ring-black/20"
             style={{
               left: `${modelPadLeftPercent(puckPoint.x)}%`,
               top: `${modelPadTopPercent(puckPoint.y)}%`,
             }}
-          />
+          >
+            <ProviderIcon
+              providerId={puckPoint.providerId}
+              providerLabel={puckPoint.providerLabel}
+              modelId={puckPoint.model}
+              artwork={puckPoint.providerArtwork}
+              className="size-3.5"
+            />
+          </span>
         ) : null}
       </div>
       <p id={helpId} className="sr-only">

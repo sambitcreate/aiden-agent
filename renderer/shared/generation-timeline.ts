@@ -1,3 +1,4 @@
+import { parseProducedFile } from "./produced-file.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -13,6 +14,7 @@ export type AgentStepStatus =
   | "cancelled";
 
 export interface AgentToolStep {
+  producedFile?: import("./produced-file.js").ProducedFile;
   id: string;
   order: number;
   kind: "tool";
@@ -50,6 +52,9 @@ export interface AgentThinkingStep {
   finishedAt?: number;
   /** UTF-16 offset into the visible assistant text when this activity began. */
   contentOffset?: number;
+  /** UTF-16 offsets into the separately exposed, readable reasoning text. */
+  reasoningStartOffset?: number;
+  reasoningEndOffset?: number;
   /** Wall-clock reasoning time measured by the host; pi reports no duration. */
   durationMs?: number;
 }
@@ -158,6 +163,7 @@ function parseToolStep(
   contentOffset?: number,
   allowLineChanges = false,
 ): AgentToolStep | undefined {
+  const producedFile = parseProducedFile(step.producedFile, String(step.toolName));
   const rawLineChanges = step.lineChanges;
   const lineChanges =
     rawLineChanges && typeof rawLineChanges === "object"
@@ -176,6 +182,7 @@ function parseToolStep(
     step.label.length > 120 ||
     typeof step.status !== "string" ||
     !STEP_STATUSES.has(step.status as AgentStepStatus) ||
+    (step.producedFile !== undefined && (!producedFile || step.status !== "completed")) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
     (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
     (rawLineChanges !== undefined &&
@@ -205,6 +212,7 @@ function parseToolStep(
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
+    ...(producedFile ? { producedFile } : {}),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
     ...(lineChanges === undefined
       ? {}
@@ -237,6 +245,12 @@ function parseThinkingStep(
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
+    ...(step.reasoningStartOffset === undefined
+      ? {}
+      : { reasoningStartOffset: step.reasoningStartOffset as number }),
+    ...(step.reasoningEndOffset === undefined
+      ? {}
+      : { reasoningEndOffset: step.reasoningEndOffset as number }),
     ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
   };
 }
@@ -245,6 +259,7 @@ function parseThinkingStep(
 export function parseGenerationTimeline(
   value: unknown,
   contentLength?: number,
+  reasoningLength?: number,
 ): GenerationTimeline | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
@@ -275,6 +290,7 @@ export function parseGenerationTimeline(
 
   const steps: AgentStep[] = [];
   let previousContentOffset = 0;
+  let previousReasoningEndOffset = 0;
   for (const [index, rawStep] of candidate.steps.entries()) {
     if (!rawStep || typeof rawStep !== "object") return undefined;
     const step = rawStep as Record<string, unknown>;
@@ -297,6 +313,26 @@ export function parseGenerationTimeline(
       return undefined;
     }
     if (contentOffset !== undefined) previousContentOffset = contentOffset as number;
+    if (step.kind === "thinking" && candidate.version === GENERATION_TIMELINE_VERSION) {
+      const start = step.reasoningStartOffset;
+      const end = step.reasoningEndOffset;
+      if (
+        (start !== undefined &&
+          (!Number.isSafeInteger(start) ||
+            (start as number) < previousReasoningEndOffset ||
+            (reasoningLength !== undefined && (start as number) > reasoningLength))) ||
+        (end !== undefined &&
+          (start === undefined ||
+            !Number.isSafeInteger(end) ||
+            (end as number) < (start as number) ||
+            (reasoningLength !== undefined && (end as number) > reasoningLength))) ||
+        (end === undefined && start !== undefined && step.finishedAt !== undefined)
+      ) return undefined;
+      if (end !== undefined) previousReasoningEndOffset = end as number;
+    } else if (candidate.version !== GENERATION_TIMELINE_VERSION &&
+      (step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined)) {
+      return undefined;
+    }
     // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =
       step.kind === "tool"

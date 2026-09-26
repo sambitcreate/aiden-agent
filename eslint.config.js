@@ -12,6 +12,7 @@ export default [
       "node_modules/**",
       ".memory/**",
       ".papercuts/**",
+      ".agents/**",
       "resources/generative-ui/**",
       "packages/cli/dist/**",
       "packages/cli-playground/dist/**",

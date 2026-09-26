@@ -42,6 +42,7 @@ import {
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
   writeModelPadLayout,
+  measureModelPadAvailableSize,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadDirection,
@@ -372,6 +373,56 @@ export function ModelPadSettings() {
   const catalogRef = React.useRef<HTMLDivElement | null>(null);
   const modelsPanelRef = React.useRef<HTMLElement | null>(null);
   const panelTransitionRef = React.useRef<ViewTransition | null>(null);
+
+  React.useLayoutEffect(() => {
+    const pad = padRef.current;
+    const canvas = pad?.parentElement;
+    const grid = canvas?.parentElement;
+    if (!pad || !canvas || !grid) return;
+
+    // Measure the real settings viewport: window width alone ignores the app
+    // sidebar, settings navigation, wrapped controls, and user interface zoom.
+    let scrollport = grid.parentElement;
+    while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
+      scrollport = scrollport.parentElement;
+    }
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const scrollportRect = scrollport?.getBoundingClientRect();
+      const viewportBottom = Math.min(
+        window.innerHeight,
+        scrollportRect?.bottom ?? window.innerHeight,
+      );
+      // Compensate for page scrolling so scrolling down never grows the Pad.
+      const canvasTop = canvas.getBoundingClientRect().top + (scrollport?.scrollTop ?? 0);
+      const size = measureModelPadAvailableSize({
+        viewportBottom,
+        canvasTop,
+        canvasWidth: canvas.clientWidth,
+        scrollportClientHeight: scrollport?.clientHeight ?? window.innerHeight,
+      });
+      const value = `${size}px`;
+      if (grid.style.getPropertyValue("--model-pad-available-size") !== value) {
+        grid.style.setProperty("--model-pad-available-size", value);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    // Watch the grid and scrollport only. Observing the canvas height (labels +
+    // square) fed legend wrapping back into the square size and made the outline jump.
+    observer.observe(grid);
+    if (scrollport) observer.observe(scrollport);
+    measure();
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", schedule);
+    };
+  }, [activePanel]);
   const [catalogScrollState, setCatalogScrollState] = React.useState({
     scrollable: false,
     hasMoreBelow: false,
@@ -644,10 +695,8 @@ export function ModelPadSettings() {
   const activeRow = activePoint ? Math.round((1 - activePoint.y) * (gridSize - 1)) : -1;
 
   return (
-    <FieldSet title="Personal Model Pad" className="model-pad-fieldset">
+    <FieldSet className="model-pad-fieldset">
       <Field
-        label="Arrange your models"
-        description="Choose the models you want close at hand, then snap them to dots by how capable and responsive they feel for your work. The dot matrix adapts to your visible models."
         orientation="vertical"
         className="model-pad-field"
       >
@@ -759,7 +808,7 @@ export function ModelPadSettings() {
                     className={cn(
                       "model-pad-node absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/16",
                       occupied && "bg-primary/32",
-                      targeted && "z-[5] size-1.5 bg-accent ring-4 ring-accent/20",
+                      targeted && "z-[5] size-1.5 bg-accent",
                     )}
                     style={{
                       left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
@@ -890,7 +939,7 @@ export function ModelPadSettings() {
                       <span className="block truncate text-small-strong text-primary">
                         {entry.label}
                       </span>
-                      <span className="mt-0.5 block truncate text-[11px] font-normal text-secondary">
+                      <span className="mt-0.5 block truncate text-mini font-normal text-secondary">
                         {entry.providerLabel} · {paceDescription}
                       </span>
                     </span>
@@ -902,7 +951,7 @@ export function ModelPadSettings() {
               <span>Faster</span>
               <span>More deliberate</span>
             </div>
-            <div className="model-pad-legend mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tertiary">
+            <div className="model-pad-legend mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-mini text-tertiary">
               <span className="inline-flex items-center gap-1.5">
                 <span
                   aria-hidden="true"
@@ -1010,7 +1059,7 @@ export function ModelPadSettings() {
                           <span className="block truncate text-small-strong text-primary">
                             {entry.label}
                           </span>
-                          <span className="block truncate text-[11px] text-tertiary">
+                          <span className="block truncate text-mini text-tertiary">
                             {entry.providerLabel}
                             {entry.isLocal ? " · Local" : " · Hosted"}
                           </span>

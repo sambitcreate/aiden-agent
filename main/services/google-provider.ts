@@ -8,6 +8,7 @@ import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   GOOGLE_PROVIDER_ID,
   LEGACY_GEMINI_PROVIDER_ID,
+  isSelectableGoogleCatalogModel,
   migrateLegacyGoogleProviderId,
 } from "../../renderer/shared/google-provider.js";
 import {
@@ -51,7 +52,8 @@ function googleModelMetadata(model: Model<Api>): ProviderModelMetadata {
 }
 
 export function googleProviderModels(): readonly Model<Api>[] {
-  return builtinGoogleModels;
+  // Keep the historical preset helpers intact for exact config migration matching.
+  return builtinGoogleModels.filter((model) => isSelectableGoogleCatalogModel(model.id));
 }
 
 export function googleProviderModelIds(): string[] {

@@ -71,6 +71,8 @@ private struct AidenSpeechTranscriptionRequest: Encodable {
 
 struct AidenServer: Codable, Equatable, Sendable {
     static let chatSummariesFeature = "chat-summaries-v1"
+    static let chatTasksFeature = "chat-tasks-v1"
+    static let chatAgentsFeature = "chat-agents-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -194,6 +196,14 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatSummaries: Bool {
         features.contains(Self.chatSummariesFeature)
+    }
+
+    var supportsChatTasks: Bool {
+        features.contains(Self.chatTasksFeature)
+    }
+
+    var supportsChatAgents: Bool {
+        features.contains(Self.chatAgentsFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -431,6 +441,10 @@ final class AidenRemoteClient: @unchecked Sendable {
         let clientVersion: String
         let acceptsDisplayName: Bool?
         let acceptsBotCapabilities: Bool?
+    }
+
+    private struct DeviceCapabilitiesUpdateRequest: Encodable {
+        let accepts: [AidenRemoteCapability]
     }
 
     private struct DeviceIdentityRequest: Encodable {
@@ -695,6 +709,58 @@ final class AidenRemoteClient: @unchecked Sendable {
         let value: AidenServer = try await send(method: "GET", path: ["server"])
         guard value.protocolVersion == AidenRemoteProtocol.version else {
             throw AidenRemoteContractError.invalidProtocolVersion
+        }
+        return value
+    }
+
+    /// Advertises the progress capabilities this client can consume. The
+    /// endpoint accepts only the additive progress vocabulary; the response
+    /// is the complete device grant list and is validated before persistence.
+    func updateDeviceCapabilities(
+        accepts: [AidenRemoteCapability]
+    ) async throws -> [AidenRemoteCapability] {
+        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        guard !accepts.isEmpty,
+              Set(accepts).count == accepts.count,
+              Set(accepts).isSubset(of: allowed) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let response: AidenRemoteDeviceCapabilitiesUpdateResponse = try await send(
+            method: "POST",
+            path: ["device", "capabilities"],
+            body: DeviceCapabilitiesUpdateRequest(accepts: accepts)
+        )
+        return response.capabilities
+    }
+
+    func taskProgress(chatId: String) async throws -> AidenRemoteChatTaskProgress {
+        let value: AidenRemoteChatTaskProgress = try await send(
+            method: "GET",
+            path: ["chats", chatId, "tasks"]
+        )
+        guard value.chatId == chatId else { throw AidenRemoteClientError.invalidResponse }
+        return value
+    }
+
+    func agentRoster(
+        chatId: String,
+        turnId: String? = nil
+    ) async throws -> AidenRemoteChatAgentRoster {
+        var query: [URLQueryItem] = []
+        if let turnId {
+            guard turnId.wholeMatch(of: /^[A-Za-z0-9._:-]{1,128}$/) != nil else {
+                throw AidenRemoteClientError.invalidResponse
+            }
+            query = [URLQueryItem(name: "turnId", value: turnId)]
+        }
+        let value: AidenRemoteChatAgentRoster = try await send(
+            method: "GET",
+            path: ["chats", chatId, "agents"],
+            query: query
+        )
+        guard value.chatId == chatId else { throw AidenRemoteClientError.invalidResponse }
+        if let turnId, value.turnId != turnId {
+            throw AidenRemoteClientError.invalidResponse
         }
         return value
     }
@@ -1078,8 +1144,13 @@ final class AidenRemoteClient: @unchecked Sendable {
         return response.chat
     }
 
-    func botCapabilityCatalog() async throws -> AidenBotCapabilityCatalog {
-        try await send(method: "GET", path: ["bot-capabilities"])
+    func botCapabilityCatalog(botId: String? = nil) async throws -> AidenBotCapabilityCatalog {
+        if let botId { try validateBotIdentifier(botId) }
+        return try await send(
+            method: "GET",
+            path: ["bot-capabilities"],
+            query: botId.map { [URLQueryItem(name: "botId", value: $0)] } ?? []
+        )
     }
 
     func updateBotAccess(
@@ -1677,6 +1748,34 @@ final class AidenRemoteClient: @unchecked Sendable {
         id: String,
         after sequence: Int
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
+        eventStream(
+            path: ["streams", id, "events"],
+            expectedStreamId: id,
+            progressOnly: false,
+            after: sequence
+        )
+    }
+
+    /// Opens the chat-scoped progress channel. Progress events use the chat ID
+    /// as their stream identity and carry direct task/agent snapshots.
+    func progressEvents(
+        chatId: String,
+        after sequence: Int
+    ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
+        eventStream(
+            path: ["chats", chatId, "progress", "events"],
+            expectedStreamId: chatId,
+            progressOnly: true,
+            after: sequence
+        )
+    }
+
+    private func eventStream(
+        path: [String],
+        expectedStreamId: String?,
+        progressOnly: Bool,
+        after sequence: Int
+    ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -1685,7 +1784,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                         : []
                     var request = try makeRequest(
                         method: "GET",
-                        path: ["streams", id, "events"],
+                        path: path,
                         query: query,
                         body: nil,
                         headers: sequence > 0 ? ["Last-Event-ID": String(sequence)] : [:],
@@ -1708,6 +1807,26 @@ final class AidenRemoteClient: @unchecked Sendable {
                         throw AidenRemoteClientError.unexpectedStatus(httpResponse.statusCode)
                     }
 
+                    func yield(_ event: AidenRemoteStreamEvent) throws {
+                        if let expectedStreamId, event.streamId != expectedStreamId {
+                            throw AidenRemoteClientError.invalidResponse
+                        }
+                        if progressOnly,
+                           event.type != .taskUpdate,
+                           event.type != .agentsUpdate {
+                            // The progress channel uses SSE comments for keep-alive.
+                            // A protocol heartbeat belongs to the transcript channel.
+                            throw AidenRemoteClientError.invalidResponse
+                        }
+                        if !progressOnly,
+                           event.type == .taskUpdate || event.type == .agentsUpdate {
+                            // Progress snapshots are a separate chat-scoped channel;
+                            // never let one enter the parent turn cursor.
+                            throw AidenRemoteClientError.invalidResponse
+                        }
+                        continuation.yield(event)
+                    }
+
                     var parser = AidenSSEParser()
                     var lineBytes: [UInt8] = []
                     lineBytes.reserveCapacity(512)
@@ -1720,7 +1839,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                             }
                             lineBytes.removeAll(keepingCapacity: true)
                             if let event = try parser.consume(line: line) {
-                                continuation.yield(event)
+                                try yield(event)
                             }
                         } else {
                             lineBytes.append(byte)
@@ -1729,18 +1848,9 @@ final class AidenRemoteClient: @unchecked Sendable {
                             }
                         }
                     }
-                    if !lineBytes.isEmpty {
-                        if lineBytes.last == 0x0D { lineBytes.removeLast() }
-                        guard let line = String(bytes: lineBytes, encoding: .utf8) else {
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if let event = try parser.consume(line: line) {
-                            continuation.yield(event)
-                        }
-                    }
-                    if let event = try parser.finish() {
-                        continuation.yield(event)
-                    }
+                    // EOF is not an SSE frame delimiter. Discard the pending
+                    // line and frame, including any partial UTF-8 scalar, so
+                    // reconnect resumes after the last fully delivered event.
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()

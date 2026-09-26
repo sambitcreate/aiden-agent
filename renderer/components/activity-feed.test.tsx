@@ -189,15 +189,90 @@ test("failed work is counted for review and states why", () => {
   assert.match(markup, /Success not verified/u);
 });
 
+test("a compact-only trail is one line, not a second Compacted context disclosure", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "compact_context", "completed", {
+          detail: "LLM · 10.6s · ~37153 → 14440 tokens",
+        }),
+      ])}
+    />,
+  );
+  assert.doesNotMatch(markup, /<details/u);
+  assert.doesNotMatch(markup, /agent-activity-chevron/u);
+  assert.equal((markup.match(/Compacted context/gu) ?? []).length, 1);
+  assert.match(markup, /LLM · 10\.6s · ~37153 → 14440 tokens/u);
+  assert.doesNotMatch(markup, /role="listitem"/u);
+});
+
+test("compaction among other work still expands into the trail", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "read_file", "completed", { target: "package.json" }),
+        step(1, "compact_context", "completed", { detail: "LLM · 1.0s · ~100 → 40 tokens" }),
+      ])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.match(markup, /Explored 1 file, compacted context/u);
+  assert.match(markup, /Compacted context<\/span><span[^>]*> LLM · 1\.0s · ~100 → 40 tokens/u);
+});
+
+test("a failed compact-only trail stays expandable without repeating the summary line", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [step(0, "compact_context", "failed")])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.match(markup, /Compacted context/u);
+  assert.equal((markup.match(/compact_context failed/gu) ?? []).length, 1);
+});
+
+test("repeated compactions keep every run's metrics in the trail", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "compact_context", "completed", { detail: "LLM · 10.6s · ~37153 → 14440 tokens" }),
+        step(1, "compact_context", "completed", { detail: "pi-vcc · 0.4s · ~25900 → 6758 tokens" }),
+      ])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.equal((markup.match(/role="listitem"/gu) ?? []).length, 2);
+  assert.match(markup, /LLM · 10\.6s · ~37153 → 14440 tokens/u);
+  assert.match(markup, /pi-vcc · 0\.4s · ~25900 → 6758 tokens/u);
+});
+
+test("a claim check on a lone compaction keeps one Compacted context line", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline(
+        "completed",
+        [step(0, "compact_context", "completed", { detail: "LLM · 1.0s · ~100 → 40 tokens" })],
+        { claimCheck: { kind: "unverified_success", stepIds: ["tool-1"] } },
+      )}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.equal((markup.match(/Compacted context/gu) ?? []).length, 1);
+  assert.match(markup, /LLM · 1\.0s · ~100 → 40 tokens/u);
+  assert.doesNotMatch(markup, /role="listitem"/u);
+  assert.match(markup, /Success not verified/u);
+});
+
 test("an empty timeline renders nothing at all", () => {
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={timeline("running", [])} />), "");
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={null} />), "");
 });
 
-test("the ticker rises by exactly one row and dissolves under a fade", () => {
+test("the ticker preserves rows and only fades new content", () => {
   const css = styles();
-  assert.match(css, /@keyframes aiden-activity-stack-shift\s*\{[^}]*translateY\(1\.5rem\)/u);
-  assert.match(css, /@keyframes aiden-activity-row-in\s*\{[^}]*blur\(2px\)/u);
+  assert.doesNotMatch(css, /aiden-activity-stack-shift/u);
+  assert.match(css, /animation: aiden-activity-row-in 120ms ease-out/u);
+  assert.doesNotMatch(css.slice(css.indexOf("@keyframes aiden-activity-row-in"), css.indexOf("@keyframes aiden-environment-summary-in")), /blur|transform/u);
   assert.match(
     css,
     /\.activity-feed-window\[data-masked="true"\]\s*\{[^}]*mask-image:\s*linear-gradient/u,
@@ -205,4 +280,14 @@ test("the ticker rises by exactly one row and dissolves under a fade", () => {
   // Motion is opt-in, so a reduced-motion window still shows the same rows.
   assert.match(css, /:root\[data-reduce-motion="false"\] \.activity-feed-stack/u);
   assert.doesNotMatch(css, /aiden-agent-step-label-(?:in|out)/u);
+});
+
+
+test("successful produced files render explicit host provenance", () => {
+  const markup = renderToStaticMarkup(<ActivityFeed timeline={timeline("completed", [
+    step(0, "write_file", "completed", { producedFile: { relativePath: "out/report.txt", operation: "written", bytes: 12 } }),
+  ])} />);
+  assert.match(markup, /File written/u);
+  assert.match(markup, /report.txt/u);
+  assert.match(markup, /title="out\/report.txt"/u);
 });

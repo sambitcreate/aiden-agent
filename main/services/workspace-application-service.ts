@@ -34,6 +34,7 @@ export interface WorkspaceApplicationDependencies {
     "cancelWorkspace" | "resumeWorkspace"
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
+  browserService?: { closeForWorkspace(workspaceId: string): void };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
   workspaceOperationRegistry: Pick<typeof workspaceOperationRegistry, "cancelAndSettle">;
   createScratchWorkspaceDirectory: typeof createScratchWorkspaceDirectory;
@@ -218,6 +219,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           },
           async ({ ensureResumedOnExit, keepPaused }) => {
             deps.terminalService.closeForWorkspace(existing.id);
+            deps.browserService?.closeForWorkspace(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             const saved = await deps.configStore.saveWorkspace(next);
@@ -245,6 +247,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         const existing = await deps.configStore.getWorkspace(id);
         if (existing) options.assertCurrent?.(existing);
         deps.terminalService.closeForWorkspace(id);
+        deps.browserService?.closeForWorkspace(id);
         assertWorkspaceRecordRemovalAllowed(existing);
         await withWorkspaceScheduleRestoration(
           {

@@ -15,6 +15,7 @@ import {
   assertDeveloperIdSignature,
   assertElectronEntitlements,
   assertElectronHelperEntitlements,
+  assertFormFillHelperEntitlements,
   assertExactUniversalArchitectures,
   assertMinimalComputerUseEntitlements,
   assertMacOSArchitectureMinimum,
@@ -32,6 +33,7 @@ import {
   verifyPackagedModelCatalogResources,
   verifyPackagedSubagentInferenceWorker,
   verifyPackagedParakeetWorker,
+  verifyPackagedVccWorker,
   verifyPackagedNodePtyResources,
   verifyPackagedGenerativeUiLibraries,
   verifyReviewedComputerUseInfoPlist,
@@ -94,7 +96,9 @@ test("package verifier requires regular non-empty Generative UI host libraries",
   const filenames = ["chart.umd.min.js", "plotly.min.js", "katex.min.js", "katex.min.css"];
   try {
     await mkdir(directory, { recursive: true });
-    await Promise.all(filenames.map((filename) => writeFile(path.join(directory, filename), filename)));
+    await Promise.all(
+      filenames.map((filename) => writeFile(path.join(directory, filename), filename)),
+    );
     await assert.doesNotReject(verifyPackagedGenerativeUiLibraries(app));
 
     await writeFile(path.join(directory, "plotly.min.js"), "");
@@ -605,6 +609,32 @@ test("package verifier requires the normal Electron runtime entitlements", () =>
   );
 });
 
+test("package verifier requires the pinned inherit entitlements on the CUA-S1 forms helper", () => {
+  const expected = [
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.device.audio-input",
+  ]
+    .map((key) => `<key>${key}</key><true/>`)
+    .join("");
+  assert.doesNotThrow(() =>
+    assertFormFillHelperEntitlements(`<plist><dict>${expected}</dict></plist>`),
+  );
+  assert.throws(
+    () => assertFormFillHelperEntitlements("<plist><dict/></plist>"),
+    /pinned inherit set/u,
+  );
+  // No AX or automation entitlements may leak onto the scorer helper.
+  assert.throws(
+    () =>
+      assertFormFillHelperEntitlements(
+        `<plist><dict>${expected}<key>com.apple.security.automation.apple-events</key><true/></dict></plist>`,
+      ),
+    /pinned inherit set/u,
+  );
+});
+
 test("package verifier requires inherited microphone access on Electron helpers", () => {
   const expected = [
     "com.apple.security.cs.allow-jit",
@@ -638,4 +668,25 @@ test("package verifier requires inherited microphone access on Electron helpers"
       ),
     /pinned inherited set/u,
   );
+});
+
+test("package verifier requires the local VCC worker and pinned attribution", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-vcc-worker-asar-")));
+  const source = path.join(root, "source");
+  try {
+    await mkdir(path.join(source, "build/main"), { recursive: true });
+    await writeFile(path.join(source, "build/main/pi-vcc-worker.js"), "export {};\n");
+    await writeFile(
+      path.join(source, "THIRD_PARTY_NOTICES.md"),
+      "## pi-vcc\n1f1575b6e0a07df51e0a9ea8413394ccac3714ae\n",
+    );
+    const packed = path.join(root, "packed.asar");
+    await createPackage(source, packed);
+    await assert.doesNotReject(verifyPackagedVccWorker(packed));
+    await writeFile(path.join(source, "THIRD_PARTY_NOTICES.md"), "Missing notice");
+    await createPackage(source, path.join(root, "invalid.asar"));
+    await assert.rejects(verifyPackagedVccWorker(path.join(root, "invalid.asar")), /attribution/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

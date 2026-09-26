@@ -55,6 +55,16 @@ test("keeps completed and read-only failures quiet", () => {
   assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("read_file", "failed")), undefined);
 });
 
+test("browser mutation failures cannot support an unqualified success claim", () => {
+  for (const tool of ["browser_click", "browser_type", "browser_press", "browser_scroll", "browser_evaluate"]) {
+    assert.deepEqual(detectUnverifiedSuccessClaim("Done.", timeline(tool, "failed")), {
+      kind: "unverified_success", stepIds: ["tool-1"],
+    });
+    assert.equal(detectUnverifiedSuccessClaim("Done, but the browser action failed.", timeline(tool, "failed")), undefined);
+  }
+  assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("browser_snapshot", "failed")), undefined);
+});
+
 test("does not mistake negative or qualified prose for false success", () => {
   const failed = timeline("run_command", "failed");
   assert.equal(detectUnverifiedSuccessClaim("I could not complete the task.", failed), undefined);

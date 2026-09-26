@@ -235,7 +235,7 @@ async function childSurfaceReplay(): Promise<boolean> {
 async function botTelegramSurfaceReplay(): Promise<boolean> {
   const core = createFauxCore({
     provider: "aiden-phase7-bot-surface",
-    models: [{ id: "phase7-bot", contextWindow: 1_000, maxTokens: 200 }],
+    models: [{ id: "phase7-bot", contextWindow: 8_000, maxTokens: 200 }],
   });
   core.setResponses(Array.from({ length: 4 }, () => async (context) => {
     const serialized = JSON.stringify(context);
@@ -271,11 +271,13 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
     JSON.stringify((await session.buildContext()).messages).includes("BOT-314");
 }
 
+// Replay text must fit the declared summary window. Synthetic usage still crosses
+// the trigger deliberately; these fixtures are not installed/provider acceptance evidence.
 async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: ExecutableCase): Promise<PiUpgradeReplayMeasurement> {
   const provider = fauxProvider({
     api: "openai-completions",
     provider: `replay-${caseId}`,
-    models: [{ id: "summary-model", contextWindow: 1_000, maxTokens: 200 }],
+    models: [{ id: "summary-model", contextWindow: 64_000, maxTokens: 200 }],
   });
   const providerObservedMarkers = new Set<string>();
   // Split-turn compaction can perform both a history and a turn-prefix summary.
@@ -313,6 +315,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
         api: model.api,
         provider: model.provider,
         model: model.id,
+        usage: { ...message.usage, input: 63_950, totalTokens: 63_970 },
       }),
       timestamp,
     };
@@ -344,7 +347,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
   const retained = fixture.markers.filter((marker) => serialized.includes(marker)).length;
   let turnsUntilNextCompaction = 0;
   const primaryResultCount = primaryResults.length;
-  for (const inputTokens of [700, 950, 950]) {
+  for (const inputTokens of [44_800, 63_950, 63_950]) {
     turnsUntilNextCompaction += 1;
     const timestamp = Date.now() + 20_000 + turnsUntilNextCompaction;
     await session.appendMessage({ ...user(`observed follow-up ${turnsUntilNextCompaction}`), timestamp });
@@ -459,3 +462,6 @@ export async function runPiUpgradeReplayCases(): Promise<PiUpgradeReplayMeasurem
     };
   }));
 }
+
+/** Separate opt-in report; does not change installed Pi rollout receipts. */
+export { runVccReplayCases } from "./pi-vcc/evaluation.js";

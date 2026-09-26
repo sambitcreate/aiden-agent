@@ -98,20 +98,31 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
   assert.match(source, /enlarge the window to view it beside the Pad/u);
   assert.match(source, /scrollIntoView/u);
   assert.match(source, /dataset\.reduceMotion === "true"/u);
-  assert.match(
-    styles,
-    /--model-pad-fieldset-width: max\(100%, min\(64rem, calc\(100vw - 19rem\)\)\)/u,
-  );
+  assert.doesNotMatch(styles, /--model-pad-fieldset-width/u);
+  assert.match(styles, /\.model-pad-fieldset\s*\{\s*width: 100%;\s*min-width: 0/u);
   assert.match(styles, /\.model-pad-field\s*\{\s*padding: 1\.5rem/u);
   assert.match(
     styles,
-    /\.settings-model-pad-grid\[data-panel-open="true"\]\s*\{\s*grid-template-columns: minmax\(28rem, 40rem\) minmax\(16rem, 18rem\)/u,
+    /\.settings-model-pad-grid\[data-panel-open="true"\]\s*\{\s*grid-template-columns: minmax\(0, 1fr\) minmax\(16rem, 18rem\)/u,
   );
   assert.match(styles, /\.model-pad-canvas\s*\{\s*width: min\(100%, 40rem\)/u);
+  assert.match(styles, /\.model-pad\s*\{\s*width: min\(100%, var\(--model-pad-available-size/u);
+  assert.match(source, /measureModelPadAvailableSize/u);
+  assert.match(source, /observer\.observe\(grid\)/u);
+  assert.doesNotMatch(source, /labelsHeight/u);
+  assert.doesNotMatch(
+    source,
+    /canvas\.getBoundingClientRect\(\)\.height - pad\.getBoundingClientRect\(\)\.height/u,
+  );
+  assert.match(
+    styles,
+    /\.model-pad\s*\{[\s\S]*aspect-ratio: 1 \/ 1;[\s\S]*flex-shrink: 0/u,
+  );
+  assert.match(styles, /\.model-pad-legend\s*\{\s*min-height: 2\.5rem/u);
   assert.match(styles, /@container model-pad-fieldset \(max-width: 760px\)/u);
   assert.match(
     styles,
-    /\.model-pad-catalog\s*\{\s*max-height: min\(48rem, calc\(100vh - 12rem\)\)/u,
+    /\.model-pad-catalog\s*\{\s*max-height: max\(8rem, var\(--model-pad-available-size/u,
   );
   assert.match(styles, /\.model-pad-catalog-shell\[data-more-below="true"\]::after/u);
   assert.match(styles, /\.model-pad-catalog-more/u);

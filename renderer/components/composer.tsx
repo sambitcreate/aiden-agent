@@ -1,3 +1,4 @@
+import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in Finder. Git workspaces also show the
 // current branch. The input
@@ -24,6 +25,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  ListPlus,
   Loader2,
   Lock,
   Mic,
@@ -36,6 +38,8 @@ import {
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { ComposerContextBar } from "./composer-context-bar";
+import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -43,7 +47,11 @@ import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi } from "../lib/ipc";
+import { attachmentsApi, browserApi } from "../lib/ipc";
+import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import { composerImageAttach } from "../lib/composer-attach";
+import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -52,6 +60,10 @@ import {
   shouldShowComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../lib/computer-use-notice";
+import {
+  ComposerAttachmentOperation,
+  acceptComposerAttachments,
+} from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
@@ -77,7 +89,14 @@ import {
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
-import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
+import {
+  loadComposerDraft,
+  markComposerSubmission,
+  mergeRestoredGuidance,
+  saveComposerDraftText,
+  settleComposerSubmission,
+  subscribeGuidanceRestore,
+} from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -111,21 +130,35 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  readinessSettingsSection?: SettingsSection;
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
+  /** Initial text for an explicitly seeded renderer-only chat draft. */
+  initialText?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
+  onQueue?: ComposerProps["onSend"];
+  onSteer?: ComposerProps["onSend"];
+  onRedirect?: ComposerProps["onSend"];
+  queuedMessages?: React.ReactNode;
+  hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
+  /** Stop has been requested; no busy Queue/Steer/Redirect may be admitted until it settles. */
+  stoppingGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
+  /** New-agent drafts cannot accept edits while their first message commits. */
+  freezeWhileSending?: boolean;
+  /** Survives navigating away and reopening a draft whose commit is pending. */
+  firstMessageSaving?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
@@ -172,8 +205,14 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
-  onCompactChat?: () => Promise<
-    | { compacted: true; tokensBefore?: number }
+  onCompactChat?: (engine?: CompactionEngine) => Promise<
+    | {
+        compacted: true;
+        engine?: CompactionEngine;
+        durationMs?: number;
+        tokensBefore?: number;
+        estimatedTokensAfter?: number;
+      }
     | {
         compacted: false;
         reason:
@@ -254,13 +293,23 @@ function composerDraftReducer(
 export function Composer({
   ready,
   readinessMessage,
+  readinessSettingsSection,
   hasMessages,
   chatId,
+  initialText = "",
   onSend,
   onStop,
+  onQueue,
+  onSteer,
+  onRedirect,
+  queuedMessages,
+  hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
+  stoppingGeneration = false,
   configurationBusy = false,
+  freezeWhileSending = false,
+  firstMessageSaving = false,
   inputRef,
   workspace,
   gitBranch,
@@ -302,15 +351,28 @@ export function Composer({
   slashPaletteBlocked = false,
   slashActionBusy = false,
 }: ComposerProps) {
+  const restoredText = React.useMemo(
+    () => initialText || loadComposerDraft(chatId).text,
+    [chatId, initialText],
+  );
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: "",
-    slashTracker: { epoch: 0, active: false },
+    text: restoredText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
+  const [busyMode, setBusyMode] = React.useState<"steer" | "queue" | "redirect">("queue");
+  const [confirmRedirect, setConfirmRedirect] = React.useState(false);
+  React.useEffect(() => {
+    if (!isGenerating) {
+      setBusyMode("queue");
+      setConfirmRedirect(false);
+    }
+  }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+  const firstSendPendingRef = React.useRef(false);
   const slashActionPendingRef = React.useRef(false);
   const sessionCommandBusyRef = React.useRef(false);
   const slashPaletteBlockedRef = React.useRef(slashPaletteBlocked);
@@ -330,7 +392,16 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
     dispatchDraft({ type: "update", value: text });
-  }, []);
+    saveComposerDraftText(chatId, text);
+  }, [chatId]);
+  React.useEffect(
+    () =>
+      subscribeGuidanceRestore(chatId, (guidance) => {
+        setText((current) => mergeRestoredGuidance(current, guidance));
+        toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
+      }),
+    [chatId, setText],
+  );
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
@@ -349,13 +420,51 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
-  const attachmentOperationRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (!workspace?.id) return;
+    const available = () => {
+      const input = inputRef?.current;
+      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+    };
+    const receive = (annotation: BrowserAnnotation) => {
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
+      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const comment = annotation.comment.trim();
+      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      if (result.attachments.length) {
+        attachmentRevisionRef.current += 1;
+        updateAttachments((current) => [...current, ...result.attachments]);
+      }
+      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
+    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+    });
+    return () => { unregister(); unsubscribe(); };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
+  const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
+  const attachmentVisionRef = React.useRef(visionSupported);
+  React.useLayoutEffect(() => {
+    attachmentVisionRef.current = visionSupported;
+  }, [visionSupported]);
+  React.useLayoutEffect(() => {
+    const operation = attachmentOperationRef.current;
+    return () => operation.cancel();
+  }, []);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
+  const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
+  firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const permissionOptionsId = React.useId();
   const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTitle, setRenameTitle] = React.useState("");
@@ -372,6 +481,7 @@ export function Composer({
   }>();
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
+  const [compactionBusy, setCompactionBusy] = React.useState(false);
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
   const [composing, setComposing] = React.useState(false);
@@ -399,7 +509,7 @@ export function Composer({
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
-      isGenerating,
+      isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
@@ -407,7 +517,9 @@ export function Composer({
       attaching,
     }) &&
     !configurationBusy &&
-    !sessionCommandBusy;
+    !firstMessageSaving &&
+    !sessionCommandBusy &&
+    !(isGenerating && stoppingGeneration);
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
   const selectedSkillState = React.useMemo(
@@ -434,7 +546,9 @@ export function Composer({
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
+    (transcript) => {
+      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    },
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
@@ -646,37 +760,47 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
-  const compactChat = React.useCallback(async () => {
-    if (!onCompactChat || sessionCommandBusy) return;
-    sessionCommandBusyRef.current = true;
-    setSessionCommandStatus("Compacting chat…");
-    try {
-      const result = await onCompactChat();
-      if (result.compacted) {
-        toast.success(
-          result.tokensBefore
-            ? `Chat compacted from about ${result.tokensBefore.toLocaleString()} tokens`
-            : "Chat compacted",
-        );
-      } else {
-        const copy = {
-          already_compact: "This chat is already compact enough.",
-          busy: "Finish the current response or approval first.",
-          archived: "This chat is archived or unavailable.",
-          not_canonical: "This legacy Bot conversation is read-only.",
-          provider_unavailable: "The saved provider is unavailable.",
-          context_metadata_invalid: "The saved model context is invalid.",
-          cancelled: "Compaction was cancelled.",
-          compaction_failed: "Compaction failed.",
-        } as const;
-        toast.info(copy[result.reason]);
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      if (!onCompactChat || sessionCommandBusy) return;
+      sessionCommandBusyRef.current = true;
+      setCompactionBusy(true);
+      setSessionCommandStatus(
+        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+      );
+      try {
+        const result = await onCompactChat(engine);
+        if (result.compacted) {
+          const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
+          const size =
+            result.tokensBefore !== undefined && result.estimatedTokensAfter !== undefined
+              ? ` · about ${result.tokensBefore.toLocaleString()} → ${result.estimatedTokensAfter.toLocaleString()} tokens`
+              : "";
+          const duration =
+            result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
+          toast.success(`${label} compaction complete${duration}${size}`);
+        } else {
+          const copy = {
+            already_compact: "This chat is already compact enough.",
+            busy: "Finish the current response or approval first.",
+            archived: "This chat is archived or unavailable.",
+            not_canonical: "This legacy Bot conversation is read-only.",
+            provider_unavailable: "The saved provider is unavailable.",
+            context_metadata_invalid: "The saved model context is invalid.",
+            cancelled: "Compaction was cancelled.",
+            compaction_failed: "Compaction failed.",
+          } as const;
+          toast.info(copy[result.reason]);
+        }
+      } finally {
+        sessionCommandBusyRef.current = false;
+        setCompactionBusy(false);
+        setSessionCommandStatus(null);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
-    } finally {
-      sessionCommandBusyRef.current = false;
-      setSessionCommandStatus(null);
-      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
-    }
-  }, [inputRef, onCompactChat, sessionCommandBusy]);
+    },
+    [inputRef, onCompactChat, sessionCommandBusy],
+  );
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -754,12 +878,22 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
+      mode?: "steer" | "queue" | "redirect";
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
-      if (sendPendingRef.current) return false;
+      if (sendPendingRef.current || firstSendPendingRef.current) return false;
       sendPendingRef.current = true;
+      firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
+      try {
+        markComposerSubmission(chatId, payload.draftText);
+      } catch (error) {
+        sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
+        setSending(false);
+        throw error;
+      }
 
       setText("");
       const optimisticTextRevision = textRevisionRef.current;
@@ -773,7 +907,20 @@ export function Composer({
       });
 
       try {
-        await onSend(
+        let submit: ComposerProps["onSend"];
+        if (payload.mode === "steer") {
+          if (!onSteer) throw new Error("Steer is unavailable for this response.");
+          submit = onSteer;
+        } else if (payload.mode === "redirect") {
+          if (!onRedirect) throw new Error("Redirect is unavailable for this response.");
+          submit = onRedirect;
+        } else if (payload.mode === "queue") {
+          if (!onQueue) throw new Error("Queue is unavailable for this response.");
+          submit = onQueue;
+        } else {
+          submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        }
+        await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
@@ -781,51 +928,56 @@ export function Composer({
             ? { visualize: payload.visualize, btw: payload.btw }
             : undefined,
         );
+        if (payload.mode === "steer") toast.info("Guidance queued. Aiden will read it at the next step.");
+        if (payload.mode === "queue") toast.info("Follow-up queued. It will run after the current response.");
+        if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
+        settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
       } catch (error) {
-        // An unknown append result may already be durable. ChatPane blocks
-        // another send until reload, so restoring it here would invite a
-        // duplicate message with a new turn identity.
-        if (!isAppendReconciliationRequired(error)) {
-          const currentDraft = draftRef.current.text;
-          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
-          if (
-            textRevisionRef.current === optimisticTextRevision ||
-            restoredDraft !== currentDraft
-          ) {
-            setText(restoredDraft);
-          }
-
-          const currentAttachments = attachmentsRef.current;
-          const restoredAttachments = failedSendAttachments(
-            payload.attachments,
-            currentAttachments,
-          );
-          if (
-            attachmentRevisionRef.current === optimisticAttachmentRevision ||
-            restoredAttachments.length !== currentAttachments.length
-          ) {
-            attachmentRevisionRef.current += 1;
-            updateAttachments(restoredAttachments);
-          }
-          dispatchSkillSelection({
-            type: "send-failed",
-            optimisticRevision: optimisticSkillRevision,
-            submitted: payload.selectedSkill,
-          });
+        // Keep the submitted text after a rejected or uncertain acknowledgment.
+        // An uncertain append is reconciled by ChatPane; it is never replayed here.
+        const currentDraft = draftRef.current.text;
+        const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+        if (
+          textRevisionRef.current === optimisticTextRevision ||
+          restoredDraft !== currentDraft
+        ) {
+          setText(restoredDraft);
         }
+
+        const currentAttachments = attachmentsRef.current;
+        const restoredAttachments = failedSendAttachments(
+          payload.attachments,
+          currentAttachments,
+        );
+        if (
+          attachmentRevisionRef.current === optimisticAttachmentRevision ||
+          restoredAttachments.length !== currentAttachments.length
+        ) {
+          attachmentRevisionRef.current += 1;
+          updateAttachments(restoredAttachments);
+        }
+        dispatchSkillSelection({
+          type: "send-failed",
+          optimisticRevision: optimisticSkillRevision,
+          submitted: payload.selectedSkill,
+        });
+        // Any failed IPC acknowledgement may have an unknown delivery outcome.
+        // Keep the marker until another deliberate submission settles it.
         throw error;
       } finally {
         sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
         setSending(false);
       }
     },
-    [onSend, setText, updateAttachments],
+    [chatId, onSend, onQueue, onSteer, onRedirect, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
+        firstSendPendingRef.current ||
         slashActionPendingRef.current ||
         !slashSession ||
         result.kind !== slashSession.kind ||
@@ -902,11 +1054,11 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt =
-            prompt.trim() || consumeSlashToken(text, slashSession).trim();
-          const missingPromptMessage = instruction === "btw"
-            ? "Add a question after /btw, then send."
-            : "Add what to visualize after /visualize, then send.";
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage =
+            instruction === "btw"
+              ? "Add a question after /btw, then send."
+              : "Add what to visualize after /visualize, then send.";
           if (!nextPrompt) {
             toast.info(missingPromptMessage);
             return false;
@@ -961,10 +1113,10 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        (result.command.action.kind === "session" &&
-          (result.command.action.action === "clone" ||
-            result.command.action.action === "export" ||
-            result.command.action.action === "worktree"));
+        result.command.action.kind === "session" &&
+        (result.command.action.action === "clone" ||
+          result.command.action.action === "export" ||
+          result.command.action.action === "worktree");
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -1032,32 +1184,44 @@ export function Composer({
     }
   }, [onRenameChat, renameTitle, renaming]);
 
-  const beginAttachmentRead = (status: string): boolean => {
+  const beginAttachmentRead = (status: string): number | null => {
+    if (firstSendPendingRef.current) return null;
+    if (sendPendingRef.current) {
+      toast.info("Wait for the current message to finish sending before attaching files.");
+      return null;
+    }
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
-      return false;
+      return null;
     }
-    if (attachmentOperationRef.current) {
+    if (attachmentOperationRef.current.isBusy) {
       toast.info("Wait for the current attachments to finish loading.");
-      return false;
+      return null;
     }
-    attachmentOperationRef.current = true;
+    const token = attachmentOperationRef.current.begin();
     setAttaching(true);
     setAttachmentStatus(status);
-    return true;
+    return token;
   };
 
-  const finishAttachmentRead = () => {
-    attachmentOperationRef.current = false;
+  const finishAttachmentRead = (token: number) => {
+    if (!attachmentOperationRef.current.isCurrent(token)) return;
+    attachmentOperationRef.current.finish(token);
     setAttaching(false);
-    requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      if (attachmentOperationRef.current.isCurrent(token)) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+    });
   };
 
   const acceptReadAttachments = (added: Attachment[], emptyStatus: string): number => {
-    if (visionSupported === false && added.some((attachment) => attachment.kind === "image")) {
-      added = added.filter((attachment) => attachment.kind !== "image");
-      toast.info("The selected model can't read images — image attachments were skipped.");
-    }
+    const accepted = acceptComposerAttachments(
+      attachmentsRef.current,
+      added,
+      attachmentVisionRef.current !== false,
+    );
+    added = accepted;
     if (added.length === 0) {
       setAttachmentStatus(emptyStatus);
       return 0;
@@ -1071,17 +1235,18 @@ export function Composer({
   };
 
   const handleAttach = async () => {
-    if (!beginAttachmentRead("Attachment picker open. Selected files will load before sending.")) {
-      return;
-    }
+    const token = beginAttachmentRead(
+      "Attachment picker open. Selected files will load before sending.",
+    );
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
       if (remainingSlots <= 0) {
         setAttachmentStatus("The attachment count limit has been reached.");
         toast.info(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`);
         return;
       }
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingInlineBytes <= 0) {
         setAttachmentStatus("The attachment data limit has been reached.");
         toast.info("This message has reached the attachment data limit.");
@@ -1092,25 +1257,32 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
-      if (picked.skipped > 0) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
+      const accepted = acceptReadAttachments(
+        picked.attachments,
+        "No compatible attachments were added.",
+      );
+      const skipped = picked.skipped + picked.attachments.length - accepted;
+      if (skipped > 0) {
         toast.info(
-          `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+          `${skipped} selected ${skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
         );
       }
-      acceptReadAttachments(picked.attachments, "No compatible attachments were added.");
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Attachments could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readDroppedAttachments = async (files: File[]) => {
-    if (!beginAttachmentRead("Dropped files are loading before sending.")) return;
+    const token = beginAttachmentRead("Dropped files are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingSlots <= 0 || remainingInlineBytes <= 0) {
         toast.info("This message has reached its attachment limit.");
         setAttachmentStatus("The attachment limit has been reached.");
@@ -1122,6 +1294,7 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No compatible dropped files were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1129,18 +1302,20 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Dropped files could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that dropped file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readClipboardImages = async (files: File[]) => {
-    if (!beginAttachmentRead("Clipboard images are loading before sending.")) return;
+    const token = beginAttachmentRead("Clipboard images are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       const eligible: File[] = [];
       let plannedBytes = 0;
       for (const file of files) {
@@ -1167,11 +1342,13 @@ export function Composer({
           bytes: new Uint8Array(await file.arrayBuffer()),
         })),
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const added = await attachmentsApi.readClipboardImages(
         payload,
         remainingSlots,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No clipboard images were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1179,14 +1356,35 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Clipboard images could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that clipboard image.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
+  const readClipboardImagesRef = React.useRef(readClipboardImages);
+  readClipboardImagesRef.current = readClipboardImages;
+  React.useEffect(
+    () =>
+      composerImageAttach.register({
+        chatId,
+        available: () => {
+          const input = inputRef?.current;
+          return Boolean(
+            input?.isConnected &&
+              !input.disabled &&
+              !input.closest('[aria-hidden="true"], [inert]') &&
+              !firstSendPendingRef.current &&
+              !sendPendingRef.current,
+          );
+        },
+        receive: (files) => void readClipboardImagesRef.current(files),
+      }),
+    [chatId, inputRef],
+  );
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1198,6 +1396,7 @@ export function Composer({
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (firstSendPendingRef.current) { event.preventDefault(); return; }
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1224,13 +1423,18 @@ export function Composer({
   };
 
   const removeAttachment = (id: string) => {
+    if (firstSendPendingRef.current) return;
     attachmentRevisionRef.current += 1;
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  const submit = async () => {
+  const submit = async (redirectConfirmed = false) => {
+    if (redirectConfirmed && !isGenerating) {
+      toast.info("The previous response has finished. Send your message normally.");
+      return;
+    }
     if (sendPendingRef.current || composing) return;
-    if (attachmentOperationRef.current || attaching) {
+    if (attachmentOperationRef.current.isBusy || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
     }
@@ -1244,6 +1448,20 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    const mode = isGenerating ? busyMode : hasQueuedMessages ? "queue" : undefined;
+    if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
+      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      return;
+    }
+    if (mode === "redirect" && !redirectConfirmed) {
+      if (attachments.length > 0 || selectedSkill) {
+        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
+        return;
+      }
+      setConfirmRedirect(true);
+      return;
+    }
+    if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
       toast.info(selectedSkillState.reason);
       return;
@@ -1262,6 +1480,7 @@ export function Composer({
         attachments,
         selectedSkill,
         skillRevision: skillSelection.revision,
+        mode,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -1386,8 +1605,8 @@ export function Composer({
       gitOperationBusy
     )
       return;
-    setPermissionMenuOpen(false);
     if (nextPermission === "full") {
+      setPermissionMenuOpen(false);
       setConfirmFullAccess(true);
       return;
     }
@@ -1396,8 +1615,9 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        <div className="composer-responsive pointer-events-auto relative isolate">
+      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1435,7 +1655,7 @@ export function Composer({
           {showComputerUseNotice ? (
             <aside
               aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
+              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
             >
               <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
               <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
@@ -1466,7 +1686,9 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
+          {queuedMessages}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1541,10 +1763,11 @@ export function Composer({
                 programmaticReturnFocusRef={inputRef}
               />
             ) : null}
+            <ChatPullRequestsChip chatId={chatId} />
           </div>
-
+          </ComposerContextBar>
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
+            className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -1556,12 +1779,12 @@ export function Composer({
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
                   className={cn(
-                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-small",
+                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-small",
                     selectedSkillState?.state === "valid"
-                      ? "border-accent/25 bg-accent/10 text-primary"
+                      ? "bg-status-accent-surface text-primary"
                       : selectedSkillState?.state === "checking"
-                        ? "border-field bg-control text-secondary"
-                        : "border-support-warning/35 bg-support-warning/10 text-primary",
+                        ? "bg-control text-secondary"
+                        : "bg-status-warning-surface text-primary",
                   )}
                   title={
                     selectedSkillState?.state === "valid"
@@ -1594,7 +1817,7 @@ export function Composer({
                       );
                     }}
                     aria-label={`Remove ${selectedSkill.invocation.displayName} skill from message`}
-                    className="-mr-1 rounded-full p-0.5 text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
+                    className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
                   >
                     <X aria-hidden="true" className="size-3.5" />
                   </button>
@@ -1611,7 +1834,7 @@ export function Composer({
                 {attachments.map((a) => (
                   <div
                     key={a.id}
-                    className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
+                    className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
                   >
                     {a.kind === "image" && a.data ? (
                       <img
@@ -1628,7 +1851,7 @@ export function Composer({
                       disabled={sessionCommandBusy}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
+                      className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -1639,9 +1862,10 @@ export function Composer({
             <Textarea
               ref={inputRef}
               value={text}
-              readOnly={sessionCommandBusy}
-              aria-busy={sessionCommandBusy || undefined}
+              readOnly={sessionCommandBusy || firstSendPending}
+              aria-busy={sessionCommandBusy || firstSendPending || undefined}
               onChange={(event) => {
+                if (firstSendPendingRef.current) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
@@ -1687,16 +1911,10 @@ export function Composer({
             />
             {sessionCommandStatus ? (
               <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
-                <Text
-                  as="p"
-                  role="status"
-                  aria-live="polite"
-                  variant="small"
-                  color="tertiary"
-                >
+                <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
                   {sessionCommandStatus}
                 </Text>
-                {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
+                {compactionBusy && onCancelCompact ? (
                   <Button
                     type="button"
                     variant="transparent"
@@ -1708,9 +1926,17 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {!ready && readinessMessage && text.trim().length > 0 ? (
+            {voice.lastError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
+                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
+                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+              </div>
+            ) : null}
+            {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
@@ -1722,7 +1948,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || isGenerating || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -1737,8 +1963,13 @@ export function Composer({
                 <div
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
                   data-open={permissionMenuOpen || undefined}
-                  onPointerEnter={dismissSlash}
-                  onPointerLeave={() => setPermissionMenuOpen(false)}
+                  onPointerEnter={() => {
+                    dismissSlash();
+                    setPermissionMenuOpen(true);
+                  }}
+                  onPointerLeave={(event) => {
+                    if (!event.currentTarget.contains(document.activeElement)) setPermissionMenuOpen(false);
+                  }}
                   onBlur={(event) => {
                     if (!event.currentTarget.contains(event.relatedTarget)) {
                       setPermissionMenuOpen(false);
@@ -1754,7 +1985,8 @@ export function Composer({
                   <button
                     type="button"
                     aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
-                    aria-haspopup="true"
+                    aria-expanded={permissionMenuOpen}
+                    aria-controls={permissionOptionsId}
                     onFocus={() => setPermissionMenuOpen(true)}
                     onClick={() => setPermissionMenuOpen(true)}
                     onKeyDown={(event) => {
@@ -1763,7 +1995,7 @@ export function Composer({
                       setPermissionMenuOpen(true);
                       requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
                   >
                     <PermissionIcon
                       className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
@@ -1773,6 +2005,7 @@ export function Composer({
                     </span>
                   </button>
                   <div
+                    id={permissionOptionsId}
                     role="radiogroup"
                     aria-label="Workspace access"
                     aria-disabled={
@@ -1784,7 +2017,7 @@ export function Composer({
                       Boolean(workspaceChangeBlockedReason) ||
                       undefined
                     }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
                   >
                     {PERMISSION_ORDER.map((value, index) => {
                       const meta = PERMISSION_META[value];
@@ -1813,8 +2046,13 @@ export function Composer({
                           }
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
-                          onClick={() => {
-                            if (!disabled) requestPermission(value);
+                          onClick={(event) => {
+                            if (disabled) return;
+                            requestPermission(value);
+                            if (event.detail > 0 && (value !== "full" || value === permission)) {
+                              setPermissionMenuOpen(false);
+                              inputRef?.current?.focus({ preventScroll: true });
+                            }
                           }}
                           onKeyDown={(event) => {
                             if (disabled) return;
@@ -1842,7 +2080,7 @@ export function Composer({
                             radios?.[nextIndex]?.focus();
                           }}
                           className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
                             selected
                               ? "bg-popover shadow-control"
                               : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
@@ -1918,7 +2156,7 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || isGenerating || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -1928,12 +2166,40 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating && canStopGeneration ? (
+                {onQueue && isGenerating ? (
+                  <>
+                    <Button variant="accent" size="small" disabled={!canSend}
+                      onClick={() => void submit()} aria-label={busyMode === "queue" ? "Queue message" : busyMode === "steer" ? "Steer response" : "Redirect response"}>
+                      {busyMode === "queue" ? <ListPlus /> : <ArrowUp />}
+                      {busyMode === "queue" ? "Queue" : busyMode === "steer" ? "Steer" : "Redirect"}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="transparent" size="small" iconOnly aria-label="Choose message action">
+                          <ChevronDown aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem disabled={!onSteer || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("steer")}>
+                          Steer · Add guidance without stopping
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setBusyMode("queue")}>
+                          Queue · Run after this response
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={!onRedirect || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("redirect")}>
+                          Redirect · Stop and change direction
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                ) : null}
+                {isGenerating ? (
                   <Button
                     variant="filled"
                     size="small"
                     iconOnly
                     onClick={onStop}
+                    disabled={!canStopGeneration}
                     aria-label="Stop generating"
                   >
                     <Square className="fill-current" />
@@ -1945,9 +2211,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label="Send message"
+                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
                   >
-                    <ArrowUp />
+                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>
@@ -1955,6 +2221,18 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={confirmRedirect}
+        onOpenChange={setConfirmRedirect}
+        title="Redirect this response?"
+        description="Aiden will stop the current response and run your new direction next. Queued follow-ups will be cleared."
+        confirmLabel="Redirect"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => {
+          setConfirmRedirect(false);
+          void submit(true);
+        }}
+      />
       <AlertDialog
         open={voice.awaitingRecordedRetryConsent}
         onOpenChange={(open) => {

@@ -13,7 +13,7 @@ const editorSource = readFileSync(
   "utf8",
 );
 
-test("Gemini setup offers separate scopes and a concrete privacy disclosure", () => {
+test("Gemini setup offers accessible borderless radio cards and a concrete privacy disclosure", () => {
   assert.match(dialogSource, /Transcription only/u);
   assert.match(dialogSource, /Models \+ transcription/u);
   assert.match(dialogSource, /streams[\s\S]*?your recording to Google/u);
@@ -23,9 +23,12 @@ test("Gemini setup offers separate scopes and a concrete privacy disclosure", ()
   assert.match(dialogSource, /existing chats keep their pinned model/u);
   assert.match(dialogSource, /Accessibility is optional/u);
   assert.match(dialogSource, /Gemini does not need Screen Recording/u);
-  assert.match(dialogSource, /role="radiogroup"/u);
-  assert.match(dialogSource, /type="radio"/u);
-  assert.match(dialogSource, /checked=\{selected\}/u);
+  assert.match(dialogSource, /<RadioGroup[\s\S]*?aria-label="Gemini access"/u);
+  assert.match(dialogSource, /onValueChange=\{\(value\) => onScopeChange/u);
+  assert.match(dialogSource, /<RadioGroupItem[\s\S]*?value=\{choice\.scope\}/u);
+  assert.match(dialogSource, /selected \? "bg-list-selection"/u);
+  assert.doesNotMatch(dialogSource, /border-accent|has-\[:focus-visible\]/u);
+  assert.doesNotMatch(dialogSource, /className="sr-only"[\s\S]*?type="radio"/u);
 });
 
 test("Voice defers Gemini selection until disclosure and managed auth complete", () => {
@@ -43,6 +46,7 @@ test("Voice defers Gemini selection until disclosure and managed auth complete",
 test("Providers routes Google through the same purpose dialog and voice-only auth readiness", () => {
   assert.match(providerSource, /provider\.id !== GOOGLE_PROVIDER_ID/u);
   assert.match(providerSource, /<GeminiVoiceSetupDialog/u);
+  assert.match(providerSource, /provider=\{list\.find\(\(provider\) => provider\.id === GOOGLE_PROVIDER_ID\)\}/u);
   assert.match(providerSource, /activatesVoice=\{false\}/u);
   assert.match(providerSource, /settingsApi\.setGeminiUsageScope\(geminiScope\)/u);
   assert.doesNotMatch(providerSource, /settingsApi\.setGeminiVoiceSetup/u);
@@ -50,4 +54,6 @@ test("Providers routes Google through the same purpose dialog and voice-only aut
   assert.match(providerSource, /requireChatModel=\{settingUp\.id !== GOOGLE_PROVIDER_ID\}/u);
   assert.match(editorSource, /requireChatModel && refreshed\.models\.length === 0/u);
   assert.match(editorSource, /await onSaved\(\)/u);
+  assert.match(dialogSource, /<ProviderModelVisibility provider=\{provider\} policyHidden=\{false\}/u);
+  assert.match(dialogSource, /scope === "models_and_transcription"/u);
 });

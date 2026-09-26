@@ -38,10 +38,11 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   assert.doesNotMatch(section, /variant="accent"/u);
 });
 
-test("newAgent delegates explicit creation to the active workspace", () => {
+test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
-  assert.match(sidebar, /chatsApi\.create\(\{ workspaceId \}\)/u);
+  assert.match(sidebar, /createChatDraft\(workspaceId\)/u);
+  assert.doesNotMatch(sidebar, /chatsApi\.create\(/u);
   assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
   assert.match(sidebar, /if \(!activeId\) return;/u);
   assert.match(sidebar, /await newAgentInWorkspace\(activeId\)/u);
@@ -156,6 +157,58 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
   assert.doesNotMatch(pane, /\bnewChat\b/u);
 });
 
+test("workspace pull request indicators surface checks without owning GitHub secrets", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const queries = source("../lib/queries.ts");
+  const ipc = source("../lib/ipc.ts");
+  const indicator = between(
+    sidebar,
+    "function WorkspacePullRequestIndicator",
+    "\n}\n\nfunction updateRestartError",
+  );
+  const pullRequestTrigger = between(
+    indicator,
+    "const remainingChecks",
+    '<PopoverContent className="w-80 p-3"',
+  );
+
+  assert.match(sidebar, /function WorkspacePullRequestIndicator/u);
+  assert.match(sidebar, /useGitPullRequestStatus\(workspace\.id, enabled\)/u);
+  assert.match(sidebar, /workspace\.folderPath && workspace\.permission !== "none"/u);
+  assert.match(sidebar, /Some checks were not successful/u);
+  assert.match(sidebar, /Some checks haven’t completed yet/u);
+  assert.match(sidebar, /All checks have passed/u);
+  assert.match(sidebar, /Checks did not run/u);
+  assert.match(sidebar, /GitHub status unavailable/u);
+  assert.match(sidebar, /availability === "not-github"/u);
+  assert.match(sidebar, /Merged/u);
+  assert.match(sidebar, /Closed/u);
+  assert.match(sidebar, /Draft/u);
+  assert.match(sidebar, /PopoverContent className="w-80 p-3"/u);
+  assert.match(sidebar, /aria-label=\{`Pull request #\$\{pullRequest\.number\} checks`\}/u);
+  assert.match(pullRequestTrigger, /<Button[\s\S]*variant="transparent"[\s\S]*iconOnly/u);
+  assert.match(
+    pullRequestTrigger,
+    /className=\{pullRequestChecksIconTone\(displayChecksState\)\}/u,
+  );
+  assert.match(pullRequestTrigger, /<GitPullRequest aria-hidden="true" \/>/u);
+  assert.doesNotMatch(pullRequestTrigger, /<span[^>]*>#\{pullRequest\.number\}<\/span>/u);
+  assert.doesNotMatch(pullRequestTrigger, /checksIcon\(displayChecksState\)/u);
+  assert.doesNotMatch(indicator, /<span className="truncate">GitHub<\/span>/u);
+  assert.match(sidebar, /window\.open\(url, "_blank", "noopener,noreferrer"\)/u);
+  assert.match(
+    sidebar,
+    /const explicitlyExpanded = expandedWorkspaceIds\.has\(group\.workspace\.id\)/u,
+  );
+  assert.match(
+    sidebar,
+    /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{group\.workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*group\.workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
+  );
+  assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
+  assert.match(queries, /refetchInterval: enabled \? 30_000 : false/u);
+  assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
+});
+
 test("workspace outline and recent view are alternate projections, not duplicate lists", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
@@ -192,13 +245,14 @@ test("chat shortcuts follow the rows rendered by the active organization", () =>
 
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /function workspaceSecondaryLabel/u);
+  assert.match(sidebar, /useWorkspacePathPreferences/u);
+  assert.match(source("../lib/workspace-path-display.ts"), /function workspaceSecondaryLabel/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
-  assert.match(sidebar, /Target: \{workspaceSecondaryLabel\(deletingWorktree\)\}/u);
-  assert.match(sidebar, /workspaceSecondaryLabel\(removingWorkspace\)/u);
+  assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
+  assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
 });
 
 test("sidebar overflow menus open beyond the sidebar's right edge", () => {
@@ -206,7 +260,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   const overflowMenu = between(
     sidebar,
     "function SidebarOverflowMenu",
-    "\n}\n\nfunction updateRestartError",
+    "\n}\n\nfunction pullRequestChecksLabel",
   );
 
   assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
@@ -225,13 +279,10 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
   assert.match(overflowMenu, /maxHeight: contentMaxHeight, overflowY: "auto"/u);
   assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
+  assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(
     sidebar,
-    /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u,
-  );
-  assert.match(
-    sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
 });
 
@@ -243,10 +294,7 @@ test("sidebar organizer icons retain contrast on the highlighted accent surface"
     "const workspaceCreationMenu",
   );
 
-  assert.equal(
-    organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length,
-    2,
-  );
+  assert.equal(organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length, 2);
 });
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
@@ -279,22 +327,12 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden settings uses the canonical sidebar logo", () => {
+test("Aiden Live settings has a dedicated destination and the dock restores the app logo", () => {
   const settings = source("../main/settings-view.tsx");
-  const rendererLogo = readFileSync(
-    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
-  );
-  const canonicalLogo = readFileSync(
-    new URL(
-      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
-      import.meta.url,
-    ),
-  );
-
-  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
-  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
-  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
-  assert.deepEqual(rendererLogo, canonicalLogo);
+  const dock = source("./assistant/assistant-dock.tsx");
+  assert.match(settings, /geminiLive: <AudioWaveform/u);
+  assert.match(dock, /resources\/app-icon\.png/u);
+  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
 });
 
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
@@ -334,7 +372,7 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   const settings = source("../main/settings-view.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
-  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-5xl/u);
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
@@ -343,7 +381,12 @@ test("allocated composer and settings widths drive their compact layouts", () =>
 
 test("environment inline handoff uses the same animated spacer pattern", () => {
   const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(panel, /environment-panel absolute z-30/u);
+  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
+  assert.match(
+    panel,
+    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
+  );
   assert.match(
     panel,
     /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
@@ -373,6 +416,7 @@ test("shared controls use theme fills for text entry and focus states", () => {
   const button = between(ui, "export const Button =", "});");
   const input = between(ui, "export const Input =", "});");
   const textarea = between(ui, "export const Textarea =", "type TextProps");
+  const selectTrigger = between(ui, "export const SelectTrigger =", "export const SelectContent =");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
   assert.match(button, /focus-visible:bg-accent-hover/u);
@@ -382,9 +426,12 @@ test("shared controls use theme fills for text entry and focus states", () => {
     assert.doesNotMatch(control, /focus:border-focus-ring/u);
     assert.doesNotMatch(control, /focus:ring-/u);
   }
+  assert.match(selectTrigger, /focus:bg-input/u);
+  assert.doesNotMatch(selectTrigger, /focus-visible:ring-/u);
+  assert.match(source("../styles.css"), /outline: 2px solid var\(--focus-ring\) !important/u);
+  assert.doesNotMatch(selectTrigger, /focus:border-focus-ring/u);
   assert.match(ui, /focus-within:bg-control/u);
   assert.doesNotMatch(ui, /focus-within:border-focus-ring/u);
-  assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
 });
 

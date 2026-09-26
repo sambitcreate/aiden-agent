@@ -123,9 +123,9 @@ export function McpSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text variant="strong">Plugins</Text>
+          <Text as="h1" variant="heading1">Plugins</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
             Browse plugins, connect hosted MCP servers, or add your own. Listing a plugin does not
             add tools. Enabled MCP servers and Skills you add become assistant tools; workspace
@@ -147,7 +147,7 @@ export function McpSettings() {
         </Button>
       </div>
 
-      <div className="flex items-center justify-between gap-4 rounded-card border border-separator px-3.5 py-3">
+      <div className="flex items-center justify-between gap-4 settings-card rounded-card border border-separator px-3.5 py-3">
         <div className="min-w-0 flex-1">
           <Text variant="small-strong">Manual MCP server setup</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
@@ -166,7 +166,7 @@ export function McpSettings() {
           <Text variant="small-strong" color="secondary">
             Configured MCP servers · {list.length}
           </Text>
-          <div className="rounded-card border border-separator">
+          <div className="settings-card rounded-card border border-separator">
             {list.map((s, i) => (
               <React.Fragment key={s.id}>
                 {i > 0 ? <Separator /> : null}
@@ -408,7 +408,7 @@ function PluginCard({
   const connectable = isConnectablePlugin(plugin);
   const badge = state ? mcpPresetConnectionBadge(state) : null;
   return (
-    <div className="flex flex-col gap-2 rounded-card border border-separator p-4">
+    <div className="flex flex-col gap-2 settings-card rounded-card border border-separator p-4">
       <div
         aria-hidden
         className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong"

@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
@@ -29,13 +30,17 @@ import {
   type SubagentRuntimeAuthority,
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
-import type { SubagentReadToolName } from "./capability-profile.js";
+import { SUBAGENT_READ_TOOL_NAMES, type SubagentReadToolName } from "./capability-profile.js";
 import {
   captureLiveSubagentContext,
   type SubagentContextCapture,
   type SubagentContextMode,
 } from "./forked-context.js";
 import { normalizeSubagentModelText } from "./model-text.js";
+import {
+  containsHighConfidenceSecretIncludingEncodings,
+  sanitizeCredentialText,
+} from "../../../renderer/shared/subagent-safe-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
@@ -58,6 +63,80 @@ import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent
 import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
 export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
+const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
+const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
+const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
+const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after safety scan limit.]";
+
+function sanitizePartialFindingsForParent(reports: readonly string[]): string {
+  const rawReports = reports.map((entry) => entry.split(/\r\n|[\n\r\u2028\u2029]/u));
+  const safeReports = rawReports.map((lines) => [...lines]);
+  const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
+  let comparisons = 0;
+  let scanLimitReached = false;
+  reportScan: for (const [reportIndex, lines] of rawReports.entries()) {
+    for (const [lineIndex, line] of lines.entries()) {
+      for (const tail of earlierReportTails) {
+        // Non-adjacent reports can still carry a key prefix and its value.
+        // Only already-checked lines may reach the parent when this scan cap
+        // is exhausted. The current and later lines remain unclassified.
+        if (++comparisons > MAX_PARTIAL_BOUNDARY_COMPARISONS) {
+          safeReports.length = reportIndex + 1;
+          safeReports[reportIndex]!.length = lineIndex;
+          scanLimitReached = true;
+          break reportScan;
+        }
+        if (containsHighConfidenceSecretIncludingEncodings(tail.text + line)) {
+          safeReports[reportIndex]![lineIndex] = REDACTED_CREDENTIAL;
+          safeReports[tail.reportIndex]![tail.lineIndex] = REDACTED_CREDENTIAL;
+          break;
+        }
+      }
+    }
+    let lineIndex = lines.length - 1;
+    while (lineIndex >= 0 && !lines[lineIndex]!.trim()) lineIndex -= 1;
+    if (lineIndex >= 0) earlierReportTails.push({
+      text: lines[lineIndex]!.slice(-128),
+      reportIndex,
+      lineIndex,
+    });
+  }
+  const report = safeReports.map((lines) => lines.join("\n")).join("\n\n");
+  const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
+  const safeLines = lines.map((line) => {
+    const directSafe = sanitizeCredentialText(line);
+    return containsHighConfidenceSecretIncludingEncodings(directSafe)
+      ? REDACTED_CREDENTIAL
+      : directSafe;
+  });
+  // A sensitive assignment key can be split across lines or settled messages.
+  // Find the shortest unsafe adjacent span so unrelated source-path lines stay.
+  if (containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))) {
+    // A hostile report can consist of thousands of one-character lines. Keep
+    // the local span search bounded; the whole-report fallback remains closed.
+    if (safeLines.length > 256) return REDACTED_CREDENTIAL;
+    const redacted = new Set<number>();
+    for (let width = 2; width <= Math.min(8, lines.length); width += 1) {
+      for (let start = 0; start + width <= lines.length; start += 1) {
+        const indices = Array.from({ length: width }, (_value, offset) => start + offset);
+        if (indices.some((index) => redacted.has(index))) continue;
+        if (containsHighConfidenceSecretIncludingEncodings(
+          safeLines.slice(start, start + width).join(""),
+        )) {
+          for (const index of indices) redacted.add(index);
+        }
+      }
+    }
+    for (const index of redacted) safeLines[index] = REDACTED_CREDENTIAL;
+  }
+  const partial = safeLines.join("\n").trim();
+  // Arbitrarily fragmented or encoded material beyond the local span limit
+  // cannot be reconstructed safely; fail closed before the parent sees it.
+  if (containsHighConfidenceSecretIncludingEncodings(partial) ||
+    containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))
+  ) return REDACTED_CREDENTIAL;
+  return scanLimitReached ? `${partial}\n${PARTIAL_SCAN_LIMIT_NOTICE}`.trim() : partial;
+}
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -77,6 +156,7 @@ export interface SubagentChildRunnerDependencies {
     childId?: string;
     runtime: ResolvedModelRuntime;
     thinkingLevel: ThinkingLevel;
+    compactionEngine?: CompactionEngine;
     systemPrompt: string;
     tools: AgentTool[];
     initialMessages: AgentMessage[];
@@ -108,6 +188,7 @@ export interface SubagentChildToolAssembly {
 }
 
 export interface RunSubagentChildInput {
+  compactionEngine?: CompactionEngine;
   authority: SubagentRuntimeAuthority;
   runId?: string;
   childId?: string;
@@ -571,11 +652,12 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       childId: input.childId,
       runtime: input.runtime,
       thinkingLevel: input.thinkingLevel,
+      compactionEngine: input.compactionEngine,
       systemPrompt: subagentRoleSystemPrompt(input.request.role, {
         contextMode: input.context.mode,
-        workspaceRead:
-          input.v2Authority?.capabilities.workspaceRead ??
-          (input.permission !== "none" && input.inheritedCeiling.length > 0),
+        workspaceRead: childTools.some((tool) =>
+          (SUBAGENT_READ_TOOL_NAMES as readonly string[]).includes(tool.name),
+        ),
         workspaceWrite: input.v2Authority?.capabilities.workspaceWrite === true,
         shell: input.v2Authority?.capabilities.shell === true,
         mcpRead:
@@ -587,6 +669,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
             scope.tools.some((tool) => tool.effect === "mutating"),
           ) === true,
         delegation: input.executeNested !== undefined,
+        permission: input.permission,
       }),
       tools: childTools,
       beforeToolCall:
@@ -620,6 +703,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
 
     let currentTurnOutput = "";
     let terminalOutput = "";
+    // Keep the complete, output-budget-bounded assistant history so sanitizing
+    // the final partial never loses an earlier credential-key prefix.
+    const partialReports: string[] = [];
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -685,7 +771,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         }
       } else if (event.type === "turn_start") {
         if (turns >= policy.maxTurns) {
-          stopForLimit("The child reached its turn limit.");
+          stopForLimit(CHILD_TURN_LIMIT_WARNING);
           return;
         }
         turns += 1;
@@ -712,12 +798,21 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           if (error) {
             terminalError = message.stopReason === "error" ? SAFE_CHILD_PROVIDER_FAILURE : error;
           }
-          if (terminalGenerationWasAborted(message)) terminalAborted = true;
+          const messageWasAborted = terminalGenerationWasAborted(message);
+          if (messageWasAborted) terminalAborted = true;
           const exactOutput = terminalAssistantText(message);
           const additionalObserved = currentTurnHadTextDelta
             ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
             : exactOutput.length;
           observedOutputChars += additionalObserved;
+          if (
+            !messageWasAborted &&
+            observedOutputChars <= policy.maxOutputChars &&
+            exactOutput.length <= policy.maxOutputChars &&
+            exactOutput.trim()
+          ) {
+            partialReports.push(exactOutput.trim());
+          }
           input.telemetry?.textReconciled(additionalObserved);
           const exactProtocolChars = assistantProtocolChars(message);
           observedProtocolChars += Math.max(0, exactProtocolChars - currentTurnProtocolDeltaChars);
@@ -773,7 +868,21 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       return timedOutResult(input.request);
     }
     throwIfParentAborted(input.signal);
-    if (limitWarning) return safeFailure(input.request, limitWarning);
+    if (limitWarning) {
+      if (limitWarning !== CHILD_TURN_LIMIT_WARNING || partialReports.length === 0) {
+        return safeFailure(input.request, limitWarning);
+      }
+      // Keep source paths useful to the parent; the renderer projector applies its
+      // stricter snapshot/path policy separately.
+      const modelSafePartial = sanitizePartialFindingsForParent(partialReports);
+      return {
+        role: input.request.role,
+        label: input.request.label,
+        status: "failed",
+        ...projectSubagentCompletedSummary(modelSafePartial),
+        warning: "The child reached its turn limit. These are incomplete, unverified partial findings.",
+      };
+    }
     if (outcome.kind === "failed") {
       return safeFailure(input.request);
     }

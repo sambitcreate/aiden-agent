@@ -7,9 +7,10 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "simulator",
   "memory",
   "scheduledTasks",
-  "assistant",
+  "geminiLive",
   "voice",
   "shortcut",
   "appearance",
@@ -24,7 +25,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   group: "Agent" | "App";
   keywords: string[];
 }> = [
-  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys"] },
+  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
   {
     id: "modelData",
     title: "Model Pad",
@@ -73,36 +74,43 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "remoteAccess",
-    title: "Remote Access",
+    title: "Aiden On The Go",
     group: "Agent",
-    keywords: ["iphone", "ipad", "aiden on the go", "tailscale", "local network", "pairing"],
+    keywords: ["remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
   },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
     group: "Agent",
-    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications"],
+    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later"],
   },
   {
-    id: "assistant",
-    title: "Aiden",
+    id: "geminiLive",
+    title: "Aiden Live",
     group: "Agent",
     keywords: [
-      "assistant",
-      "companion",
-      "chat",
+      "live",
+      "voice assistant",
+      "orb",
       "hotkey",
       "shortcut",
       "model",
       "access",
       "proactive",
+      "beta",
     ],
   },
   {
     id: "computerUse",
     title: "Computer Use",
     group: "Agent",
-    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta"],
+    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
+  },
+  {
+    id: "simulator",
+    title: "Simulator",
+    group: "Agent",
+    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs"],
   },
   {
     id: "memory",
@@ -114,7 +122,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "voice",
     title: "Voice",
     group: "App",
-    keywords: ["microphone", "audio", "transcription", "dictation"],
+    keywords: ["microphone", "audio", "transcription", "dictation", "use my voice", "microphone not working", "talk to aiden"],
   },
   {
     id: "shortcut",
@@ -126,7 +134,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "appearance",
     title: "Appearance",
     group: "App",
-    keywords: ["theme", "light", "dark"],
+    keywords: ["theme", "light", "dark", "workspace", "folder", "paths", "truncation"],
   },
   {
     id: "about",

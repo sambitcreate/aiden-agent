@@ -20,7 +20,8 @@ import {
   Clock3,
   Send,
   Smartphone,
-  BrainCircuit,
+  TabletSmartphone,
+  AudioWaveform,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -34,34 +35,16 @@ import { ComputerUseSettings } from "../components/settings/computer-use-setting
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
-import { AssistantSettings } from "../components/settings/assistant-settings";
+import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { SimulatorSettings } from "../components/settings/simulator-settings";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { MemoryCardIcon } from "../components/memory-card-icon";
+import { SettingsPage } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
-
-const AIDEN_SIDEBAR_LOGO_URL = new URL("../../resources/aiden-sidebar-logo.png", import.meta.url)
-  .href;
-
-function AidenSidebarLogo() {
-  return (
-    <span
-      aria-hidden="true"
-      className="block size-5 shrink-0 bg-current"
-      style={{
-        WebkitMaskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
-        maskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-      }}
-    />
-  );
-}
 
 type NavItem = {
   id: SettingsSection;
@@ -80,9 +63,10 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <AidenSidebarLogo />,
+  geminiLive: <AudioWaveform className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
-  memory: <BrainCircuit className="size-5" />,
+  simulator: <TabletSmartphone className="size-5" />,
+  memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
@@ -106,13 +90,33 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  simulator: SimulatorSettings,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
-  assistant: AssistantSettings,
+  geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
+};
+
+const DESCRIPTIONS: Record<SettingsSection, string> = {
+  providers: "Connect models to Aiden and manage the providers you use.",
+  modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
+  skills: "Choose the reusable instructions Aiden can load in chats.",
+  mcp: "Connect tools and services to extend what Aiden can do.",
+  telegram: "Connect your Telegram bots and choose how they respond.",
+  remoteAccess: "Pair your devices to use Aiden on the go.",
+  websearch: "Choose how Aiden searches and reads the web.",
+  computerUse: "Manage Aiden’s access to native apps and your screen.",
+  simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
+  memory: "Control what Aiden remembers and how long chats stay manageable.",
+  scheduledTasks: "Manage when Aiden works in the background.",
+  geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
+  voice: "Set up voice input, transcription, and dictation.",
+  shortcut: "Customize the keyboard controls for Aiden and the app.",
+  appearance: "Shape Aiden’s light and dark interfaces independently. Changes apply live.",
+  about: "App information, updates, and diagnostics.",
 };
 
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
@@ -120,11 +124,14 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const navigate = useNavigate();
   const section = initialSection ?? "providers";
   const [search, setSearch] = React.useState("");
+  const capabilities = useAppCapabilities();
 
   const query = search.trim().toLocaleLowerCase();
+  // Simulator settings exist only in builds with the devices capability.
+  const availableNav = capabilities.devices ? NAV : NAV.filter((item) => item.id !== "simulator");
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
-    : NAV;
+    ? availableNav.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
+    : availableNav;
   const ActiveSection = CONTENT[section];
 
   return (
@@ -191,7 +198,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                                 replace: true,
                               })
                             }
-                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none ${
+                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring ${
                               selected
                                 ? "bg-list-selection text-primary hover:bg-list-selection"
                                 : "text-primary"
@@ -218,8 +225,18 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       }
     >
       <ScrollArea className="h-full" title="Settings">
-        <div className="settings-responsive mx-auto w-full max-w-2xl px-5 py-6">
-          <ActiveSection />
+        <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
+          <SettingsPage
+            heading={
+              !["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(
+                section,
+              )
+            }
+            title={NAV.find((item) => item.id === section)?.title ?? "Settings"}
+            description={DESCRIPTIONS[section]}
+          >
+            <ActiveSection />
+          </SettingsPage>
         </div>
       </ScrollArea>
     </SplitView>

@@ -197,6 +197,7 @@ export interface BotRuntimeAuthorityDependencies {
   catalog: CatalogPort;
   managedWorkspace: ManagedWorkspacePort;
   inventoryLeases?: Pick<BotRuntimeInventoryLeaseRegistry, "acquire">;
+  skillsEnabled?(): Promise<boolean>;
 }
 
 function fail(classification: BotRuntimeAuthorityFailure): never {
@@ -298,11 +299,14 @@ function otherAuthority(
 function customBinding(
   admission: BotCapabilityAdmission,
   snapshot: BotCapabilityCatalogSnapshot,
+  skillsEnabled: boolean,
 ): BoundBotCustomSelection {
   if (!admission.effectiveCustom) fail("access_unavailable");
   try {
     return bindBotCustomSelection({
-      selection: admission.effectiveCustom,
+      selection: skillsEnabled
+        ? admission.effectiveCustom
+        : { ...admission.effectiveCustom, skillIds: [] },
       catalogRevision: snapshot.catalog.revision,
       snapshot,
     });
@@ -335,6 +339,7 @@ function buildAuthority(input: {
   workspace: BotManagedWorkspaceResolution;
   admission: BotCapabilityAdmission;
   snapshot: BotCapabilityCatalogSnapshot;
+  skillsEnabled: boolean;
 }): BotRuntimeEffectiveAuthority {
   const { admission, snapshot, chat } = input;
   if (!admission.chat) fail("access_unavailable");
@@ -366,7 +371,9 @@ function buildAuthority(input: {
     connections = snapshot.resources.connections
       .filter(({ option }) => option.available)
       .map(connectionAuthority);
-    skills = snapshot.resources.skills.filter(({ option }) => option.available).map(skillAuthority);
+    skills = input.skillsEnabled
+      ? snapshot.resources.skills.filter(({ option }) => option.available).map(skillAuthority)
+      : [];
     otherCapabilities = snapshot.resources.otherCapabilities
       .filter(
         ({ kind, option }) =>
@@ -376,7 +383,7 @@ function buildAuthority(input: {
       )
       .map(otherAuthority);
   } else {
-    const binding = customBinding(admission, snapshot);
+    const binding = customBinding(admission, snapshot, input.skillsEnabled);
     files = fileAuthority(binding.fileScopes);
     shell = binding.shell
       ? {
@@ -508,6 +515,8 @@ export class BotRuntimeAuthorityResolver {
     let inventoryLease: BotRuntimeInventoryLease | undefined;
     try {
       inventoryLease = (this.deps.inventoryLeases ?? botRuntimeInventoryLeases).acquire();
+      const skillsEnabled = await (this.deps.skillsEnabled?.() ?? Promise.resolve(true));
+      inventoryLease.assertCurrent();
       const { bot, chat } = await resolveIdentities(this.deps, input.botId, input.chatId);
       let workspace: BotManagedWorkspaceResolution;
       try {
@@ -536,6 +545,7 @@ export class BotRuntimeAuthorityResolver {
           botId: input.botId,
           chatId: input.chatId,
           snapshot,
+          skillsEnabled,
         });
       } catch (error) {
         if (
@@ -554,6 +564,7 @@ export class BotRuntimeAuthorityResolver {
         workspace,
         admission: capabilityAdmission,
         snapshot,
+        skillsEnabled,
       });
       let released = false;
       const signal = AbortSignal.any([lease.signal, inventoryLease.signal]);
@@ -600,6 +611,7 @@ export class BotRuntimeAuthorityResolver {
                 botId: input.botId,
                 chatId: input.chatId,
                 snapshot: currentSnapshot,
+                skillsEnabled,
               });
             } catch {
               fail("capability_changed");

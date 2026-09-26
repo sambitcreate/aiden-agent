@@ -163,6 +163,7 @@ test("uses product marks for Claude and Grok models while keeping provider marks
   assert.equal(resolveProviderIconSlug("anthropic", "claude-sonnet-4"), "claude");
   assert.equal(resolveProviderIconSlug("xai"), "xai");
   assert.equal(resolveProviderIconSlug("xai", "grok-4-fast"), "grok");
+  assert.equal(resolveProviderIconSlug("tailscale"), "tailscale");
   assert.equal(resolveProviderIconSlug("openrouter", "anthropic/claude-sonnet-4"), "openrouter");
   assert.equal(resolveProviderIconSlug("opencode", "anthropic/claude-sonnet-4"), "opencode");
   assert.equal(
@@ -222,6 +223,15 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
   assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
+  assert.match(
+    providerIconSource,
+    /if \(artwork\) \{\s*return \(\s*<img[\s\S]*data-provider-icon="custom"[\s\S]*src=\{providerArtworkDataUrl\(artwork\)\}/u,
+  );
+  assert.doesNotMatch(
+    providerIconSource,
+    /<ThemedProviderMark[\s\S]*mark="custom"/u,
+  );
   assert.doesNotMatch(
     `${providersSettingsSource}\n${codexProviderSettingsSource}`,
     /bg-surface-subtle/u,

@@ -1496,6 +1496,73 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
+    func testGloballyDisabledSkillsRejectStaleSelectionsAndAllowSkillFreeChoices() throws {
+        let fixture = try sharedFixtureObject()
+        var catalogObject = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        catalogObject["skills"] = [] as [[String: Any]]
+        let catalog = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self, from: data(for: catalogObject)
+        )
+        let update = try XCTUnwrap(fixture["botPolicyUpdate"] as? [String: Any])
+        let request = try XCTUnwrap(update["request"] as? [String: Any])
+        var selectionObject = try XCTUnwrap(request["custom"] as? [String: Any])
+        let stale = try AidenRemoteJSONDecoder.decode(
+            AidenBotCustomSelection.self, from: data(for: selectionObject)
+        )
+        XCTAssertFalse(stale.skillIds.isEmpty)
+        XCTAssertFalse(catalog.containsAvailable(stale))
+        selectionObject["skillIds"] = [] as [String]
+        let skillFree = try AidenRemoteJSONDecoder.decode(
+            AidenBotCustomSelection.self, from: data(for: selectionObject)
+        )
+        XCTAssertTrue(catalog.containsAvailable(skillFree))
+    }
+
+    func testDisabledSkillsPreserveSavedDraftsWithoutGrantingNewChoices() throws {
+        let fixture = try sharedFixtureObject()
+        let decoded = try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: data(for: fixture))
+        let saved = try XCTUnwrap(decoded.botPolicyUpdate.response.custom)
+        var object = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        object["skillsEnabled"] = false
+        object["skills"] = try XCTUnwrap(object["skills"] as? [[String: Any]]).map { value in
+            var option = value
+            option["available"] = false
+            return option
+        }
+        let catalog = try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: object))
+        XCTAssertTrue(catalog.containsAvailable(saved))
+        let draft = try XCTUnwrap(AidenBotCustomAccessDraft(access: decoded.botPolicyUpdate.response, catalog: catalog))
+        XCTAssertEqual(draft.skillIDs, Set(saved.skillIds))
+        XCTAssertTrue(draft.isSaveable(in: catalog))
+        XCTAssertTrue(try XCTUnwrap(AidenBotCustomAccessDraft(catalog: catalog)).skillIDs.isEmpty)
+        var unknownDraft = draft
+        unknownDraft.skillIDs = ["skill.unknown"]
+        XCTAssertFalse(unknownDraft.isSaveable(in: catalog))
+        var unavailableConnection = object
+        unavailableConnection["connections"] = try XCTUnwrap(object["connections"] as? [[String: Any]]).map { value in
+            var option = value
+            option["available"] = false
+            return option
+        }
+        XCTAssertFalse(try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: unavailableConnection)).containsAvailable(saved))
+        object["skillsEnabled"] = true
+        XCTAssertFalse(try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: object)).containsAvailable(saved))
+        XCTAssertTrue(decoded.botCapabilityCatalog.containsAvailable(saved))
+    }
+
+    func testSkillsGateWireDefaultsAndValidation() throws {
+        let fixture = try sharedFixtureObject()
+        var object = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        object.removeValue(forKey: "skillsEnabled")
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: object)).skillsEnabled)
+        object["skillsEnabled"] = false
+        XCTAssertFalse(try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: object)).skillsEnabled)
+        for invalid: Any in [NSNull(), "false", 0] {
+            object["skillsEnabled"] = invalid
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: object)))
+        }
+    }
+
     func testCatalogKeepsResponseTombstonesButRejectsUnavailableMutationSelections() throws {
         let fixture = try sharedFixtureObject()
         var catalogObject = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])

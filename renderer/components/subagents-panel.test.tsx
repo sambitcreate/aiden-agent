@@ -15,11 +15,6 @@ import type {
 } from "../shared/assistant.js";
 import { mergeSubagentSnapshots, type SubagentRunView } from "../lib/subagent-view-state.js";
 import {
-  ENVIRONMENT_COMPACT_MODAL_FOCUSABLE_SELECTOR,
-  environmentCompactModalFocusableTargets,
-  environmentCompactModalTabWrapTarget,
-} from "../lib/environment-panel-state.js";
-import {
   SubagentLiveAnnouncementCoordinator,
   captureSubagentChipFocus,
   focusSubagentRosterRun,
@@ -427,11 +422,9 @@ function MountedSelectionRepairHarness({
 
 function MountedLiveAnnouncerHarness({
   detailRequest,
-  host,
   runs,
 }: {
   detailRequest: SubagentDetailAnnouncementRequest | null;
-  host: HTMLElement;
   runs: readonly SubagentRunSnapshotV1[];
 }) {
   return (
@@ -439,7 +432,6 @@ function MountedLiveAnnouncerHarness({
       ownerKey={subagentPanelOwnerKey("chat-1", "workspace-1")}
       runs={runs}
       detailRequest={detailRequest}
-      portalHost={host}
     />
   );
 }
@@ -2463,94 +2455,7 @@ test("mounted compact selection repair restores Back and breakpoint focus to the
   }
 });
 
-test("mounted compact Environment trap keeps a pointer-focused disclosure in Tab order without Jump to latest", async () => {
-  const releaseMountedDomTest = await acquireMountedDomTest();
-  const mounted = installMountedDom();
-  const { createRoot } = await import("react-dom/client");
-  const { flushSync } = await import("react-dom");
-  const root = createRoot(mounted.container);
-
-  try {
-    flushSync(() => {
-      root.render(
-        <aside role="dialog" aria-modal="true" data-environment-compact-modal="true">
-          <button type="button">Close Environment</button>
-          <button type="button" data-subagent-run-id="selected">
-            Selected subagent
-          </button>
-          <input aria-label="Filter subagents" />
-          <details>
-            <summary data-subagent-milestones="true">3 tool uses · 2 activity milestones</summary>
-          </details>
-          <button type="button">Next detail control</button>
-        </aside>,
-      );
-    });
-
-    const surface = mounted.container.getElementsByTagName("aside")[0] as HTMLElement;
-    const buttons = Array.from(surface.getElementsByTagName("button")) as HTMLElement[];
-    const input = surface.getElementsByTagName("input")[0] as HTMLElement;
-    const summary = surface.getElementsByTagName("summary")[0] as HTMLElement;
-    const focusableCandidates = [buttons[0]!, buttons[1]!, input, summary, buttons[2]!];
-    for (const element of focusableCandidates) {
-      Object.defineProperty(element, "offsetParent", {
-        configurable: true,
-        value: surface,
-      });
-      Object.defineProperty(element, "closest", {
-        configurable: true,
-        value: () => null,
-      });
-    }
-    let receivedSelector = "";
-    Object.defineProperty(surface, "querySelectorAll", {
-      configurable: true,
-      value: (selector: string) => {
-        receivedSelector = selector;
-        return focusableCandidates;
-      },
-    });
-
-    summary.focus();
-    const focusable = environmentCompactModalFocusableTargets(surface);
-    assert.equal(receivedSelector, ENVIRONMENT_COMPACT_MODAL_FOCUSABLE_SELECTOR);
-    assert.ok(
-      ENVIRONMENT_COMPACT_MODAL_FOCUSABLE_SELECTOR.includes("summary:not([tabindex='-1'])"),
-    );
-    assert.ok(focusable.includes(buttons[0]!));
-    assert.ok(focusable.includes(buttons[1]!));
-    assert.ok(focusable.includes(input));
-    assert.ok(focusable.includes(summary));
-    assert.equal(mounted.document.activeElement, summary, "the disclosure has pointer focus");
-    assert.equal(
-      environmentCompactModalTabWrapTarget(focusable, summary, false),
-      null,
-      "Tab from the disclosure keeps native order instead of wrapping to the modal start",
-    );
-    assert.equal(
-      environmentCompactModalTabWrapTarget(focusable, buttons[2]!, false),
-      buttons[0],
-      "the last control still wraps to the modal start",
-    );
-    assert.equal(
-      environmentCompactModalTabWrapTarget(focusable, buttons[0]!, true),
-      buttons[2],
-      "Shift+Tab from the first control still wraps to the modal end",
-    );
-    assert.equal(
-      mountedElementsWithAttribute(mounted.document, "data-subagent-jump-latest").length,
-      0,
-      "the regression does not rely on the conditional Jump to latest control",
-    );
-  } finally {
-    flushSync(() => root.unmount());
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    mounted.restore();
-    releaseMountedDomTest();
-  }
-});
-
-test("mounted live announcer stays singular and active in compact and inline surfaces", async () => {
+test("mounted live announcer stays singular and active in floating and pinned surfaces", async () => {
   const releaseMountedDomTest = await acquireMountedDomTest();
   const mounted = installMountedDom();
   const { createRoot } = await import("react-dom/client");
@@ -2564,23 +2469,18 @@ test("mounted live announcer stays singular and active in compact and inline sur
     finishedAt: 3_000,
   });
   const renderHarness = (
-    compactModal: boolean,
+    floating: boolean,
     detailRequest: SubagentDetailAnnouncementRequest | null,
   ) => {
-    if (compactModal) {
-      host.setAttribute("role", "dialog");
-      host.setAttribute("aria-modal", "true");
-      host.removeAttribute("data-environment-inline");
+    if (floating) {
+      host.setAttribute("data-surface-mode", "tools-floating");
     } else {
-      host.removeAttribute("role");
-      host.removeAttribute("aria-modal");
-      host.setAttribute("data-environment-inline", "true");
+      host.setAttribute("data-surface-mode", "tools-pinned");
     }
     flushSync(() => {
       root.render(
         <MountedLiveAnnouncerHarness
           detailRequest={detailRequest}
-          host={host as unknown as HTMLElement}
           runs={[terminalRun]}
         />,
       );
@@ -2606,17 +2506,20 @@ test("mounted live announcer stays singular and active in compact and inline sur
       /0 active subagents; 1 completed successfully\./u.test(message),
     );
     assert.equal(regions.length, 1);
+    const originalRegion = regions[0];
     let ancestor: HTMLElement | null = regions[0];
-    let modalAncestor: HTMLElement | null = null;
     while (ancestor) {
       assert.notEqual(ancestor.getAttribute("aria-hidden"), "true");
       assert.equal(ancestor.hasAttribute("inert"), false);
-      if (ancestor.getAttribute("role") === "dialog") modalAncestor = ancestor;
+      assert.notEqual(ancestor.getAttribute("role"), "dialog");
+      assert.equal(ancestor.hasAttribute("aria-modal"), false);
       ancestor = ancestor.parentNode instanceof HTMLElement ? ancestor.parentNode : null;
     }
-    assert.ok(modalAncestor, "the sole compact region is inside the active modal subtree");
+    assert.equal(host.getAttribute("data-surface-mode"), "tools-floating");
     assert.match(regions[0].textContent ?? "", /0 active subagents; 1 completed successfully\./u);
 
+    host.setAttribute("inert", "");
+    host.setAttribute("aria-hidden", "true");
     renderHarness(true, {
       id: 1,
       ownerKey: subagentPanelOwnerKey("chat-1", "workspace-1"),
@@ -2637,11 +2540,8 @@ test("mounted live announcer stays singular and active in compact and inline sur
       (message) => message === "Loading saved activity for Code scout.",
     );
     assert.equal(regions.length, 1);
-    assert.ok(
-      regions[0].parentNode instanceof HTMLElement &&
-        regions[0].parentNode.hasAttribute("data-environment-inline"),
-      "the same region moves into the active inline Environment subtree",
-    );
+    assert.equal(regions[0], originalRegion, "panel changes preserve the live DOM node");
+    assert.equal(regions[0].parentNode, mounted.container, "announcements stay outside the covered panel");
     assert.equal(regions[0].textContent, "Loading saved activity for Code scout.");
   } finally {
     flushSync(() => root.unmount());

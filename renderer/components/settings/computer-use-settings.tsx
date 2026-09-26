@@ -1,15 +1,19 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
-import { Badge, Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
-import { computerUseApi } from "../../lib/ipc";
+import { Badge, Button, Callout, Dialog, Field, FieldSet, Switch, Text, toast } from "../ui";
+import { computerUseApi, formFillApi } from "../../lib/ipc";
 import { reduceComputerUseRefreshState } from "../../lib/computer-use-control";
 import {
   restoreComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../../lib/computer-use-notice";
-import { queryKeys, useComputerUseStatus, useSettings } from "../../lib/queries";
-import type { AppSettings, ComputerUseStatus } from "../../lib/types";
+import { queryKeys, useComputerUseStatus, useFormFillStatus, useSettings } from "../../lib/queries";
+import type {
+  AppSettings,
+  ComputerUseStatus,
+  FormFillSettingsView,
+} from "../../lib/types";
 
 function statusPresentation(status: ComputerUseStatus | undefined, failed: boolean) {
   if (failed) {
@@ -35,10 +39,42 @@ function statusPresentation(status: ComputerUseStatus | undefined, failed: boole
   return { label: "Unavailable", color: "red", icon: TriangleAlert, iconClass: "text-red" };
 }
 
+function FormFillSpecialistField() {
+  const queryClient = useQueryClient();
+  const formFillQuery = useFormFillStatus();
+  const [removing, setRemoving] = React.useState(false);
+  const status = formFillQuery.data?.status;
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      const status = await formFillApi.remove();
+      queryClient.setQueryData<FormFillSettingsView>(queryKeys.formFillStatus, { enabled: false, status });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't remove the model.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+  return (
+    <Field
+      label="Form fill specialist"
+      description="Unavailable until Computer Use can keep each fill bound to the document you approved. Existing downloaded model files can be removed."
+    >
+      {status && status.state !== "not-downloaded" ? (
+        <Button size="small" variant="transparent" onClick={() => void remove()} disabled={removing}>
+          {removing ? "Removing…" : "Remove model"}
+        </Button>
+      ) : <Text variant="small" color="secondary">Unavailable</Text>}
+    </Field>
+  );
+}
+
 export function ComputerUseSettings() {
   const queryClient = useQueryClient();
   const statusQuery = useComputerUseStatus();
   const settingsQuery = useSettings();
+  const [enableReview, setEnableReview] = React.useState(false);
+  const [enableError, setEnableError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
   const [requesting, setRequesting] = React.useState(false);
@@ -79,16 +115,20 @@ export function ComputerUseSettings() {
   const toggle = async (enabled: boolean) => {
     if (saving) return;
     setSaving(true);
+    setEnableError(null);
     setPendingEnabled(enabled);
     try {
       await queryClient.cancelQueries({ queryKey: queryKeys.computerUseStatus });
       const next = await computerUseApi.setEnabled(enabled);
       commitStatus(next);
+      setEnableReview(false);
       if (enabled && next.state !== "ready" && next.state !== "permission_required") {
         toast.error(next.detail);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't update Computer Use.");
+      const message = error instanceof Error ? error.message : "Couldn't update Computer Use.";
+      setEnableError(message);
+      toast.error(message);
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
         queryClient.invalidateQueries({ queryKey: queryKeys.computerUseStatus }),
@@ -130,18 +170,18 @@ export function ComputerUseSettings() {
       <FieldSet
         title={
           <span className="inline-flex items-center gap-2">
-            Computer Use <Badge color="blue">Beta</Badge>
+            Desktop control <Badge color="blue">Beta</Badge>
           </span>
         }
       >
         <Field
           label="Enable Computer Use"
-          description="Makes Aiden's pinned external cua-driver available as an opt-in tool in individual chats."
+          description="Let Aiden see your screen and help with apps when you turn it on in a chat."
         >
           <div className="flex justify-end">
             <Switch
               checked={enabled}
-              onCheckedChange={(checked) => void toggle(checked)}
+              onCheckedChange={(checked) => (checked ? setEnableReview(true) : void toggle(false))}
               disabled={saving || settingsQuery.isLoading}
               aria-label="Enable Computer Use beta"
             />
@@ -153,8 +193,8 @@ export function ComputerUseSettings() {
           </div>
         </Field>
         <Field
-          label="Readiness"
-          description="Computer Use needs Accessibility and Screen Recording. Permission belongs to Aiden Computer Use, not the model provider."
+          label="Allow access on your Mac"
+          description="macOS will ask you to allow Aiden Computer Use to see the screen and interact with apps."
           orientation="vertical"
         >
           <Callout
@@ -168,9 +208,6 @@ export function ComputerUseSettings() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Text variant="small-strong">{presentation.label}</Text>
-                    {status?.driverVersion ? (
-                      <Badge>cua-driver {status.driverVersion}</Badge>
-                    ) : null}
                   </div>
                   <Text as="p" variant="small" color="secondary" className="mt-1">
                     {refreshError ??
@@ -204,14 +241,39 @@ export function ComputerUseSettings() {
                   disabled={requesting}
                 >
                   {requesting ? <Loader2 className="animate-spin" /> : <ShieldAlert />}
-                  {requesting ? "Requesting…" : "Request access"}
+                  {requesting ? "Requesting…" : "Open Mac permissions"}
                 </Button>
               </div>
             ) : null}
           </Callout>
         </Field>
+        <FormFillSpecialistField />
       </FieldSet>
 
+      <Dialog
+        open={enableReview}
+        onOpenChange={setEnableReview}
+        title="Let Aiden help with apps?"
+        description="You choose which chats can use this."
+        confirmLabel="Enable Computer Use"
+        busy={saving}
+        onConfirm={() => toggle(true)}
+      >
+        <Text as="p" color="secondary">
+          When you turn this on in a chat, its selected AI provider may receive screenshots and text
+          visible in your apps. Each click or typing action asks for your permission. You can stop
+          or turn it off at any time.
+        </Text>
+        <Text as="p" color="secondary">
+          Next, allow Screen Recording and Accessibility in macOS. Enabling this feature alone does
+          not share your screen.
+        </Text>
+        {enableError ? (
+          <Callout color="red" role="alert">
+            {enableError}
+          </Callout>
+        ) : null}
+      </Dialog>
       <FieldSet title="How it behaves">
         <div className="settings-computer-use-grid grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
           <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">

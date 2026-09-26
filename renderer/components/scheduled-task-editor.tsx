@@ -17,15 +17,21 @@ import {
   Textarea,
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
+import { isUsable } from "../lib/model-picker-data";
 import {
   cronFromScheduleDraft,
   formatSchedule,
   scheduleDraftFromCron,
+  scheduledTaskProviderGuardrail,
+  scheduledTaskProviderModelOptions,
   type ScheduledTaskCadence,
   type ScheduledTaskScheduleDraft,
 } from "../lib/scheduled-task-view";
+import { readModelSelection } from "../lib/use-model-selection";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import type {
   McpServer,
+  Provider,
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
@@ -62,6 +68,8 @@ const WEEKDAYS = [
   "Saturday",
 ] as const;
 
+const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
+
 export function ScheduledTaskEditor({
   open,
   initial,
@@ -70,6 +78,9 @@ export function ScheduledTaskEditor({
   mcpServersUnavailable = false,
   assistantOwned = false,
   busy,
+  providers,
+  hiddenModelsByProvider,
+  lastProviderId,
   onOpenChange,
   onSave,
 }: {
@@ -79,10 +90,15 @@ export function ScheduledTaskEditor({
   mcpServers: McpServer[];
   mcpServersUnavailable?: boolean;
   assistantOwned?: boolean;
+  providers: Provider[];
+  hiddenModelsByProvider?: HiddenModelsByProvider;
+  lastProviderId?: string;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
 }) {
+  const [reviewing, setReviewing] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState(initial);
   const [scheduleDraft, setScheduleDraft] = React.useState(() =>
     scheduleDraftFromCron(initial.cron),
@@ -93,6 +109,8 @@ export function ScheduledTaskEditor({
 
   React.useEffect(() => {
     if (open) {
+      setReviewing(false);
+      setSaveError(null);
       setScheduleDraft(scheduleDraftFromCron(initial.cron));
       setDraft({
         ...initial,
@@ -225,6 +243,44 @@ export function ScheduledTaskEditor({
     return [...new Set([localTimezone, draft.timezone ?? localTimezone, "UTC", ...supported])];
   }, [draft.timezone, localTimezone]);
 
+  const usableProviders = providers.filter(isUsable);
+  const pinnedProvider = usableProviders.find((provider) => provider.id === draft.providerId);
+  const providerModelOptions = pinnedProvider
+    ? scheduledTaskProviderModelOptions(
+        pinnedProvider,
+        hiddenModelsByProvider,
+        draft.model,
+        readModelSelection().model,
+      )
+    : undefined;
+  const providerGuardrail = scheduledTaskProviderGuardrail(
+    draft.mode,
+    draft.providerId,
+    lastProviderId,
+    providers,
+  );
+  const chooseProvider = (choice: string) => {
+    if (choice === APP_DEFAULT_PROVIDER_CHOICE) {
+      setDraft((current) => ({ ...current, providerId: undefined, model: undefined }));
+      return;
+    }
+    const provider = usableProviders.find((candidate) => candidate.id === choice);
+    if (!provider) return;
+    setDraft((current) => {
+      // A pinned model only stays pinned when the provider is unchanged; a
+      // hidden pinned model survives re-selecting its own provider but a stale
+      // model from another provider must not leak into the new one.
+      const { model } = scheduledTaskProviderModelOptions(
+        provider,
+        hiddenModelsByProvider,
+        current.providerId === provider.id ? current.model : undefined,
+        readModelSelection().model,
+      );
+      return { ...current, providerId: provider.id, model };
+    });
+  };
+  const chooseModel = (model: string) => setDraft((current) => ({ ...current, model }));
+
   return (
     <Dialog
       open={open}
@@ -233,11 +289,29 @@ export function ScheduledTaskEditor({
       description="Aiden runs this task on your Mac while the app is open."
       size="large"
       busy={busy}
-      confirmLabel={draft.id ? "Save" : "Create"}
+      confirmLabel={reviewing ? (draft.id ? "Save task" : "Create task") : "Review task"}
       confirmDisabled={!valid}
-      onConfirm={() => onSave(draft)}
+      onConfirm={async () => {
+        if (!reviewing) { setReviewing(true); return; }
+        try { setSaveError(null); await onSave(draft); }
+        catch (error) { setSaveError(error instanceof Error ? error.message : "Couldn’t save this task. Your choices are still here."); }
+      }}
     >
-      <FieldSet>
+      {reviewing ? (
+        <FieldSet title="Review your task">
+          <Field label={draft.name} description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
+            <Button variant="transparent" size="small" onClick={() => setReviewing(false)}>Edit choices</Button>
+          </Field>
+          <Field label="What Aiden will do" orientation="vertical"><Text as="p">{draft.mode === "script" ? draft.script : draft.prompt}</Text></Field>
+          <Field label="Access" orientation="vertical">
+            <Text as="p">{draft.permission === "full" ? "Full access · Runs without asking you each time." : "Read-only · Can inspect information without making changes."}</Text>
+            <Text as="p" color="secondary">{workspaces.find((workspace) => workspace.id === draft.workspaceId)?.name ?? "No selected workspace"} · {selectedMcpIds.length ? selectedMcpIds.map((id) => visibleMcpServers.find((server) => server.id === id)?.name ?? "Unavailable connection").join(", ") : "No connections"} · Web search {draft.webSearchEnabled ? "on" : "off"}</Text>
+          </Field>
+          <Field label="Keep this Mac awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this Mac for the task to run. Results appear in the task’s chat.</Text></Field>
+          {saveError ? <Callout color="red" role="alert">{saveError}</Callout> : null}
+        </FieldSet>
+      ) : <>
+      <FieldSet title="What should Aiden do?">
         <Field label="Name" description="A short label for the task and its dedicated chat.">
           <Input
             autoFocus
@@ -257,7 +331,6 @@ export function ScheduledTaskEditor({
               <Button
                 size="small"
                 variant={draft.mode === "llm" ? "filled" : "transparent"}
-                radius="rounded"
                 aria-pressed={draft.mode === "llm"}
                 onClick={() => setMode("llm")}
               >
@@ -266,7 +339,6 @@ export function ScheduledTaskEditor({
               <Button
                 size="small"
                 variant={draft.mode === "script" ? "filled" : "transparent"}
-                radius="rounded"
                 aria-pressed={draft.mode === "script"}
                 onClick={() => setMode("script")}
               >
@@ -484,7 +556,7 @@ export function ScheduledTaskEditor({
           </div>
         </Field>
         <details className="group px-4 py-3">
-          <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
             <ChevronRight className="size-4 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
             Advanced schedule
           </summary>
@@ -511,6 +583,61 @@ export function ScheduledTaskEditor({
         </details>
       </FieldSet>
       <FieldSet title="Run context">
+        {draft.mode === "llm" ? (
+          <Field label="Provider">
+            <Select
+              disabled={assistantOwned}
+              value={draft.providerId ?? APP_DEFAULT_PROVIDER_CHOICE}
+              onValueChange={chooseProvider}
+            >
+              <SelectTrigger aria-label="Scheduled task provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={APP_DEFAULT_PROVIDER_CHOICE}>
+                  App default (follows your selection)
+                </SelectItem>
+                {usableProviders.map((provider) => (
+                  <SelectItem value={provider.id} key={provider.id}>
+                    {provider.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {providerGuardrail ? (
+              <div
+                className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
+                role="status"
+              >
+                <span>
+                  No provider pinned. If no app default is available, this task cannot run.
+                </span>
+              </div>
+            ) : null}
+          </Field>
+        ) : null}
+        {pinnedProvider && providerModelOptions ? (
+          <Field label="Model">
+            <Select
+              disabled={assistantOwned}
+              value={providerModelOptions.model ?? ""}
+              onValueChange={chooseModel}
+            >
+              <SelectTrigger aria-label="Scheduled task model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providerModelOptions.models.map((model) => (
+                  <SelectItem value={model} key={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+      </FieldSet>
+      <FieldSet title="Access and notifications">
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."
@@ -677,6 +804,7 @@ export function ScheduledTaskEditor({
           </div>
         </Field>
       </FieldSet>
+      </>}
     </Dialog>
   );
 }

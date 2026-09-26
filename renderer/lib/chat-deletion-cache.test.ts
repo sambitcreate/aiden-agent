@@ -3,30 +3,49 @@ import test from "node:test";
 import { QueryClient } from "@tanstack/react-query";
 import { isChatCacheDeleted, removeDeletedChatFromCache } from "./chat-deletion-cache.js";
 import { queryKeys } from "./queries.js";
+import { chatMessageQueue } from "./chat-message-queue.js";
+import { loadComposerDraft, saveComposerDraftText } from "./composer-draft-store.js";
 
 test("successful deletion removes the exact transcript and tombstones late terminal delivery", async () => {
-  const queryClient = new QueryClient();
-  const deletedKey = queryKeys.chat("deleted-chat");
-  const retainedKey = queryKeys.chat("retained-chat");
-  queryClient.setQueryData(deletedKey, { id: "deleted-chat", messages: ["stale"] });
-  queryClient.setQueryData(retainedKey, { id: "retained-chat", messages: ["keep"] });
+  const values = new Map<string, string>();
+  const priorStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  try {
+    const queryClient = new QueryClient();
+    const deletedKey = queryKeys.chat("deleted-chat");
+    const retainedKey = queryKeys.chat("retained-chat");
+    queryClient.setQueryData(deletedKey, { id: "deleted-chat", messages: ["stale"] });
+    queryClient.setQueryData(retainedKey, { id: "retained-chat", messages: ["keep"] });
+    const queue = chatMessageQueue("deleted-chat");
+    queue.add({ id: "queued", text: "unsent", attachments: [] });
+    saveComposerDraftText("deleted-chat", "unsent draft");
 
-  await removeDeletedChatFromCache(queryClient, "deleted-chat");
+    await removeDeletedChatFromCache(queryClient, "deleted-chat");
+    assert.deepEqual(queue.getSnapshot().messages, []);
+    assert.equal(queue.getSnapshot().paused, true);
+    assert.equal(loadComposerDraft("deleted-chat").text, "");
 
-  assert.equal(queryClient.getQueryData(deletedKey), undefined);
-  assert.deepEqual(queryClient.getQueryData(retainedKey), {
-    id: "retained-chat",
-    messages: ["keep"],
-  });
-  assert.equal(isChatCacheDeleted("deleted-chat"), true);
-  assert.equal(isChatCacheDeleted("retained-chat"), false);
+    assert.equal(queryClient.getQueryData(deletedKey), undefined);
+    assert.deepEqual(queryClient.getQueryData(retainedKey), {
+      id: "retained-chat",
+      messages: ["keep"],
+    });
+    assert.equal(isChatCacheDeleted("deleted-chat"), true);
+    assert.equal(isChatCacheDeleted("retained-chat"), false);
 
-  const queuedTerminal = { id: "deleted-chat", messages: ["late assistant"] };
-  if (!isChatCacheDeleted(queuedTerminal.id)) {
-    queryClient.setQueryData(queryKeys.chat(queuedTerminal.id), queuedTerminal);
+    const queuedTerminal = { id: "deleted-chat", messages: ["late assistant"] };
+    if (!isChatCacheDeleted(queuedTerminal.id)) {
+      queryClient.setQueryData(queryKeys.chat(queuedTerminal.id), queuedTerminal);
+    }
+    assert.equal(queryClient.getQueryData(deletedKey), undefined);
+    queryClient.clear();
+  } finally {
+    globalThis.localStorage = priorStorage;
   }
-  assert.equal(queryClient.getQueryData(deletedKey), undefined);
-  queryClient.clear();
 });
 
 test("deletion cancellation prevents an older in-flight read from reinstalling the chat", async () => {

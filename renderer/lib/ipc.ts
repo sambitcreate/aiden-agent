@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
@@ -13,6 +14,8 @@ import type {
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
+  FormFillArtifactStatus,
+  FormFillSettingsView,
   EngineStatus,
   ExternalEditor,
   GitBranches,
@@ -22,6 +25,7 @@ import type {
   GitComparisonDiffInput,
   GitDiffInput,
   GitFileDiff,
+  GitHubPullRequestStatus,
   GitInfo,
   GitPushCapability,
   GitPushInput,
@@ -127,6 +131,11 @@ import {
   type AppUpdateRestartResult,
   type AppUpdateSnapshot,
 } from "../shared/app-update";
+import type {
+  AssistantLiveRendererEvent,
+  AssistantLiveSnapshot,
+  AssistantLiveStartIntent,
+} from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
   parseChatReadResponse,
@@ -137,6 +146,10 @@ import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemotePairingBootstrapView,
@@ -149,15 +162,33 @@ import {
   type ChatArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import type {
+  ChatPullRequestCandidatesResult,
+  ChatPullRequestCreateResult,
+  ChatPullRequestDetectResult,
+  ChatPullRequestLinkResult,
+  ChatPullRequestListResult,
+  ChatPullRequestPendingCreate,
+  ChatPullRequestRef,
+  ChatPullRequestView,
+} from "../shared/chat-pull-requests";
+import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import {
-  parseTodoSnapshotView,
-  type TodoSnapshotViewV1,
-} from "../shared/todo";
-import {
-  parseBtwEvent,
-  type BtwEventV1,
-  type BtwStartReceiptV1,
-} from "../shared/btw";
+  parseDeviceServiceState,
+  parseDeviceSettings,
+  parseDeviceStreamGrant,
+  parseDeviceToolchainState,
+  type DeviceActionInput,
+  type DeviceConsentKind,
+  type DeviceServiceState,
+  type DeviceSession,
+  type DeviceSettings,
+  type DeviceStreamGrant,
+  type DeviceToolchainState,
+} from "../shared/devices";
+import type { PeerHostView } from "../shared/peer-host";
+import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -177,6 +208,16 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
+
+export const peerHostsApi = {
+  list: () => invoke<PeerHostView[]>("remote:peersList"),
+  pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
+  setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
+  remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  operation: (hostId: string, operation: PeerOperation) =>
+    invoke<unknown>("remote:peerOperation", hostId, operation),
+  onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+};
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
@@ -296,6 +337,23 @@ export const assistantApi = {
     invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
 };
 
+export const assistantLiveApi = {
+  status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
+  authorizeComputerUse: () => invoke<string | null>("assistant-live:authorize-computer-use", {}),
+  start: (intent: AssistantLiveStartIntent) =>
+    invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
+  stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
+  sendAudio: (sessionId: string, pcm: Uint8Array) =>
+    invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
+  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  releaseDisplay: (bindingId: string) =>
+    invoke<boolean>("assistant-live:display-release", { bindingId }),
+  sendFrame: (sessionId: string, frame: Uint8Array) =>
+    invoke<boolean>("assistant-live:frame", { sessionId, frame }),
+  onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
+    onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
+};
+
 export const modelInsightsApi = {
   status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
   connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
@@ -307,6 +365,16 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+};
+
+export const formFillApi = {
+  status: () => invoke<FormFillSettingsView>("formFill:status"),
+  setEnabled: (enabled: boolean) => invoke<FormFillSettingsView>("formFill:setEnabled", enabled),
+  download: () => invoke<FormFillArtifactStatus>("formFill:download"),
+  cancel: () => invoke<FormFillArtifactStatus>("formFill:cancel"),
+  remove: () => invoke<FormFillArtifactStatus>("formFill:remove"),
+  onProgress: (handler: (status: FormFillArtifactStatus) => void) =>
+    onNotification<FormFillArtifactStatus>("formFill:progress", handler),
 };
 
 export const titleProvidersApi = {
@@ -481,6 +549,14 @@ export const telegramApi = {
 };
 
 export const aidenRemoteApi = {
+  setupPairing: (
+    transport: "lan" | "tailscale",
+    expected: {
+      instanceId: string;
+      enabled: boolean;
+      connectionMode: AidenRemoteConnectionMode;
+    },
+  ) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
@@ -632,8 +708,10 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (id: string, patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean }) =>
-    invoke<Workspace>("workspaces:update", id, patch),
+  update: (
+    id: string,
+    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+  ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
@@ -670,6 +748,83 @@ export interface TerminalSnapshot {
   sequence: number;
 }
 
+export const browserApi = {
+  getState: (workspaceId: string) =>
+    invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
+    invoke<import("../shared/browser").BrowserCommandResult>(
+      "browser:command",
+      workspaceId,
+      command,
+    ),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
+    onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+};
+
+async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
+  const toolchain = parseDeviceToolchainState(await invoke<unknown>(channel));
+  if (!toolchain) throw new Error("The simulator tool versions were invalid.");
+  return toolchain;
+}
+
+async function invokeDeviceState(channel: string, ...args: unknown[]): Promise<DeviceServiceState> {
+  const state = parseDeviceServiceState(await invoke<unknown>(channel, ...args));
+  if (!state) throw new Error("The simulator state response was invalid.");
+  return state;
+}
+
+async function invokeDeviceSettings(channel: string, ...args: unknown[]): Promise<DeviceSettings> {
+  const settings = parseDeviceSettings(await invoke<unknown>(channel, ...args));
+  if (!settings) throw new Error("The simulator settings response was invalid.");
+  return settings;
+}
+
+export const devicesApi = {
+  getState: () => invokeDeviceState("devices:get-state"),
+  setConsent: (kind: DeviceConsentKind, granted: boolean) =>
+    invokeDeviceState("devices:consent", kind, granted),
+  /** Refreshes this Mac and paired Macs; `"local"` never contacts paired Macs. */
+  refresh: (scope?: "local") =>
+    scope ? invokeDeviceState("devices:refresh", scope) : invokeDeviceState("devices:refresh"),
+  /** Contacts paired Macs only when the user asks. */
+  refreshPeers: () => invokeDeviceState("devices:refresh-peers"),
+  open: (input: { chatId: string; deviceId: string; hostId?: string }) =>
+    invoke<DeviceSession>("devices:open", input),
+  close: (input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }) =>
+    invoke<void>("devices:close", input),
+  action: (input: DeviceActionInput) => invokeDeviceSettings("devices:action", input),
+  settings: (input: { hostId: string; deviceId: string }) =>
+    invokeDeviceSettings("devices:settings", input),
+  screenshot: async (input: { hostId: string; deviceId: string }): Promise<Uint8Array> => {
+    const png = await invoke<unknown>("devices:screenshot", input);
+    if (!(png instanceof Uint8Array) || png.byteLength === 0) {
+      throw new Error("The simulator screenshot was invalid.");
+    }
+    return png;
+  },
+  streamGrant: async (): Promise<DeviceStreamGrant> => {
+    const grant = parseDeviceStreamGrant(await invoke<unknown>("devices:stream-grant"));
+    if (!grant) throw new Error("The simulator stream grant was invalid.");
+    return grant;
+  },
+  /** Installed helper versions, read from disk only. */
+  toolchain: () => invokeDeviceToolchain("devices:toolchain"),
+  pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
+  /** Turns every simulator permission off and deletes the installed helpers. */
+  removeTools: () => invokeDeviceState("devices:remove-tools"),
+  onState: (handler: (state: DeviceServiceState) => void) =>
+    onNotification<unknown>("devices:state", (payload) => {
+      const state = parseDeviceServiceState(payload);
+      if (state) handler(state);
+    }),
+  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
+  onReveal: (handler: (chatId: string) => void) =>
+    onNotification<unknown>("devices:reveal", (payload) => {
+      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
+      if (typeof chatId === "string" && chatId) handler(chatId);
+    }),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
@@ -698,11 +853,60 @@ export const gitApi = {
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
+  pullRequestStatus: (workspaceId: string) =>
+    invoke<GitHubPullRequestStatus>("git:pullRequestStatus", workspaceId),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
+};
+
+// ── Chat ↔ pull requests ──────────────────────────────────────────────
+// A chat durably links many PRs; the relationship is keyed by the canonical
+// (host, repository, number) — never by the workspace's current branch.
+export const pullRequestsApi = {
+  list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
+  current: (chatId: string) =>
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+      "pullRequests:current",
+      chatId,
+    ),
+  candidates: (chatId: string, workspaceId?: string) =>
+    invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
+  link: (chatId: string, input: { url: string }) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:link", chatId, input),
+  linkRef: (chatId: string, ref: ChatPullRequestRef, source?: "manual" | "branch-discovered") =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, { ...ref, source }),
+  unlink: (chatId: string, ref: ChatPullRequestRef) =>
+    invoke<{ ok: boolean }>("pullRequests:unlink", chatId, ref),
+  refresh: (chatId: string, ref?: ChatPullRequestRef) =>
+    invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
+  detectAfterPush: (
+    chatId: string,
+    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
+  ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
+  create: (
+    chatId: string,
+    input: {
+      workspaceId: string;
+      title: string;
+      body?: string;
+      baseBranch: string;
+      headBranch: string;
+      expectedHeadSha?: string;
+      repository?: string;
+      draft?: boolean;
+    },
+  ) => invoke<ChatPullRequestCreateResult>("pullRequests:create", chatId, input),
+  dismissPending: (chatId: string, operationId: string) =>
+    invoke<void>("pullRequests:dismissPending", chatId, operationId),
+  pending: (chatId: string) =>
+    invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
+  adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
@@ -733,9 +937,15 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
-  compact: (id: string) =>
+  compact: (id: string, engine?: CompactionEngine) =>
     invoke<
-      | { compacted: true; tokensBefore?: number; estimatedTokensAfter?: number }
+      | {
+          compacted: true;
+          engine?: CompactionEngine;
+          durationMs?: number;
+          tokensBefore?: number;
+          estimatedTokensAfter?: number;
+        }
       | {
           compacted: false;
           reason:
@@ -748,13 +958,14 @@ export const chatsApi = {
             | "cancelled"
             | "compaction_failed";
         }
-    >("chats:compact", id),
+    >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
   todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
     const value = await invoke<unknown>("chats:todoSnapshot", id);
     if (value === null) return null;
     const snapshot = parseTodoSnapshotView(value);
-    if (!snapshot || snapshot.chatId !== id) throw new Error("The todo snapshot response was invalid.");
+    if (!snapshot || snapshot.chatId !== id)
+      throw new Error("The todo snapshot response was invalid.");
     return snapshot;
   },
   btwStart: (chatId: string, question: string) =>
@@ -767,12 +978,19 @@ export const chatsApi = {
       const event = parseBtwEvent(payload);
       if (event) handler(event);
     }),
-  create: (input: {
+  create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
+    invokeChatMutation<Chat>("chats:create", input),
+  createWithFirstMessage: (input: {
+    draftId: string;
     title?: string;
     workspaceId: string;
     providerId?: string;
     model?: string;
-  }) => invokeChatMutation<Chat>("chats:create", input),
+    computerUseEnabled?: boolean;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+  }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
@@ -827,8 +1045,11 @@ export const chatsApi = {
       skillInvocation?: SkillInvocationV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
-  approve: (approvalId: string, decision: ApprovalDecision) =>
-    invoke<void>("chat:approve", approvalId, decision),
+  approve: (
+    approvalId: string,
+    decision: ApprovalDecision,
+    options?: { formFillExcludedOrders?: number[] },
+  ) => invoke<void>("chat:approve", approvalId, decision, options),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
@@ -860,7 +1081,8 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: () => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getCapabilityCatalog: (botId?: string) =>
+    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
@@ -948,6 +1170,7 @@ interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 interface ChatError {
   streamId: string;
@@ -956,6 +1179,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1003,6 +1227,16 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
+}
+
+export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
+  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
+  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
@@ -1092,6 +1326,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
@@ -1102,6 +1337,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),

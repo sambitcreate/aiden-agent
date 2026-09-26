@@ -26,7 +26,8 @@ test("renders an accessible four-step Gemini thinking control", () => {
   assert.match(markup, /pointer-events-none max-h-0/u);
   assert.match(markup, /group-hover\/thinking:max-h-7/u);
   assert.match(markup, /group-focus-within\/thinking:max-h-7/u);
-  assert.match(markup, /group-hover\/thinking:bg-control\/80/u);
+  assert.doesNotMatch(markup, /bg-control\/80/u);
+  assert.match(markup, /group-focus-within\/thinking:bg-popover/u);
   assert.match(markup, /group-hover\/thinking:bg-popover/u);
   assert.doesNotMatch(markup, /disabled:opacity-45/u);
 });

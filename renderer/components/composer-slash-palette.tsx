@@ -200,7 +200,7 @@ export function ComposerSlashPalette({
           else if (unavailableReason) setAnnouncement(unavailableReason);
         }}
         className={cn(
-          "flex min-h-10 cursor-default items-center gap-2 rounded-[10px] px-2.5 py-1.5 outline-none transition-colors duration-100",
+          "flex min-h-10 cursor-default items-center gap-2 rounded-menu px-2.5 py-1.5 outline-none transition-colors duration-100",
           selected && available && "bg-control",
           !selected && available && "hover:bg-list-hover",
           !available && "opacity-45",
@@ -239,6 +239,7 @@ export function ComposerSlashPalette({
     <div
       className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-dialog border border-separator bg-popover/98 shadow-popover backdrop-blur-xl"
       data-composer-slash-palette
+      data-browser-occluder
       data-presence={presenceState}
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >

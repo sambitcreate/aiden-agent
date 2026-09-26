@@ -1,9 +1,14 @@
 import { nativeImage } from "../platform.js";
 import {
   PROVIDER_ARTWORK_MAX_PNG_BYTES,
+  normalizeProviderArtwork,
   type ProviderArtwork,
 } from "../../renderer/shared/provider-artwork.js";
-import { decodeProviderArtworkSource } from "./provider-artwork-core.js";
+import {
+  decodeProviderArtworkSource,
+  persistStoredProviderArtwork,
+} from "./provider-artwork-core.js";
+
 const TARGET_EDGE = 64;
 
 export function normalizeProviderArtworkInput(value: unknown): ProviderArtwork {
@@ -36,5 +41,14 @@ export function normalizeProviderArtworkInput(value: unknown): ProviderArtwork {
   if (png.length === 0 || png.length > PROVIDER_ARTWORK_MAX_PNG_BYTES) {
     throw new Error("The normalized provider icon is too complex. Choose a simpler image.");
   }
-  return { mimeType: "image/png", dataBase64: png.toString("base64") };
+  const artwork = { mimeType: "image/png" as const, dataBase64: png.toString("base64") };
+  if (!normalizeProviderArtwork(artwork)) {
+    throw new Error("The normalized provider icon is too complex. Choose a simpler image.");
+  }
+  return artwork;
+}
+
+/** Persist only artwork that already matches the display contract, or re-encode it. */
+export function persistableProviderArtwork(value: unknown): ProviderArtwork | undefined {
+  return persistStoredProviderArtwork(value, (input) => normalizeProviderArtworkInput(input));
 }

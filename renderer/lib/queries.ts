@@ -13,6 +13,7 @@ import {
   botsApi,
   chatsApi,
   computerUseApi,
+  formFillApi,
   exaApi,
   gitApi,
   localVoiceApi,
@@ -21,6 +22,7 @@ import {
   modelsApi,
   profileApi,
   providersApi,
+  pullRequestsApi,
   scheduleApi,
   settingsApi,
   shortcutApi,
@@ -37,6 +39,7 @@ import type {
   ModelInfo,
   ModelInsightsStatus,
   Provider,
+  Chat,
   UsageDateRange,
 } from "./types";
 
@@ -59,6 +62,7 @@ export const queryKeys = {
   scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
+  formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
@@ -76,6 +80,8 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
+  gitPullRequestStatus: (workspaceId: string | undefined) =>
+    ["git-pull-request-status", workspaceId ?? "none"] as const,
   gitReview: (workspaceId: string | undefined) => ["git-review", workspaceId ?? "none"] as const,
   gitPushCapability: (workspaceId: string | undefined) =>
     ["git-push-capability", workspaceId ?? "none"] as const,
@@ -84,12 +90,31 @@ export const queryKeys = {
   gitComparison: (workspaceId: string | undefined, targetRef: string | undefined) =>
     [...queryKeys.gitComparisons(workspaceId), targetRef ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
+  chatPullRequests: (chatId: string | undefined) =>
+    ["chat-pull-requests", chatId ?? "none"] as const,
+  chatCurrentPullRequest: (chatId: string | undefined) =>
+    ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatPullRequestCandidates: (chatId: string | undefined) =>
+    ["chat-pull-request-candidates", chatId ?? "none"] as const,
+  chatPullRequestPending: (chatId: string | undefined) =>
+    ["chat-pull-request-pending", chatId ?? "none"] as const,
   gitWorktrees: (workspaceId: string | undefined) =>
     ["gitWorktrees", workspaceId ?? "none"] as const,
   skillCatalog: (workspaceId: string | undefined) =>
     ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
+
+/** Keep a pre-append read from replacing the durable new user turn. */
+export async function installAppendedChatSnapshot(
+  queryClient: QueryClient,
+  chatId: string,
+  updated: Chat,
+): Promise<void> {
+  const chatKey = queryKeys.chat(chatId);
+  await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+  queryClient.setQueryData(chatKey, updated);
+}
 
 async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
   await Promise.all([
@@ -275,10 +300,10 @@ export function useBotChats(botId: string | undefined) {
 }
 
 /** Bot capability catalog for the desktop audience; refreshed after saves. */
-export function useBotCapabilityCatalog(enabled: boolean) {
+export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   return useQuery({
-    queryKey: queryKeys.botCapabilityCatalog,
-    queryFn: () => botsApi.getCapabilityCatalog(),
+    queryKey: [...queryKeys.botCapabilityCatalog, botId],
+    queryFn: () => botsApi.getCapabilityCatalog(botId),
     enabled,
   });
 }
@@ -367,6 +392,16 @@ export function useGitInfo(workspaceId: string | undefined) {
   });
 }
 
+export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    refetchInterval: enabled ? 30_000 : false,
+    staleTime: 30_000,
+  });
+}
+
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.gitReview(workspaceId),
@@ -416,6 +451,45 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
     queryFn: () => gitApi.branches(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
     staleTime: 1_000,
+  });
+}
+
+// Chat ↔ pull requests: snapshots are cached display state; GitHub is the
+// authority. Refreshes happen on rail open, after push/create/link, and on the
+// shared `chats:pull-requests-changed` notification — no per-PR polling.
+export function useChatPullRequests(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequests(chatId),
+    queryFn: () => pullRequestsApi.list(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useChatCurrentPullRequest(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatCurrentPullRequest(chatId),
+    queryFn: () => pullRequestsApi.current(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useChatPullRequestCandidates(chatId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestCandidates(chatId),
+    queryFn: () => pullRequestsApi.candidates(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useChatPullRequestPending(chatId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestPending(chatId),
+    queryFn: () => pullRequestsApi.pending(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 15_000,
   });
 }
 
@@ -483,6 +557,17 @@ export function useComputerUseStatus(enabled = true) {
   return useQuery({
     queryKey: queryKeys.computerUseStatus,
     queryFn: () => computerUseApi.status(),
+    enabled,
+    retry: false,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useFormFillStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.formFillStatus,
+    queryFn: () => formFillApi.status(),
     enabled,
     retry: false,
     staleTime: 5_000,

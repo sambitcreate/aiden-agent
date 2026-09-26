@@ -189,8 +189,8 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     return botApplicationService.updateBot(parseBotUpdate(input));
   });
-  ipcMain.handle("bots:getCapabilityCatalog", async () =>
-    botApplicationService.capabilityCatalog(desktopAudienceId),
+  ipcMain.handle("bots:getCapabilityCatalog", async (_event, id: unknown) =>
+    botApplicationService.capabilityCatalog(desktopAudienceId, id === undefined ? undefined : parseBotId(id)),
   );
   ipcMain.handle("bots:getBotAccess", async (_event, id: unknown) => {
     const botId = parseBotId(id);

@@ -8,6 +8,10 @@ import {
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 
 const MAX_DETACHED_STREAMS = 64;
 const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
@@ -57,6 +61,10 @@ interface TerminalChatNotification {
 export interface ChatSettlementNotification {
   chatId: string;
   workspaceId: string;
+}
+
+export interface DetachedLifecycleChatReconciliation extends ChatSettlementNotification {
+  streamIds: readonly string[];
 }
 
 export interface ChatReadReconciliation {
@@ -349,6 +357,80 @@ export function isDetachedLifecycleChatDraining(
   );
 }
 
+function ownsLifecycleChat(
+  owner: ChatSettlementNotification,
+  chatId: string,
+  workspaceId: string,
+): boolean {
+  return owner.chatId === chatId && owner.workspaceId === workspaceId;
+}
+
+/** Capture exact retained streams so recovery cannot clear newer work in the same chat. */
+export function pendingDetachedLifecycleChats(): DetachedLifecycleChatReconciliation[] {
+  const pending = new Map<string, DetachedLifecycleChatReconciliation>();
+  for (const [streamId, owner] of [
+    ...detachedLifecycleStreams.entries(),
+    ...fallbackLifecycleStreams.entries(),
+  ]) {
+    const key = chatReadReconciliationKey(owner);
+    const retained = pending.get(key);
+    if (retained?.streamIds.includes(streamId)) continue;
+    pending.set(key, {
+      chatId: owner.chatId,
+      workspaceId: owner.workspaceId,
+      streamIds: [...(retained?.streamIds ?? []), streamId],
+    });
+  }
+  return [...pending.values()];
+}
+
+export function captureDetachedLifecycleChat(
+  owner: ChatSettlementNotification,
+): DetachedLifecycleChatReconciliation | null {
+  const workspaceId = persistedChatWorkspaceId(owner.workspaceId);
+  return (
+    pendingDetachedLifecycleChats().find((candidate) =>
+      ownsLifecycleChat(candidate, owner.chatId, workspaceId),
+    ) ?? null
+  );
+}
+
+/** Clear captured ownership only after main's current activity snapshot proves inactivity. */
+export function clearInactiveDetachedLifecycleChat(
+  owner: DetachedLifecycleChatReconciliation,
+  activeChatIds: ReadonlySet<string>,
+): boolean {
+  if (
+    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isSafeSubagentIdentifier(owner.workspaceId) ||
+    !owner.streamIds.every(isSafeSubagentIdentifier) ||
+    activeChatIds.has(owner.chatId)
+  ) {
+    return false;
+  }
+  const workspaceId = persistedChatWorkspaceId(owner.workspaceId);
+  let changed = false;
+  for (const streamId of owner.streamIds) {
+    const detachedOwner = detachedLifecycleStreams.get(streamId);
+    if (detachedOwner && ownsLifecycleChat(detachedOwner, owner.chatId, workspaceId)) {
+      detachedLifecycleStreams.delete(streamId);
+      changed = true;
+    }
+    const fallbackOwner = fallbackLifecycleStreams.get(streamId);
+    if (fallbackOwner && ownsLifecycleChat(fallbackOwner, owner.chatId, workspaceId)) {
+      fallbackLifecycleStreams.delete(streamId);
+      changed = true;
+    }
+    const projection = detachedLifecycleProjections.get(streamId);
+    if (projection && ownsLifecycleChat(projection, owner.chatId, workspaceId)) {
+      detachedLifecycleProjections.delete(streamId);
+      changed = true;
+    }
+  }
+  if (changed) emitRegistryChange();
+  return changed;
+}
+
 function requestChatReadReconciliation(owner: ChatReadReconciliation): void {
   const key = chatReadReconciliationKey(owner);
   if (
@@ -524,6 +606,7 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      reasoning: reset ? "" : current.reasoning,
       lastTextDeltaAt:
         reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
     }));
@@ -592,6 +675,8 @@ export function subscribeDetachedTerminalChats(
     }
     const owner = detachedLifecycleStreams.get(terminal.streamId);
     if (!owner || terminalSettlementInFlight.has(terminal.streamId)) return;
+    // Accepted Steer text that never reached the chat returns to its draft.
+    restoreUndeliveredGuidance(owner.chatId, undeliveredGuidanceFromTerminal(payload));
     if (
       !terminal.chat ||
       terminal.chat.id !== owner.chatId ||

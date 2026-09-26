@@ -56,7 +56,7 @@ test.describe("fresh portable config", () => {
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
 
-    await onboarding.getByRole("button", { name: /Choose from more/u }).click();
+    await onboarding.getByRole("button", { name: /Other ways/u }).click();
     const google = onboarding.getByRole("button", { name: "Google Add your API key" });
     await expect(google).toBeEnabled();
     await google.click();

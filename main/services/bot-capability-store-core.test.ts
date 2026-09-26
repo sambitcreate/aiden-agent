@@ -225,6 +225,13 @@ test("Custom policy bindings are mandatory, private in projections, strict on di
     () => editor.assertAuthorityBindingsCurrent({ botId: "bot:one", snapshot: drifted }),
     BotCapabilityBindingDriftError,
   );
+  assert.doesNotThrow(() =>
+    editor.assertAuthorityBindingsCurrent({
+      botId: "bot:one",
+      snapshot: drifted,
+      skillsEnabled: false,
+    }),
+  );
 
   const futureBinding = structuredClone(state) as unknown as {
     policies: Array<{ binding: { version: number } }>;

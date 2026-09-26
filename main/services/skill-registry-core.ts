@@ -9,6 +9,8 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 
 export interface SkillRegistryCandidate {
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
   stableId: string;
   name: string;
   description: string;
@@ -235,6 +237,7 @@ export function projectSkillCatalog(
   const projected: SkillCatalogEntry[] = [];
   const invocationIds = new Set<string>();
   for (const candidate of candidates) {
+    if (candidate.userInvocable === false) continue;
     if (projected.length === SLASH_LIMITS.catalogEntries) break;
     try {
       const entry = projectSkillCatalogEntry(candidate, context);

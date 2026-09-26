@@ -2082,3 +2082,28 @@ test("delete-chat recovery is idempotent at every durable checkpoint", async (t)
     });
   }
 });
+
+
+test("disabled Full Bot catalog retains only its own saved chat-reduction skill IDs as presentation tombstones", async () => {
+  const app = fixture({ bots: [bot("bot:one"), bot("bot:other")] });
+  await app.service.initialize();
+  const own = await app.service.createChat({ audienceId: "device:a", botId: "bot:one" });
+  const other = await app.service.createChat({ audienceId: "device:a", botId: "bot:other" });
+  for (const [chat, skillId] of [[own, "skill:saved"], [other, "skill:other-bot"]] as const) {
+    app.chatPolicies.set(chat.id, {
+      ...app.chatPolicies.get(chat.id)!, mode: "custom",
+      custom: { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"],
+        shellEnabled: false, connectionIds: [], skillIds: [skillId], otherCapabilityIds: [] },
+    });
+  }
+  const paused = catalog();
+  paused.catalog.skillsEnabled = false;
+  paused.catalog.providers[0]!.models[0]!.supportsImages = false;
+  app.deps.catalog.snapshot = async () => paused;
+  const result = await app.service.capabilityCatalog("device:a", "bot:one");
+  assert.equal(result.skillsEnabled, false);
+  assert.deepEqual(result.skills, [{ id: "skill:saved", label: "Saved skill", available: false }]);
+  assert.deepEqual(paused.resources.skills, [], "presentation IDs never become executable resources");
+  assert.deepEqual((await app.service.capabilityCatalog("device:a")).skills, []);
+  assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
+});

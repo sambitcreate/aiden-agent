@@ -5,6 +5,7 @@ import {
   parseTodoSnapshotView,
   TodoSnapshotReadFence,
   todoSnapshotForRenderer,
+  unavailableTodoSnapshot,
   type TodoSnapshotViewV1,
 } from "./todo.js";
 
@@ -51,6 +52,22 @@ test("renderer parser rejects dangling dependencies and malformed unavailable st
     }),
     undefined,
   );
+});
+
+test("unavailable reasons are closed, content-free and backward compatible", () => {
+  for (const reason of [undefined, "storage_not_enabled", "invalid_snapshot"] as const) {
+    const snapshot = unavailableTodoSnapshot("chat", reason);
+    assert.deepEqual(parseTodoSnapshotView(snapshot), snapshot);
+  }
+  for (const reason of ["private error text", null, 42]) {
+    assert.equal(parseTodoSnapshotView({
+      ...unavailableTodoSnapshot("chat"), unavailableReason: reason,
+    }), undefined);
+  }
+  assert.equal(parseTodoSnapshotView({
+    version: 1, chatId: "chat", availability: "ready", tasks: [],
+    unavailableReason: "storage_not_enabled",
+  }), undefined);
 });
 
 test("a slow initial read cannot overwrite a newer live snapshot", async () => {

@@ -48,30 +48,46 @@ function floatingAnchor(children: React.ReactNode) {
   );
 }
 
+export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): boolean {
+  if (!snapshot) return false;
+  if (snapshot.availability === "unavailable") {
+    return snapshot.unavailableReason !== "storage_not_enabled";
+  }
+  return snapshot.tasks.some(
+    (task) => task.status !== "deleted" && task.status !== "completed",
+  );
+}
+
 export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null }) {
   if (!snapshot) return null;
   if (snapshot.availability === "unavailable") {
+    // Rollout-ineligible and other intentionally journalless chats need no
+    // user action. Keep that expected capability state out of the composer;
+    // verified corruption remains visible because it can affect saved work.
+    if (snapshot.unavailableReason === "storage_not_enabled") return null;
+    const title = "Task tracking unavailable";
+    const explanation =
+      "Aiden could not verify this chat’s private task state, so it will not display or update an older snapshot.";
     return floatingAnchor(
       <>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          Task tracking unavailable. Aiden could not verify this chat’s private task state.
+          {title}. {explanation}
         </p>
         <HoverCard openDelay={180} closeDelay={100}>
           <HoverCardTrigger asChild>
             <button
               type="button"
-              className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none"
-              aria-label="Task tracking unavailable. Focus or hover for details."
+              className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover motion-reduce:transition-none"
+              aria-label={`${title}. Focus or hover for details.`}
             >
               <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
               <span className="truncate">Tasks unavailable</span>
             </button>
           </HoverCardTrigger>
           <HoverCardContent align="center" side="top" className="w-[min(28rem,calc(100vw-2rem))]">
-            <p className="text-small-strong text-primary">Task tracking unavailable</p>
+            <p className="text-small-strong text-primary">{title}</p>
             <p className="mt-1 text-small leading-relaxed text-secondary">
-              Aiden could not verify this chat’s private task state, so it will not display or
-              update an older snapshot.
+              {explanation}
             </p>
           </HoverCardContent>
         </HoverCard>
@@ -112,7 +128,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
         <HoverCardTrigger asChild>
           <button
             type="button"
-            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none"
+            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal motion-reduce:transition-none"
             aria-label={`Tasks: step ${currentIndex} of ${tasks.length}. ${chipDetail}. Focus or hover for full details.`}
           >
             {current ? (
@@ -149,7 +165,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
                   <span
                     className={
                       task.status === "in_progress"
-                        ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-accent/10 text-accent"
+                        ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-status-accent-surface text-status-accent"
                         : task.status === "completed"
                           ? "mt-0.5 grid size-5 shrink-0 place-items-center text-tertiary"
                           : "mt-0.5 grid size-5 shrink-0 place-items-center text-secondary"

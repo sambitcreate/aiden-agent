@@ -69,9 +69,13 @@ test("Google discovery validates the native endpoint and returns only Pi-support
       JSON.stringify({
         models: [
           {
-            name: "models/gemini-2.5-pro",
+            name: "models/gemini-3.5-flash",
             supportedGenerationMethods: ["generateContent"],
           },
+          ...["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"].map((id) => ({
+            name: `models/${id}`,
+            supportedGenerationMethods: ["generateContent"],
+          })),
         ],
       }),
       { status: 200 },
@@ -79,10 +83,10 @@ test("Google discovery validates the native endpoint and returns only Pi-support
   }) as typeof fetch;
 
   const result = await testConnection(canonicalGoogleProvider(), "google-key");
-  assert.deepEqual(result.models, ["gemini-2.5-pro"]);
+  assert.deepEqual(result.models, ["gemini-3.5-flash"]);
   assert.equal(result.modelCount, 1);
-  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.reasoning, true);
-  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.vision, true);
+  assert.equal(result.modelMetadata["gemini-3.5-flash"]?.reasoning, true);
+  assert.equal(result.modelMetadata["gemini-3.5-flash"]?.vision, true);
   assert.equal(requests.length, 2);
 });
 

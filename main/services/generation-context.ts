@@ -125,17 +125,17 @@ export function projectMessagesForModel(
   });
 }
 
-/** Keep only the newest Computer Use screenshots while preserving every text result. */
-export function limitComputerUseImages(
+function limitToolResultImages(
   messages: AgentMessage[],
-  keep = 3,
+  toolName: string,
+  keep: number,
 ): AgentMessage[] {
   const imageIndexes: number[] = [];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (
       message?.role === "toolResult" &&
-      message.toolName === "computer_use" &&
+      message.toolName === toolName &&
       message.content.some((part) => part.type === "image")
     ) {
       imageIndexes.push(index);
@@ -153,6 +153,20 @@ export function limitComputerUseImages(
       content: message.content.filter((part) => part.type !== "image"),
     };
   });
+}
+
+/** Keep only the newest Computer Use screenshots while preserving every text result. */
+export function limitComputerUseImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
+  return limitToolResultImages(messages, "computer_use", keep);
+}
+
+/** Browser history has its own image allowance; this projection never edits the journal. */
+export function limitBrowserSnapshotImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
+  return limitToolResultImages(messages, "browser_snapshot", keep);
+}
+
+function projectRequestMessages(messages: readonly AgentMessage[], supportsImages: boolean): AgentMessage[] {
+  return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
 }
 
 function compactedToolResult(message: ToolResultMessage): ToolResultMessage {
@@ -247,9 +261,7 @@ export function projectNextContextUsage(
   messages: readonly AgentMessage[],
   options: GenerationContextOptions,
 ): NextContextUsageProjection {
-  const projected = limitComputerUseImages(
-    projectMessagesForModel(messages, options.supportsImages !== false),
-  );
+  const projected = projectRequestMessages(messages, options.supportsImages !== false);
   const staticTokens = estimateStaticContextTokens(options);
   const estimatedMessages = messageTokens(projected);
   const providerEstimate = estimateContextTokens(projected);
@@ -433,9 +445,7 @@ export function compactGenerationContext(
   messages: AgentMessage[],
   options: GenerationContextOptions,
 ): GenerationContextCompaction {
-  const retained = limitComputerUseImages(
-    projectMessagesForModel(messages, options.supportsImages !== false),
-  );
+  const retained = projectRequestMessages(messages, options.supportsImages !== false);
   const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } =
     contextLimits(options);
   const estimatedMessageTokensBefore = messageTokens(retained);

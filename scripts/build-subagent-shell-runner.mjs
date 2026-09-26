@@ -25,7 +25,7 @@ await mkdir(path.dirname(output), { recursive: true });
 await executeFile(
   process.platform === "darwin" ? "/usr/bin/xcrun" : "cc",
   [
-    ...(process.platform === "darwin" ? ["clang"] : []),
+    ...(process.platform === "darwin" ? ["--sdk", "macosx", "clang"] : []),
     "-std=c17",
     "-Wall",
     "-Wextra",
@@ -47,7 +47,7 @@ if (testing) {
   await executeFile(
     process.platform === "darwin" ? "/usr/bin/xcrun" : "cc",
     [
-      ...(process.platform === "darwin" ? ["clang"] : []),
+      ...(process.platform === "darwin" ? ["--sdk", "macosx", "clang"] : []),
       "-std=c17",
       "-Wall",
       "-Wextra",

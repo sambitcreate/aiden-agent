@@ -79,6 +79,13 @@ test("slash availability combines the dispatcher with composer-specific state", 
     /git is busy/iu,
   );
   assert.match(
+    slashCommandAvailability(command("quick-view"), {
+      ...context,
+      environmentBlockedReason: "Git is busy.",
+    }).reason ?? "",
+    /git is busy/iu,
+  );
+  assert.match(
     slashCommandAvailability(command("terminal"), {
       ...context,
       canExecuteCommand: () => false,

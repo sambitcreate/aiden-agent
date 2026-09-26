@@ -1,4 +1,26 @@
+import {
+  normalizeProviderArtwork,
+  type ProviderArtwork,
+} from "../../renderer/shared/provider-artwork.js";
+
 export const PROVIDER_ARTWORK_MAX_SOURCE_BYTES = 512 * 1024;
+
+/** Keep artwork that already matches the display contract, or re-encode PNG bytes. */
+export function persistStoredProviderArtwork(
+  value: unknown,
+  reencode: (input: { name: string; dataBase64: string }) => ProviderArtwork,
+): ProviderArtwork | undefined {
+  const validated = normalizeProviderArtwork(value);
+  if (validated) return validated;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const dataBase64 = (value as { dataBase64?: unknown }).dataBase64;
+  if (typeof dataBase64 !== "string" || dataBase64.length === 0) return undefined;
+  try {
+    return reencode({ name: "icon.png", dataBase64 });
+  } catch {
+    return undefined;
+  }
+}
 
 export function decodeProviderArtworkSource(value: unknown): {
   bytes: Buffer;

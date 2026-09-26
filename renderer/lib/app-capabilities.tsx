@@ -2,22 +2,23 @@ import * as React from "react";
 
 export interface AppCapabilities {
   subagents: boolean;
+  geminiLive: boolean;
+  devices: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   subagents: false,
+  geminiLive: false,
+  devices: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("subagents" in value) ||
-    value.subagents !== true
-  ) {
-    return DISABLED_APP_CAPABILITIES;
-  }
-  return { subagents: true };
+  if (typeof value !== "object" || value === null) return DISABLED_APP_CAPABILITIES;
+  return {
+    subagents: "subagents" in value && value.subagents === true,
+    geminiLive: "geminiLive" in value && value.geminiLive === true,
+    devices: "devices" in value && value.devices === true,
+  };
 }
 
 const AppCapabilitiesContext = React.createContext<AppCapabilities>(DISABLED_APP_CAPABILITIES);

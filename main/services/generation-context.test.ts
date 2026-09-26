@@ -11,6 +11,7 @@ import {
   compactGenerationContext,
   createGenerationContextTransform,
   limitComputerUseImages,
+  limitBrowserSnapshotImages,
   projectNextContextUsage,
   projectMessagesForModel,
 } from "./generation-context.js";
@@ -322,6 +323,54 @@ test("compactGenerationContext always applies computer_use image retention", () 
       message.content.some((part) => part.type === "image"),
   );
   assert.equal(imagesKept.length, 3);
+});
+
+test("browser image history preserves text, errors, pairing and the newest three results independently of Computer Use", () => {
+  const messages: AgentMessage[] = [user("Inspect the browser and the desktop.")];
+  for (let index = 0; index < 6; index += 1) {
+    for (const toolName of ["browser_snapshot", "computer_use"]) {
+      const id = `${toolName}-${index}`;
+      const result = toolResult(id, [{ type: "text", text: `${id}: ${index === 0 ? "Error: login failed" : "actionable locator #save"}` }, { type: "image", data: id, mimeType: "image/png" }], toolName);
+      if (index === 0) result.isError = true;
+      messages.push(assistant(id, toolName), result);
+    }
+    messages.push(assistant(`browser-text-${index}`, "browser_snapshot"), toolResult(`browser-text-${index}`, "text only; no screenshot allowance used", "browser_snapshot"));
+  }
+  const durable = JSON.stringify(messages);
+  const checkpoint = { role: "compactionSummary", summary: "Keep the user's styling decision", tokensBefore: 1_000, timestamp: 1 } as AgentMessage;
+  messages.unshift(checkpoint);
+  const projected = compactGenerationContext(messages, options);
+  assert.equal(projected.compacted, false);
+  assert.equal(projected.messages[0], checkpoint);
+  assertToolProtocolIsPaired(projected.messages);
+  for (const name of ["browser_snapshot", "computer_use"]) {
+    const results = projected.messages.filter((message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === name);
+    const images = results.flatMap((result) => result.content.filter((part) => part.type === "image").map((part) => part.data));
+    assert.deepEqual(images, [3, 4, 5].map((index) => `${name}-${index}`));
+    const oldest = results.find((result) => result.toolCallId === `${name}-0`)!;
+    assert.equal(oldest.isError, true);
+    assert.match(JSON.stringify(oldest.content), /Error: login failed/);
+  }
+  assert.equal(JSON.stringify(messages.slice(1)), durable);
+  assert.deepEqual(projectNextContextUsage(messages, options), projectNextContextUsage(projected.messages, options));
+});
+
+test("browser screenshot projection counts image-bearing results and leaves other images and journal objects intact", () => {
+  const messages: AgentMessage[] = [user("Compare snapshots")];
+  for (let index = 0; index < 4; index += 1) {
+    messages.push(assistant(`browser-${index}`, "browser_snapshot"), toolResult(`browser-${index}`, [{ type: "text", text: `page-${index}` }, { type: "image", data: `first-${index}`, mimeType: "image/png" }, { type: "image", data: `second-${index}`, mimeType: "image/png" }], "browser_snapshot"));
+  }
+  const unrelated = toolResult("read", [{ type: "image", data: "attachment", mimeType: "image/png" }]);
+  messages.push(assistant("read"), unrelated);
+  const projected = limitBrowserSnapshotImages(messages);
+  assert.equal(projected[projected.length - 1], unrelated);
+  assert.equal(projected.filter((message) => message.role === "toolResult").flatMap((message) => message.role === "toolResult" ? message.content.filter((part) => part.type === "image") : []).length, 7);
+  assert.equal((messages[2] as ToolResultMessage).content.length, 3);
+  assert.equal(limitBrowserSnapshotImages(messages, Number.POSITIVE_INFINITY), messages);
+  const textOnly = compactGenerationContext(messages, { ...options, supportsImages: false });
+  assert.equal(JSON.stringify(textOnly.messages).includes('"type":"image"'), false);
+  assert.match(JSON.stringify(textOnly.messages), /private journal/);
+  assert.equal((messages[2] as ToolResultMessage).content.length, 3);
 });
 
 test("bounds a Codex-sized discovery loop while preserving recent evidence and tool pairs", () => {

@@ -144,7 +144,14 @@ export class SubagentInferenceProcessOwner {
         // The process may already have stopped reading its IPC channel.
       }
       await Promise.race([exit, delay(this.timing.termGraceMs)]);
-      if (!exited) process.terminate();
+      if (!exited) {
+        try {
+          process.terminate();
+        } catch {
+          // A failed TERM is not exit proof. Continue to the identity-checked
+          // hard kill and verify settlement before releasing this process.
+        }
+      }
       await Promise.race([exit, delay(this.timing.killGraceMs)]);
       if (!exited) {
         try {
@@ -214,9 +221,14 @@ export class SubagentInferenceProcessOwner {
           await terminate();
         } catch (error) {
           this.cleanupHealthy = false;
-          this.onCleanupFailure(
-            error instanceof Error ? error : new Error("Subagent inference cleanup failed."),
-          );
+          try {
+            this.onCleanupFailure(
+              error instanceof Error ? error : new Error("Subagent inference cleanup failed."),
+            );
+          } catch {
+            // Diagnostic observers cannot reject detached shutdown or erase
+            // the fail-closed cleanup state.
+          }
         }
       })());
     const onAbort = () => {
@@ -370,7 +382,7 @@ export class SubagentInferenceProcessOwner {
               code: "invalid_message",
               durationMs: performance.now() - startedAt,
             });
-            void terminate();
+            void stopOwnedProcess();
             return;
           }
           let event: import("@earendil-works/pi-ai").AssistantMessageEvent;

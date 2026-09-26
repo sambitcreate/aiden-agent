@@ -36,6 +36,7 @@ export interface SkillRegistrySnapshot {
 
 export interface SkillRegistryDependencies {
   getWorkspace(id: string): Promise<Workspace | undefined>;
+  isEnabled(): Promise<boolean>;
   listConfigured(): Promise<Skill[]>;
   discover(workspaceRoot?: string): Promise<DiscoveredSkill[]>;
   now(): number;
@@ -78,6 +79,8 @@ function discoveredCandidate(
     name: skill.name,
     description: skill.description,
     instructions: skill.instructions,
+    modelInvocable: skill.modelInvocable ?? true,
+    userInvocable: skill.userInvocable ?? true,
     source: skill.source,
     enabled: true,
     path: skill.path,
@@ -104,6 +107,8 @@ function skillRegistryFingerprint(
     field(candidate.name);
     field(candidate.description);
     field(candidate.instructions);
+    field(candidate.modelInvocable ?? true);
+    field(candidate.userInvocable ?? true);
     field(candidate.source);
     field(candidate.enabled);
     field(candidate.path);
@@ -120,6 +125,7 @@ export class SkillRegistry {
 
   constructor(dependencies: SkillRegistryOptions) {
     this.#dependencies = {
+      isEnabled: async () => true,
       now: () => Date.now(),
       invocationKey: randomBytes(32),
       cacheTtlMs: DEFAULT_CACHE_TTL_MS,
@@ -151,6 +157,11 @@ export class SkillRegistry {
   ): Promise<SkillRegistrySnapshot> {
     if (!workspace.id || workspace.id.length > 256) {
       throw new SkillInvocationError("workspace_changed", "Invalid skill workspace.");
+    }
+    // The global gate precedes cache reuse and all discovery/file reads.
+    if (!(await this.#dependencies.isEnabled())) {
+      this.invalidate(workspace.id);
+      return this.#project(workspace, []);
     }
     const now = this.#dependencies.now();
     const cached = this.#cache.get(workspace.id);
@@ -208,6 +219,9 @@ export class SkillRegistry {
     if (!skill) {
       throw new SkillInvocationError("invalid_reference", "Skill selection expired or changed.");
     }
+    if (skill.userInvocable === false) {
+      throw new SkillInvocationError("skill_unavailable", "This skill does not allow user invocation.");
+    }
     if (!skill.available) {
       throw new SkillInvocationError(
         "skill_unavailable",
@@ -228,6 +242,7 @@ export class SkillRegistry {
   async #load(
     workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
   ): Promise<SkillRegistrySnapshot> {
+    if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const [configured, discovered] = await Promise.all([
       this.#dependencies.listConfigured(),
       // No Access is also a discovery boundary: do not read workspace skill
@@ -236,10 +251,19 @@ export class SkillRegistry {
         workspace.permission === "none" ? undefined : workspace.folderPath,
       ),
     ]);
+    // A disable may race an in-flight disk scan. Never publish that snapshot.
+    if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const resolved = resolveSkillCandidates([
       ...configured.map(configuredCandidate),
       ...discovered.map((skill) => discoveredCandidate(skill, workspace.permission)),
     ]);
+    return this.#project(workspace, resolved);
+  }
+
+  #project(
+    workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+    resolved: readonly ResolvedSkillCandidate[],
+  ): SkillRegistrySnapshot {
     const fingerprint = skillRegistryFingerprint(workspace, resolved);
     const revision = `rf_${fingerprint}`;
     const projectionContext = {
@@ -257,7 +281,9 @@ export class SkillRegistry {
         if (invocationIds.has(invocationId)) continue;
         invocationIds.add(invocationId);
         skills.push({ ...candidate, invocationId, toolKey: skillToolKey(candidate) });
-        projected.push({ entry, available: candidate.available });
+        if (candidate.userInvocable !== false) {
+          projected.push({ entry, available: candidate.available });
+        }
       } catch {
         // Unsafe local metadata is excluded from every registry consumer.
       }
@@ -288,9 +314,9 @@ export function formatAvailableSkills(
   snapshot: SkillRegistrySnapshot,
   allowedToolNames?: ReadonlySet<string>,
 ): string | undefined {
-  const available = allowedToolNames
-    ? snapshot.available.filter((skill) => allowedToolNames.has(skill.toolKey))
-    : snapshot.available;
+  const available = snapshot.available.filter(
+    (skill) => skill.modelInvocable !== false && (!allowedToolNames || allowedToolNames.has(skill.toolKey)),
+  );
   if (available.length === 0) return undefined;
   return [
     "Skills provide specialized instructions and workflows for specific tasks.",

@@ -1,5 +1,4 @@
 import * as React from "react";
-import { createPortal } from "react-dom";
 import {
   SubagentLiveAnnouncementCoordinator,
   subagentSnapshotLiveSummary,
@@ -17,12 +16,10 @@ export function SubagentLiveAnnouncer({
   ownerKey,
   runs,
   detailRequest,
-  portalHost,
 }: {
   ownerKey: string;
   runs: readonly SubagentRunSnapshot[];
   detailRequest: SubagentDetailAnnouncementRequest | null;
-  portalHost: HTMLElement | null;
 }) {
   const summary = runs.length > 0 ? subagentSnapshotLiveSummary(runs) : "";
   const terminal = subagentSnapshotLiveSummaryIsTerminal(runs);
@@ -61,7 +58,8 @@ export function SubagentLiveAnnouncer({
     );
   }, [detailRequest]);
 
-  const region = (
+  // Keep the live region mounted outside panels that can become inert or hidden.
+  return (
     <div
       className="sr-only"
       role="status"
@@ -72,5 +70,4 @@ export function SubagentLiveAnnouncer({
       {announcement}
     </div>
   );
-  return portalHost ? createPortal(region, portalHost) : region;
 }

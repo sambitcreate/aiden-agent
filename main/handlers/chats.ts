@@ -1,3 +1,4 @@
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
@@ -30,6 +31,9 @@ import {
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { closeDeviceSessionsForChat } from "./devices.js";
+import { parseChatFirstMessage } from "./chat-first-message-params.js";
+import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -45,6 +49,7 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
+import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
@@ -59,11 +64,9 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
-import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
-import {
-  todoSnapshotForRenderer,
-  unavailableTodoSnapshot,
-} from "../../renderer/shared/todo.js";
+import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
+import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
+import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -81,6 +84,53 @@ function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): 
 }
 
 export function registerChatHistoryHandlers(): void {
+  const commitFirstMessage = createFirstMessageCommitter({
+    store: chatStore,
+    beginTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
+    requiresReconciliation: (ownerId) => llmClient.requiresAppendReconciliation(ownerId),
+    markReconciliation: (ownerId) => llmClient.markAppendReconciliationRequired(ownerId),
+    clearReconciliation: (ownerId) => llmClient.clearAppendReconciliationRequired(ownerId),
+    admitWorkspace: (workspaceId, owner) => {
+      const mutation = workspaceMutationGate.admit(workspaceId);
+      try {
+        const operation = admitRendererOwnedWorkspaceOperation(workspaceOperationRegistry, owner, workspaceId);
+        const abort = () => operation.cancel();
+        mutation.signal.addEventListener("abort", abort, { once: true });
+        if (mutation.signal.aborted) abort();
+        return {
+          signal: operation.signal,
+          cancel: operation.cancel,
+          release: () => {
+            mutation.signal.removeEventListener("abort", abort);
+            operation.release();
+            mutation.release();
+          },
+        };
+      } catch (error) {
+        mutation.release();
+        throw error;
+      }
+    },
+    workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+    requireComputerUseReady: async (signal) => {
+      const status = await computerUseStatus.status({ signal });
+      if (!status.ready) throw new Error(status.detail);
+    },
+    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+  });
+  ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
+    const parsed = parseChatFirstMessage(input);
+    const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
+    return commitFirstMessage(parsed, owner).then((chat) => {
+      ipcMain.broadcast("chats:metadata-updated", {
+        chatId: chat.id,
+        title: chat.title,
+        workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+        updatedAt: chat.updatedAt,
+      });
+      return chatForRenderer(chat);
+    });
+  });
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
@@ -101,34 +151,29 @@ export function registerChatHistoryHandlers(): void {
     );
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (!chat || chat.botId || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
+    if (!chat || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    try {
-      const snapshot = todoSnapshotForRenderer(
-        chatId,
-        await replayTodoState(await piCompactionSessionStore.openChat(chatId, chat)),
-      );
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      return snapshot;
-    } catch (error) {
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      if (!isTodoSnapshotFailure(error)) throw error;
-      return unavailableTodoSnapshot(chatId);
-    }
+    const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+    const { snapshot } = await loadDurableTodoSnapshot(chatId, opened.session);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const diagnostic = todoSnapshotDiagnostic(snapshot);
+    if (diagnostic) writeDiagnosticEvent(diagnostic);
+    return snapshot;
   });
 
   ipcMain.handle("chats:waitUntilIdle", async (_event, id: unknown) =>
     chatApplicationService.waitUntilIdle(asString(id, "id")),
   );
 
-  ipcMain.handle("chats:compact", async (event, id: unknown) => {
+  ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {
+    if (engine !== undefined && !isCompactionEngine(engine)) throw new Error("Invalid compaction engine.");
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Compaction requires the active application document."),
     );
-    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId);
+    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId, engine);
   });
   ipcMain.handle("chats:cancelCompact", (event, id: unknown) => {
     const owner = rendererDocumentOwner(
@@ -449,40 +494,18 @@ export function registerChatHistoryHandlers(): void {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean")
         throw new Error("Invalid Computer Use chat setting.");
-      const release = llmClient.beginComputerUseSettingChange(chatId);
-      if (!release) {
-        throw new Error(
-          "Finish or stop the current response before changing Computer Use.",
-        );
-      }
-      const controller = new AbortController();
-      const removeInvalidation = owner.onInvalidated(() =>
-        controller.abort(
-          new Error("The renderer document is no longer active."),
-        ),
+      return chatForRenderer(
+        await applyComputerUseSettingChange(owner, chatId, enabled, {
+          begin: (targetChatId) =>
+            llmClient.beginComputerUseSettingChange(targetChatId),
+          status: (signal) => computerUseStatus.status({ signal }),
+          persist: (targetChatId, nextEnabled, isCurrent) =>
+            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
+          // Aiden Live owns separate per-session authority and is unaffected
+          // by an ordinary chat's Computer Use toggle.
+          revokeLive: () => undefined,
+        }),
       );
-      try {
-        if (enabled) {
-          const status = await computerUseStatus.status({
-            signal: controller.signal,
-          });
-          if (owner.isDestroyed())
-            throw new Error("The renderer document is no longer active.");
-          if (!status.ready) throw new Error(status.detail);
-        }
-        if (owner.isDestroyed())
-          throw new Error("The renderer document is no longer active.");
-        return chatForRenderer(
-          await chatStore.setComputerUseEnabled(
-            chatId,
-            enabled,
-            () => !owner.isDestroyed(),
-          ),
-        );
-      } finally {
-        removeInvalidation();
-        release();
-      }
     },
   );
 
@@ -493,6 +516,7 @@ export function registerChatHistoryHandlers(): void {
       ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
       : await chatApplicationService.remove(chatId);
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
+    closeDeviceSessionsForChat(chatId);
     return result;
   });
 

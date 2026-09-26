@@ -1,5 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { queryKeys } from "./queries";
+import { discardChatMessageQueue } from "./chat-message-queue";
+import { discardComposerDraft } from "./composer-draft-store";
 
 // Chat ids are never reused. Retaining exact tombstones for this renderer
 // lifetime prevents queued terminal notifications from reinstalling a
@@ -15,6 +17,8 @@ export async function removeDeletedChatFromCache(
   chatId: string,
 ): Promise<void> {
   deletedChatIds.add(chatId);
+  discardChatMessageQueue(chatId);
+  discardComposerDraft(chatId);
   const chatKey = queryKeys.chat(chatId);
   await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
   queryClient.removeQueries({ queryKey: chatKey, exact: true });

@@ -20,13 +20,21 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 
 ## Features
 
-- **Aiden Assistant** - press `⌘⌥A` to open a private assistant dock inside the main window. It follows the selected chat model, keeps its own local history and drafts, supports Stop, and can explain the app without receiving workspace tools or a hidden copy of the workspace.
+- **Aiden Live (Beta)** - use the blue orb for an explicitly started voice session with visible listening, thinking, speaking, approval, and error states. First use walks through model access, microphone, and Screen & Accessibility permissions once; computer actions and scheduled tasks retain Aiden's existing approval boundaries.
 - **Command palette and shortcuts** - `⌘K` searches commands, chats, models, providers, Settings, and appearance actions. One typed command system also powers native menus, visible shortcut labels, transactional global hotkeys, and the searchable Keyboard Shortcuts editor.
 - **Commands and explicit skills** - type `/` at the start of the composer to search Aiden app commands, or `$` to search the active workspace's available skills. Commands reuse canonical app workflows; an explicitly selected skill is revalidated for the active workspace, applies to one accepted message, and persists only safe display provenance.
-- **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, or `reviewer` tasks. Children are read/search-only, inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment.
+- **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, `reviewer`, or `implementer` tasks. Children inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment. The implementer can edit files and run commands within the parent permission ceiling.
+
+  | Role defaults when capabilities are omitted | Full workspace access | Ask workspace access | None |
+  | --- | --- | --- | --- |
+  | Scout, planner, reviewer: read/search | Read/search | Read/search | No workspace tools |
+  | Implementer: read/search, write/edit, shell | Writes and shell run under this child run without another card | One write grant and one separate shell grant per child run, requested on first use | No write or shell tools |
+
+  Web and MCP calls keep their existing per-call approval behavior. Implementer cannot delegate to another subagent. Rollout flags and the parent capability ceiling can narrow every row.
 - **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
 - **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Arrange a personal capability-and-pace map, optionally enrich hosted models with explicitly fetched Artificial Analysis scores through a benchmark-only OpenRouter key, and keep benchmark evidence visibly separate from runtime limits and availability.
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
+- **Shared browser and annotations** - browse beside the chat in Environment, preview workspace HTML/PDF files, use isolated profiles and responsive viewports, and share selected text, elements, drawings, and image crops with Aiden. Aiden's browser tools operate on those same tabs. See [browser behavior and controls](docs/environment-browser.md).
 - **macOS integration and appearance** - native menus, **Keychain**, **Parakeet**, the dictation pill, Apple **Foundation Models**, the signed **Rust** Computer Use broker, semantic themes, high contrast, reduced motion, and consistent light/dark rendering.
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
 - **Aiden On The Go** - opt in to a pinned local-network connection or an explicit non-Funnel Tailscale Serve route, pair each iPhone or iPad separately, and revoke devices from [Remote Access settings](docs/aiden-on-the-go-remote-access.md).
@@ -36,11 +44,11 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 
 The roadmap is maintained in [the plan index](docs/plans/README.md). These bullets name only the unfinished parts of partially shipped work or features with no runtime implementation yet; they are directions, not release promises:
 
-- **Assistant tools and proactive nudges** - the private dock, shortcut, and Settings foundation ship today. The remaining work is approval-gated settings/status tools plus opt-in, rate-limited suggestions about useful app and workspace maintenance. See the [Aiden Assistant plan](docs/plans/aiden-assistant-plan.md).
 - **Designer Mode** - no Designer Mode runtime exists yet. The proposed flow selects UI in a local Vite app, requests a bounded change, requires approval, and reviews the exact action diff; Phase 0 remains a go/no-go validation gate. See the [Designer Mode plan](docs/plans/designer-mode-plan.md).
 - **Static-catalog overlays and provider completion** - Pi built-in discovery, encrypted credentials, provider-owned authentication, native streaming, stored dynamic catalogs, manual refresh, and voice credential lookup already ship. Remaining work includes remote overlays for otherwise-static hosted catalogs, Pi-native custom-endpoint composition, historical message provenance, scalable large-catalog recovery UX, and rollout cleanup. See the [Dynamic Model Catalog](docs/plans/dynamic-model-catalog-plan.md) and [Pi Provider Integration](docs/plans/pi-provider-integration-plan.md) plans.
 - **Truthful generation progress notes** - no progress-note runtime exists yet. The plan would show one temporary acknowledgement after an otherwise-silent start, using an explicitly selected on-device or verified hosted route without exposing hidden reasoning. See the [Generation Progress Notes plan](docs/plans/generation-progress-notes-plan.md).
 - **Long-session context and run control** - model-aware deterministic compaction already ships. Remaining work includes visible compaction activity, reconstructable structured checkpoints, durable-versus-working memory separation, queued follow-up messages, and safe mid-run redirects. See the [Compaction](docs/plans/compaction-plan.md) and [Taracodlab Learnings](docs/plans/taracodlab-learnings-plan.md) plans.
+- **iOS Simulator devices** - behind `AIDEN_EXPERIMENTAL_DEVICES=1`, the Environment **Simulator** tab streams and controls iOS Simulators on this Mac or a paired Mac, with optional procedural 3D frames and consent-gated `device_*` agent tools. Remaining work is real-device acceptance before the flag defaults on, and SSH device hosts. See [Simulator devices](docs/devices.md).
 - **Whole-app performance, durability, and battery gates** - atomic/recoverable chat storage and several bounded lifecycles already ship. The broader program still needs production-equivalent baselines, recovery and hard bounds across the remaining stores and payloads, zero-idle Git/renderer scheduling, cancellable heavy helpers, and enforceable packaged release budgets. See the [Performance, Stability, Battery, and Efficiency plan](docs/plans/performance-stability-efficiency-plan.md).
 
 ## Privacy and trust
@@ -91,7 +99,7 @@ The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.m
 
 ### Mobile distribution
 
-The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation builds remain separate from the macOS release and are uploaded by CI as installable APK artifacts.
+The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation remains separate from the macOS release. Pull requests run the Android verification gates without retaining an installable artifact; relevant merges to `main` publish the debug APK and its checksum.
 
 The development launcher prepares a cached, ad-hoc-signed **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate Application Support, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 
@@ -115,6 +123,8 @@ npm run package:verify
 ```
 
 Distribution builds use `npm run dist` and require Developer ID signing plus notarization. The release pipeline fails closed, verifies the app, DMG, and ZIP, checks the deployed Homebrew and website consumers, and publishes updater metadata only with the matching verified artifacts. Read [macOS releases and automatic updates](docs/releasing.md) before enabling publication.
+
+See [continuous integration](docs/ci.md) for change selection, test lanes, Electron shards, and the `CI required` gate.
 
 The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path. Artificial Analysis credentials and data are never bundled. Direct Artificial Analysis suggestions require an explicit user fetch. OpenRouter benchmark insights use a separate encrypted Model Pad key only after an explicit Connect & fetch or Fetch latest action, then read normalized public scores from a device-local offline cache. That key never configures an inference provider or imports OpenRouter's model catalog.
 

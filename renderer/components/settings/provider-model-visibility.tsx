@@ -10,7 +10,13 @@ import type { AppSettings, Provider } from "../../lib/types";
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { isModelHidden } from "../../shared/model-visibility";
 
-export function ProviderModelVisibility({ provider }: { provider: Provider }) {
+export function ProviderModelVisibility({
+  provider,
+  policyHidden: policyHiddenOverride,
+}: {
+  provider: Provider;
+  policyHidden?: boolean;
+}) {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const [query, setQuery] = React.useState("");
@@ -25,7 +31,9 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
   ).length;
   const shownCount = entries.length - hiddenCount;
   const policyHidden =
-    provider.id === GOOGLE_PROVIDER_ID && settings.data?.geminiUsageScope === "transcription_only";
+    policyHiddenOverride ??
+    (provider.id === GOOGLE_PROVIDER_ID &&
+      settings.data?.geminiUsageScope === "transcription_only");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filtered = normalizedQuery
     ? entries.filter((entry) =>
@@ -178,7 +186,7 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
                           color="tertiary"
                           as="span"
                           truncate
-                          className="mt-0.5 block text-[11px]"
+                          className="mt-0.5 block text-mini"
                           title={entry.model}
                         >
                           {entry.model}

@@ -94,7 +94,7 @@ function providerInventory(
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
-          supportsImages: metadata?.vision === true,
+          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,
@@ -286,6 +286,12 @@ function ordinaryInventory(input: {
       description: "Delegate bounded parts of a task to Aiden subagents.",
       available: input.subagentsAvailable,
     },
+    {
+      kind: "tasks",
+      label: "Task tracking",
+      description: "Keep a saved checklist and show progress for multi-step work.",
+      available: true,
+    },
   ];
   return values.map((value) => ({
     ...value,
@@ -380,8 +386,17 @@ export function createBotCapabilityInventoryPorts(
       if (signal.aborted) throw signal.reason;
       return connectionInventory(servers, scopes);
     },
+    async skillsEnabled() {
+      return (await dependencies.getSettings()).skillsEnabled !== false;
+    },
     async inspectSkills(signal, target) {
+      if (signal.aborted) throw signal.reason;
+      // A global pause is not removal: do not tombstone durable incarnations or
+      // discover instructions until the user enables Skills again.
+      if ((await dependencies.getSettings()).skillsEnabled === false) return [];
       const resolved = await dependencies.listSkills(target);
+      if ((await dependencies.getSettings()).skillsEnabled === false) return [];
+      if (signal.aborted) throw signal.reason;
       const partitions = new Set([
         "global",
         ...(target ? [`bot:${target.botId}`] : []),
