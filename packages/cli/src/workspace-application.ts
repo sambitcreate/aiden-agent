@@ -47,5 +47,6 @@ export function createCliWorkspaceApplication(agentDir: string, operations: {
   });
   return { application, environment, configStore, mutationGate, operationRegistry,
     async ensureWorktreeRoot() { const root = join(agentDir, "worktrees"); await mkdir(root, { recursive: true, mode: 0o700 }); return root; },
+    async ensureSnapshotRoot() { const root = join(agentDir, "worktree-snapshots"); await mkdir(root, { recursive: true, mode: 0o700 }); return root; },
   };
 }
