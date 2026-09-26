@@ -100,6 +100,9 @@ class AidenChatTest {
     }
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    // Mac wire shape: absent optionals are omitted, never sent as null. A regular chat that
+    // carries `botId: null` beside `reasoning` is refused by the private-field validator.
+    private val wireJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     @Test
     fun chronologicalReasoningKeepsToolsAndProseInOrder() {
@@ -145,8 +148,16 @@ class AidenChatTest {
     @Test
     fun heldInitialLoadCannotOverwriteSettledTranscriptOrCache() = assertStreamRecovery(holdInitialLoad = true)
 
+    @Test
+    fun anotherOwnersHeldLoadCannotOverwriteSettledTranscriptOrCache() =
+        assertStreamRecovery(holdInitialLoad = true, independentOwner = true)
+
+    @Test
+    fun anotherOwnersHeldLoadAdoptsWinnerWhenDiskWriteFails() =
+        assertStreamRecovery(holdInitialLoad = true, independentOwner = true, failDiskWrite = true)
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private fun assertStreamRecovery(holdInitialLoad: Boolean = false) {
+    private fun assertStreamRecovery(holdInitialLoad: Boolean = false, independentOwner: Boolean = false, failDiskWrite: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-stream-recovery-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
@@ -155,6 +166,7 @@ class AidenChatTest {
         val chatReads = java.util.concurrent.atomic.AtomicInteger()
         val eventReads = java.util.concurrent.atomic.AtomicInteger()
         val releaseInitialLoad = CountDownLatch(1)
+        val initialLoadArrived = CountDownLatch(1)
         val initial = AidenChat(
             id = "chat-recovery", workspaceId = "workspace-recovery", title = "Recovery",
             messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
@@ -186,6 +198,7 @@ class AidenChatTest {
                         """{"streamId":"stream-recovery","chatId":"chat-recovery","turnId":"turn-recovery","state":"running","lastSequence":1}"""
                     )
                     path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
+                        initialLoadArrived.countDown()
                         if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
                         MockResponse().setBody(wireJson.encodeToString(initial))
                     }
@@ -209,11 +222,20 @@ class AidenChatTest {
                 ), null)
                 val cache = AidenChatCache(directory)
                 cache.saveChat(initial, "instance-recovery")
-                cache.saveActiveStream(AidenChatCache.ActiveStream("device-recovery", "stream-recovery", "turn-recovery", 27), "instance-recovery", initial.id)
                 val drafts = AidenChatDraftStore(directory)
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
                     scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
                 coordinator.refreshClient()
+                val otherOwner = if (independentOwner) {
+                    AidenChatViewModel(initial.id, coordinator, cache, drafts, initial).also {
+                        viewModels.put("other", it)
+                        withContext(Dispatchers.IO) { check(initialLoadArrived.await(5, TimeUnit.SECONDS)) }
+                    }
+                } else null
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-recovery", "stream-recovery", "turn-recovery", 27), "instance-recovery", initial.id)
+                if (failDiskWrite) {
+                    File(cache.root, "chats").apply { deleteRecursively(); writeText("blocked directory") }
+                }
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
                 viewModels.put("chat", model)
                 withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
@@ -223,7 +245,15 @@ class AidenChatTest {
                     releaseInitialLoad.countDown()
                     withTimeout(5_000) { model.isLoading.first { !it } }
                     assertEquals("final-reply", model.chat.value!!.messages.last().id)
-                    assertEquals("final-reply", cache.loadChat("instance-recovery", initial.id)!!.messages.last().id)
+                    assertEquals("final-reply", cache.admittedChat("instance-recovery", initial.id)!!.messages.last().id)
+                    if (otherOwner != null) {
+                        withTimeout(5_000) { otherOwner.isLoading.first { !it } }
+                        assertEquals("final-reply", otherOwner.chat.value!!.messages.lastOrNull()?.id)
+                        if (failDiskWrite) assertNull(AidenChatCache(directory).loadChat("instance-recovery", initial.id))
+                        else assertEquals("final-reply", AidenChatCache(directory).loadChat("instance-recovery", initial.id)!!.messages.lastOrNull()?.id)
+                        otherOwner.updateDraft("Continue from another destination")
+                        assertTrue(otherOwner.canSend)
+                    }
                     assertEquals("", model.liveText.value)
                 } else {
                     // Let the terminal reconciliation attempt and any illegally queued late frame run.
@@ -249,6 +279,182 @@ class AidenChatTest {
             server.shutdown()
             directory.deleteRecursively()
         }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun heldTurnReceiptPreservesOtherOwnerAndCannotCrossRemoval() {
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        Dispatchers.setMain(main)
+        try {
+            runBlocking(main) {
+                for (mode in listOf("newer", "missing", "newer_post", "purge", "remove", "disk", "stream_disk", "replace_disk", "unpair", "switch", "repair", "inverse", "inverse_missing", "ordered_posts")) {
+                    val root = kotlin.io.path.createTempDirectory("aiden-turn-owner-").toFile()
+                    val server = MockWebServer()
+                    val owners = ViewModelStore()
+                    val arrived = CountDownLatch(1)
+                    val release = CountDownLatch(1)
+                    val secondPostArrived = CountDownLatch(1)
+                    val getArrived = CountDownLatch(1)
+                    val getRelease = CountDownLatch(1)
+                    val postCount = java.util.concurrent.atomic.AtomicInteger()
+                    val initial = sampleChat().copy(messages = emptyList())
+                    val accepted = AidenChatMessage("accepted-user", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH)
+                    val second = accepted.copy(id = "second-user", text = "Second", createdAt = Instant.EPOCH.plusSeconds(2))
+                    val settled = initial.copy(title = "Settled title", revision = "settled-revision", messages = listOf(accepted,
+                        AidenChatMessage("settled-assistant", AidenChatRole.ASSISTANT, "Final", createdAt = Instant.EPOCH.plusSeconds(1))))
+                    val remote = java.util.concurrent.atomic.AtomicReference(initial)
+                    server.dispatcher = object : Dispatcher() {
+                        override fun dispatch(request: RecordedRequest): MockResponse = when {
+                            request.requestUrl!!.encodedPath.endsWith("/turns") -> {
+                                val count = postCount.incrementAndGet()
+                                if (count == 1) { arrived.countDown(); check(release.await(8, TimeUnit.SECONDS)) }
+                                if (count == 2 && mode == "ordered_posts") { secondPostArrived.countDown(); check(getRelease.await(8, TimeUnit.SECONDS)) }
+                                MockResponse().setResponseCode(202).setBody("""{"turnId":"accepted-turn-$count","streamId":"accepted-stream-$count","status":"queued","message":${wireJson.encodeToString(if (count == 1) accepted else second)}}""")
+                            }
+                            request.requestUrl!!.encodedPath.endsWith("/events") -> MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE)
+                            request.requestUrl!!.encodedPath.endsWith("/chats/" + initial.id) -> {
+                                val snapshot = remote.get()
+                                if (mode.startsWith("inverse") && snapshot != initial) {
+                                    getArrived.countDown(); check(getRelease.await(8, TimeUnit.SECONDS))
+                                }
+                                MockResponse().setBody(wireJson.encodeToString(snapshot))
+                            }
+                            else -> MockResponse().setResponseCode(404)
+                        }
+                    }
+                    server.start()
+                    try {
+                        val store = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                        store.addInstallation(AidenPairingExchange(instanceId = "turn-instance", deviceId = "turn-device",
+                            endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                            capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                        var failStreamWrite = false
+                        val cache = AidenChatCache(root = File(root, "cache"), beforeActiveStreamWrite = {
+                            if (failStreamWrite) throw java.io.IOException("held stream persistence failure")
+                        })
+                        val drafts = AidenChatDraftStore(root)
+                        val coordinator = AidenRemoteCoordinator(store, root, cache, drafts, scope = CoroutineScope(main + Job().apply { cancel() }))
+                        coordinator.refreshClient()
+                        val sender = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        owners.put("sender", sender)
+                        yield(); withTimeout(5_000) { sender.isLoading.first { !it } }
+                        sender.updateDraft("Hello")
+                        assertTrue(sender.canSend)
+                        sender.send()
+                        withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+                        remote.set(if (mode in listOf("missing", "inverse_missing", "ordered_posts")) settled.copy(messages = settled.messages.drop(1)) else settled)
+                        val other = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        owners.put("other", other)
+                        if (mode.startsWith("inverse")) {
+                            withContext(Dispatchers.IO) { check(getArrived.await(5, TimeUnit.SECONDS)) }
+                            release.countDown()
+                            withTimeout(5_000) { sender.isStarting.first { !it } }
+                            getRelease.countDown()
+                        }
+                        yield(); withTimeout(5_000) { other.isLoading.first { !it } }
+                        assertEquals("settled-assistant", other.chat.value!!.messages.last().id)
+                        if (mode in listOf("newer_post", "ordered_posts")) {
+                            other.updateDraft("Second")
+                            assertTrue(other.canSend)
+                            other.send()
+                            if (mode == "ordered_posts") {
+                                withContext(Dispatchers.IO) { check(secondPostArrived.await(5, TimeUnit.SECONDS)) }
+                                release.countDown()
+                                withTimeout(5_000) { sender.isStarting.first { !it } }
+                                getRelease.countDown()
+                            }
+                            yield(); withTimeout(5_000) { other.isStarting.first { !it } }
+                            assertEquals("accepted-stream-2", cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                        }
+                        when (mode) {
+                            "unpair" -> store.removeInstallation("turn-instance")
+                            "switch" -> { store.setActiveInstallation(null); coordinator.refreshClient() }
+                            "repair" -> store.addInstallation(AidenPairingExchange(instanceId = "turn-instance", deviceId = "turn-device",
+                                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "replacement",
+                                capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                            "replace_disk" -> {
+                                cache.saveActiveStream(AidenChatCache.ActiveStream("turn-device", "old-stream", "old-turn", 0), "turn-instance", initial.id)
+                                assertEquals("old-stream", AidenChatCache(root = File(root, "cache")).loadActiveStream("turn-instance", initial.id)?.streamId)
+                                failStreamWrite = true
+                            }
+                            "purge" -> cache.purge("turn-instance")
+                            "remove" -> { cache.removeChat("turn-instance", initial.id); cache.saveChat(initial.copy(title = "Fresh readmission"), "turn-instance") }
+                            "disk" -> File(cache.root, "chats").apply { deleteRecursively(); writeText("blocked directory") }
+                            "stream_disk" -> File(cache.root, "streams").apply { deleteRecursively(); writeText("blocked directory") }
+                        }
+                        release.countDown()
+                        withTimeout(5_000) { sender.isStarting.first { !it } }
+                        val reopened = AidenChatCache(root = File(root, "cache"))
+                        if (mode == "ordered_posts") {
+                            assertEquals(settled.messages + second, other.chat.value!!.messages)
+                            assertEquals(settled.messages + second, reopened.loadChat("turn-instance", initial.id)!!.messages)
+                            assertEquals("accepted-stream-2", cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                        } else if (mode.startsWith("inverse")) {
+                            assertEquals(settled.messages, other.chat.value!!.messages)
+                            assertEquals(settled.title, other.chat.value!!.title)
+                            assertEquals(settled, reopened.loadChat("turn-instance", initial.id))
+                            assertEquals("accepted-stream-1", cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertEquals("accepted-stream-1", reopened.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertNull(sender.presentedError.value)
+                            assertEquals("", sender.draft.value)
+                            assertEquals(settled.title, cache.loadSummaries("turn-instance")!!.first { it.id == initial.id }.title)
+                        } else if (mode in listOf("unpair", "switch", "repair")) {
+                            assertFalse(sender.hasActiveStream.value)
+                            assertEquals(settled.messages, sender.chat.value!!.messages)
+                            assertEquals(if (mode == "switch") "accepted-stream-1" else null, cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertNull(sender.presentedError.value)
+                            assertEquals("", sender.draft.value)
+                        } else if (mode !in listOf("purge", "remove")) {
+                            val expectedMessages = if (mode == "newer_post") settled.messages + second else settled.messages
+                            assertEquals(expectedMessages, sender.chat.value!!.messages)
+                            assertEquals(settled.revision, sender.chat.value!!.revision)
+                            val expectedStream = if (mode == "newer_post") "accepted-stream-2" else "accepted-stream-1"
+                            assertEquals(expectedStream, cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertEquals(if (mode in listOf("stream_disk", "replace_disk")) null else expectedStream, reopened.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertTrue(sender.hasActiveStream.value)
+                            assertNull(sender.presentedError.value)
+                            assertEquals("", sender.draft.value)
+                            if (mode == "newer") assertEquals(settled.messages, reopened.loadChat("turn-instance", initial.id)?.messages)
+                        } else {
+                            assertNull(reopened.loadActiveStream("turn-instance", initial.id))
+                            assertFalse(sender.hasActiveStream.value)
+                            assertEquals(if (mode == "remove") "Fresh readmission" else null, reopened.loadChat("turn-instance", initial.id)?.title)
+                        }
+                        assertEquals(if (mode in listOf("newer_post", "ordered_posts")) 2 else 1, postCount.get())
+                    } finally { release.countDown(); getRelease.countDown(); owners.clear(); server.shutdown(); root.deleteRecursively() }
+                }
+            }
+        } finally { Dispatchers.resetMain(); main.close() }
+    }
+
+    @Test
+    fun receiptOverlayRetiresAtFreshSnapshotAndDoesNotCrossDeletion() {
+        val root = kotlin.io.path.createTempDirectory("aiden-receipt-overlay-").toFile()
+        try {
+            val cache = AidenChatCache(root = root)
+            val chat = sampleChat().copy(messages = emptyList())
+            val receipt = AidenChatMessage("accepted", AidenChatRole.USER, "Accepted", createdAt = Instant.EPOCH)
+            val stream = AidenChatCache.ActiveStream("device", "stream", "turn", 0)
+            for (mode in listOf("fresh", "remove", "purge")) {
+                val instance = "overlay-$mode"
+                cache.saveChat(chat, instance)
+                val post = cache.reserveChatWrite()
+                val heldGet = cache.reserveChatWrite()
+                cache.acceptTurnReceipt(chat, receipt, stream, instance, post)
+                assertTrue(cache.saveChat(chat, instance, heldGet))
+                assertEquals(listOf(receipt), cache.admittedChat(instance, chat.id)!!.messages)
+                when (mode) {
+                    "remove" -> cache.removeChat(instance, chat.id)
+                    "purge" -> cache.purge(instance)
+                }
+                val fresh = chat.copy(title = "Fresh snapshot", revision = "fresh")
+                assertTrue(cache.saveChat(fresh, instance, cache.reserveChatWrite()))
+                assertEquals(fresh, cache.admittedChat(instance, chat.id))
+                assertFalse(cache.saveChat(chat, instance, heldGet))
+                assertEquals(fresh, AidenChatCache(root = root).loadChat(instance, chat.id))
+            }
+        } finally { root.deleteRecursively() }
     }
 
     @Test
@@ -385,6 +591,15 @@ class AidenChatTest {
     @Test
     fun mismatchedStopAcknowledgementShowsFailure() = exerciseRunControl("stop-mismatch")
 
+    @Test
+    fun lateStopAcknowledgementAfterUnpairCannotControlOrReport() = exerciseRunControl("stop-revoked")
+
+    @Test
+    fun droppedStopRequestIsNotRetriedAndLeavesRunControllable() = exerciseRunControl("stop-disconnect")
+
+    @Test
+    fun approvalSnapshotHeldAcrossUnpairCannotRestoreCard() = exerciseRunControl("approval-snapshot-revoked")
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
         val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
@@ -420,7 +635,7 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
                     if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
                     val id = snapshotId.get()
-                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap", "approval-snapshot-revoked") && id != "approval-current") ||
                         (scenario == "approval-fallback-before" && id == "approval-old")) {
                         (if (id == "approval-old") oldRead else newRead).countDown()
                         check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
@@ -431,6 +646,9 @@ class AidenChatTest {
                     writes.incrementAndGet()
                     arrived.countDown()
                     check(release.await(10, TimeUnit.SECONDS))
+                    if (scenario == "stop-disconnect") {
+                        return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                    }
                     if (scenario.startsWith("stop-")) {
                         val responseStatus = if (scenario == "stop-mismatch") status.replace("stream-control", "stream-other") else status.replace("waiting_for_approval", "reconciling")
                         return MockResponse().setResponseCode(202).setBody(responseStatus)
@@ -491,6 +709,22 @@ class AidenChatTest {
                     assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
                     return@runBlocking
                 }
+                if (scenario == "approval-snapshot-revoked") {
+                    // A snapshot read that was admitted before unpair must not paint a card
+                    // for an installation whose credentials are gone.
+                    snapshotId.set("approval-old")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    coordinator.removeInstallation(installation.id)
+                    releaseOld.countDown()
+                    read.await()
+                    assertNotEquals("approval-old", model.pendingApproval.value?.id)
+                    assertFalse(model.canControlCurrentRun)
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-old")
+                    model.stop()
+                    assertEquals(0, writes.get())
+                    return@runBlocking
+                }
                 if (scenario == "approval-overlap") {
                     snapshotId.set("approval-old")
                     val old = async { model.restorePendingApproval("stream-control") }
@@ -533,7 +767,7 @@ class AidenChatTest {
                 }
                 withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
                 assertEquals(1, writes.get())
-                if (scenario == "revoked") coordinator.removeInstallation(installation.id)
+                if (scenario == "revoked" || scenario == "stop-revoked") coordinator.removeInstallation(installation.id)
                 if (scenario.endsWith("terminal")) {
                     terminal.set(true)
                     withTimeout(5_000) { model.streamState.first { it?.isTerminal == true } }
@@ -542,9 +776,22 @@ class AidenChatTest {
                 if (scenario.startsWith("stop")) {
                     withTimeout(5_000) { model.isStopping.first { !it } }
                     if (scenario.endsWith("terminal")) assertTrue(model.streamState.value!!.isTerminal)
-                    else {
+                    else if (scenario == "stop-revoked") {
+                        // The late 202 belongs to a revoked client: no reconcile, no error, no controls.
+                        assertNotEquals(AidenStreamState.RECONCILING, model.streamState.value)
+                        assertNull(model.presentedError.value)
+                        assertFalse(model.canControlCurrentRun)
+                        model.stop()
+                        assertFalse(model.isStopping.value)
+                    } else {
                         assertTrue(model.presentedError.value!!.contains("Stop was not confirmed"))
                         assertFalse(model.streamState.value!!.isTerminal)
+                        if (scenario == "stop-disconnect") {
+                            // No optimistic cancel: the run stays live and the user may retry.
+                            assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                            assertEquals("approval-current", model.pendingApproval.value?.id)
+                            assertTrue(model.canControlCurrentRun)
+                        }
                     }
                 } else {
                     withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
@@ -1217,6 +1464,81 @@ class AidenChatTest {
         )
         assertTrue(ordinaryAction!!.hasRequiredWriteCapability)
         assertTrue(ordinaryAction.canAllow)
+    }
+
+    @Test
+    fun queuedHomeWriteCannotReplaceNewerAcceptedChat() {
+        val root = File(System.getProperty("java.io.tmpdir"), "aiden-queued-home-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val cache = AidenChatCache(root = root)
+            val initial = sampleChat()
+            // Model the closure queued by WorkspaceHome.accept before navigation.
+            val token = cache.reserveChatWrite()
+            val queuedHomeWrite = Runnable { cache.saveChat(initial, "instance-a", token) }
+            val final = initial.copy(title = "Settled title")
+            cache.saveChat(final, "instance-a")
+            queuedHomeWrite.run()
+            assertEquals("Settled title", AidenChatCache(root = root).loadChat("instance-a", initial.id)?.title)
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun queuedHomeWriteCannotRecreatePurgedInstallation() {
+        val root = File(System.getProperty("java.io.tmpdir"), "aiden-queued-purge-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val cache = AidenChatCache(root = root)
+            val initial = sampleChat()
+            val token = cache.reserveChatWrite()
+            val queuedHomeWrite = Runnable { cache.saveChat(initial, "instance-a", token) }
+            cache.purge("instance-a")
+            queuedHomeWrite.run()
+            assertNull(AidenChatCache(root = root).loadChat("instance-a", initial.id))
+        } finally { root.deleteRecursively() }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun homeOwnerReservesBeforeQueuedCacheWrite() {
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val queued = kotlinx.coroutines.test.StandardTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                for (purging in listOf(false, true)) {
+                    val root = File(System.getProperty("java.io.tmpdir"), "aiden-home-owner-${UUID.randomUUID()}").apply { mkdirs() }
+                    val viewModels = ViewModelStore()
+                    try {
+                        val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                        installations.addInstallation(AidenPairingExchange(
+                            instanceId = "instance-a", deviceId = "device-a",
+                            endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
+                            credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ)
+                        ), null)
+                        val cache = AidenChatCache(root = File(root, "cache"))
+                        val drafts = AidenChatDraftStore(root)
+                        val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts,
+                            scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                        coordinator.refreshClient()
+                        val home = sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceHomeViewModel(
+                            coordinator, cache, cacheWriteDispatcher = queued)
+                        viewModels.put("home", home)
+                        val initial = sampleChat()
+                        home.accept(initial)
+                        if (purging) cache.purge("instance-a")
+                        else cache.saveChat(initial.copy(title = "Settled title"), "instance-a")
+                        queued.scheduler.runCurrent()
+                        val reopened = AidenChatCache(root = File(root, "cache"))
+                        if (purging) assertNull(reopened.loadChat("instance-a", initial.id))
+                        else assertEquals("Settled title", reopened.loadChat("instance-a", initial.id)?.title)
+                        // Another installation and a fresh post-purge owner remain valid.
+                        cache.saveChat(initial, "instance-b")
+                        cache.saveChat(initial.copy(title = "New owner"), "instance-a")
+                        assertEquals("New owner", reopened.loadChat("instance-a", initial.id)?.title)
+                        assertNotNull(reopened.loadChat("instance-b", initial.id))
+                    } finally { viewModels.clear(); root.deleteRecursively() }
+                }
+            }
+        } finally { Dispatchers.resetMain(); dispatcher.close() }
     }
 
     @Test
