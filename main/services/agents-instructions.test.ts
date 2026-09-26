@@ -12,6 +12,7 @@ import {
   withoutAgentsInstructions,
 } from "./agents-instructions.js";
 import { assertGenerationContextCapacity, projectChatContextPressure } from "./generation-context.js";
+import { createGenerationContextProfile, rememberedContextOptions } from "./context-profile.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agents-"));
@@ -213,4 +214,46 @@ test("instruction fingerprint changes when either AGENTS.md is added, edited or 
   assert.notEqual(edited, added);
   await fs.rm(file);
   assert.equal(await agentsInstructionFingerprint(roots), empty);
+});
+
+test("remembered profiles never re-read a workspace whose path or permission changed", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "OLD_SCOPE");
+  const roots = { globalRoot: f.globalRoot, workspaceRoot: f.workspaceRoot };
+  const captured = (await (await createAgentsInstructionRefresher(f)).apply({ systemPrompt: "HOST" })).systemPrompt;
+  const options = {
+    contextWindow: 32_000,
+    systemPrompt: captured,
+    tools: [],
+    supportsImages: false,
+    providerId: "p",
+    modelId: "m",
+  };
+  const reads: string[] = [];
+  const profile = createGenerationContextProfile(options, roots, async (root) => {
+    reads.push(root.canonicalPath);
+    return f.read(root as { canonicalPath: string });
+  });
+  const request = { providerId: "p", modelId: "m", contextWindow: 32_000, supportsImages: false };
+  // The old workspace's guidance changes after the scope moved on.
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "OLD_SCOPE_EDITED_AND_LONGER");
+  const moved = path.join(f.root, "other-workspace");
+  for (const current of [
+    { globalRoot: f.globalRoot, workspaceRoot: undefined }, // permission revoked
+    { globalRoot: f.globalRoot, workspaceRoot: moved }, // folder repointed
+  ]) {
+    assert.equal(await rememberedContextOptions(profile, { ...request, instructionRoots: current }), undefined);
+  }
+  assert.deepEqual(reads, [], "a stale scope must not be read to price the meter");
+  // The same scope is reused and repriced.
+  const same = await rememberedContextOptions(profile, { ...request, instructionRoots: roots });
+  assert.match(same?.systemPrompt ?? "", /OLD_SCOPE_EDITED_AND_LONGER/);
+  // A model shape change also falls back to the ambient profile.
+  assert.equal(
+    await rememberedContextOptions(profile, { ...request, modelId: "other", instructionRoots: roots }),
+    undefined,
+  );
+  // Profiles without AGENTS.md (bot and assistant runs) are reused verbatim.
+  const plain = createGenerationContextProfile(options);
+  assert.equal(await rememberedContextOptions(plain, { ...request, instructionRoots: roots }), options);
 });

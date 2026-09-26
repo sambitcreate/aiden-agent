@@ -18,40 +18,29 @@ import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import {
   agentsInstructionFingerprint,
-  createAgentsInstructionTracker,
   withAgentsInstructionsEstimate,
   type AgentsInstructionRoots,
 } from "./agents-instructions.js";
+import {
+  createGenerationContextProfile,
+  rememberedContextOptions,
+  type GenerationContextProfile,
+} from "./context-profile.js";
 import { buildAgentTools } from "./tools.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
-/**
- * The exact GenerationContextOptions the last generation for a chat resolved
- * (system prompt + tool schemas after host-disclosed updates). The object is
- * mutated in place by the generation path, so a stored reference stays live
- * for the rest of the session.
- */
-interface GenerationProfile {
-  options: GenerationContextOptions;
-  /** Present when the generation appended AGENTS.md guidance to its prompt. */
-  instructions?: ReturnType<typeof createAgentsInstructionTracker>;
-}
-const generationProfiles = new Map<string, GenerationProfile>();
+const generationProfiles = new Map<string, GenerationContextProfile>();
 
 /**
  * Callers register right after the runtime applied AGENTS.md to `options`
- * (generation start, and each pre-request projection), so the tracker's
- * baseline is the file state that prompt was built from.
+ * (generation start, and each pre-request projection).
  */
 export function rememberChatContextProfile(
   chatId: string,
   options: GenerationContextOptions,
   instructionRoots?: AgentsInstructionRoots,
 ): void {
-  generationProfiles.set(chatId, {
-    options,
-    instructions: instructionRoots ? createAgentsInstructionTracker(instructionRoots) : undefined,
-  });
+  generationProfiles.set(chatId, createGenerationContextProfile(options, instructionRoots));
 }
 
 export function forgetChatContextProfile(chatId: string): void {
@@ -114,6 +103,23 @@ function draftAttachmentsForProjection(
  * delegation factory). The result is an estimate — flagged "estimated" by the
  * projection — until the next real generation registers exact options.
  */
+/**
+ * The chat's currently authorized workspace scope and the AGENTS.md roots a
+ * desktop generation started now would read (llm-client appends global and
+ * workspace guidance before every provider request).
+ */
+async function currentInstructionScope(chatWorkspaceId: string | undefined) {
+  const workspaceId = persistedChatWorkspaceId(chatWorkspaceId);
+  const workspace = workspaceId ? await configStore.getWorkspace(workspaceId) : undefined;
+  const folderPath = workspace?.folderPath;
+  const permission = workspace?.permission ?? "ask";
+  const instructionRoots: AgentsInstructionRoots = {
+    globalRoot: aidenConfigDir(),
+    workspaceRoot: permission !== "none" ? folderPath : undefined,
+  };
+  return { workspaceId, workspace, folderPath, permission, instructionRoots };
+}
+
 async function ambientContextOptions(
   chatId: string,
   contextWindow: number,
@@ -121,16 +127,8 @@ async function ambientContextOptions(
 ): Promise<GenerationContextOptions | undefined> {
   const chat = await chatStore.get(chatId);
   if (!chat) return undefined;
-  const workspaceId = persistedChatWorkspaceId(chat.workspaceId);
-  const workspace = workspaceId ? await configStore.getWorkspace(workspaceId) : undefined;
-  const folderPath = workspace?.folderPath;
-  const permission = workspace?.permission ?? "ask";
-  // Desktop generations append global and workspace AGENTS.md guidance before
-  // every provider request (llm-client); the estimate must price it too.
-  const instructionRoots = {
-    globalRoot: aidenConfigDir(),
-    workspaceRoot: permission !== "none" ? folderPath : undefined,
-  };
+  const { workspaceId, workspace, folderPath, permission, instructionRoots } =
+    await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
   const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
   const cached = ambientProfiles.get(chatId);
@@ -226,22 +224,14 @@ export async function chatContextPressure(
   const messages = await journalMessages(chatId, chat.createdAt);
   if (!messages) return null;
   const supportsImages = model.input.includes("image");
-  const profile = generationProfiles.get(chatId);
-  const remembered = profile?.options;
   const base =
-    remembered &&
-    remembered.providerId === providerId &&
-    remembered.modelId === modelId &&
-    remembered.contextWindow === model.contextWindow &&
-    remembered.supportsImages === supportsImages
-      ? {
-          ...remembered,
-          // The next request re-reads AGENTS.md; price an edit made since.
-          systemPrompt: profile.instructions
-            ? await profile.instructions.current(remembered.systemPrompt)
-            : remembered.systemPrompt,
-        }
-      : await ambientContextOptions(chatId, model.contextWindow, supportsImages);
+    (await rememberedContextOptions(generationProfiles.get(chatId), {
+      providerId,
+      modelId,
+      contextWindow: model.contextWindow,
+      supportsImages,
+      instructionRoots: (await currentInstructionScope(chat.workspaceId)).instructionRoots,
+    })) ?? (await ambientContextOptions(chatId, model.contextWindow, supportsImages));
   if (!base) return null;
   // Keep the generation-accurate static context (tools + system prompt) while
   // overriding only the fields a live model/provider change rewrites.

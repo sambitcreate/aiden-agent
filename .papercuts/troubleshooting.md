@@ -1061,3 +1061,4 @@ because their native file-mutator test binary had not been built. Run
 - Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
 - The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
 - 2026-09-26 PR #187 update: resolving a both-sides import conflict by concatenation drops the shared `import {` line above the conflict when both sides extend adjacent import blocks (renderer/lib/ipc.ts). Typecheck immediately after scripted conflict resolution.
+- 2026-09-26 PR #187: tests listed only in `test:preflight` never run in CI. The CI registry (`scripts/ci-test-registry.json`) collects only from `pretest` and `test`, so new renderer tests must also go into `test` and a registry lane.
