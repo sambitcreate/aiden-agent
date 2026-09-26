@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyBrowserGuestIdentityHeaders,
+  browserGuestBrands,
+  browserGuestUserAgent,
   browserUrl,
   browserDisplayUrl,
   browserRedactPreviewUrls,
@@ -29,6 +32,67 @@ test("navigation normalizes public and loopback hosts but refuses privileged sch
     assert.throws(() => browserUrl(url));
   }
 });
+test("guest user-agent drops Electron and Aiden product tokens Google rejects", () => {
+  const electron = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36";
+  const guest = browserGuestUserAgent(electron);
+  assert.equal(
+    guest,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36",
+  );
+  assert.doesNotMatch(guest, /Electron|Aiden/u);
+  const linux = browserGuestUserAgent(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) aiden-agent/0.43.0 Chrome/142.0.0.0 Electron/43.1.1 Safari/537.36",
+  );
+  assert.match(linux, /Linux x86_64/u);
+  assert.doesNotMatch(linux, /Electron|aiden/iu);
+});
+
+test("guest identity headers rewrite Client Hints without dropping preview grants", () => {
+  const ua = browserGuestUserAgent(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36",
+  );
+  const headers = applyBrowserGuestIdentityHeaders(
+    {
+      "User-Agent": "Electron",
+      Cookie: "session=1",
+      "X-Aiden-Preview-Authorization": "grant",
+      "Sec-CH-UA": '"Electron";v="43"',
+      "Sec-CH-UA-Full-Version-List": '"Electron";v="43.1.1"',
+    },
+    ua,
+    "https://accounts.google.com/",
+    "darwin",
+  );
+  assert.equal(headers["User-Agent"], ua);
+  assert.equal(headers["X-Aiden-Preview-Authorization"], "grant");
+  assert.equal(headers.Cookie, "session=1");
+  // Exactly the brand list Chromium 142 exposes via navigator.userAgentData in
+  // an unbranded (Electron) build: no invented "Google Chrome" brand.
+  assert.equal(headers["sec-ch-ua"], '"Not_A Brand";v="99", "Chromium";v="142"');
+  assert.equal(headers["sec-ch-ua-platform"], '"macOS"');
+  assert.equal(headers["sec-ch-ua-mobile"], "?0");
+  // Stale or high-entropy hints are dropped, never forged or passed through.
+  assert.deepEqual(
+    Object.keys(headers).filter((name) => /^sec-ch-ua/iu.test(name)).sort(),
+    ["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"],
+  );
+  const linux = applyBrowserGuestIdentityHeaders({}, ua, "http://localhost:3000/", "linux");
+  assert.equal(linux["sec-ch-ua-platform"], '"Linux"');
+  // Chromium never sends UA-CH to insecure origins.
+  const insecure = applyBrowserGuestIdentityHeaders({ "sec-ch-ua": "x" }, ua, "http://example.com/", "darwin");
+  assert.deepEqual(insecure, { "User-Agent": ua });
+});
+
+test("guest brands follow Chromium's GREASE spelling and order for each major", () => {
+  const brands = (major: number) => browserGuestBrands(`Mozilla/5.0 (X11) Chrome/${major}.0.0.0 Safari/537.36`);
+  // Verified against Electron 43.1.1 (Chromium 150) navigator.userAgentData.brands.
+  assert.deepEqual(brands(150), [{ brand: "Not;A=Brand", version: "8" }, { brand: "Chromium", version: "150" }]);
+  // Known Chrome releases: the GREASE brand of 120 and 124.
+  assert.equal(brands(120)[0].brand, "Not_A Brand");
+  assert.deepEqual(brands(124)[0], { brand: "Not-A.Brand", version: "99" });
+  assert.deepEqual(brands(151).map(({ brand }) => brand), ["Chromium", "Not=A?Brand"]);
+});
+
 test("profile partitions isolate persistent, ephemeral, and unusual identity bytes", () => {
   assert.match(browserPartition("one", false), /^persist:aiden-browser-profile-/);
   assert.doesNotMatch(browserPartition("one", true), /^persist:/);

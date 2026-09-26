@@ -154,6 +154,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /event\.key === "PageDown"/u);
   assert.match(composer, /event\.key === "Home"/u);
   assert.match(palette, /role="listbox"/u);
+  assert.match(palette, /data-browser-occluder/u);
   assert.doesNotMatch(palette, /role="group"/u);
   assert.match(palette, /role="option"/u);
   assert.match(palette, /aria-live="polite"/u);
