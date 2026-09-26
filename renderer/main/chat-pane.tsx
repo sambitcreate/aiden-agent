@@ -420,6 +420,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [streamComplete, setStreamComplete] = React.useState(false);
+  const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
+    null,
+  );
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
   // Closes busy admission in the same tick as Stop, before React re-renders.
@@ -590,6 +593,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingArtifacts([]);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
+    setPersistedHandoffMessageId(null);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
@@ -892,6 +896,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingArtifacts([]);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
+      setPersistedHandoffMessageId(null);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
       streamedTextRef.current = "";
@@ -1073,6 +1078,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+            setPersistedHandoffMessageId(
+              persistedAssistant?.role === "assistant" && persistedAssistant.content === full
+                ? persistedAssistant.id
+                : null,
+            );
             clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
@@ -1094,6 +1105,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
               setStreamComplete(false);
+              setPersistedHandoffMessageId(null);
               setIsStoppingGeneration(false);
               setIsModelLoading(false);
               setGenerationTimeline(null);
@@ -1124,6 +1136,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+              setPersistedHandoffMessageId(
+                persistedAssistant?.role === "assistant" &&
+                  persistedAssistant.content === resolvedPartialContent
+                  ? persistedAssistant.id
+                  : null,
+              );
               clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
@@ -1152,6 +1171,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   streamedTextRef.current = "";
                   streamedReasoningRef.current = "";
                   setStreamComplete(false);
+                  setPersistedHandoffMessageId(null);
                 }
                 const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
                 setHasUnpersistedResponse(
@@ -2580,6 +2600,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
+            persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
             timeline={displayedGenerationTimeline}
             liveSubagents={displayedLiveSubagents}

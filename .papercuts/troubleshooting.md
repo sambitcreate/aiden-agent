@@ -821,6 +821,18 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
 - Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
 - Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.
+
+# Agent CLI PATH diagnosis (2026-09-21)
+
+- The warning lived in a chat transcript, not the structured app log; inspect both when a user quotes agent output as a log.
+- zsh's unmatched globs aborted broad source searches; use `rg --glob` for optional file patterns.
+- Fresh-worktree Git cleanup tests require the native remover; its build script pins a minimal environment, and this host's default Command Line Tools SDK has an incompatible `arm64e.x1` stub. An explicit Xcode `-isysroot` compiles the helper, but the script still fails until that SDK selection is repaired.
+- `.memory/` ignores new files; append this work's context to a tracked memory note so it reaches the PR.
+- `git add` rejected paths inside ignored `.memory/` and `.papercuts/` even though their files are tracked; use `git add -u` for those updates.
+- A PATH regression test using `gh` can resolve a host-installed binary first; give fixture executables unique generated names to keep CLI lookup tests portable.
+- 2026-09-21 PR #206 review: project instructions require friction in this tracked troubleshooting file. A separate lane note was easy to overlook; duplicate the native SDK/pretest limitation here and test the runner's four-note eviction plus 8,000-character projection at the event boundary.
+- `test:subagents` native pretest selects a Command Line Tools macOS 27 SDK that Xcode 26.6 cannot link; the build script replaces its child environment, so an outer SDK pin is ineffective. Focused TypeScript, mobile consumer, type-check, and lint validation remain separate from this native gate.
+- 2026-09-21 PR #206 Pullfrog review caught an omitted-provenance edge case: four retained short notes can be under the character cap after a fifth note is evicted. Track count eviction separately from character truncation and test both boundaries.
 - Lane form-fill-specialist: pure `-core.ts` modules cannot own electron-bound singletons — `FormFillArtifactStore` constructor deps like `onStatusChanged` must be wired in a thin electron-importing shim (`artifacts.ts`), not the testable core.
 - Approval row deselection travels the decision-payload path (`approvals.decide` → `takeDecisionPayload` in `beforeToolCall`), never tool arguments; validate each option field at the `chat:approve` IPC edge (`Number.isSafeInteger` predicates) rather than passing `unknown` through.
 - `ipc-contract.test.ts` scans `main/**/*.ts` automatically: handlers must use literal channel strings and `ipcMain.broadcast` for contract coverage; no manual registry edits.
@@ -1008,6 +1020,10 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 
 - 2026-09-25 PR245: shared `contract.json` has no usage entry; usage-label tests must construct typed usage totals, not assume a fixture exists. Initial tests exposed this incorrect assumption and were corrected.
 - 2026-09-25 PR245 simulator: the reused iOS26.4 simulator launched the app but did not inject/connect XCTest on a second run (sample showed idle app, no XCTest). Terminated only that test runner/app; an isolated iPhone17 simulator completed 232 tests (5 skipped). Do not reset unrelated simulators or count the stalled run as a pass.
+## 2026-09-25 — rich link previews
+
+- Fresh worktrees have no `node_modules`, so focused `tsx` tests fail immediately. Run `npm ci --ignore-scripts` from the lockfile before renderer verification.
+- Review status can pass while an actionable inline finding remains. Inspect unresolved threads explicitly; content equality is not sufficient handoff identity when an unpersisted partial can repeat older assistant text.
 # 2026-09-24 implementer run-grant worktree
 
 Fresh managed worktrees have no `node_modules`; `npm ci --no-audit --no-fund`
@@ -1074,3 +1090,5 @@ because their native file-mutator test binary had not been built. Run
 - `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
 - Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
 - The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
+- 2026-09-26 main merge: 15 `git.test.ts` managed-worktree removal tests fail locally with "could not safely remove the managed worktree quarantine"; this is the same host native-remover SDK issue above, not the PATH change.
+- 2026-09-26 PR #206 reconciliation: #207 on main superseded the runner-side four-note tail, so the merge took main's runner and kept only the projector gap (failed results with `summaryTruncated` lost the `report_truncated` notice because the gate predated failed summaries).
