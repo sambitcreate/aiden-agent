@@ -1,3 +1,5 @@
+import { ttsService } from "./tts/service-main.js";
+import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -382,6 +384,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
+        readAloud: AidenRemoteTtsService;
         bots?: AidenRemoteBotService;
         botNotice?: {
           status: typeof botApplicationService.noticeStatus;
@@ -390,6 +393,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }>
     | undefined;
   let workspaceApiInstanceId: string | undefined;
+  let activeReadAloud: AidenRemoteTtsService | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
   let activeProgress: AidenRemoteChatProgressService | undefined;
@@ -719,6 +723,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
+          activeReadAloud?.close();
+          const readAloud = new AidenRemoteTtsService(ttsService);
+          activeReadAloud = readAloud;
           return {
             instanceId,
             workspaceBrowser,
@@ -732,6 +739,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             memorySettings,
             usage: usageStore,
             speech,
+            readAloud,
             ...(botsSupported
               ? {
                   botFiles,
@@ -752,7 +760,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
-            settle: () => streams.settlePersistence(),
+            settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
               browser: workspaceBrowser,
@@ -763,7 +771,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           };
         })();
       }
-      return workspaceApi;
+      const api = await workspaceApi;
+      api.readAloud.resume();
+      return api;
     },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
@@ -776,6 +786,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     revokeDevice: async (deviceId) => {
+      activeReadAloud?.revokeDevice(deviceId);
       activeProgress?.revokeDevice(deviceId);
       simulatorShareRelay.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({

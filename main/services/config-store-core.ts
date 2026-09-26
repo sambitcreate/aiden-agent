@@ -1,4 +1,5 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -33,6 +34,11 @@ import {
   type SettingsShape,
 } from "./portable-config-core.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
+import { parseTtsSettingsDocument } from "./tts/settings.js";
+import {
+  normalizeTtsSettings,
+  type TtsSettingsV1,
+} from "../../renderer/shared/tts.js";
 import { migratePiProviderConfig } from "./provider-config-migration-core.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import {
@@ -262,6 +268,12 @@ export function createConfigStore(
   let secretMigrationTargets: Array<Readonly<{ id: string; binding: string }>> = [];
   let secretMigrationComplete = false;
   let secretMigrationPromise: Promise<void> | null = null;
+  // TTS settings revision: monotonic per session, seeded randomly so a restart
+  // can never alias an older revision. Used for renderer compare-and-set.
+  let ttsSettingsRevisionCounter = 0;
+  const ttsSettingsRevisionSeed = randomBytes(8).toString("hex");
+  const nextTtsSettingsRevision = (): string =>
+    `tts-${ttsSettingsRevisionSeed}-${(ttsSettingsRevisionCounter += 1)}`;
 
   async function portableConfigSafeForCredentialReconciliation(
     reloadFromDisk: boolean,
@@ -778,6 +790,48 @@ export function createConfigStore(
         return structuredClone(config.settings);
       }, isCurrent);
       return runtimeSettingsFrom(saved);
+    },
+
+    /** Read the normalized Text to Speech document after startup migration. */
+    async getTtsSettings(): Promise<{
+      settings: TtsSettingsV1;
+      revision: string;
+    }> {
+      await ensureSeeded();
+      const settings = runtimeSettingsFrom((await settingsStore.load()).settings);
+      return {
+        settings: settings.tts ?? normalizeTtsSettings(undefined),
+        revision: `tts-${ttsSettingsRevisionSeed}-${ttsSettingsRevisionCounter}`,
+      };
+    },
+
+    /**
+     * Atomically update only Text to Speech preferences. A document written by
+     * a newer version is refused rather than downgraded; credentials never
+     * live in this document.
+     */
+    async updateTtsSettings(
+      mutation: (current: TtsSettingsV1) => TtsSettingsV1,
+      isCurrent: () => boolean = () => true,
+    ): Promise<{ settings: TtsSettingsV1; revision: string }> {
+      const saved = await mutateSettings((config) => {
+        const hasTts = Object.prototype.hasOwnProperty.call(config.settings, "tts");
+        const current = parseTtsSettingsDocument(config.settings.tts);
+        if (!current && hasTts) {
+          throw new Error(
+            "Text to Speech settings are invalid or from a newer version; repair settings.json before changing them.",
+          );
+        }
+        config.settings.tts = normalizeTtsSettings(
+          mutation(structuredClone(current ?? normalizeTtsSettings(undefined))),
+        );
+        return structuredClone(config.settings);
+      }, isCurrent);
+      const settings = runtimeSettingsFrom(saved);
+      return {
+        settings: settings.tts ?? normalizeTtsSettings(undefined),
+        revision: nextTtsSettingsRevision(),
+      };
     },
 
     async setSettings(

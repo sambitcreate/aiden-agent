@@ -48,6 +48,7 @@ import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { parseTtsSettingsDocument } from "./tts/settings.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -675,6 +676,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     if (webSearch) runtime.webSearch = webSearch;
     else delete runtime.webSearch;
+  }
+  if (settings.tts !== undefined) {
+    const tts = parseTtsSettingsDocument(settings.tts);
+    if (tts) runtime.tts = tts;
+    else delete runtime.tts;
   }
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;

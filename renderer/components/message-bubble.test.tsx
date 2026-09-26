@@ -758,3 +758,48 @@ test("persisted assistant failure renders once with fixed private-safe copy", ()
   assert.equal((markup.match(/Generation failed/gu) ?? []).length, 1);
   assert.match(markup, /after retrying/iu);
 });
+
+
+const readAloud = {
+  active: true, phase: "playing" as const, omissions: ["Code blocks skipped"],
+  onActivate: () => undefined, onStop: () => undefined, onTogglePause: () => undefined,
+};
+
+test("read aloud is a response footer action after copy, never a user or code-copy action", () => {
+  const assistant = renderToStaticMarkup(<MessageBubble role="assistant" content="Answer" readAloud={readAloud} />);
+  assert.ok(assistant.indexOf('aria-label="Copy message"') < assistant.indexOf('aria-label="Stop reading aloud"'));
+  assert.match(assistant, /aria-label="Pause reading aloud"/u);
+  assert.match(assistant, /Code blocks skipped/u);
+  assert.match(assistant, /focus-visible:outline-focus-ring/u);
+  assert.doesNotMatch(assistant, /1 section skipped/u);
+  const user = renderToStaticMarkup(<MessageBubble role="user" content="Question" readAloud={readAloud} />);
+  assert.doesNotMatch(user, /reading aloud/u);
+  const code = renderToStaticMarkup(<MessageBubble role="assistant" content={"```ts\nconst a = 1;\n```"} />);
+  assert.doesNotMatch(code, /reading aloud/u);
+});
+
+test("only the selected latest response tail has a speaker, with or without a timeline", () => {
+  for (const withTimeline of [false, true]) {
+    const markup = renderToStaticMarkup(<MessageList chatId="chat-1" messages={[
+      { id: "old", role: "assistant", content: "Historical", createdAt: 1 },
+      { id: "user", role: "user", content: "Question", createdAt: 2 },
+      { id: "latest", role: "assistant", content: "Before.After.", createdAt: 3,
+        ...(withTimeline ? { timeline: { version: 3 as const, generationId: "g", status: "completed" as const,
+          startedAt: 1, finishedAt: 3, steps: [{ id: "tool", order: 0, kind: "tool" as const,
+          toolCallId: "call", toolName: "read_file", label: "Read file", status: "completed" as const,
+          startedAt: 1, updatedAt: 2, finishedAt: 2, contentOffset: 7 }] } } : {}) },
+    ]} streamingText={null} streamingReasoning={null} timeline={null} liveSubagents={[]}
+      subagentsEnabled={false} onOpenSubagent={() => undefined} agentActivity={null} error={null}
+      readAloudMessageId="latest" readAloud={readAloud} />);
+    assert.equal((markup.match(/aria-label="Stop reading aloud"/gu) ?? []).length, 1);
+    assert.ok(markup.indexOf('aria-label="Stop reading aloud"') > markup.indexOf("After."));
+  }
+});
+
+test("paused speech keeps both Resume and Stop available", () => {
+  const markup = renderToStaticMarkup(<MessageBubble role="assistant" content="Answer"
+    readAloud={{ ...readAloud, phase: "paused" }} />);
+  assert.match(markup, /aria-label="Resume reading aloud"/u);
+  assert.match(markup, /aria-label="Stop reading aloud"/u);
+  assert.match(markup, /data-active="true"/u);
+});

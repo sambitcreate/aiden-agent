@@ -3632,6 +3632,218 @@
           }
         }
       }
+    },
+    "/read-aloud": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getReadAloudSettingsStatus",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getChatReadAloudStatus",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "startChatReadAloud",
+        "x-aiden-capability": "chat:write",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudJob",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAloudStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud/stop": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "stopChatReadAloud",
+        "x-aiden-capability": "chat:write",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStopped"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAloudStop"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "name": "jobId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "name": "segment",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        {
+          "name": "offset",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          }
+        }
+      ],
+      "get": {
+        "operationId": "readChatReadAloudAudio",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudAudio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudAudio"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8670,6 +8882,272 @@
             "additionalProperties": false
           }
         },
+        "additionalProperties": false
+      },
+      "ReadAloudSource": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId",
+          "sourceRevision"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStart": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReadAloudSource"
+          },
+          "settingsRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "requestId",
+          "source",
+          "settingsRevision"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudJob": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "chatId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "read-aloud",
+              "preview"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "generating",
+              "buffering",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "totalSegments": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "readySegments": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256
+          },
+          "omissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "generationMayHaveBeenBilled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "generationMayHaveBeenBilled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "jobId",
+          "chatId",
+          "kind",
+          "phase",
+          "totalSegments",
+          "readySegments",
+          "omissions",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "settingsRevision": {
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadAloudSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadAloudJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "ready",
+          "settingsRevision",
+          "source",
+          "job"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStop": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStopped": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudAudio": {
+        "type": "object",
+        "properties": {
+          "bytesBase64": {
+            "type": "string",
+            "maxLength": 87384,
+            "contentEncoding": "base64"
+          },
+          "mimeType": {
+            "type": "string",
+            "const": "audio/wav"
+          },
+          "sampleRate": {
+            "type": "integer",
+            "const": 24000
+          },
+          "channels": {
+            "type": "integer",
+            "const": 1
+          },
+          "segmentBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          },
+          "nextOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bytesBase64",
+          "mimeType",
+          "sampleRate",
+          "channels",
+          "segmentBytes",
+          "nextOffset",
+          "complete"
+        ],
         "additionalProperties": false
       }
     }

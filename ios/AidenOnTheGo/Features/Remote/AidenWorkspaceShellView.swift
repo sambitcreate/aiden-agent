@@ -2874,7 +2874,7 @@ private struct AidenUsageView: View {
                 insightDivider
                 insightRow(
                     "Hosted cost",
-                    value: usage.totals.hostedCostUsd.formatted(.currency(code: "USD"))
+                    value: usage.totals.hostedCostSummary
                 )
             }
             .padding(.horizontal, 18)
@@ -3099,6 +3099,22 @@ private struct AidenAppSettingsView: View {
 
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var readAloudStatus: AidenReadAloudStatus?
+    @State private var readAloudError: String?
+    // TODO: mobile configuration is deferred; only the desktop may enable TTS.
+    private func loadReadAloudStatus() async {
+        let context = try? coordinator.requestContext()
+        guard let context else { readAloudStatus = nil; return }
+        do {
+            let value = try await coordinator.remoteClient(for: context).readAloudStatus()
+            guard coordinator.isCurrent(context) else { return }
+            readAloudStatus = value; readAloudError = nil
+        } catch {
+            guard coordinator.isCurrent(context) else { return }
+            readAloudStatus = nil; readAloudError = "Read Aloud is unavailable. Connect to an updated desktop app."
+        }
+    }
     @State private var memorySettings: AidenMemorySettings?
     @State private var memoryError: String?
     @State private var isSavingMemory = false
@@ -3184,6 +3200,14 @@ private struct AidenAppSettingsView: View {
                 }
 
                 Section {
+                    Text(readAloudStatus?.ready == true ? "Ready on your Mac" : "Set up on your Mac")
+                    if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
+                    Button("Refresh status") { Task { await loadReadAloudStatus() } }
+                } header: { Text("Read Aloud") } footer: {
+                    Text(AidenReadAloudStatus.setupGuidance + " Audio is retained only for this session; replay does not generate it again.")
+                }
+
+                Section {
                     Picker("Transcription", selection: $voiceInputModeRaw) {
                         ForEach(AidenVoiceInputMode.allCases) { mode in
                             Text(mode.title).tag(mode.rawValue)
@@ -3238,7 +3262,9 @@ private struct AidenAppSettingsView: View {
                 }
             }
         }
-        .task { await loadMemorySettings() }
+        .task { await loadMemorySettings(); await loadReadAloudStatus() }
+        .task(id: scenePhase) { if scenePhase == .active { await loadReadAloudStatus() } }
+        .task(id: coordinator.server?.instanceId) { readAloudStatus = nil; await loadReadAloudStatus() }
         .sheet(isPresented: $isShowingInstallations) {
             AidenInstallationsView(
                 coordinator: coordinator,

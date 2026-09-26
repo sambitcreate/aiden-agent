@@ -928,5 +928,25 @@
       "retryable": false,
       "details": { "currentRevision": "workspace_revision_8" }
     }
+  },
+  "readAloudStatus": {
+    "enabled": true,
+    "ready": true,
+    "settingsRevision": "tts-fixture-1",
+    "source": {
+      "chatId": "chat-1",
+      "messageId": "assistant-1",
+      "sourceRevision": "source-fixture-1"
+    },
+    "job": null
+  },
+  "readAloudAudio": {
+    "bytesBase64": "AQI=",
+    "mimeType": "audio/wav",
+    "sampleRate": 24000,
+    "channels": 1,
+    "segmentBytes": 2,
+    "nextOffset": 2,
+    "complete": true
   }
 }

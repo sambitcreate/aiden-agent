@@ -2243,3 +2243,86 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
     }
 }
+
+
+// Playback-only contract. TODO: mobile enablement/configuration is a future feature.
+struct AidenReadAloudSource: Codable, Sendable {
+    let chatId: String
+    let messageId: String
+    let sourceRevision: String
+}
+struct AidenReadAloudStart: Encodable, Sendable {
+    let requestId: String
+    let source: AidenReadAloudSource
+    let settingsRevision: String
+}
+struct AidenReadAloudStop: Encodable, Sendable { let requestId: String }
+struct AidenReadAloudAcknowledgement: Decodable { let ok: Bool }
+struct AidenReadAloudError: Codable, Sendable { let message: String }
+struct AidenReadAloudJob: Codable, Sendable {
+    // Server gives each segment 60 seconds; allow 120 seconds without progress.
+    static let maximumStalledPolls = 240
+    static func nextStalledPollCount(previousReady: Int, currentReady: Int, stalled: Int) -> Int {
+        currentReady > previousReady ? 0 : stalled + 1
+    }
+    let jobId: String
+    let chatId: String?
+    let phase: String
+    let totalSegments: Int
+    let readySegments: Int
+    let error: AidenReadAloudError?
+    var isValid: Bool {
+        !jobId.isEmpty && jobId.utf8.count <= 128 && totalSegments > 0 && totalSegments <= 256 &&
+        readySegments >= 0 && readySegments <= totalSegments &&
+        ["preparing", "generating", "buffering", "paused", "completed", "cancelled", "failed"].contains(phase)
+    }
+}
+struct AidenReadAloudStatus: Codable, Sendable {
+    let enabled: Bool
+    let ready: Bool
+    let settingsRevision: String
+    let source: AidenReadAloudSource?
+    let job: AidenReadAloudJob?
+    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+}
+struct AidenReadAloudAudio: Codable, Sendable {
+    let bytesBase64: String
+    let mimeType: String
+    let sampleRate: Int
+    let channels: Int
+    let segmentBytes: Int
+    let nextOffset: Int
+    let complete: Bool
+    func validatedBytes(offset: Int, expectedTotal: Int?) throws -> Data {
+        guard bytesBase64.utf8.count <= 87_384, let data = Data(base64Encoded: bytesBase64),
+              !data.isEmpty, data.count <= 65_536, mimeType == "audio/wav",
+              sampleRate == 24_000, channels == 1, segmentBytes > 0, segmentBytes <= 8 * 1_024 * 1_024,
+              expectedTotal == nil || expectedTotal == segmentBytes,
+              nextOffset == offset + data.count, nextOffset <= segmentBytes,
+              complete == (nextOffset == segmentBytes) else { throw AidenReadAloudFailure.invalidAudio }
+        return data
+    }
+}
+enum AidenReadAloudFailure: LocalizedError {
+    case invalidAudio, unavailable
+    var errorDescription: String? {
+        switch self {
+        case .invalidAudio: return "Read Aloud received invalid audio. It will not retry generation automatically."
+        case .unavailable: return "This soundbite is unavailable. It will not be generated again automatically."
+        }
+    }
+}
+extension AidenRemoteClient {
+    func readAloudStatus(chatId: String? = nil) async throws -> AidenReadAloudStatus {
+        try await send(method: "GET", path: chatId.map { ["chats", $0, "read-aloud"] } ?? ["read-aloud"])
+    }
+    func startReadAloud(chatId: String, request: AidenReadAloudStart) async throws -> AidenReadAloudJob {
+        try await send(method: "POST", path: ["chats", chatId, "read-aloud"], body: request)
+    }
+    func stopReadAloud(chatId: String, requestId: String) async throws {
+        let _: AidenReadAloudAcknowledgement = try await send(method: "POST", path: ["chats", chatId, "read-aloud", "stop"], body: AidenReadAloudStop(requestId: requestId))
+    }
+    func readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int) async throws -> AidenReadAloudAudio {
+        try await send(method: "GET", path: ["chats", chatId, "read-aloud", "audio", jobId, String(segment), String(offset)], maximumResponseBytes: 100_000)
+    }
+}

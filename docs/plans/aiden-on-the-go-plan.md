@@ -895,3 +895,14 @@ Pull-request CI now gives Android its own Java 21/SDK 36 job. Pull requests run 
 ### Native workspace browsing follow-up — 2026-09-22
 
 Implementation in `feature/native-workspace-browsing`: optional per-directory pages supplement the legacy recursive index; iOS and Android expand loaded folders, search only downloaded entries, and open bounded source previews before explicit editing. Explicit `./` file links resolve through opaque directory/file handles. Both native clients retain offline read-only caches and expected-version writes. The workspace-browser selection service, Bot files, streaming, and produced-file events are outside this slice. Focused test and review evidence is tracked in `.memory/native-workspace-browsing.md`; PR/physical-device acceptance remains pending.
+
+## Desktop-configured Read Aloud follow-up — September 2026
+
+The user's approved `tts-v1` extension supersedes this plan's earlier exclusion
+of server TTS, only for explicit playback of the latest canonical assistant
+response using the paired desktop's separately enabled Gemini speech settings.
+iOS and Android never send arbitrary speech text or Google keys, and cannot
+enable/configure TTS. Native Settings shows status and desktop setup guidance;
+TODO: mobile configuration remains a future separately reviewed feature.
+The original `/speech` local transcription contract is unchanged. See the
+Gemini TTS plan and Remote API specification for replay, bounds and verification.

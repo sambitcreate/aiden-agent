@@ -578,3 +578,20 @@ test("retains queued mutations across a transient persistence failure", async ()
     2,
   );
 });
+
+
+test("TTS accounting survives reload and keeps unknown cost and usage separate from zero", async () => {
+  const { ttsUsageRecord } = await import("./tts/service.js");
+  const persistence = memoryPersistence(); const store = createUsageStore(persistence);
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    await store.record(ttsUsageRecord({ kind: "read-aloud", model: "gemini-3.8-flash-tts", status,
+      inputTokens: status === "completed" ? 2 : null, outputTokens: status === "completed" ? 3 : null,
+      usageKnown: status === "completed" }));
+  }
+  const totals = (await createUsageStore(persistence).summary("all")).totals;
+  assert.equal(totals.requests, 3); assert.equal(totals.tokens.total, 5);
+  assert.equal(totals.unmeteredRequests, 2); assert.equal(totals.unpricedHostedRequests, 3);
+  assert.equal(totals.costedRequests, 0); assert.equal(totals.failedRequests, 1); assert.equal(totals.cancelledRequests, 1);
+  assert.equal(ttsUsageRecord({ kind: "preview", model: "tts", status: "completed", inputTokens: 1, outputTokens: null, usageKnown: false }).tokens, null);
+  assert.ok(persistence.read().buckets.every(bucket => bucket.source === "text-to-speech"));
+});
