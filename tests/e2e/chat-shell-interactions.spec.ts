@@ -600,6 +600,22 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   await expect(composer).toBeFocused();
   await expect(composer).toHaveValue("hi there");
 
+  // A redirected "/" typed before existing draft text opens the slash palette
+  // at the restored caret, not at the end of the draft.
+  await composer.fill(" later");
+  await composer.evaluate((element: HTMLTextAreaElement) => {
+    element.setSelectionRange(0, 0);
+    element.blur();
+  });
+  await page.keyboard.press("/");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("/ later");
+  expect(await composer.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(1);
+  const slashCommands = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(slashCommands.getByRole("option", { name: /^Choose model/u })).toBeVisible();
+  await composer.press("Escape");
+  await composer.fill("hi there");
+
   // Space activates a focused control instead of being redirected, and
   // ordinary typing inside another text field stays in that field.
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
