@@ -50,6 +50,7 @@ import {
 import { attachmentsApi, browserApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
@@ -1302,8 +1303,28 @@ export function Composer({
       finishAttachmentRead(token);
     }
   };
+  const readClipboardImagesRef = React.useRef(readClipboardImages);
+  readClipboardImagesRef.current = readClipboardImages;
+  React.useEffect(
+    () =>
+      composerImageAttach.register({
+        chatId,
+        available: () => {
+          const input = inputRef?.current;
+          return Boolean(
+            input?.isConnected &&
+              !input.disabled &&
+              !input.closest('[aria-hidden="true"], [inert]') &&
+              !firstSendPendingRef.current &&
+              !sendPendingRef.current,
+          );
+        },
+        receive: (files) => void readClipboardImagesRef.current(files),
+      }),
+    [chatId, inputRef],
+  );
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
