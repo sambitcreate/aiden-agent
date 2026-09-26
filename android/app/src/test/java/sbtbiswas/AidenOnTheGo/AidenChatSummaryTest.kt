@@ -2,6 +2,11 @@ package sbtbiswas.AidenOnTheGo
 
 import com.sun.management.ThreadMXBean
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.resetMain
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -52,6 +57,104 @@ class AidenChatSummaryTest {
     @After
     fun teardown() {
         server.shutdown()
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun heldHomePagesPreserveNewerRowsAndPaginationOwnership() {
+        val main = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        kotlinx.coroutines.Dispatchers.setMain(main)
+        try {
+            runBlocking(main) {
+                for ((pagination, purging, afterCommit) in listOf(Triple(false, false, false), Triple(true, false, false), Triple(false, true, false), Triple(true, true, false), Triple(true, false, true))) {
+                    val root = tempFolder.newFolder()
+                    val arrived = java.util.concurrent.CountDownLatch(1)
+                    val release = java.util.concurrent.CountDownLatch(1)
+                    val reads = java.util.concurrent.atomic.AtomicInteger()
+                    val cursor = canonicalCursor("held-page")
+                    val first = summary("chat-1", "workspace-1", "Before settlement", AidenChatSummaryActivity.IDLE)
+                    server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+                        override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                            val path = request.requestUrl!!.encodedPath
+                            return when {
+                                path.endsWith("/server") -> MockResponse().setBody(json.encodeToString(AidenServer(
+                                    instanceId = "home-instance", name = "Home", capabilities = listOf(AidenRemoteCapability.CHAT_READ), features = listOf("chat-summaries-v1"))))
+                                path.endsWith("/workspaces") -> MockResponse().setBody("""{"workspaces":[{"id":"workspace-1","name":"Workspace","permission":"ask","revision":"rev-1"}]}""")
+                                path.endsWith("/chat-summaries") -> {
+                                    val number = reads.incrementAndGet()
+                                    if (number == 2) { arrived.countDown(); check(release.await(8, java.util.concurrent.TimeUnit.SECONDS)) }
+                                    if (request.requestUrl!!.queryParameter("cursor") != null) MockResponse().setBody("""{"summaries":[${json.encodeToString(first.copy(id = "chat-2", updatedAt = first.updatedAt.minusSeconds(1)))}]}""")
+                                    else MockResponse().setBody("""{"summaries":[${json.encodeToString(first)}],"nextCursor":"$cursor"}""")
+                                }
+                                else -> MockResponse().setResponseCode(503)
+                            }
+                        }
+                    }
+                    val store = sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore(root, sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore())
+                    store.addInstallation(AidenPairingExchange(instanceId = "home-instance", deviceId = "home-device", endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+                    val cache = AidenChatCache(root = File(root, "cache"))
+                    val scope = kotlinx.coroutines.CoroutineScope(main + kotlinx.coroutines.Job())
+                    val coordinator = sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator(store, root, cache, scope = scope)
+                    val owners = androidx.lifecycle.ViewModelStore()
+                    try {
+                        kotlinx.coroutines.withTimeout(5_000) { coordinator.workspaces.first { it.isNotEmpty() } }
+                        val writes = java.util.concurrent.atomic.AtomicInteger()
+                        val cacheDispatcher = object : kotlinx.coroutines.CoroutineDispatcher() {
+                            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                                main.dispatch(context, Runnable {
+                                    block.run()
+                                    // Same single-thread executor: mutate after the cache commit,
+                                    // before its queued Home continuation can publish the cursor.
+                                    if (afterCommit && writes.incrementAndGet() == 2) {
+                                        cache.saveChat(fullChat("chat-1", "workspace-1", "Settled title", canonicalRevision("settled")), "home-instance")
+                                    }
+                                })
+                            }
+                        }
+                        val home = sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceHomeViewModel(coordinator, cache, cacheWriteDispatcher = cacheDispatcher)
+                        owners.put("home", home)
+                        kotlinx.coroutines.withTimeout(5_000) { home.nextChatCursor.first { it == cursor } }
+                        if (pagination) home.loadMoreChats() else home.load(force = true)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { check(arrived.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                        val settled = fullChat("chat-1", "workspace-1", "Settled title", canonicalRevision("settled"))
+                        if (purging) cache.purge("home-instance")
+                        else if (!afterCommit) cache.saveChat(settled, "home-instance")
+                        release.countDown()
+                        if (pagination) kotlinx.coroutines.withTimeout(5_000) { home.isLoadingMoreChats.first { !it } }
+                        else kotlinx.coroutines.withTimeout(5_000) { home.isLoading.first { !it } }
+                        assertEquals(if (afterCommit) null else cursor, home.nextChatCursor.value)
+                        val expected = if (purging) emptyList() else if (afterCommit) listOf("Settled title", "Before settlement") else listOf("Settled title")
+                        assertEquals(expected, home.chats.value.map { it.title })
+                        assertEquals(if (purging) null else expected, AidenChatCache(root = File(root, "cache")).loadSummaries("home-instance")?.map { it.title })
+                        if (afterCommit) assertNull(home.chatPaginationErrorMessage.value)
+                        else assertNotNull(if (pagination) home.chatPaginationErrorMessage.value else home.chatLoadErrorMessage.value)
+                        if (pagination && !purging && !afterCommit) {
+                            home.loadMoreChats()
+                            kotlinx.coroutines.withTimeout(5_000) { home.nextChatCursor.first { it == null } }
+                            assertEquals(listOf("chat-1", "chat-2"), home.chats.value.map { it.id })
+                            assertNull(home.chatPaginationErrorMessage.value)
+                        }
+                    } finally { release.countDown(); owners.clear(); scope.cancel() }
+                }
+            }
+        } finally { kotlinx.coroutines.Dispatchers.resetMain(); main.close() }
+    }
+
+    @Test
+    fun queuedDetailCannotReplaceNewerSummaryAndNewRequestRejectsOldWriter() {
+        val cache = AidenChatCache(root = tempFolder.newFolder())
+        val initial = fullChat("chat-1", "workspace-1", "Old title", canonicalRevision("old"))
+        val oldDetail = cache.reserveSummaryMutation("instance")
+        val page = cache.reserveSummaryMutation("instance")
+        assertTrue(cache.saveSummaries(listOf(AidenChatSummary.fromChat(initial.copy(title = "New page"))), "instance", writeToken = page))
+        assertTrue(cache.saveChat(initial, "instance", oldDetail))
+        assertEquals("Old title", cache.loadChat("instance", initial.id)?.title)
+        assertEquals("New page", cache.loadSummaries("instance")?.single()?.title)
+        val oldRequest = cache.reserveSummaryMutation("instance")
+        cache.reserveSummaryMutation("instance") // New request can fail without admitting the old writer.
+        assertFalse(cache.saveSummaries(emptyList(), "instance", writeToken = oldRequest))
+        assertEquals("New page", cache.loadSummaries("instance")?.single()?.title)
+        assertTrue(cache.saveSummaries(emptyList(), "other", writeToken = oldRequest))
     }
 
     @Test
