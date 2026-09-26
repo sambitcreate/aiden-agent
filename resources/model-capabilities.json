@@ -30884,6 +30884,45 @@
           "cache_write": 0
         }
       },
+      "xiaomi/mimo-v2.6-flash-uncensored:thinking": {
+        "id": "xiaomi/mimo-v2.6-flash-uncensored:thinking",
+        "name": "MiMo V2.6 Flash Uncensored Thinking",
+        "description": "MiMo V2.6 Flash Uncensored with maximum thinking enabled. Supports a 1M-token context window and tool calling.",
+        "family": "mimo",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-09-26",
+        "last_updated": "2026-09-26",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "input": 1048576,
+          "output": 65536
+        },
+        "cost": {
+          "input": 0.5,
+          "output": 1.5,
+          "cache_read": 0.275
+        }
+      },
       "xiaomi/mimo-v2.6-pro-ultraspeed": {
         "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
         "name": "MiMo V2.6 Pro UltraSpeed",
@@ -71896,8 +71935,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 943718
+          "context": 1040000,
+          "output": 384000
         },
         "cost": {
           "input": 0.3,
@@ -81393,7 +81432,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 65536
+          "output": 235929
         },
         "cost": {
           "input": 0.26,
@@ -107995,12 +108034,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 384000
         },
         "cost": {
-          "input": 0.3,
-          "output": 1.2,
-          "cache_read": 0.006
+          "input": 0.035,
+          "output": 0.29,
+          "cache_read": 0.001
         }
       },
       "deepseek/deepseek-v4-flash-vision-exp": {
@@ -117545,7 +117584,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 65536
+          "output": 235929
         },
         "cost": {
           "input": 0.26,
