@@ -8,7 +8,7 @@ const chatPane = readFileSync(new URL("../../main/chat-pane.tsx", import.meta.ur
 test("Memory settings expose authoritative global and workspace switches", () => {
   assert.match(settings, /aria-label="Use memory globally"/u);
   assert.match(settings, /workspacesApi\.update\(workspace\.id, \{ memoryEnabled: enabled \}\)/u);
-  assert.match(settings, /Existing approved[\s\S]*stay on this Mac/u);
+  assert.match(settings, /Existing approved[\s\S]*stay on this device/u);
   assert.match(settings, /Bot memory has its own scope/u);
   assert.match(settings, /<\/FieldSet>\s*<Text as="p"[\s\S]*Existing approved/u);
   assert.match(settings, /<\/FieldSet>\s*<Text as="p"[\s\S]*Workspace switches affect/u);

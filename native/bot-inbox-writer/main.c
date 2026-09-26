@@ -1,4 +1,8 @@
+#ifdef __APPLE__
 #define _DARWIN_C_SOURCE 1
+#else
+#define _GNU_SOURCE
+#endif
 
 #include <errno.h>
 #include <fcntl.h>

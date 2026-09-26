@@ -367,7 +367,7 @@ export class SubagentEventProjector {
     const error = errorProjection.text || "The child could not complete this task.";
     const projectionNotices = mergeProjectionNotices(
       current.projectionNotices,
-      ((result.status === "completed" && result.summaryTruncated === true) ||
+      (result.summaryTruncated === true ||
         terminalProjection.truncated) &&
         "report_truncated",
       (terminalProjection.displayFiltered ||

@@ -54,8 +54,14 @@ function defaultStorageBinary(): string {
   return path.resolve(process.cwd(), "build", "native", "aiden-subagent-run-store");
 }
 
-function safeGeneration(value: string): boolean {
-  return value === "missing" || /^[0-9a-f]+(?:-[0-9a-f]+){8}$/u.test(value);
+export function isSubagentRunStoreGeneration(value: unknown): value is SubagentRunStoreGeneration {
+  // macOS includes birth-time seconds/nanoseconds in addition to the seven
+  // identity fields available from Linux stat. Accept only those two exact
+  // native wire shapes; an intermediate field count is never canonical.
+  return (
+    value === "missing" ||
+    (typeof value === "string" && /^[0-9a-f]+(?:(?:-[0-9a-f]+){6}|(?:-[0-9a-f]+){8})$/u.test(value))
+  );
 }
 
 class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
@@ -237,11 +243,13 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
     }
     if (response.startsWith("oversize ")) {
       const generation = response.slice(9);
-      if (!safeGeneration(generation)) throw new SubagentRunStoreStorageError("io_failed");
+      if (!isSubagentRunStoreGeneration(generation)) throw new SubagentRunStoreStorageError("io_failed");
       return { status: "oversized", contents: undefined, generation };
     }
-    const match = /^data ([0-9a-f]+(?:-[0-9a-f]+){8}) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
-    if (!match) throw new SubagentRunStoreStorageError("io_failed");
+    const match = /^data (\S+) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
+    if (!match || !isSubagentRunStoreGeneration(match[1])) {
+      throw new SubagentRunStoreStorageError("io_failed");
+    }
     return {
       status: "data",
       generation: match[1],
@@ -250,12 +258,14 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
   }
 
   async write(expected: SubagentRunStoreGeneration, contents: string): Promise<string> {
-    if (!safeGeneration(expected)) throw new SubagentRunStoreStorageError("invalid_input");
+    if (!isSubagentRunStoreGeneration(expected)) throw new SubagentRunStoreStorageError("invalid_input");
     const response = await this.request(
       `write ${expected} ${Buffer.from(contents, "utf8").toString("base64")}`,
     );
-    const match = /^ok ([0-9a-f]+(?:-[0-9a-f]+){8})$/u.exec(response);
-    if (!match) throw new SubagentRunStoreStorageError("io_failed");
+    const match = /^ok (\S+)$/u.exec(response);
+    if (!match || !isSubagentRunStoreGeneration(match[1])) {
+      throw new SubagentRunStoreStorageError("io_failed");
+    }
     return match[1];
   }
 

@@ -19,7 +19,7 @@ test("Gemini setup offers accessible borderless radio cards and a concrete priva
   assert.match(dialogSource, /streams[\s\S]*?your recording to Google/u);
   assert.match(dialogSource, /only after you approve a retry/u);
   assert.match(dialogSource, /another Gemini charge/u);
-  assert.match(dialogSource, /Stored encrypted on[\s\S]*?this Mac/u);
+  assert.match(dialogSource, /Stored encrypted on[\s\S]*?this device/u);
   assert.match(dialogSource, /existing chats keep their pinned model/u);
   assert.match(dialogSource, /Accessibility is optional/u);
   assert.match(dialogSource, /Gemini does not need Screen Recording/u);

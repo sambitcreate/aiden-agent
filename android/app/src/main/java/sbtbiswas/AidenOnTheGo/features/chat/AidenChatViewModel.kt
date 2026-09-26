@@ -1222,10 +1222,10 @@ class AidenChatViewModel(
                 if (!capabilities.canWriteSchedules) {
                     "Schedule write access is required to approve this task."
                 } else {
-                    "Confirm this automation in Aiden on your Mac after reviewing its full access scope."
+                    "Confirm this automation in Aiden on your paired desktop after reviewing its full access scope."
                 }
             } else {
-                "This action must be confirmed in Aiden on your Mac."
+                "This action must be confirmed in the Aiden desktop app."
             }
             refreshApprovalAccess()
             return

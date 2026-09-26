@@ -23,7 +23,7 @@ function speechUsage(modelId: string, status: "completed" | "failed"): UsageRequ
   return unreportedUsageRecord({
     source: "voice-transcription",
     providerId: "local-voice",
-    providerLabel: "Paired Mac voice",
+    providerLabel: "Paired desktop voice",
     modelId,
     local: true,
     status,

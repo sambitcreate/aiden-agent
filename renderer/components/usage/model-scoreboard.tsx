@@ -55,7 +55,7 @@ export function ModelScoreboard({
             Top models
           </Text>
           <Text as="p" variant="small" color="secondary" className="mt-0.5">
-            Private rankings from this Mac.
+            Private rankings from this device.
           </Text>
         </div>
         <Select value={metric} onValueChange={(value) => setMetric(value as UsageScoreMetric)}>
