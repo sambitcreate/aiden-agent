@@ -981,3 +981,14 @@ preparation exactly like desktop; catalog/lease failures map onto the remote
 error vocabulary instead of 500s; empty skill descriptions decode on all
 three platforms; Android persists the negotiated `skills:invoke` grant; and
 both composers pin the Unicode White_Space trigger grammar.
+
+## Desktop-configured Read Aloud follow-up — September 2026
+
+The user's approved `tts-v1` extension supersedes this plan's earlier exclusion
+of server TTS, only for explicit playback of the latest canonical assistant
+response using the paired desktop's separately enabled Gemini speech settings.
+iOS and Android never send arbitrary speech text or Google keys, and cannot
+enable/configure TTS. Native Settings shows status and desktop setup guidance;
+TODO: mobile configuration remains a future separately reviewed feature.
+The original `/speech` local transcription contract is unchanged. See the
+Gemini TTS plan and Remote API specification for replay, bounds and verification.

@@ -23,6 +23,8 @@ import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
+import { useReadAloud } from "../lib/tts-client";
+import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
@@ -43,6 +45,7 @@ import {
   subagentMcpMutationAllowLabel,
 } from "../components/subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
+import { SubagentRunGrantApproval } from "../components/subagent-run-grant-approval";
 import { FormFillApproval } from "../components/form-fill-approval";
 import {
   chatsApi,
@@ -50,6 +53,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  steerGeneration,
   stopDetachedGeneration,
   gitApi,
   workspacesApi,
@@ -143,6 +147,7 @@ import {
   isFormFillBatchApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
@@ -417,7 +422,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  // Closes busy admission in the same tick as Stop, before React re-renders.
+  const stopRequestedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    stopRequestedRef.current = isStoppingGeneration;
+  }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
+  // Read aloud: one controller per chat surface; main owns eligibility.
+  const { state: readAloudState, controller: readAloudController } = useReadAloud(chatId);
+  const readAloudRef = React.useRef(readAloudController);
+  readAloudRef.current = readAloudController;
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
   const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
@@ -1210,6 +1224,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (attachments.length > 0 || skillInvocation) {
           throw new Error("Side questions do not accept attachments or skills.");
         }
+        // A new turn revokes any active read-aloud job for this chat.
+        readAloudRef.current?.stop();
         const question = text.trim();
         setBtwView({
           requestId: "pending",
@@ -1235,6 +1251,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (chatMessageQueue(chatId).getSnapshot().messages.length === 0)
         chatMessageQueue(chatId).resume();
+      // A new turn revokes any active read-aloud job for this chat.
+      readAloudRef.current?.stop();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
@@ -1355,12 +1373,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
         }
       });
-      return;
+      return true;
     }
-    if (!generationRef.current || !canStopGeneration) return;
+    if (!generationRef.current || !canStopGeneration) return false;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
+    return true;
   }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
@@ -1416,6 +1435,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (stopRequestedRef.current) {
+        throw new Error("Aiden is stopping this response. Send your message after it stops.");
+      }
       messageQueue.add({
         id: createChatTurnId(),
         text,
@@ -1425,6 +1447,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     },
     [messageQueue],
+  );
+
+  const steerMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Steer requires text without attachments or a skill.");
+      }
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      await steerGeneration(streamId, text);
+    },
+    [isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const redirectMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Redirect requires text without attachments or a skill.");
+      }
+      if (
+        !(canStopGeneration || visibleDetachedProjection) ||
+        isStoppingGeneration ||
+        stopRequestedRef.current
+      ) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      const replacement = {
+        id: createChatTurnId(), text, attachments: [] as Attachment[],
+      };
+      messageQueue.replaceWith(replacement, () => {
+        const stopping = handleStop();
+        if (stopping) stopRequestedRef.current = true;
+        return stopping;
+      });
+    },
+    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -1904,6 +1964,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingShell =
     pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
+  const pendingRunGrantClaim =
+    typeof pendingDetails === "object" && pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-run-grant";
+  const pendingRunGrant = pending && isSubagentRunGrantApprovalDetails(pending.details)
+    ? pending.details : undefined;
+  const invalidPendingRunGrant = pendingRunGrantClaim && pendingRunGrant === undefined;
   const pendingFormFillClaim =
     typeof pendingDetails === "object" &&
     pendingDetails !== null &&
@@ -1916,6 +1983,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     invalidPendingWorkspaceWrite ||
     invalidPendingMcpMutation ||
     invalidPendingShell ||
+    invalidPendingRunGrant ||
     invalidPendingFormFill;
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
   React.useEffect(() => {
@@ -1986,6 +2054,82 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  // --- Read aloud wiring --------------------------------------------------
+  // Local candidate mirrors main's policy: the last assistant message after
+  // the latest user turn, while no live generation row is mounted. Main
+  // revalidates authoritatively on every start and segment.
+  const transcriptIdle = displayedStreamingText === null && !isStartingGeneration;
+  const readAloudCandidateId = React.useMemo(() => {
+    if (!transcriptIdle) return undefined;
+    let lastUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]!.role === "user") {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "assistant") {
+        // Never scan past a newer failed or empty response.
+        return message.providerFailure === undefined &&
+          (!message.timeline || message.timeline.status === "completed") && message.content.trim().length > 0
+          ? message.id : undefined;
+      }
+    }
+    return undefined;
+  }, [messages, transcriptIdle]);
+
+  React.useEffect(() => {
+    void readAloudController.refreshStatus(chatId);
+    return () => readAloudController.stop();
+  }, [chatId, readAloudCandidateId, readAloudController]);
+
+  const readAloudActive =
+    readAloudState.job?.kind === "read-aloud" &&
+    readAloudState.job.chatId === chatId &&
+    (readAloudState.busy || readAloudState.playing || readAloudState.paused);
+  const readAloudPhase: ReadAloudActionProps["phase"] = !readAloudState.status
+    ? "not-configured"
+    : !readAloudState.status.synthesisReady
+      ? "not-configured"
+      : readAloudActive || readAloudState.busy
+        ? readAloudState.paused
+          ? "paused"
+          : readAloudState.playing
+            ? "playing"
+            : "busy"
+        : readAloudState.error
+          ? "error"
+          : "ready";
+  const readAloudProps: ReadAloudActionProps | undefined = readAloudCandidateId &&
+    (!readAloudState.latestSource || readAloudState.latestSource.source?.messageId === readAloudCandidateId)
+    ? {
+        active: Boolean(readAloudActive || readAloudState.busy),
+        phase: readAloudPhase,
+        omissions: readAloudState.job?.omissions ?? [],
+        error: readAloudState.error?.message,
+        onActivate: () => {
+          const source = readAloudState.latestSource?.source;
+          if (!readAloudState.status?.synthesisReady) {
+            void navigate({ to: "/settings", search: { section: "tts" } });
+            return;
+          }
+          if (!source || source.messageId !== readAloudCandidateId) {
+            void readAloudController.refreshStatus(chatId);
+            return;
+          }
+          void readAloudController.start(source);
+        },
+        onStop: () => readAloudController.stop(),
+        onTogglePause: () => {
+          if (readAloudState.paused) void readAloudController.resume();
+          else void readAloudController.pause();
+        },
+      }
+    : undefined;
+  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+
   return (
     <>
       <ScrollArea
@@ -2052,7 +2196,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
-        scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
+        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
+        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
           <>
             <EventPresence
@@ -2092,6 +2237,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
                                 : pendingShell
                                   ? `${pendingShell.childLabel} wants to run a full-host command`
+                                  : pendingRunGrant
+                                    ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
                                   : `${toolLabel(pending.toolName)} needs approval`}
                         </Text>
                         <Text variant="small" color="secondary" as="p" className="mt-0.5">
@@ -2103,6 +2250,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? "Review this one exact external mutation before Aiden continues."
                                 : pendingShell
                                   ? "Review this one exact full-host command before Aiden continues."
+                                  : pendingRunGrant
+                                    ? "Review this grant for the entire subagent run."
                                   : "Review this one action before Aiden continues."}
                         </Text>
                       </div>
@@ -2130,6 +2279,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ) : pendingShell ? (
                       <SubagentShellApproval
                         details={pendingShell}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingRunGrant ? (
+                      <SubagentRunGrantApproval
+                        details={pendingRunGrant}
                         descriptionId={`approval-summary-${pending.approvalId}`}
                       />
                     ) : pendingFormFill ? (
@@ -2177,6 +2331,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                               ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
                               : pendingMcpMutation
                                 ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                                : pendingRunGrant
+                                  ? "Allow for run"
                                 : "Allow once"}
                         </Button>
                       ) : null}
@@ -2247,27 +2403,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
+                onSteer={draft ? undefined : steerMessage}
+                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
-                    canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                     returnFocus={() => composerRef.current}
-                    onSteer={(id) => {
-                      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
-                      messageQueue.move(id, 0);
-                      messageQueue.resume();
-                      handleStop();
-                    }}
                   />
                 }
                 onStop={() => {
-                  messageQueue.pause();
-                  handleStop();
+                  messageQueue.discard();
+                  if (handleStop()) stopRequestedRef.current = true;
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
                 canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
                 workspace={effectiveWorkspace}
@@ -2434,6 +2586,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             subagentsEnabled={environmentPanel.subagentsEnabled}
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
+            readAloudMessageId={readAloudCandidateId}
+            readAloud={readAloudProps}
             error={
               error ??
               (imageArtifactRecoveryUnavailable

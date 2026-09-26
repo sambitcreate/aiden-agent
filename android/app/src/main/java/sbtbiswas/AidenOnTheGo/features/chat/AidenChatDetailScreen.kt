@@ -148,6 +148,12 @@ fun AidenChatDetailScreen(
 
     val listState = rememberLazyListState()
 
+    val readAloudClient by coordinator.client.collectAsState()
+    val readAloud = remember(readAloudClient, chatId) {
+        AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
+            readAloudClient != null && coordinator.client.value === readAloudClient
+        }
+    }
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
@@ -157,6 +163,15 @@ fun AidenChatDetailScreen(
     var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+
+    LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
+        if (isStreaming || (readAloud.activeMessageId != null && readAloud.activeMessageId != chat?.messages?.lastOrNull()?.id)) readAloud.stop()
+    }
+    DisposableEffect(readAloud, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) readAloud.stop() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); readAloud.stop() }
+    }
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -242,6 +257,7 @@ fun AidenChatDetailScreen(
     }
 
     fun startVoiceInput() {
+        readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
             currentDraft = currentDraft,
@@ -475,11 +491,11 @@ fun AidenChatDetailScreen(
 
                 // Error Banner
                 AnimatedVisibility(
-                    visible = presentedError != null,
+                    visible = presentedError != null || readAloud.error != null,
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
-                    presentedError?.let { err ->
+                    (presentedError ?: readAloud.error)?.let { err ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -669,6 +685,14 @@ fun AidenChatDetailScreen(
                             onReply = onReplyMessage
                         )
                     } else {
+                        val readAloudEligible = !isStreaming &&
+                            serverInfo?.features?.contains("tts-v1") == true &&
+                            chat?.messages?.lastOrNull()?.id == message.id &&
+                            message.isReadAloudEligible
+                        // Remembered per message so settled rows stay skippable.
+                        val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
+                            { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
+                        }
                         AssistantMessageRow(
                             message = message,
                             position = pos,
@@ -679,6 +703,8 @@ fun AidenChatDetailScreen(
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
                             onReply = onReplyMessage,
+                            onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
+                            readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl
                         )
                     }
@@ -870,6 +896,8 @@ private fun AssistantMessageRow(
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onReply: (String) -> Unit,
+    onReadAloud: (() -> Unit)? = null,
+    readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit
 ) {
     val projection = if (isBotChat) {
@@ -1024,6 +1052,19 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        if (onReadAloud != null) {
+            Row {
+                IconButton(onClick = { onCopy(displayText) }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = palette.secondary)
+                }
+                IconButton(onClick = onReadAloud) {
+                    Icon(if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
+                        contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
+                        tint = palette.secondary)
+                }
+            }
+        }
+
     }
 }
 
@@ -1327,6 +1368,14 @@ private fun AidenTimelineCollapsibleCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+    val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
+    val allowsDisclosure = !compactOnly || timeline.issueCount > 0
+    val headline = if (compactOnly && !allowsDisclosure) {
+        timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
+            ?: AidenAgentActivityPresentation.summary(timeline)
+    } else {
+        AidenAgentActivityPresentation.summary(timeline)
+    }
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
@@ -1340,7 +1389,10 @@ private fun AidenTimelineCollapsibleCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+                    .then(
+                        if (allowsDisclosure) Modifier.clickable { isExpanded = !isExpanded }
+                        else Modifier
+                    )
             ) {
                 Icon(
                     imageVector = if (timeline.issueCount > 0) Icons.Default.Warning else Icons.Default.CheckCircle,
@@ -1350,21 +1402,23 @@ private fun AidenTimelineCollapsibleCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = AidenAgentActivityPresentation.summary(timeline),
+                    text = headline,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = palette.secondary,
-                    modifier = Modifier.size(18.dp)
-                )
+                if (allowsDisclosure) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            if (isExpanded) {
+            if (allowsDisclosure && isExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
                 Spacer(modifier = Modifier.height(6.dp))

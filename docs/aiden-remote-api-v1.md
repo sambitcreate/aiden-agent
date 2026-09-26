@@ -50,6 +50,7 @@ Initial capability IDs:
 | `agents:read` | Read the bounded delegated-agent roster projection and receive `agents_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `questions:respond` | Resolve `ask_user_question` prompts owned by this device/stream and receive `question_required` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `skills:invoke` | Read the chat-scoped invocable-skill catalog and redeem opaque skill invocation leases on turn start. Granted only after explicit client negotiation at pairing or post-pairing. |
+| `simulators:control` | Desktop-only. List, open, shut down, configure and stream the serving Mac's iOS Simulators through `/simulators*`. Negotiable post-pairing only by `mac` and `linux` devices, advertised in `serverCapabilities` only to them, and effective only while the serving owner has turned on Share with paired Macs. Stripped from any persisted phone or tablet record. |
 
 No capability can enable Computer Use, mint the reserved Assistant identity, select a hidden unattended mode, read provider/MCP credentials, accept a client-authored shell/Git command, or widen a regular Workspace chat's tool authority. This prohibits a generic remote terminal or command endpoint. It does not prohibit the existing Mac-owned agent runtime from invoking its shell tool during an authenticated Bot turn after the Bot policy, chat reduction, device grant, OS/global availability, approvals, and fresh effect lease all allow it.
 
@@ -146,7 +147,7 @@ Forbidden: task descriptions, owner data, private journal or reducer state, meta
 
 ### Chat agent roster
 
-Allowed: `version` (exactly 1), `chatId`, optional `turnId` identifying the active or most recent public turn (required while agents are listed), optional `previousTurns` containing at most 16 unique `{turnId, startedAt}` selectors in newest-first order (excluding the current `turnId`), `availability`, `epoch`, `revision`, `updatedAt`, and a bounded `agents` array. Each agent carries a projection-minted `agentId` using the `[A-Za-z0-9._:-]` grammar, optional `parentAgentId` referencing an agent in the same roster, `depth` 1–8 (a parent is present exactly when depth is at least 2, and never the agent itself), positive `revision`, closed `role` (`scout`, `planner`, `reviewer`), bounded `label`/`taskPreview`, closed `state` (`queued`, `starting`, `running`, `needs_attention`, `completed`, `failed`, `timed_out`, `interrupted`, `stopped`, `unknown`), optional bounded `activity`, strict RFC 3339 `startedAt`/`updatedAt` (`updatedAt` never precedes `startedAt`), `finishedAt` exactly for terminal states, bounded `modelId`, non-negative `turns`/`tools`/`tokens`, optional closed `milestones` and `notices` lists (`report_truncated` is a terminal-only notice), and optional bounded `error`/`warnings` that may be non-empty only on terminal states.
+Allowed: `version` (exactly 1), `chatId`, optional `turnId` identifying the active or most recent public turn (required while agents are listed), optional `previousTurns` containing at most 16 unique `{turnId, startedAt}` selectors in newest-first order (excluding the current `turnId`), `availability`, `epoch`, `revision`, `updatedAt`, and a bounded `agents` array. Each agent carries a projection-minted `agentId` using the `[A-Za-z0-9._:-]` grammar, optional `parentAgentId` referencing an agent in the same roster, `depth` 1–8 (a parent is present exactly when depth is at least 2, and never the agent itself), positive `revision`, closed `role` (`scout`, `planner`, `reviewer`, `implementer`), bounded `label`/`taskPreview`, closed `state` (`queued`, `starting`, `running`, `needs_attention`, `completed`, `failed`, `timed_out`, `interrupted`, `stopped`, `unknown`), optional bounded `activity`, strict RFC 3339 `startedAt`/`updatedAt` (`updatedAt` never precedes `startedAt`), `finishedAt` exactly for terminal states, bounded `modelId`, non-negative `turns`/`tools`/`tokens`, optional closed `milestones` and `notices` lists (`report_truncated` is a terminal-only notice), and optional bounded `error`/`warnings` that may be non-empty only on terminal states.
 
 Forbidden: private run/session/group/generation/child/workspace identifiers, child transcripts or histories, prompts or instructions, tool arguments or results, raw reasoning content, filesystem paths, credentials, and every context-private field enumerated by `x-aiden-context-private-response-fields` (which applies to this schema). The roster never grants access to another device's stream or cancellation endpoint; `turnId` is a public selection key, not a stream authority.
 
@@ -176,7 +177,7 @@ Pairing accepts `iphone`, `ipad`, `mac`, and `linux` device types. This additive
 - `POST /pairing/exchange`: exchange a high-entropy single-use secret for device/instance IDs, bearer credential, exact device capability grants, endpoint, and P-256 SPKI SHA-256 fingerprint. A client may set `acceptsDisplayName: true` to receive the optional bounded server display name; the server omits that additive key for strict legacy v1 decoders. A client must separately set `acceptsBotCapabilities: true` before the Mac may issue `bot:read` or `bot:write`, and `acceptsProgressCapabilities: true` before the Mac may issue `tasks:read` or `agents:read`. Absence or `false` preserves the complete legacy grant vocabulary and never upgrades an existing device. The display name is presentation metadata only and newer clients still verify `instanceId` as identity.
 - `GET /server`: authenticated server projection. Its required `capabilities` array is the authenticated device's exact negotiated grants. The additive `deviceName` field is the presentation-only label currently stored for the calling device, allowing newer clients to refresh a stale generic label without writing on every connection. The bounded additive `features` array advertises optional API surfaces independently of device grants or vocabulary opt-in; `chat-summaries-v1` means the authenticated transcript-free summary route is available, `chat-tasks-v1`/`chat-agents-v1` mean the chat-scoped progress reads and event channel are implemented, `chat-run-input-v1` means the mid-flight stream-input mutation route is implemented, and `chat-question-prompts-v1` means the pending-question snapshot and response routes are implemented, and `chat-skills-v1` means the chat-scoped skill catalog route and turn-start lease redemption are implemented. Feature tokens grant no authority: progress reads still require the matching negotiated grant, and stream inputs still require `chat:write`. Clients ignore other bounded feature values and retain the legacy full-chat list fallback when `chat-summaries-v1` is absent. `serverCapabilities` is emitted only when the paired device persistently opted into an additive capability vocabulary—`acceptsBotCapabilities: true` at pairing, `acceptsProgressCapabilities: true` at pairing, or a successful `POST /device/capabilities` upgrade; it contains the server-supported inventory independently of the device's grants. A Bot-aware device without `bot:read` may therefore learn that its Mac supports Bots but still cannot infer any Bot identity or chat. A legacy device that happens to contain a later grant never receives the additive field unless it negotiated the vocabulary.
 - `PATCH /device/identity`: authenticated device-label refresh with exact body `{ "name": string }`. It requires `server:read`, updates only the calling credential's bounded display label, and returns the normalized label. The label is presentation metadata—not an authentication or cross-Mac identity key. Older Macs may omit this additive route, so clients treat an unavailable refresh as non-fatal.
-- `POST /device/capabilities`: additive post-pairing capability negotiation with exact body `{ "accepts": ["tasks:read", "agents:read"] }` (either member may be omitted). It requires `server:read`, accepts only members of the progress vocabulary—duplicates, unknown capabilities, and legacy or Bot capability names fail closed with `invalid_request`—and returns the calling device's complete updated `capabilities` grant list. Negotiating any progress capability also opts the device into the additive `serverCapabilities` projection on later `GET /server` reads. Legacy and Bot grants remain pairing-bound; this route can never add, widen, or remove them, and it never mints authority for another device. Older Macs may omit this additive route, so clients treat an unavailable upgrade as non-fatal and keep progress surfaces hidden.
+- `POST /device/capabilities`: additive post-pairing capability negotiation with exact body `{ "accepts": ["tasks:read", "agents:read"] }` (either member may be omitted). It requires `server:read`, accepts only members of the progress vocabulary plus the desktop-only `simulators:control`—duplicates, unknown capabilities, and legacy or Bot capability names fail closed with `invalid_request`—and returns the calling device's complete updated `capabilities` grant list. Negotiating any progress capability also opts the device into the additive `serverCapabilities` projection on later `GET /server` reads. Legacy and Bot grants remain pairing-bound; this route can never add, widen, or remove them, and it never mints authority for another device. Older Macs may omit this additive route, so clients treat an unavailable upgrade as non-fatal and keep progress surfaces hidden. A paired `mac` or `linux` device may also request the desktop-only `simulators:control`; any other device type receives `403 capability_denied` (checked before the feature, so a phone never learns whether it exists), and a Mac without the simulator feature returns `404 not_found`. The device type is the one declared at owner-approved pairing, so "desktop-only" rests on that pairing trust plus the serving owner's sharing consent. Negotiating only `simulators:control` does not opt the device into the progress vocabulary. Downgrade note: an older Aiden cannot load a device record holding `simulators:control`, so downgrading the serving Mac after a desktop negotiated it requires re-pairing that desktop.
 
 Device enumeration/revocation remains desktop-local in v1 unless a later explicit capability is added.
 
@@ -296,6 +297,18 @@ File handles are separate from browser handles and bind instance/device/workspac
 
 Git mutations reuse the workspace operation registry and mutation gate plus canonical common-directory serialization. Commit/push remain repository-root-only; nested workspaces expose a read/diff-only reason. Consequential actions carry an explicit foreground-confirmation field and return stable operation/snapshot IDs. Disconnect does not abandon an operation owner. There is no fetch, pull, stage/unstage, discard, generic Git, or terminal endpoint.
 
+### Paired-Mac simulators
+
+Desktop-to-desktop only; phones and tablets never see these routes or their capability. Every route requires `simulators:control` on a `mac` or `linux` device; a device without the grant receives `403` before any `404 not_found` for a Mac without the simulator feature. The serving Mac's owner must turn on Share with paired Macs (which requires simulator streaming consent); until then the listing reports `sharing: false` with no devices and every control fails closed. Device-scoped requests must name a simulator in the current listing.
+
+- `GET /simulators`: sharing flag, host status, bounded detail, and at most 256 simulators.
+- `POST /simulators/open|shutdown|settings`: body `{ "deviceId": string }`.
+- `POST /simulators/action`: one control action; the serving Mac always runs it on its own simulators.
+- `GET|HEAD /simulators/hub/{hubPath}`: relays the Simulator tab's allowlisted loopback hub paths (stream page, frames, device list). `hubPath` spans several path segments. A WebSocket upgrade on this path reaches the per-device helper socket (`vendor/serve-sim/helper/ws?device=`) or the device list socket (`api/devices/ws`); it authenticates the same bearer credential, rejects any `Origin` header, and is admitted only for listed devices. Redirect `Location` headers are never relayed. A device may hold at most 8 open relays; more return `429 handle_capacity`.
+- `POST /simulators/hub/vendor/serve-sim/api/screenshot`: body `{ "udid": string }` bounded to 1 KiB; only `udid` is forwarded.
+
+The hub's exec route is never relayed and the hub stays bound to loopback. Relayed streams close when the owner turns sharing off, revokes streaming consent, or revokes the device. The calling Mac contacts paired Macs only from a user-driven refresh or open, never from background polling, and its agent tools stay local-only.
+
 ### Scheduled tasks
 
 - `GET|POST /scheduled-tasks`
@@ -383,3 +396,74 @@ When moving a phone between Macs, select the intended saved Mac before starting 
 ## 10. Contract change process
 
 Change this document, OpenAPI, TypeScript contract constants/types, shared fixtures, and Swift/TypeScript fixture tests in one phase. Additive changes increment `contractRevision`. Breaking changes require `/v2`. No handler may ship an undocumented route or field.
+
+
+## Desktop-configured Read Aloud (`tts-v1`)
+
+This additive feature is advertised by authenticated `GET /server`. It is separate
+from `/speech` (Parakeet transcription). It uses the desktop's opt-in, voice,
+model, reading policy and encrypted Google credential. There is no remote
+settings, key, voice-management, preview or cache-clear endpoint. TODO: mobile
+configuration is a future feature requiring its own reviewed authority contract.
+
+- `GET /read-aloud`: read-only readiness (`enabled`, `ready`, `settingsRevision`,
+  null `source`/`job`), requiring `chat:read`.
+- `GET /chats/{chatId}/read-aloud`: readiness, latest main-issued source reference,
+  and this device/chat session's current or retained job; requires chat read and
+  retained Bot-chat authorization where applicable.
+- `POST /chats/{chatId}/read-aloud`: explicit Play. The strict body is
+  `{requestId, source: {chatId, messageId, sourceRevision}, settingsRevision}`.
+  Requires `chat:write` and Bot write authorization when applicable. Canonical
+  desktop text is resolved in main; arbitrary text is never accepted. Returns
+  the job snapshot, not audio. POSTs are not automatically retried.
+- `POST /chats/{chatId}/read-aloud/stop`: `{requestId}` cancels only that device's
+  current matching playback intent. Earlier/later requests cannot stop each
+  other. Stop-before-start is remembered so request reordering cannot rebill.
+- `GET /chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}`: owner- and
+  chat-authorized continuation reads. Returns `bytesBase64`, `mimeType`,
+  `sampleRate`, `channels`, `segmentBytes`, `nextOffset`, `complete`. WAV is
+  24 kHz mono; each read is at most 64 KiB, a segment at most 8 MiB, and the
+  whole server session cache at most 32 MiB. No audio URLs or disk caches.
+
+Each source is revalidated before generation dispatch and remote audio reads;
+paired-device revocation and retained Bot authorization remain authoritative.
+Remote playback cannot take over another owner's active playback slot. Native
+clients release it after audible completion, Stop, navigation or backgrounding;
+server inactivity also releases it after two minutes without requests. Server
+transport restarts preserve request/soundbite identities; process/session
+invalidation is a retention boundary. A revoked session cannot be revived.
+
+Replay reuses a completed soundbite for the same canonical response and effective
+speech settings, with no extra provider call or usage record. Stop preserves
+completed bytes. Evicted, cleared, cancelled or possibly-billed failed identities
+never silently regenerate. Clients poll bounded status, validate each continuation,
+keep only a bounded segment in memory, and stop on stale source, access change,
+interruption or microphone use. Settings on both clients show desktop setup guidance,
+not an enable toggle. Existing native transcription controls are unchanged.
+
+
+### Review hardening: accounting and bounded playback sessions
+
+Every dispatched synthesis segment is recorded once in the desktop usage store
+as `text-to-speech`, including failed/timed-out/cancelled in-flight requests.
+Replay and preflight rejection do not add usage. Missing/incomplete token reports
+remain unmetered and speech cost stays unavailable, never inferred as free.
+Native usage totals disclose unknown hosted costs using existing coverage fields.
+
+Unary synthesis accepts only the 24 kHz mono PCM16 WAV format consumed by all
+three clients; raw L16 and incompatible WAV layouts fail before retention.
+Native waiting uses a 120-second no-progress watchdog, reset when another segment
+becomes ready, rather than imposing a 15-minute total-job limit.
+
+Status and missing-audio reads do not allocate playback sessions. The active
+session map is capped at 256; capacity pressure reclaims sessions idle for more
+than two minutes, and revocation immediately releases its records/audio. Separate
+bounded SHA-256 intent ledgers (16,384 entries each for sources, requests and
+cancellations) preserve anti-rebilling protection across reclamation. A previously
+accepted or uncertain source from a reclaimed session returns unavailable,
+conservatively even if speech settings changed. Known unbilled preflight
+rejections release their reservations, allowing a corrected request after
+reclamation. Reservations are reference-counted: one rejected concurrent start
+cannot erase another pending or accepted start's protection. Ledger exhaustion
+fails closed for new intents; it never forgets a billed attempt merely to admit
+another one.

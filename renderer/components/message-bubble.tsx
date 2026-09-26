@@ -6,6 +6,8 @@ import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
+import { MessageActions } from "./message-actions";
+import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import { MessageAttachments } from "./message-attachments";
@@ -22,6 +24,8 @@ export interface MessageBubbleProps {
   /** Split assistant prose renders one whole-response copy action on its tail. */
   showCopy?: boolean;
   copyText?: string;
+  /** Read-aloud action for the latest eligible whole response. */
+  readAloud?: ReadAloudActionProps;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -46,6 +50,7 @@ export function MessageBubble({
   onStreamHandoffComplete,
   showCopy = true,
   copyText,
+  readAloud,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
@@ -97,16 +102,11 @@ export function MessageBubble({
           <Markdown content={content} />
         )}
         {content && showCopy ? (
-          <div
-            className={`mt-1 ${streaming && !streamComplete ? "invisible" : ""}`}
-            aria-hidden={streaming && !streamComplete}
-          >
-            <CopyButton
-              text={copyText ?? content}
-              label="Copy message"
-              className="-ml-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-            />
-          </div>
+          <MessageActions
+            copyText={copyText ?? content}
+            readAloud={readAloud}
+            hidden={Boolean(streaming && !streamComplete)}
+          />
         ) : null}
       </div>
     </div>

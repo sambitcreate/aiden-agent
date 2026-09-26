@@ -4,9 +4,12 @@ import { readFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   type SubagentShellApprovalDetails,
+  type SubagentRunGrantApprovalDetails,
 } from "../shared/assistant.js";
 import { SubagentShellApproval } from "./subagent-shell-approval.js";
+import { SubagentRunGrantApproval } from "./subagent-run-grant-approval.js";
 
 const details: SubagentShellApprovalDetails = {
   kind: "subagent-shell",
@@ -56,4 +59,29 @@ test("chat approval surface claims shell details before generic approval and kee
   assert.match(source, /invalidPendingShell/u);
   assert.match(source, /SubagentShellApproval/u);
   assert.ok(source.indexOf("ref={approvalDenyRef}") < source.indexOf('variant="accent"'));
+});
+
+test("run grant card states its whole-run scope and rejects malformed host claims", async () => {
+  const grant: SubagentRunGrantApprovalDetails = {
+    kind: "subagent-run-grant", lane: "shell", runId: "run-1",
+    childLabel: "Implement checks", workspaceLabel: "Project",
+    worktreeLabel: null, isManagedWorktree: false,
+    workspaceRevisionPrefix: "a".repeat(12), fullHostAccess: true, noRollback: true,
+  };
+  assert.equal(isSubagentRunGrantApprovalDetails(grant), true);
+  assert.equal(isSubagentRunGrantApprovalDetails({ ...grant, fullHostAccess: false }), false);
+  assert.equal(isSubagentRunGrantApprovalDetails({ ...grant, extra: "x" }), false);
+  assert.equal(isSubagentRunGrantApprovalDetails({ ...grant, childLabel: "bad\u202ename" }), false);
+  const shellHtml = renderToStaticMarkup(
+    <SubagentRunGrantApproval details={grant} descriptionId="grant-description" />,
+  );
+  assert.match(shellHtml, /Later commands will not ask again/u);
+  assert.match(shellHtml, /not OS sandboxed/u);
+  const writeHtml = renderToStaticMarkup(
+    <SubagentRunGrantApproval details={{ ...grant, lane: "write", fullHostAccess: false, noRollback: false }} descriptionId="write-description" />,
+  );
+  assert.match(writeHtml, /Later file changes will not ask again/u);
+  const source = await readFile(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
+  assert.match(source, /isSubagentRunGrantApprovalDetails\(pending\.details\)/u);
+  assert.match(source, /Allow for run/u);
 });

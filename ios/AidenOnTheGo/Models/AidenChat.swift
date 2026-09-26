@@ -16,6 +16,10 @@ enum AidenChatRole: String, Codable, Sendable {
 }
 
 struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
+    var isReadAloudEligible: Bool {
+        role == .assistant && outcome == nil && (timeline == nil || timeline?.status == .completed)
+            && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     let id: String
     let role: AidenChatRole
     let text: String
@@ -583,6 +587,13 @@ enum AidenAgentActivityPresentation {
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
     ]
+
+    /// Exactly one compaction: its line carries every metric. Repeated compactions
+    /// keep the step list so each run's metrics stay reachable.
+    static func isCompactContextOnly(_ steps: [AidenAgentStep]) -> Bool {
+        guard steps.count == 1, let only = steps.first else { return false }
+        return only.kind == .tool && only.toolName == "compact_context"
+    }
 
     static func duration(_ milliseconds: Double?) -> String {
         guard let milliseconds, milliseconds >= 2_000 else { return "briefly" }
@@ -1510,6 +1521,11 @@ struct AidenUsageTokens: Codable, Equatable, Sendable {
 }
 
 struct AidenUsageTotals: Codable, Equatable, Sendable {
+    var hostedCostSummary: String {
+        if unpricedHostedRequests > 0 && costedRequests == 0 { return "Cost unavailable" }
+        let tracked = hostedCostUsd.formatted(.currency(code: "USD"))
+        return unpricedHostedRequests > 0 ? "\(tracked) tracked; \(unpricedHostedRequests) requests unpriced" : tracked
+    }
     let requests: Int
     let completedRequests: Int
     let failedRequests: Int

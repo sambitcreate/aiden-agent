@@ -1,3 +1,5 @@
+import { ttsService } from "./tts/service-main.js";
+import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -116,6 +118,7 @@ import {
 } from "./bot-tool-authority.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { simulatorShareRelay } from "./devices/device-share.js";
 import {
   createBotInboxProjectionService,
   mergeBotInboxActivityPreviews,
@@ -383,6 +386,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
+        readAloud: AidenRemoteTtsService;
         bots: AidenRemoteBotService;
         botNotice: {
           status: typeof botApplicationService.noticeStatus;
@@ -391,6 +395,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }>
     | undefined;
   let workspaceApiInstanceId: string | undefined;
+  let activeReadAloud: AidenRemoteTtsService | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
   let activeProgress: AidenRemoteChatProgressService | undefined;
@@ -406,6 +411,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    simulators: simulatorShareRelay,
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -751,6 +757,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
+          activeReadAloud?.close();
+          const readAloud = new AidenRemoteTtsService(ttsService);
+          activeReadAloud = readAloud;
           return {
             instanceId,
             workspaceBrowser,
@@ -765,6 +774,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             memorySettings,
             usage: usageStore,
             speech,
+            readAloud,
             bots,
             botNotice: {
               status: (deviceId) => botApplicationService.noticeStatus(deviceId),
@@ -774,7 +784,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   acknowledgement,
                 ),
             },
-            settle: () => streams.settlePersistence(),
+            settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
               browser: workspaceBrowser,
@@ -785,7 +795,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           };
         })();
       }
-      return workspaceApi;
+      const api = await workspaceApi;
+      api.readAloud.resume();
+      return api;
     },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
@@ -798,13 +810,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     revokeDevice: async (deviceId) => {
+      activeReadAloud?.revokeDevice(deviceId);
       activeProgress?.revokeDevice(deviceId);
+      simulatorShareRelay.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
         chats: activeChats,
         workspaceOwners,
       }, deviceId);
+      // A relay admitted between the first close and the revocation fence is closed here.
+      simulatorShareRelay.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       await botApplicationService.revokeNoticeAudience(deviceId);

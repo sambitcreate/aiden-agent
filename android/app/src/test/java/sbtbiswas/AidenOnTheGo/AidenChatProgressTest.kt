@@ -122,9 +122,31 @@ class AidenChatProgressTest {
         assertEquals(3, tasks.tasks.size)
         assertEquals(AidenChatTaskStatus.IN_PROGRESS, tasks.tasks[1].status)
         assertEquals(2, agents.agents.size)
-        assertEquals(AidenChatAgentRole.SCOUT, agents.agents.first().role)
+        assertEquals(AidenChatAgentRole.IMPLEMENTER, agents.agents.first().role)
         assertEquals(2, agents.agents[1].depth)
         assertEquals(2, agents.previousTurns.size)
+    }
+
+    @Test
+    fun implementerAgentRoleDecodesFromMacRoster() {
+        val base = fixtureRoot().getValue("agentRoster").jsonObject
+        val agents = base.getValue("agents").jsonArray
+        val first = agents.first().jsonObject
+        val implementer = buildJsonObject {
+            first.forEach { (key, value) -> put(key, value) }
+            put("role", "implementer")
+        }
+        val roster = buildJsonObject {
+            base.forEach { (key, value) -> put(key, value) }
+            put("agents", buildJsonArray {
+                add(implementer)
+                add(agents[1])
+            })
+        }
+        assertEquals(
+            AidenChatAgentRole.IMPLEMENTER,
+            AidenChatProgressCodec.parseAgentRoster(roster).agents.first().role
+        )
     }
 
     @Test

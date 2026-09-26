@@ -729,6 +729,8 @@ export interface AppSettings {
   telegramActiveProfile?: string;
   /** Provision and route private-chat topics to explicit Aiden workspace targets. */
   telegramThreadedMode?: boolean;
+  /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
+  tts?: import("../../renderer/shared/tts.js").TtsSettingsV1;
 }
 
 export interface TelegramProfileSettings {
@@ -887,6 +889,8 @@ export interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  /** Accepted Steer text Pi never read into the visible chat; the renderer restores it to the draft. */
+  undeliveredGuidance?: string[];
 }
 export interface ChatError {
   streamId: string;
@@ -897,6 +901,7 @@ export interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 export const MAX_CONFIG_ID_LENGTH = 256;
 export const MAX_PROVIDER_BASE_URL_LENGTH = 4_096;

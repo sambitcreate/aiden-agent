@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
   AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
   AIDEN_REMOTE_ERROR_CODES,
@@ -90,13 +91,19 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
+// Simulator control is a desktop-to-desktop grant: pairing never issues it and
+// phones are never told it exists, so the shared mobile fixture omits it.
+const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
+  (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+);
+
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   assert.equal(fixture.contractRevision, 14);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
-  assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
-  assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
+  assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.equal(fixture.server.features.includes("chat-run-input-v1"), true);
@@ -302,6 +309,16 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/mcp-servers",
     "/memory/settings",
     "/scheduled-tasks/settings",
+    "/simulators",
+    "/simulators/open",
+    "/simulators/shutdown",
+    "/simulators/settings",
+    "/simulators/action",
+    "/simulators/hub/{hubPath}",
+    "/read-aloud",
+    "/chats/{chatId}/read-aloud",
+    "/chats/{chatId}/read-aloud/stop",
+    "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -330,7 +347,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     ).capabilities,
     "PairingExchangeResponse capabilities",
   );
-  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, MOBILE_CAPABILITIES);
   const serverSchema = record(schemas.Server, "Server");
   const serverProperties = record(
     serverSchema.properties,

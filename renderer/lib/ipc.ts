@@ -1,5 +1,13 @@
 import type { CompactionEngine } from "../shared/compaction";
-// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
+import type {
+  TtsJobSnapshot,
+  TtsSafeError,
+  TtsServiceEvent,
+  TtsSettingsV1,
+  TtsSourceRef,
+} from "../shared/tts";
+
+type TtsSettings = TtsSettingsV1;// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
   AppSettings,
@@ -150,6 +158,10 @@ import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemotePairingBootstrapView,
@@ -174,6 +186,19 @@ import type {
   ChatPullRequestView,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import {
+  parseDeviceServiceState,
+  parseDeviceSettings,
+  parseDeviceStreamGrant,
+  parseDeviceToolchainState,
+  type DeviceActionInput,
+  type DeviceConsentKind,
+  type DeviceServiceState,
+  type DeviceSession,
+  type DeviceSettings,
+  type DeviceStreamGrant,
+  type DeviceToolchainState,
+} from "../shared/devices";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
@@ -748,6 +773,70 @@ export const browserApi = {
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
+async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
+  const toolchain = parseDeviceToolchainState(await invoke<unknown>(channel));
+  if (!toolchain) throw new Error("The simulator tool versions were invalid.");
+  return toolchain;
+}
+
+async function invokeDeviceState(channel: string, ...args: unknown[]): Promise<DeviceServiceState> {
+  const state = parseDeviceServiceState(await invoke<unknown>(channel, ...args));
+  if (!state) throw new Error("The simulator state response was invalid.");
+  return state;
+}
+
+async function invokeDeviceSettings(channel: string, ...args: unknown[]): Promise<DeviceSettings> {
+  const settings = parseDeviceSettings(await invoke<unknown>(channel, ...args));
+  if (!settings) throw new Error("The simulator settings response was invalid.");
+  return settings;
+}
+
+export const devicesApi = {
+  getState: () => invokeDeviceState("devices:get-state"),
+  setConsent: (kind: DeviceConsentKind, granted: boolean) =>
+    invokeDeviceState("devices:consent", kind, granted),
+  /** Refreshes this Mac and paired Macs; `"local"` never contacts paired Macs. */
+  refresh: (scope?: "local") =>
+    scope ? invokeDeviceState("devices:refresh", scope) : invokeDeviceState("devices:refresh"),
+  /** Contacts paired Macs only when the user asks. */
+  refreshPeers: () => invokeDeviceState("devices:refresh-peers"),
+  open: (input: { chatId: string; deviceId: string; hostId?: string }) =>
+    invoke<DeviceSession>("devices:open", input),
+  close: (input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }) =>
+    invoke<void>("devices:close", input),
+  action: (input: DeviceActionInput) => invokeDeviceSettings("devices:action", input),
+  settings: (input: { hostId: string; deviceId: string }) =>
+    invokeDeviceSettings("devices:settings", input),
+  screenshot: async (input: { hostId: string; deviceId: string }): Promise<Uint8Array> => {
+    const png = await invoke<unknown>("devices:screenshot", input);
+    if (!(png instanceof Uint8Array) || png.byteLength === 0) {
+      throw new Error("The simulator screenshot was invalid.");
+    }
+    return png;
+  },
+  streamGrant: async (): Promise<DeviceStreamGrant> => {
+    const grant = parseDeviceStreamGrant(await invoke<unknown>("devices:stream-grant"));
+    if (!grant) throw new Error("The simulator stream grant was invalid.");
+    return grant;
+  },
+  /** Installed helper versions, read from disk only. */
+  toolchain: () => invokeDeviceToolchain("devices:toolchain"),
+  pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
+  /** Turns every simulator permission off and deletes the installed helpers. */
+  removeTools: () => invokeDeviceState("devices:remove-tools"),
+  onState: (handler: (state: DeviceServiceState) => void) =>
+    onNotification<unknown>("devices:state", (payload) => {
+      const state = parseDeviceServiceState(payload);
+      if (state) handler(state);
+    }),
+  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
+  onReveal: (handler: (chatId: string) => void) =>
+    onNotification<unknown>("devices:reveal", (payload) => {
+      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
+      if (typeof chatId === "string" && chatId) handler(chatId);
+    }),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
@@ -1093,6 +1182,7 @@ interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 interface ChatError {
   streamId: string;
@@ -1101,6 +1191,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1166,6 +1257,11 @@ export function admitChatRunInput(
   input: { mode: ChatRunInputMode; text: string },
 ): Promise<ChatRunInputAdmissionResult> {
   return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
+}
+
+export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
+  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
+  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
@@ -1255,6 +1351,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
@@ -1265,6 +1362,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),
@@ -1422,3 +1520,73 @@ export function startGeneration(
     },
   };
 }
+
+// --- Text to Speech (Read aloud) ---
+
+export interface TtsAudioReadResult {
+  bytes: Uint8Array;
+  mimeType: "audio/wav" | "audio/l16";
+  sampleRate: number;
+  channels: number;
+  segmentBytes: number;
+  nextOffset: number;
+  complete: boolean;
+}
+
+export const ttsApi = {
+  status: (chatId?: string) =>
+    invoke<{
+      settings: TtsSettings;
+      settingsRevision: string;
+      credentialReady: boolean;
+      credentialSourceLabel: string;
+      synthesisReady: boolean;
+      latestSource: {
+        source: TtsSourceRef | null;
+        reason: string;
+      };
+      job: TtsJobSnapshot | null;
+    }>("tts:status", chatId ? { chatId } : {}),
+  getSettings: () =>
+    invoke<{ settings: TtsSettings; settingsRevision: string }>("tts:settings:get"),
+  updateSettings: (expectedRevision: string, patch: unknown) =>
+    invoke<{ settings: TtsSettings; settingsRevision: string }>(
+      "tts:settings:update",
+      { expectedRevision, patch },
+    ),
+  setDedicatedCredential: (apiKey: string) =>
+    invoke<{ ok: true }>("tts:credential:set", { apiKey }),
+  clearDedicatedCredential: () => invoke<{ ok: true }>("tts:credential:clear"),
+  starterVoices: () =>
+    invoke<Array<{ providerVoiceId: string; name: string; kind: "prebuilt" }>>(
+      "tts:voices:starter",
+    ),
+  listVoices: (pageToken?: string) =>
+    invoke<{
+      voices: Array<{ providerVoiceId: string; name: string; kind: "prebuilt" | "prompted" | "replicated" }>;
+      nextPageToken: string | null;
+    }>("tts:voices:list", pageToken ? { pageToken } : undefined),
+  preview: () =>
+    invoke<
+      | { ok: true; snapshot: TtsJobSnapshot }
+      | { ok: false; error: TtsSafeError }
+    >("tts:preview"),
+  start: (request: { requestId: string; source: TtsSourceRef; settingsRevision: string }) =>
+    invoke<
+      | { ok: true; snapshot: TtsJobSnapshot }
+      | { ok: false; error: TtsSafeError }
+    >("tts:start", request),
+  readAudio: (jobId: string, segment: number, offset: number, maxBytes: number) =>
+    invoke<TtsAudioReadResult | null>("tts:audio:read", {
+      jobId,
+      segment,
+      offset,
+      maxBytes,
+    }),
+  pause: () => invoke<TtsJobSnapshot | null>("tts:pause"),
+  resume: () => invoke<TtsJobSnapshot | null>("tts:resume"),
+  stop: () => invoke<{ ok: true }>("tts:stop"),
+  clearCache: () => invoke<{ ok: true }>("tts:cache:clear"),
+  onEvent: (handler: (event: TtsServiceEvent) => void) =>
+    onNotification<TtsServiceEvent>("tts:event", handler),
+};

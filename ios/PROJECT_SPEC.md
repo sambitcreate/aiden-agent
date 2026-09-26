@@ -27,7 +27,7 @@ The complete planned product includes:
 - Device-local Aiden, Slate, Berry, and Moss appearance presets plus supported mobile appearance options.
 - Aiden workspace file index/read/version-checked write and the existing Aiden Git review/diff/compare/branch/commit/push/managed-worktree operations.
 - Aiden scheduled-task list/create/edit/remove/pause/resume/run-now/preview/history/settings.
-- Cache-only App Intents, app-driven Live Activities, native or paired-Mac local-model dictation, and local read-aloud.
+- Cache-only App Intents, app-driven Live Activities, native or paired-Mac local-model dictation, and desktop-configured read-aloud under the authenticated `tts-v1` contract.
 - Offline read-only display of previously fetched data. Mutations are disabled while disconnected.
 - A Bot-first Messages-like inbox with favorites, recent threads, search, bot profiles, and guided create/edit flows, alongside the retained Workspaces experience.
 - Exactly one persistent chat per Bot. Every Bot entry point resumes it and creates it only when absent; legacy duplicate records are recoverable but not a second writable conversation.
@@ -37,7 +37,7 @@ The complete planned product includes:
 - Bot avatars using the existing semantic editor everywhere and the system Image Playground sheet where supported. Only a person-accepted image is sent to the paired Mac and stored as the canonical bot photo.
 - Bot conversations presented through the existing `AidenChatDetailView` and its existing chat feature/view-model path, with bot identity and Access affordances added around that shared implementation.
 
-Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insights panels, Cloudflare-specific onboarding, server TTS, voice-note upload, generic terminal UI, and every control without an Aiden service contract. The bounded paired-Mac transcription endpoint is the sole remote speech exception: it invokes the existing Mac-local Parakeet model and never stores audio. Mac-projected Bot Access selectors for Skills and Connections are Aiden features, not retained Hermes panels. A bot may use the existing Mac-owned shell tool when its effective policy allows it, but the phone never gains a generic terminal or client-supplied command endpoint. Computer Use remains governed by its existing explicit opt-in and safety rules. Share Extension and cloud push remain deferred.
+Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insights panels, Cloudflare-specific onboarding, uncontracted server TTS, voice-note upload, generic terminal UI, and every control without an Aiden service contract. The bounded paired-Mac transcription endpoint is a remote speech exception: it invokes the existing Mac-local Parakeet model and never stores audio. Mac-projected Bot Access selectors for Skills and Connections are Aiden features, not retained Hermes panels. A bot may use the existing Mac-owned shell tool when its effective policy allows it, but the phone never gains a generic terminal or client-supplied command endpoint. Computer Use remains governed by its existing explicit opt-in and safety rules. Share Extension and cloud push remain deferred.
 
 ## 3. Security invariants
 
@@ -135,7 +135,7 @@ The installed Apple Development identity currently belongs to team `7EK65FX44E`.
 
 - App Intents use current open/navigation protocols and App Group-cached installation/workspace IDs only. The intent process performs no network or Keychain access and never sends a prompt or mutation.
 - Live Activity state is under 4 KB and excludes response text by default, paths, tool arguments, approval details, provider errors, and credentials. With no push relay, it shows honest last-known/stale state while the app is terminated and reconciles only when the authenticated app next runs.
-- Voice input is an editable draft using either native on-device recognition or the user-selected paired-Mac mode. Paired-Mac mode records at most 60 seconds of 16 kHz mono PCM, sends it only over the authenticated pinned-TLS Aiden connection, transcribes with the selected Mac-local Parakeet model, and does not persist the recording. It currently returns final text after stop; native recognizers may provide partial text. Voice-note attachments and server TTS remain absent. Optional read-aloud uses native on-device APIs.
+- Voice input is an editable draft using either native on-device recognition or the user-selected paired-Mac mode. Paired-Mac mode records at most 60 seconds of 16 kHz mono PCM, sends it only over the authenticated pinned-TLS Aiden connection, transcribes with the selected Mac-local Parakeet model, and does not persist the recording. It currently returns final text after stop; native recognizers may provide partial text. Voice-note attachments remain absent. The September 2026 Read Aloud extension uses native audio playback of the paired Mac's bounded `tts-v1` output. The Mac alone enables/configures cloud speech; mobile settings are read-only. Selected response text is sent by the Mac to Google only after explicit Play, and replay reuses session audio.
 
 ## 10. Testing gates
 
@@ -157,3 +157,13 @@ The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the
 ## 12. Attribution
 
 Preserve the imported Hermex upstream MIT license, copyright, and third-party notices while removing Hermes/Hermex product identity. New Aiden protocol and product documentation is owned by this repository.
+
+
+### September 2026 approved Read Aloud extension
+
+The user's desktop-configured Gemini Read Aloud request supersedes older
+on-device-only/server-TTS exclusions specifically for `tts-v1`. See
+`docs/aiden-remote-api-v1.md` (repository root) for the normative endpoint and
+ownership rules. No mobile setup mutations, arbitrary transcripts, direct Google
+requests or provider credentials are permitted. Legacy servers fail closed with
+update/setup guidance; there is no silent alternate-model or on-device fallback.

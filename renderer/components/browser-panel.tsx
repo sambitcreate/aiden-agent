@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Camera, Check, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, Minus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Settings2, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
 import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
 import { browserApi } from "../lib/ipc";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport } from "../lib/browser-ui-state";
+import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed } from "../lib/browser-ui-state";
 import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Input, Text, toast } from "./ui";
 import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
@@ -131,8 +131,9 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
       frame = 0;
       if (disposed) return;
       const bounds = browserBoundsFromRect(host.getBoundingClientRect());
-      const overlay = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [data-slot="popover-content"]'))
-        .some((element) => element.getBoundingClientRect().width > 0 && element.getAttribute("data-state") !== "closed");
+      const overlay = bounds
+        ? browserNativeViewObstructed(bounds, visibleBrowserNativeOccluders().map((element) => element.getBoundingClientRect()))
+        : false;
       const visible = surfaceActive && ready && !annotation && !settingsOpen && !menuOpen && !profileMenuOpen && !overlay && Boolean(bounds);
       const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
       const key = JSON.stringify(command);
@@ -145,7 +146,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
     const resize = new ResizeObserver(schedule);
     resize.observe(host);
     const overlays = new MutationObserver(schedule);
-    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert"] });
+    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert", "data-presence", "popover", "style"] });
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
     document.addEventListener("transitionend", schedule, true);

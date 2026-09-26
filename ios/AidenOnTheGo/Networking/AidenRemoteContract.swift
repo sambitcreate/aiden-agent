@@ -1668,6 +1668,7 @@ enum AidenRemoteChatAgentRole: String, Codable, Sendable {
     case scout
     case planner
     case reviewer
+    case implementer
 }
 
 enum AidenRemoteChatAgentMilestone: String, Codable, Sendable {

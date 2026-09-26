@@ -177,7 +177,7 @@ fun AidenUsageSheet(
                         AidenUsageDivider()
                         AidenUsageInsightRow("Failed requests", integer.format(summary.totals.failedRequests))
                         AidenUsageDivider()
-                        AidenUsageInsightRow("Hosted cost", currency.format(summary.totals.hostedCostUsd))
+                        AidenUsageInsightRow("Hosted cost", summary.totals.hostedCostSummary)
                     }
                 }
             }

@@ -9,6 +9,7 @@ import {
   isScheduledTaskApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import {
@@ -211,6 +212,7 @@ function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
     || isSubagentWorkspaceWriteApprovalDetails(value)
     || isSubagentMcpMutationApprovalDetails(value)
     || isSubagentShellApprovalDetails(value)
+    || isSubagentRunGrantApprovalDetails(value)
     ? structuredClone(value)
     : undefined;
 }

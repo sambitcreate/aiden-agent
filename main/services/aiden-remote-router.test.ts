@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
+import { connect } from "node:net";
 import {
   AIDEN_REMOTE_ROUTE_TEMPLATES,
   createAidenRemoteRequestHandler,
+  createAidenRemoteUpgradeHandler,
   remoteRouteTemplate,
 } from "./aiden-remote-router.js";
+import {
+  AidenRemoteSimulatorRelay,
+  type AidenRemoteSimulatorHost,
+} from "./aiden-remote-simulators.js";
 import type { AidenRemoteRouteLabel } from "./aiden-remote-router.js";
 import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-remote-chats.js";
 import {
@@ -19,6 +25,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
@@ -38,6 +45,8 @@ async function fixture(options: {
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
+  deviceType?: "iphone" | "mac" | "linux";
+  simulators?: AidenRemoteSimulatorRelay;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -115,7 +124,8 @@ async function fixture(options: {
       return false;
     }
   };
-  const handler = createAidenRemoteRequestHandler({
+  const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
+    readAloud: options.readAloud,
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
@@ -141,6 +151,7 @@ async function fixture(options: {
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
           acceptsProgressCapabilities:
             options.acceptsProgressCapabilities === true,
+          ...(options.deviceType ? { type: options.deviceType } : {}),
           capabilities: new Set(
             options.authenticate === "denied"
               ? []
@@ -168,7 +179,8 @@ async function fixture(options: {
             (capability) =>
               capability !== "tasks:read" &&
               capability !== "agents:read" &&
-              capability !== "questions:respond",
+              capability !== "questions:respond" &&
+              capability !== "simulators:control",
           )
         ) {
           return null;
@@ -881,8 +893,11 @@ async function fixture(options: {
     connectionMode: () => "lan",
     now: () => 1_000,
     log: (entry) => logs.push(entry),
-  });
+    ...(options.simulators ? { simulators: options.simulators } : {}),
+  };
+  const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
+  server.on("upgrade", createAidenRemoteUpgradeHandler(dependencies));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -3089,6 +3104,9 @@ function concreteRequestPath(template: string): string {
           return `att_${"a".repeat(43)}`;
         case ":avatarRevision":
           return `avatar_revision_${"a".repeat(32)}`;
+        case ":segment":
+        case ":offset":
+          return "0";
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
@@ -3349,5 +3367,219 @@ test("chat skills route gates on negotiated skills:invoke and advertises its fea
     assert.equal(missing.status, 404);
   } finally {
     noSurface.close();
+  }
+});
+
+test("Read Aloud authenticates before parsing, checks Bot access and never exposes setup writes", async () => {
+  let called = 0;
+  const readAloud: NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"]> = {
+    status: async () => { called++; return { enabled: true, ready: true, settingsRevision: "revision", source: null, job: null }; },
+    start: async () => { called++; throw new Error("should not reach synthesis"); },
+    read: async () => { called++; throw new Error("should not read audio"); },
+    stop: () => { called++; return { ok: true }; },
+  };
+  const app = await fixture({ readAloud, capabilities: ["server:read", "chat:read", "chat:write"] });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+  try {
+    const unauthenticated = await fetch(`${app.base}/chats/chat-1/read-aloud`, { method: "POST", body: "bad-json" });
+    assert.equal(unauthenticated.status, 400); // Missing protocol header, before JSON parsing or adapter.
+    assert.equal(called, 0);
+    const status = await fetch(`${app.base}/read-aloud`, { headers });
+    assert.equal(status.status, 200);
+    const server = await (await fetch(`${app.base}/server`, { headers })).json() as { features: string[] };
+    assert.ok(server.features.includes("tts-v1"));
+    const before = called;
+    const patch = await fetch(`${app.base}/read-aloud`, { method: "PATCH", headers, body: JSON.stringify({ enabled: true }) });
+    assert.equal(patch.status, 404);
+    const chatPatch = await fetch(`${app.base}/chats/chat-1/read-aloud`, { method: "PATCH", headers, body: JSON.stringify({ enabled: true }) });
+    assert.equal(chatPatch.status, 404);
+    assert.equal(called, before);
+  } finally { await app.close(); }
+  const bot = await fixture({ readAloud, botChat: true, capabilities: ["chat:read", "chat:write"] });
+  try {
+    const before = called;
+    for (const path of ["/chats/chat-1/read-aloud", "/chats/chat-1/read-aloud/audio/job-1/0/0"]) {
+      assert.equal((await fetch(`${bot.base}${path}`, { headers })).status, 404);
+    }
+    assert.equal(called, before);
+  } finally { await bot.close(); }
+});
+
+function simulatorHost(sharing = true): AidenRemoteSimulatorHost {
+  return {
+    sharing: () => sharing,
+    list: async () => ({ sharing, status: "ready", devices: [] }),
+    open: async () => {
+      throw new Error("unused");
+    },
+    shutdown: async () => undefined,
+    settings: async () => ({}),
+    action: async () => ({}),
+    hubOrigin: () => null,
+    isKnownDevice: () => false,
+    onSharingChanged: () => () => undefined,
+  };
+}
+
+const SIMULATOR_HEADERS = {
+  authorization: `Bearer ${"a".repeat(43)}`,
+  "aiden-protocol-version": "1",
+  "content-type": "application/json",
+};
+
+test("only paired desktops negotiate simulator control, and only where it exists", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  const accepts = JSON.stringify({ accepts: ["simulators:control"] });
+  const phone = await fixture({ simulators: relay, deviceType: "iphone" });
+  try {
+    const response = await fetch(`${phone.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+    assert.equal(phone.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await phone.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "mac" });
+  try {
+    const response = await fetch(`${mac.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+    assert.equal(response.status, 200);
+    assert.deepEqual(mac.calls, ["device-capabilities:device-authorized-12345678:simulators:control"]);
+  } finally {
+    await mac.close();
+  }
+  for (const simulators of [undefined, new AidenRemoteSimulatorRelay(() => null)]) {
+    const off = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "mac" });
+    try {
+      const response = await fetch(`${off.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 404);
+    } finally {
+      await off.close();
+    }
+    // A phone gets the same refusal whether or not this Mac has simulators.
+    const phoneOff = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "iphone" });
+    try {
+      const response = await fetch(`${phoneOff.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    } finally {
+      await phoneOff.close();
+    }
+  }
+});
+
+test("simulator routes require a desktop holding simulator control", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost(false));
+  const granted = ["server:read", "simulators:control"] as AidenRemoteCapability[];
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: granted });
+  try {
+    const response = await fetch(`${phone.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+  } finally {
+    await phone.close();
+  }
+  const untyped = await fixture({ simulators: relay, capabilities: granted });
+  try {
+    assert.equal((await fetch(`${untyped.base}/simulators`, { headers: SIMULATOR_HEADERS })).status, 403);
+  } finally {
+    await untyped.close();
+  }
+  const ungranted = await fixture({ simulators: relay, deviceType: "mac" });
+  try {
+    assert.equal((await fetch(`${ungranted.base}/simulators`, { headers: SIMULATOR_HEADERS })).status, 403);
+  } finally {
+    await ungranted.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "linux", capabilities: granted });
+  try {
+    const response = await fetch(`${mac.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { sharing: false, status: "ready", devices: [] });
+    const opened = await fetch(`${mac.base}/simulators/open`, {
+      method: "POST",
+      headers: SIMULATOR_HEADERS,
+      body: JSON.stringify({ deviceId: "UDID-1" }),
+    });
+    assert.equal(opened.status, 404);
+    assert.ok(mac.logs.some((entry) => (entry as { route?: string }).route === "simulators"));
+  } finally {
+    await mac.close();
+  }
+});
+
+test("hub WebSocket upgrades authenticate before reaching the relay", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  const granted = ["server:read", "simulators:control"] as AidenRemoteCapability[];
+  const statusLine = (base: string, path: string, headers: Record<string, string>) =>
+    new Promise<string>((resolve) => {
+      const url = new URL(`${base}${path}`);
+      const socket = connect({ host: url.hostname, port: Number(url.port) });
+      let text = "";
+      socket.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+      socket.on("close", () => resolve(text.split("\r\n")[0] ?? ""));
+      socket.on("error", () => undefined);
+      const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+      socket.write(
+        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+          `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n${extra}\r\n`,
+      );
+    });
+  const auth = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const path = "/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1";
+
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: granted });
+  try {
+    assert.equal(await statusLine(phone.base, path, auth), "HTTP/1.1 403 Refused");
+  } finally {
+    await phone.close();
+  }
+  const mac = await fixture({ simulators: relay, deviceType: "mac", capabilities: granted });
+  try {
+    assert.equal(await statusLine(mac.base, path, {}), "HTTP/1.1 400 Refused");
+    assert.equal(await statusLine(mac.base, path, { ...auth, origin: "https://evil.example" }), "HTTP/1.1 403 Refused");
+    assert.equal(await statusLine(mac.base, "/chats", auth), "HTTP/1.1 404 Not Found");
+    // Authenticated, but the device is not in this Mac's listing.
+    assert.equal(await statusLine(mac.base, path, auth), "HTTP/1.1 404 Not Found");
+    const logged = mac.logs.filter((entry) => (entry as { route?: string }).route === "simulatorHub");
+    assert.equal(logged.length, 4);
+    // A relay refusal is logged with its real status, never as a switch.
+    assert.deepEqual(
+      logged.map((entry) => (entry as { status?: number }).status),
+      [400, 403, 404, 404],
+    );
+    assert.ok(logged.every((entry) => !("routePath" in (entry as object))));
+  } finally {
+    await mac.close();
+  }
+  const blocked = await fixture({
+    simulators: relay,
+    deviceType: "mac",
+    capabilities: granted,
+    authorizationBlocked: () => true,
+  });
+  try {
+    assert.equal(await statusLine(blocked.base, path, auth), "HTTP/1.1 403 Refused");
+  } finally {
+    await blocked.close();
+  }
+});
+
+test("the simulator vocabulary is advertised only to paired desktops", async () => {
+  const relay = new AidenRemoteSimulatorRelay(() => simulatorHost());
+  for (const [deviceType, simulators, expected] of [
+    ["mac", relay, true],
+    ["linux", relay, true],
+    ["iphone", relay, false],
+    ["mac", new AidenRemoteSimulatorRelay(() => null), false],
+  ] as const) {
+    const server = await fixture({ simulators, deviceType, acceptsProgressCapabilities: true });
+    try {
+      const response = await fetch(`${server.base}/server`, { headers: SIMULATOR_HEADERS });
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { serverCapabilities?: string[] };
+      assert.equal(body.serverCapabilities?.includes("simulators:control"), expected, deviceType);
+    } finally {
+      await server.close();
+    }
   }
 });

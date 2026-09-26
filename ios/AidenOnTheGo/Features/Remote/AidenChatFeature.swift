@@ -1,3 +1,4 @@
+import AVFoundation
 import Accessibility
 import CryptoKit
 import ImageIO
@@ -937,6 +938,23 @@ final class AidenChatViewModel {
 #if DEBUG
         case readOnlyFixture
 #endif
+    }
+
+    let readAloud = AidenReadAloudPlayback()
+    var readAloudCandidateID: String? {
+        guard !isReadOnlyPresentation, !isStarting, streamState?.isTerminal != false,
+              coordinator.server?.features.contains("tts-v1") == true,
+              let last = chat.messages.last, last.role == .assistant,
+              last.isReadAloudEligible else { return nil }
+        return last.id
+    }
+    func toggleReadAloud(_ messageID: String) {
+        if readAloud.activeMessageID != nil { readAloud.stop(); return }
+        guard let context = try? coordinator.requestContext(for: instanceId),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        NotificationCenter.default.post(name: .aidenStopDictationForReadAloud, object: nil)
+        readAloud.start(client: client, chatID: chat.id, messageID: messageID,
+            current: { [weak coordinator] in coordinator?.isCurrent(context) == true })
     }
 
     private let runtime: Runtime
@@ -3507,6 +3525,7 @@ struct AidenChatDetailView: View {
             model.startProgressObservation()
         }
         .task(id: botToolsSessionIdentity) {
+            model.readAloud.stop()
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
@@ -3516,12 +3535,12 @@ struct AidenChatDetailView: View {
             AidenChatProgressSheet(kind: progressSheet, model: model)
         }
         .alert("Aiden On The Go", isPresented: Binding(
-            get: { model.presentedError != nil },
-            set: { if !$0 { model.presentedError = nil } }
+            get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
+            set: { if !$0 { model.presentedError = nil; model.readAloud.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { model.presentedError = nil }
+            Button("OK", role: .cancel) { model.presentedError = nil; model.readAloud.errorMessage = nil }
         } message: {
-            Text(model.presentedError ?? "The operation could not be completed.")
+            Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
         }
         .alert("Set Up Image Understanding", isPresented: $model.needsBotVisionSetup) {
             if let botID = model.chat.botId {
@@ -3535,14 +3554,19 @@ struct AidenChatDetailView: View {
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
         }
+        .onChange(of: model.readAloudCandidateID) { _, candidate in
+            if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.startProgressObservation()
             } else {
+                model.readAloud.stop()
                 model.stopProgressObservation()
             }
         }
         .onDisappear {
+            model.readAloud.stop()
             model.setHapticsActive(false)
             model.setChatForegrounded(false)
             model.stopProgressObservation()
@@ -3653,7 +3677,9 @@ struct AidenChatDetailView: View {
             AidenSettledMessageRows(
                 model: model,
                 chat: model.chat,
-                presentationStyle: presentationStyle
+                presentationStyle: presentationStyle,
+                readAloudCandidateID: model.readAloudCandidateID,
+                readAloudActiveID: model.readAloud.activeMessageID
             )
             .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
@@ -4027,12 +4053,18 @@ private struct AidenSettledMessageRows: View, Equatable {
     let model: AidenChatViewModel
     let chat: AidenChat
     let presentationStyle: AidenChatPresentationStyle
+    /// Value snapshots of the Read Aloud state the rows render, so a playback
+    /// change re-evaluates the rows even though `model` compares equal.
+    let readAloudCandidateID: String?
+    let readAloudActiveID: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         // `model` is a shared reference (same pointer on both sides of every
-        // comparison), so equality must cover the value-typed snapshot the
-        // body renders — `chat` — and the presentation style.
-        lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle
+        // comparison), so equality must cover the value-typed snapshots the
+        // body renders — `chat`, the Read Aloud state — and the presentation style.
+        lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
+            lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
+            lhs.readAloudActiveID == rhs.readAloudActiveID
     }
 
     var body: some View {
@@ -4051,7 +4083,9 @@ private struct AidenSettledMessageRows: View, Equatable {
             presentationStyle: presentationStyle,
             loadAttachmentImage: { attachment in
                 await model.attachmentImageData(for: attachment)
-            }
+            },
+            readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
+            readAloudActive: readAloudActiveID == message.id
         )
         .equatable()
         .padding(.top, topPadding)
@@ -4063,11 +4097,16 @@ private struct AidenMessageView: View, Equatable {
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
+    var readAloudAction: (() -> Void)? = nil
+    var readAloudActive = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         // The loader closure captures the stable view-model; identity churn on
         // it must not force settled rows to re-render on every streamed token.
-        lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle
+        // The Read Aloud action is compared by presence for the same reason.
+        lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle &&
+            (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
+            lhs.readAloudActive == rhs.readAloudActive
     }
 
     private var botReply: AidenBotReplyProjection? {
@@ -4101,6 +4140,21 @@ private struct AidenMessageView: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity)
+        .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 4) {
+            if let readAloudAction {
+                HStack(spacing: 16) {
+                    Button { UIPasteboard.general.string = AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) } label: {
+                        Image(systemName: "doc.on.doc")
+                    }.accessibilityLabel("Copy response")
+                    Button(action: readAloudAction) {
+                        Image(systemName: readAloudActive ? "stop.fill" : "speaker.wave.2")
+                    }.accessibilityLabel(readAloudActive ? "Stop reading aloud" : "Read response aloud")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .frame(minHeight: 44)
+            }
+        }
         .contextMenu {
             if let copyText = AidenMessageActionContent.copyText(
                 for: message,
@@ -4125,6 +4179,7 @@ private struct AidenMessageView: View, Equatable {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
+
     }
 
     private var messageContent: some View {
@@ -4266,61 +4321,32 @@ private struct AidenActivityFeed: View {
     private var visibleSteps: [AidenAgentStep] { steps ?? timeline.steps }
     private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
+    private var compactOnly: Bool { AidenAgentActivityPresentation.isCompactContextOnly(visibleSteps) }
+    /// A healthy lone compaction is fully told by its own line in the header, so the
+    /// expanded list would only repeat it; progress text still needs the disclosure.
+    private var stepInHeader: Bool { compactOnly && timeline.issueCount == 0 }
+    private var allowsDisclosure: Bool {
+        !stepInHeader || !(progressText ?? "").isEmpty
+    }
+    private var showsCollapsedTicker: Bool {
+        isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed
+    }
+    private var headline: String {
+        if stepInHeader, let last = visibleSteps.last {
+            return AidenAgentActivityPresentation.line(for: last)
+        }
+        return AidenAgentActivityPresentation.summary(timeline)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isExpanded ? 4 : 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(
-                    alignment: isRunning && !isExpanded && showsRunningRowsWhenCollapsed ? .bottom : .center,
-                    spacing: 8
-                ) {
-                    Group {
-                        if isRunning && !isExpanded && showsRunningRowsWhenCollapsed {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows) { step in
-                                    AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
-                                        .frame(height: 24)
-                                        .id(step.id)
-                                        .transition(.opacity)
-                                }
-                            }
-                            .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
-                            .clipped()
-                        } else {
-                            Text(AidenAgentActivityPresentation.summary(timeline))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondary)
-                                .lineLimit(1)
-                                .aidenActivityShimmer(isRunning)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if timeline.issueCount > 0 {
-                        Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.warning)
-                    }
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(AidenAgentActivityPresentation.summary(timeline))
-            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
-
-            if isExpanded {
+        VStack(alignment: .leading, spacing: isExpanded && allowsDisclosure ? 4 : 0) {
+            header
+            if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(visibleSteps) { step in
-                        AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    if !stepInHeader {
+                        ForEach(visibleSteps) { step in
+                            AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                        }
                     }
                     if let progressText, !progressText.isEmpty {
                         Divider()
@@ -4344,6 +4370,65 @@ private struct AidenActivityFeed: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: timeline.steps.last?.id)
         .onAppear {
             if timeline.issueCount > 0 { isExpanded = true }
+        }
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if allowsDisclosure {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                headerRow.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(headline)
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+        } else {
+            headerRow
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(headline)
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: showsCollapsedTicker ? .bottom : .center, spacing: 8) {
+            Group {
+                if showsCollapsedTicker {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { step in
+                            AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                                .frame(height: 24)
+                                .id(step.id)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
+                    .clipped()
+                } else {
+                    Text(headline)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                        .aidenActivityShimmer(isRunning)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if timeline.issueCount > 0 {
+                Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+            }
+
+            if allowsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
         }
     }
 }
@@ -6276,6 +6361,7 @@ private struct AidenComposerView: View {
                 Button {
                     Task {
                         guard !model.isReadOnlyPresentation else { return }
+                        model.readAloud.stop()
                         await voiceInput.toggle(
                             currentDraft: model.draft,
                             updateDraft: { model.draft = $0 },
@@ -6398,11 +6484,15 @@ private struct AidenComposerView: View {
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
+            model.readAloud.stop()
             await voiceInput.toggle(
                 currentDraft: model.draft,
                 updateDraft: { model.draft = $0 },
                 macTranscriber: model.transcribeMacSpeech
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
+            voiceInput.cancelDiscardingRecording()
         }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
@@ -6632,6 +6722,119 @@ private struct AidenComposerSuggestionList: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Mention file \(entry.displayPath)")
+        }
+    }
+}
+
+extension Notification.Name {
+    static let aidenStopDictationForReadAloud = Notification.Name("AidenStopDictationForReadAloud")
+}
+
+@MainActor @Observable
+final class AidenReadAloudPlayback {
+    private(set) var activeMessageID: String?
+    var errorMessage: String?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var cancelRemote: (() -> Void)?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    func stop() {
+        generation += 1
+        task?.cancel(); task = nil
+        player?.stop(); player = nil
+        let wasActive = activeMessageID != nil
+        activeMessageID = nil
+        cancelRemote?(); cancelRemote = nil
+        for token in observers { NotificationCenter.default.removeObserver(token) }
+        observers.removeAll()
+        if wasActive { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+    }
+
+    func start(client: AidenRemoteClient, chatID: String, messageID: String, current: @escaping @MainActor () -> Bool) {
+        stop()
+        let epoch = generation
+        let requestID = UUID().uuidString
+        activeMessageID = messageID; errorMessage = nil
+        cancelRemote = { Task { try? await client.stopReadAloud(chatId: chatID, requestId: requestID) } }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.stop() }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+                Task { @MainActor in self?.stop() }
+            }
+        })
+        task = Task { [weak self] in
+            guard let self else { return }
+            @MainActor func check() throws {
+                guard !Task.isCancelled, self.generation == epoch, current() else { throw CancellationError() }
+            }
+            defer { if self.generation == epoch { self.stop() } }
+            do {
+                try check()
+                let status = try await client.readAloudStatus(chatId: chatID)
+                try check()
+                guard status.enabled, status.ready else {
+                    self.errorMessage = AidenReadAloudStatus.setupGuidance; return
+                }
+                guard let source = status.source, source.chatId == chatID, source.messageId == messageID else { throw AidenReadAloudFailure.unavailable }
+                var job = try await client.startReadAloud(chatId: chatID, request: .init(requestId: requestID, source: source, settingsRevision: status.settingsRevision))
+                try check()
+                let jobID = job.jobId
+                var stalledPolls = 0
+                while job.phase != "completed" {
+                    guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.phase != "cancelled", stalledPolls < AidenReadAloudJob.maximumStalledPolls else {
+                        throw AidenReadAloudFailure.unavailable
+                    }
+                    if job.phase == "failed" {
+                        self.errorMessage = job.error?.message ?? "Read Aloud could not generate this response. Check the desktop settings."
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(500)); try check()
+                    let update = try await client.readAloudStatus(chatId: chatID)
+                    try check()
+                    guard update.ready, update.source?.sourceRevision == source.sourceRevision, let next = update.job else { throw AidenReadAloudFailure.unavailable }
+                    stalledPolls = AidenReadAloudJob.nextStalledPollCount(previousReady: job.readySegments, currentReady: next.readySegments, stalled: stalledPolls)
+                    job = next
+                }
+                guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.readySegments == job.totalSegments else { throw AidenReadAloudFailure.invalidAudio }
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
+                try AVAudioSession.sharedInstance().setActive(true)
+                var totalBytes = 0
+                for segment in 0..<job.totalSegments {
+                    var data = Data(); var expectedTotal: Int?
+                    while true {
+                        let chunk = try await client.readAloudAudio(chatId: chatID, jobId: jobID, segment: segment, offset: data.count)
+                        try check()
+                        data.append(try chunk.validatedBytes(offset: data.count, expectedTotal: expectedTotal))
+                        expectedTotal = chunk.segmentBytes
+                        if chunk.complete { break }
+                    }
+                    totalBytes += data.count
+                    guard totalBytes <= 32 * 1_024 * 1_024 else { throw AidenReadAloudFailure.invalidAudio }
+                    let audio = try AVAudioPlayer(data: data)
+                    self.player = audio
+                    guard audio.play() else { throw AidenReadAloudFailure.invalidAudio }
+                    var ticks = 0
+                    while audio.isPlaying {
+                        try await Task.sleep(for: .milliseconds(200)); try check()
+                        ticks += 1
+                        if ticks % 10 == 0 {
+                            let update = try await client.readAloudStatus(chatId: chatID)
+                            try check()
+                            guard update.ready, update.source?.sourceRevision == source.sourceRevision, update.job?.jobId == jobID, update.job?.phase == "completed" else { throw AidenReadAloudFailure.unavailable }
+                        }
+                    }
+                    self.player = nil
+                }
+            } catch is CancellationError {
+                // Navigation, backgrounding and replacement never retry synthesis.
+            } catch {
+                if self.generation == epoch && current() { self.errorMessage = error.localizedDescription }
+            }
         }
     }
 }
