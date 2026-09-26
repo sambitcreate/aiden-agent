@@ -19,10 +19,10 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -121,7 +121,9 @@ fun AidenChatDetailScreen(
 
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
+    var workspaceFileReference by remember(chatId) { mutableStateOf<String?>(null) }
     val streamState by viewModel.streamState.collectAsState()
+    val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val liveText by viewModel.liveText.collectAsState()
     val reasoning by viewModel.reasoning.collectAsState()
@@ -145,7 +147,16 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
+    var followLatest by remember(listState) {
+        mutableStateOf(
+            AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        )
+    }
+    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -155,6 +166,8 @@ fun AidenChatDetailScreen(
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+    val currentChat by rememberUpdatedState(chat)
+    val currentlyStreaming by rememberUpdatedState(isStreaming)
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -288,9 +301,63 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    val isScrolledUp by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+    LaunchedEffect(listState) {
+        var lastItemCount = -1
+        var wasScrolling = false
+        snapshotFlow {
+            val itemCount = AidenChatScroll.reverseLayoutItemCount(
+                currentChat?.messages?.size ?: 0,
+                currentlyStreaming
+            )
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            ) to itemCount
+        }.collect { (viewport, itemCount) ->
+            val (scrolling, index, offset) = viewport
+            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
+            lastItemCount = itemCount
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
+                    contentChanged,
+                    itemCount,
+                    consumedItemCount
+                )
+            ) {
+                return@collect
+            }
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            }
+        }
+    }
+
+    // Keyed by listState too: a chat switch with an equal item count must still
+    // consume the new list's insertion epoch.
+    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
+        val itemCount = AidenChatScroll.reverseLayoutItemCount(
+            chat?.messages?.size ?: 0,
+            isStreaming
+        )
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
+            listState.scrollToItem(AidenChatScroll.latestItemIndex())
+            followLatest = true
+        }
+        consumedItemCount = itemCount
+    }
+
+    workspaceFileReference?.let { reference ->
+        val workspaceId = chat?.workspaceId
+        if (workspaceId != null && chat?.isBotChat != true) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { workspaceFileReference = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+                sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen(
+                    workspaceId, coordinator, onNavigateBack = { workspaceFileReference = null }, initialReference = reference)
+            }
         }
     }
 
@@ -356,7 +423,7 @@ fun AidenChatDetailScreen(
                 ) {
                     pendingApproval?.let { approval ->
                         val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresMacConfirmation = AidenApprovalPresentation.requiresMacConfirmation(approval)
+                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -401,10 +468,10 @@ fun AidenChatDetailScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
-                                } else if (requiresMacConfirmation) {
+                                } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your Mac. You can deny it here.",
+                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
@@ -490,7 +557,7 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend,
+                    canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
@@ -616,7 +683,12 @@ fun AidenChatDetailScreen(
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
-                            onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+                            onOpenUrl = { url ->
+                                if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
+                                else if (android.net.Uri.parse(url).scheme?.lowercase() in listOf("https", "http", "mailto")) {
+                                    try { uriHandler.openUri(url) } catch (_: Exception) {}
+                                }
+                            }
                         )
                     }
                 }
@@ -624,10 +696,12 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = isScrolledUp,
+                visible = !followLatest,
                 onClick = {
+                    followLatest = true
                     scope.launch {
-                        listState.animateScrollToItem(0)
+                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+                        followLatest = true
                     }
                 },
                 modifier = Modifier
@@ -1235,6 +1309,14 @@ private fun AidenTimelineCollapsibleCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+    val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
+    val allowsDisclosure = !compactOnly || timeline.issueCount > 0
+    val headline = if (compactOnly && !allowsDisclosure) {
+        timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
+            ?: AidenAgentActivityPresentation.summary(timeline)
+    } else {
+        AidenAgentActivityPresentation.summary(timeline)
+    }
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
@@ -1248,7 +1330,10 @@ private fun AidenTimelineCollapsibleCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+                    .then(
+                        if (allowsDisclosure) Modifier.clickable { isExpanded = !isExpanded }
+                        else Modifier
+                    )
             ) {
                 Icon(
                     imageVector = if (timeline.issueCount > 0) Icons.Default.Warning else Icons.Default.CheckCircle,
@@ -1258,21 +1343,23 @@ private fun AidenTimelineCollapsibleCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = AidenAgentActivityPresentation.summary(timeline),
+                    text = headline,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = palette.secondary,
-                    modifier = Modifier.size(18.dp)
-                )
+                if (allowsDisclosure) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            if (isExpanded) {
+            if (allowsDisclosure && isExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
                 Spacer(modifier = Modifier.height(6.dp))

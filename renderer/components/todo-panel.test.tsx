@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TodoPanel, todoPanelHasVisibleChrome } from "./todo-panel.js";
+import { ScrollArea } from "./ui.js";
 
 const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
 
@@ -17,7 +18,7 @@ test("storage-disabled tracking stays hidden because it requires no user action"
 const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("./ui.tsx", import.meta.url), "utf8");
 
-test("visible chrome and scroll offset share the complete snapshot state matrix", () => {
+test("visible chrome and scroll clearance share the complete snapshot state matrix", () => {
   const unavailable = (unavailableReason?: "storage_not_enabled" | "invalid_snapshot") => ({
     version: 1 as const,
     chatId: "chat",
@@ -43,8 +44,18 @@ test("visible chrome and scroll offset share the complete snapshot state matrix"
   assert.equal(todoPanelHasVisibleChrome(ready("in_progress")), true);
   assert.match(
     chatPaneSource,
-    /scrollToBottomButtonOffset=\{todoPanelHasVisibleChrome\(todoSnapshot\) \? 44 : 0\}/u,
+    /scrollToBottomButtonOffset=\{todoPanelVisible \? 44 : 0\}/u,
   );
+  assert.match(chatPaneSource, /scrollContentBottomOffset=\{todoPanelVisible \? 56 : 0\}/u);
+  assert.match(uiSource, /\[autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges\]/u);
+  const html = renderToStaticMarkup(
+    <ScrollArea scrollContentBottomOffset={56} footer={<div>Composer</div>}>
+      <div>Last transcript row</div>
+    </ScrollArea>,
+  );
+  assert.match(html, /padding-bottom:56px/u);
+  assert.match(html, /Last transcript row/u);
+  assert.match(html, /Composer/u);
 });
 
 test("renders a floating elevated progress chip without an inline expanding panel", () => {
@@ -74,6 +85,12 @@ test("renders a floating elevated progress chip without an inline expanding pane
   assert.match(html, /Task progress: 1 of 3 completed\. In progress: Writing code\./u);
   assert.match(source, /<HoverCard openDelay=\{160\} closeDelay=\{120\}>/u);
   assert.match(source, /<HoverCardContent[\s\S]*side="top"/u);
+  assert.match(source, /if \(!didPinOnOpen\.current\)/u);
+  assert.match(source, /shouldPinAfterContentGrowth\(followLatest\.current\)/u);
+  assert.match(source, /addEventListener\("scroll"/u);
+  assert.match(source, /\[taskFollowKey\]/u);
+  assert.match(uiSource, /resolveProgrammaticFollowLatch/u);
+  assert.match(source, /function TrackedTaskList\(/u);
   assert.doesNotMatch(source, /hover:-translate|focus-visible:-translate/u);
   assert.match(source, /Blocked by\{" "\}/u);
   assert.match(source, /max-h-\[min\(26rem,55vh\)\]/u);

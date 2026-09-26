@@ -9,7 +9,7 @@ final class AidenBotPrototypeSnapshotTests: XCTestCase {
     private let canvasSize = CGSize(width: 1_024, height: 768)
 
     func testRegularWidthBotInboxRendersEveryAidenThemeAtReviewSize() async throws {
-        XCTAssertEqual(AidenThemePresetID.allCases.count, 4)
+        XCTAssertEqual(AidenThemePresetID.allCases.count, 9)
 
         for theme in AidenThemePresetID.allCases {
             let image = try await renderRegularWidthInbox(theme: theme)

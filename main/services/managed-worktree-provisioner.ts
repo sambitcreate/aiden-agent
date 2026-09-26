@@ -98,6 +98,9 @@ export async function provisionWorktreeIncludedFiles(
     onProvisioned?(relativePath: string): void;
   },
 ): Promise<string[]> {
+  // The descriptor-relative transfer helper ships only in macOS builds today;
+  // `.worktreeinclude` provisioning is a no-op elsewhere until it gains a Linux port.
+  if (process.platform !== "darwin") return [];
   const includeFile = await readWorktreeInclude(options.sourceRoot);
   if (includeFile === undefined) return [];
 

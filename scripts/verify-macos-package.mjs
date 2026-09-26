@@ -88,6 +88,10 @@ const BOT_INBOX_WRITER_EXECUTABLE = "aiden-bot-inbox-writer";
 const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
 const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
 const SUBAGENT_SHELL_RUNNER_EXECUTABLE = "aiden-subagent-shell-runner";
+const FOUNDATION_MODELS_HELPER_APP = "Aiden Foundation Models Helper.app";
+const FOUNDATION_MODELS_HELPER_EXECUTABLE = "aiden-foundation-models-helper";
+const FOUNDATION_MODELS_HELPER_BUNDLE_ID =
+  "com.sambitcreate.aiden-agent.foundation-models-helper";
 const REQUIRED_UNIVERSAL_ARCHITECTURES = Object.freeze(["arm64", "x86_64"]);
 const ELECTRON_HELPER_SUFFIXES = Object.freeze(["", " (GPU)", " (Plugin)", " (Renderer)"]);
 
@@ -646,6 +650,23 @@ export async function verifyMacPackage(appPath) {
   }
   const paths = packagedComputerUsePaths(appPath);
   const appAsar = path.join(paths.app, "Contents", "Resources", "app.asar");
+  const foundationModelsHelper = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    FOUNDATION_MODELS_HELPER_APP,
+  );
+  const foundationModelsInfoPlist = path.join(
+    foundationModelsHelper,
+    "Contents",
+    "Info.plist",
+  );
+  const foundationModelsExecutable = path.join(
+    foundationModelsHelper,
+    "Contents",
+    "MacOS",
+    FOUNDATION_MODELS_HELPER_EXECUTABLE,
+  );
   const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
   const worktreeFileIo = path.join(paths.app, "Contents", "Helpers", WORKTREE_FILE_IO_EXECUTABLE);
   const botInboxWriter = path.join(paths.app, "Contents", "Helpers", BOT_INBOX_WRITER_EXECUTABLE);
@@ -702,6 +723,8 @@ export async function verifyMacPackage(appPath) {
     subagentRunStore,
     subagentFileMutator,
     subagentShellRunner,
+    foundationModelsInfoPlist,
+    foundationModelsExecutable,
     appAsar,
     formFillHelperInfoPlist,
     formFillHelper,
@@ -723,6 +746,31 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
   assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
   assertComputerUseExecutableMode((await lstat(subagentShellRunner)).mode, subagentShellRunner);
+  assertComputerUseExecutableMode(
+    (await lstat(foundationModelsExecutable)).mode,
+    foundationModelsExecutable,
+  );
+  if (
+    (await readInfoPlistValue(foundationModelsInfoPlist, "CFBundleIdentifier")) !==
+    FOUNDATION_MODELS_HELPER_BUNDLE_ID
+  ) {
+    throw new Error(
+      `Unexpected Foundation Models helper bundle identifier in ${foundationModelsInfoPlist}`,
+    );
+  }
+  if (
+    (await readInfoPlistValue(foundationModelsInfoPlist, "CFBundleExecutable")) !==
+    FOUNDATION_MODELS_HELPER_EXECUTABLE
+  ) {
+    throw new Error(`Unexpected Foundation Models helper executable in ${foundationModelsInfoPlist}`);
+  }
+  if (
+    (await readInfoPlistValue(foundationModelsInfoPlist, "LSMinimumSystemVersion")) !== "26.0"
+  ) {
+    throw new Error(
+      `Unexpected Foundation Models helper minimum system version in ${foundationModelsInfoPlist}`,
+    );
+  }
   assertComputerUseExecutableMode((await lstat(formFillHelper)).mode, formFillHelper);
   if (
     (await readInfoPlistValue(formFillHelperInfoPlist, "CFBundleIdentifier")) !==
@@ -793,6 +841,11 @@ export async function verifyMacPackage(appPath) {
     identifier: SUBAGENT_SHELL_RUNNER_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(foundationModelsHelper, {
+    deep: true,
+    identifier: FOUNDATION_MODELS_HELPER_BUNDLE_ID,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   await verifySignature(formFillHelperApp, {
     deep: true,
     identifier: FORM_FILL_HELPER_BUNDLE_ID,
@@ -817,6 +870,7 @@ export async function verifyMacPackage(appPath) {
         subagentRunStore,
         subagentFileMutator,
         subagentShellRunner,
+        foundationModelsHelper,
         formFillHelper,
       ].map(async (target) => [target, await readCodeDisplay(target)]),
     ),
@@ -856,6 +910,7 @@ export async function verifyMacPackage(appPath) {
   assertMinimalComputerUseEntitlements(await readEntitlements(botInboxWriter));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));
+  assertMinimalComputerUseEntitlements(await readEntitlements(subagentShellRunner));
   assertFormFillHelperEntitlements(await readEntitlements(formFillHelper));
   assertElectronEntitlements(await readEntitlements(paths.electronExecutable));
   for (const electronHelper of electronHelpers) {

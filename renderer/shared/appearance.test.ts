@@ -171,12 +171,22 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
     slate: { light: "#3A434E", dark: "#D1D6DE" },
     berry: { light: "#443F4A", dark: "#D5CFD6" },
     moss: { light: "#3F4943", dark: "#D1D6D3" },
+    paper: { light: "#3E3C38", dark: "#D6D2CA" },
+    calm: { light: "#44403A", dark: "#D8D3C8" },
+    graphite: { light: "#38383B", dark: "#D4D4D8" },
+    dusk: { light: "#37423F", dark: "#CFE0DD" },
+    midnight: { light: "#38405A", dark: "#D2D8E6" },
   } as const;
   const darkAccents = {
     aiden: "#3E97F6",
     slate: "#21A9BE",
     berry: "#E8629F",
     moss: "#42B596",
+    paper: "#C9A97C",
+    calm: "#D9A86C",
+    graphite: "#A1A1AA",
+    dusk: "#2DD4BF",
+    midnight: "#7FA0F0",
   } as const;
 
   for (const preset of THEME_PRESETS) {
@@ -385,7 +395,7 @@ test("audited UI components retain semantic typography, radii, colors, and radio
   const styles = readRenderer("styles.css");
   const previewStyles = styles.slice(
     styles.indexOf(".appearance-mode-preview {"),
-    styles.indexOf(".appearance-code-preview {"),
+    styles.indexOf(".appearance-theme-grid {"),
   );
 
   for (const source of typographySources) {

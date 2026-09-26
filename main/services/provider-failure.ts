@@ -59,6 +59,16 @@ function requestFailureCategory(
   return "unknown";
 }
 
+function networkTransportCause(message: string): string {
+  if (/\b(?:EAI_AGAIN|ENOTFOUND)\b|\bgetaddrinfo\b/iu.test(message)) return "dns";
+  if (/\bECONNRESET\b|connection reset/iu.test(message)) return "connection-reset";
+  if (/\bECONNREFUSED\b|connection refused/iu.test(message)) return "connection-refused";
+  if (/socket.{0,30}closed|socket hang up|other side closed/iu.test(message)) return "socket-closed";
+  if (/\bfetch failed\b/iu.test(message)) return "fetch-failed";
+  if (/\bconnection error\b/iu.test(message)) return "connection-error";
+  return "network-unknown";
+}
+
 /**
  * Collapse a terminal outcome to closed metadata before it reaches chat
  * persistence. The raw message is inspected only for classification and is
@@ -115,6 +125,7 @@ export function providerFailureDiagnosticFields(
     providerCategory,
     failurePhase,
     attempts: failure.attempts,
+    ...(failure.category === "network" ? { transportCause: networkTransportCause(message ?? "") } : {}),
     fingerprint: createHash("sha256").update(`${failurePhase}:${providerCategory}`).digest("hex").slice(0, 16),
   };
 }

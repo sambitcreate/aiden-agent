@@ -41,8 +41,8 @@ import { ProviderIcon } from "./provider-icon";
 import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
-import { Button, Dialog, Field, Input, Switch, Text, toast } from "./ui";
-import { appApi, profileApi, providersApi, webSearchApi } from "../lib/ipc";
+import { Button, Dialog, Field, Input, Text, toast } from "./ui";
+import { appApi, profileApi, providersApi } from "../lib/ipc";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -60,7 +60,7 @@ import {
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
 } from "../lib/pi-provider-display";
-import { queryKeys, useCodexProviderStatus, useProviders, useWebSearch } from "../lib/queries";
+import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
 import {
@@ -68,6 +68,7 @@ import {
   shouldOpenOnboarding,
   type OnboardingSnapshot,
 } from "../shared/onboarding";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 type Step = "profile" | "provider" | "tour";
 const steps: Step[] = ["profile", "provider", "tour"];
@@ -159,6 +160,7 @@ const providerChoices: Array<{
     id: "tailscale",
     title: "Tailscale custom model",
     description: "Connect a private server and choose models and capabilities in More options.",
+    iconProviderId: "tailscale",
   },
 ];
 
@@ -207,7 +209,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Native Subagents",
     description:
-      "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
+      "Delegate research, plans, reviews, or coding to a child agent. Implementer writes and commands follow your workspace permission.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
     size: "standard",
@@ -226,7 +228,7 @@ const featureBentos: FeatureBento[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
+    description: "Browse, search, edit, and safely save workspace text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
     size: "standard",
@@ -372,7 +374,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Choose shortcut behavior in Voice settings. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",
@@ -427,7 +429,7 @@ const featureBentos: FeatureBento[] = [
     id: "themes",
     group: "control",
     title: "Themes & Accessibility",
-    description: "Tune light or dark themes, fonts, contrast, motion, and diff markers.",
+    description: "Pick a theme and follow the system, light, or dark appearance.",
     icon: Palette,
     imageUrl: FEATURE_ILLUSTRATIONS.themes,
     size: "wide",
@@ -485,9 +487,24 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
 
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
+  const capabilities = useAppCapabilities();
+  const visibleFeatureBentos = React.useMemo(() => {
+    const visible: FeatureBento[] = [];
+    for (const feature of featureBentos) {
+      if (!capabilities.computerUse && feature.id === "computerUse") continue;
+      if (!capabilities.bots && feature.id === "bots") continue;
+      visible.push(
+        feature.id === "commands" && capabilities.platform === "linux"
+          ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
+          : feature.id === "models" && capabilities.platform === "linux"
+            ? { ...feature, description: "Choose from 30+ Pi providers, ChatGPT sign-in, or local and private endpoints." }
+            : feature,
+      );
+    }
+    return visible;
+  }, [capabilities.bots, capabilities.computerUse, capabilities.platform]);
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
-  const webSearch = useWebSearch();
   // Main-owned state is authoritative. Block the workbench until it has been
   // checked so a stale legacy renderer marker cannot expose a bypass window.
   const [open, setOpen] = React.useState(true);
@@ -509,11 +526,9 @@ export function OnboardingFlow() {
   const [discovering, setDiscovering] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
   const [providerSkipped, setProviderSkipped] = React.useState(false);
-  const [webSearchSaving, setWebSearchSaving] = React.useState(false);
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
   const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
-  const webSearchSavingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
@@ -594,28 +609,6 @@ export function OnboardingFlow() {
     setBaseUrl(nextFields.baseUrl);
     setChoice(nextChoice);
     setProviderError(null);
-  };
-
-  const setWebSearchEnabled = async (enabled: boolean) => {
-    if (!webSearch.data || webSearchSavingRef.current) return;
-    const focusTarget =
-      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    webSearchSavingRef.current = true;
-    setWebSearchSaving(true);
-    try {
-      // The migration/default decision stays main-owned. Onboarding only
-      // persists an explicit user choice through the fenced generic seam.
-      const next = await webSearchApi.setEnabled(enabled);
-      queryClient.setQueryData(queryKeys.webSearch, next);
-    } catch (error) {
-      if (focusTarget?.isConnected) requestAnimationFrame(() => focusTarget.focus());
-      toast.error(error instanceof Error ? error.message : "Couldn’t update Web Search.");
-    } finally {
-      webSearchSavingRef.current = false;
-      setWebSearchSaving(false);
-    }
   };
 
   const completeProviderStep = async (providerId: string) => {
@@ -957,7 +950,7 @@ export function OnboardingFlow() {
                       What should Aiden call you?
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
-                      This personalizes your profile and model context on this Mac.
+                      This personalizes your profile and model context on this device.
                     </Text>
                   </div>
                 </div>
@@ -978,85 +971,9 @@ export function OnboardingFlow() {
                 <div className="mt-4 flex items-center gap-2 text-secondary">
                   <Lock className="size-4 text-accent" />
                   <Text variant="small" color="secondary">
-                    Stored privately on this Mac.
+                    Stored privately on this device.
                   </Text>
                 </div>
-                <section
-                  data-onboarding-web-search
-                  aria-busy={webSearchSaving || webSearch.isFetching || undefined}
-                  aria-labelledby="onboarding-web-search-title"
-                  className="mt-6 rounded-card border border-separator bg-well p-4 shadow-control motion-reduce:transition-none"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-status-accent-surface text-status-accent">
-                      <Globe2 aria-hidden="true" className="size-4.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <Text id="onboarding-web-search-title" variant="small-strong">
-                            Web Search
-                          </Text>
-                          <Text
-                            as="span"
-                            variant="small"
-                            color="tertiary"
-                            className="ml-2"
-                            aria-live="polite"
-                          >
-                            {webSearch.data
-                              ? webSearch.data.settings.enabled
-                                ? "On"
-                                : "Off"
-                              : webSearch.isError
-                                ? "Unavailable"
-                                : "Checking local setting…"}
-                          </Text>
-                        </div>
-                        <Switch
-                          checked={webSearch.data?.settings.enabled === true}
-                          onCheckedChange={(enabled) => void setWebSearchEnabled(enabled)}
-                          disabled={!webSearch.data || webSearch.isFetching || webSearchSaving}
-                          aria-label="Allow Web Search in attended chats"
-                          aria-describedby="onboarding-web-search-description"
-                          className="motion-reduce:transition-none motion-reduce:[&_*]:transition-none"
-                        />
-                      </div>
-                      <Text
-                        id="onboarding-web-search-description"
-                        as="p"
-                        variant="small"
-                        color="secondary"
-                        className="mt-2 leading-5"
-                      >
-                        Fresh profiles start with Web Search on; anonymous Exa is the initial
-                        recipient. Existing opt-outs and routes stay unchanged. Aiden may derive a
-                        search query from this conversation and send that query and your network
-                        address to Exa only when the model invokes search. This screen makes no
-                        network request.
-                      </Text>
-                      <Text as="p" variant="small" color="tertiary" className="mt-2 leading-5">
-                        Turn it off here, or choose another provider later in Settings → Web Search.
-                      </Text>
-                      {webSearch.isError && !webSearch.data ? (
-                        <Text role="alert" variant="small" color="red" className="mt-2 block">
-                          The local Web Search setting could not be read. No change was made.
-                        </Text>
-                      ) : null}
-                      {webSearchSaving ? (
-                        <Text
-                          role="status"
-                          aria-live="polite"
-                          variant="small"
-                          color="tertiary"
-                          className="mt-2 block"
-                        >
-                          Saving Web Search preference…
-                        </Text>
-                      ) : null}
-                    </div>
-                  </div>
-                </section>
               </div>
             ) : null}
 
@@ -1172,27 +1089,56 @@ export function OnboardingFlow() {
                     aria-live="polite"
                     className="mt-2 rounded-card bg-well p-2"
                   >
-                    <div className="grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
+                    <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
                       {providerChoices
                         .filter((item) =>
                           ["openai-key", "anthropic", "tailscale"].includes(item.id),
                         )
                         .map((item) => (
-                          <Button
+                          <button
                             key={item.id}
-                            variant="transparent"
+                            type="button"
                             disabled={saving}
                             aria-pressed={choice === item.id}
+                            className={`flex min-h-14 items-center gap-2.5 rounded-control border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${choice === item.id ? "bg-list-selection" : "bg-transparent hover:bg-control"}`}
                             onClick={() => {
                               selectProviderChoice(item.id);
                               setBuiltinChoiceId(null);
                               setProviderSkipped(false);
-                              if (item.id === "openai-key" || item.id === "anthropic")
+                              if (item.id === "openai-key" || item.id === "anthropic") {
                                 setApiKeyDialogChoice(item.id);
+                              }
                             }}
                           >
-                            {item.title}
-                          </Button>
+                            <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-primary shadow-control">
+                              {item.iconProviderId ? (
+                                <ProviderIcon
+                                  providerId={item.iconProviderId}
+                                  providerLabel={item.title}
+                                  className="size-4.5"
+                                />
+                              ) : (
+                                <Network className="size-4.5" />
+                              )}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <Text variant="small-strong" truncate className="block">
+                                {item.title}
+                              </Text>
+                              <Text
+                                variant="small"
+                                color="tertiary"
+                                truncate
+                                className="mt-0.5 block"
+                              >
+                                {item.description}
+                              </Text>
+                            </span>
+                            <Check
+                              aria-hidden="true"
+                              className={`size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
+                            />
+                          </button>
                         ))}
                     </div>
                     {providers.isLoading && moreProviders.length === 0 ? (
@@ -1317,7 +1263,7 @@ export function OnboardingFlow() {
                       Everything Aiden brings together
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
-                      Explore all {featureBentos.length} shipped features. Scroll, then hover or
+                      Explore all {visibleFeatureBentos.length} shipped features. Scroll, then hover or
                       focus a tile to learn more.
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
@@ -1329,11 +1275,13 @@ export function OnboardingFlow() {
                 </div>
                 <div
                   data-onboarding-bento
-                  data-onboarding-feature-count={featureBentos.length}
+                  data-onboarding-feature-count={visibleFeatureBentos.length}
                   className="mt-5 space-y-7 pb-1"
                 >
                   {featureGroups.map((group) => {
-                    const features = featureBentos.filter((feature) => feature.group === group.id);
+                    const features = visibleFeatureBentos.filter(
+                      (feature) => feature.group === group.id,
+                    );
                     const headingId = `onboarding-feature-group-${group.id}`;
                     return (
                       <section key={group.id} aria-labelledby={headingId}>
@@ -1505,7 +1453,7 @@ export function OnboardingFlow() {
         }}
         layer="onboarding"
         title={`Connect ${apiKeyDialogChoice === "openai-key" ? "OpenAI" : "Anthropic"}`}
-        description="Paste your API key to verify the connection. Validation does not send a chat message, and the key is stored encrypted on this Mac."
+        description="Paste your API key to verify the connection. Validation does not send a chat message, and the key is stored encrypted on this device."
         confirmLabel={discovering ? "Validating…" : "Validate & continue"}
         confirmDisabled={!apiKey.trim()}
         dismissDisabled={saving}

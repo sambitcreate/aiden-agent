@@ -174,7 +174,7 @@ export class AidenRemoteWorkspaceBrowserService {
       if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
       throw new AidenRemoteServiceError(
         "workspace_unavailable",
-        "This approved folder is not currently available on the Mac.",
+        "This approved folder is not currently available on the desktop.",
         409,
       );
     }

@@ -48,6 +48,8 @@ interface MessageListProps {
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
   streamingArtifacts?: readonly ChatArtifactV1[];
   streamComplete?: boolean;
+  /** Persisted assistant message that duplicates the completed streaming row during handoff. */
+  persistedHandoffMessageId?: string | null;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
   liveSubagents: readonly SubagentRunSnapshot[];
@@ -67,6 +69,7 @@ interface AssistantResponseProps {
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
+  richLinks?: boolean;
 }
 
 function AssistantResponse({
@@ -78,6 +81,7 @@ function AssistantResponse({
   streaming = false,
   streamComplete,
   onStreamHandoffComplete,
+  richLinks = true,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
@@ -108,6 +112,7 @@ function AssistantResponse({
             streaming={streaming}
             streamComplete={streamComplete}
             onStreamHandoffComplete={onStreamHandoffComplete}
+            richLinks={richLinks}
           />
         ) : null}
         {attachments?.length ? (
@@ -165,6 +170,7 @@ function AssistantResponse({
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}
+            richLinks={richLinks}
           />
         );
       })}
@@ -189,6 +195,17 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
   );
 }
 
+export function richLinkHandoffDuplicateMessageId(
+  messages: readonly ChatMessage[],
+  streamingText: string | null,
+  streamComplete: boolean,
+  persistedHandoffMessageId: string | null,
+): string | null {
+  if (!streamComplete || streamingText === null || persistedHandoffMessageId === null) return null;
+  const message = messages.find((candidate) => candidate.id === persistedHandoffMessageId);
+  return message?.role === "assistant" && message.content === streamingText ? message.id : null;
+}
+
 export function MessageList({
   chatId,
   messages,
@@ -196,6 +213,7 @@ export function MessageList({
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamComplete,
+  persistedHandoffMessageId = null,
   onStreamHandoffComplete,
   timeline,
   liveSubagents,
@@ -237,6 +255,12 @@ export function MessageList({
       streamingText ||
       liveAttachments.length > 0 ||
       liveHtmlArtifacts.length > 0,
+  );
+  const richLinkHandoffDuplicateId = richLinkHandoffDuplicateMessageId(
+    messages,
+    streamingText,
+    Boolean(streamComplete),
+    persistedHandoffMessageId,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -325,6 +349,7 @@ export function MessageList({
               timeline={message.timeline}
               reasoning={message.reasoning}
               attachments={message.attachments}
+              richLinks={message.id !== richLinkHandoffDuplicateId}
               subagentChips={
                 subagentsEnabled && message.subagents ? (
                   <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />

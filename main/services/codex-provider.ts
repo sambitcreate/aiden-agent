@@ -12,7 +12,7 @@ import type {
   OAuthCredential,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
-import { cleanupSessionResources, lazyStream } from "@earendil-works/pi-ai";
+import { cleanupSessionResources, lazyStream, normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "./codex-auth-failure.js";
 import {
   codexThinkingLevelsForModel,
@@ -802,7 +802,7 @@ export class CodexProviderService {
       const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
       if (!provider) throw new Error("OpenAI Codex provider is unavailable.");
       const prepared = await this.prepareIsolatedStream(model, options);
-      const source = provider.streamSimple(prepared.model, context, prepared.options);
+      const source = provider.streamSimple(prepared.model, normalizeContext(context), prepared.options);
       void source
         .result()
         .then(prepared.observeResult)

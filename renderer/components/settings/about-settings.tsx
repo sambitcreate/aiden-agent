@@ -5,9 +5,11 @@ import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
 import { DiagnosticsSettings } from "./diagnostics-settings";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
+const RELEASES_URL = `${REPOSITORY_URL}/releases`;
 
 function buildLabel(environment: string): string {
   return environment.toLocaleLowerCase() === "development"
@@ -19,12 +21,16 @@ function formatMegabytes(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
-function updateDescription(snapshot: AppUpdateSnapshot): string {
+function updateDescription(snapshot: AppUpdateSnapshot, platform: string): string {
   switch (snapshot.status) {
     case "idle":
-      return "Aiden checks automatically and downloads signed updates without interrupting your work.";
+      return platform === "linux"
+        ? "Aiden checks automatically and downloads AppImage updates without interrupting your work."
+        : "Aiden checks automatically and downloads signed updates without interrupting your work.";
     case "checking":
-      return "Checking the signed Aiden Agent update feed…";
+      return platform === "linux"
+        ? "Checking the Aiden Agent update feed…"
+        : "Checking the signed Aiden Agent update feed…";
     case "downloading": {
       const progress =
         snapshot.transferred !== null && snapshot.total !== null
@@ -39,7 +45,9 @@ function updateDescription(snapshot: AppUpdateSnapshot): string {
     case "error":
       return snapshot.error === "download-failed"
         ? `Aiden Agent${snapshot.version ? ` ${snapshot.version}` : ""} couldn’t finish downloading. Check your connection and try again.`
-        : "Aiden couldn’t reach the signed update feed. Check your connection and try again.";
+        : platform === "linux"
+          ? "Aiden couldn’t reach the update feed. Check your connection and try again."
+          : "Aiden couldn’t reach the signed update feed. Check your connection and try again.";
   }
 }
 
@@ -56,6 +64,8 @@ function updateRestartError(result: AppUpdateRestartResult): string | null {
 }
 
 export function AboutSettings() {
+  const capabilities = useAppCapabilities();
+  const showUpdateControls = capabilities.platform === "darwin" || capabilities.appUpdates;
   const [appInfo, setAppInfo] = React.useState<AppInfo | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [confirmReset, setConfirmReset] = React.useState(false);
@@ -124,7 +134,9 @@ export function AboutSettings() {
           appInfo ? `Aiden Agent ${appInfo.version} is up to date.` : "Aiden Agent is up to date.",
         );
       } else if (result.outcome === "unavailable") {
-        toast.info("Automatic updates are available in signed production builds.");
+        toast.info(capabilities.platform === "linux"
+          ? "Automatic updates require a production AppImage installation."
+          : "Automatic updates are available in signed production builds.");
       }
     } catch {
       toast.error("Aiden could not start an update check.");
@@ -206,8 +218,21 @@ export function AboutSettings() {
         <Field
           className="border-t border-separator"
           label="Software update"
-          description={updateDescription(updateSnapshot)}
+          description={
+            showUpdateControls
+              ? updateDescription(updateSnapshot, capabilities.platform)
+              : capabilities.platform === "linux"
+                ? "Install updates through your package manager, or download the newest Linux package from GitHub Releases."
+                : "Download the newest production build from GitHub Releases."
+          }
         >
+          {!showUpdateControls ? (
+            <Button asChild size="small" variant="filled">
+              <a href={RELEASES_URL} target="_blank" rel="noreferrer">
+                <Download /> Open releases
+              </a>
+            </Button>
+          ) : (
           <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
             {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
               <div
@@ -250,6 +275,7 @@ export function AboutSettings() {
                       : "Check for updates"}
             </Button>
           </div>
+          )}
         </Field>
         <Field
           className="border-t border-separator"

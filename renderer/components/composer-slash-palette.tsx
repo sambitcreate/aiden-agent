@@ -239,6 +239,7 @@ export function ComposerSlashPalette({
     <div
       className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-dialog border border-separator bg-popover/98 shadow-popover backdrop-blur-xl"
       data-composer-slash-palette
+      data-browser-occluder
       data-presence={presenceState}
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >

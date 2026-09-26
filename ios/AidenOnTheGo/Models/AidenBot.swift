@@ -8,7 +8,7 @@ enum AidenBotContractError: Error, Equatable, LocalizedError {
         switch self {
         case .invalidCombination("no available provider and model"):
             String(
-                localized: "Set up a provider and model on your Mac. In Aiden Agent, open Settings → Providers, connect or refresh a provider, and make at least one chat model available. Then tap Try Again."
+                localized: "Set up a provider and model on your paired desktop. In Aiden Agent, open Settings → Providers, connect or refresh a provider, and make at least one chat model available. Then tap Try Again."
             )
         case .invalidCombination("unavailable custom access"):
             String(

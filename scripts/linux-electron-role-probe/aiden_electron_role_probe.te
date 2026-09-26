@@ -1,0 +1,58 @@
+policy_module(aiden_electron_role_probe, 1.0)
+
+type aiden_electron_role_probe_main_t;
+type aiden_electron_role_probe_exec_t;
+init_daemon_domain(aiden_electron_role_probe_main_t, aiden_electron_role_probe_exec_t)
+type aiden_electron_role_probe_child_t;
+domain_type(aiden_electron_role_probe_child_t)
+domain_entry_file(aiden_electron_role_probe_child_t, aiden_electron_role_probe_exec_t)
+role system_r types aiden_electron_role_probe_child_t;
+# Broad GUI access is deliberate: this experiment proves role transitions only.
+unconfined_domain(aiden_electron_role_probe_main_t)
+unconfined_domain(aiden_electron_role_probe_child_t)
+domtrans_pattern(aiden_electron_role_probe_main_t, aiden_electron_role_probe_exec_t, aiden_electron_role_probe_child_t)
+gen_require(`
+  role unconfined_r;
+  type bin_t;
+  type shell_exec_t;
+')
+# Keep forged runcon contexts valid so denials exercise authorization.
+role unconfined_r types { aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t };
+domain_entry_file(aiden_electron_role_probe_child_t, bin_t)
+domain_entry_file(aiden_electron_role_probe_child_t, shell_exec_t)
+# Actual Aiden can launch command children; these must not keep main's role.
+domtrans_pattern(aiden_electron_role_probe_main_t, bin_t, aiden_electron_role_probe_child_t)
+domtrans_pattern(aiden_electron_role_probe_main_t, shell_exec_t, aiden_electron_role_probe_child_t)
+
+# Scoped success auditing makes the actual exec transition observable.
+auditallow aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t:process transition;
+auditallow aiden_electron_role_probe_child_t aiden_electron_role_probe_exec_t:file entrypoint;
+
+# Chromium sets NNP before zygote exec. Without this scoped permission SELinux
+# retains the old SID; execute_no_trans denial then correctly stops the launch.
+allow aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t:process2 nnp_transition;
+
+# Separate synthetic SCM_RIGHTS creator. No automation authority.
+type aiden_electron_role_probe_sender_t;
+type aiden_electron_role_probe_sender_exec_t;
+init_daemon_domain(aiden_electron_role_probe_sender_t, aiden_electron_role_probe_sender_exec_t)
+type aiden_electron_role_probe_ipc_runtime_t;
+files_pid_file(aiden_electron_role_probe_ipc_runtime_t)
+type aiden_electron_role_probe_report_t;
+files_pid_file(aiden_electron_role_probe_report_t)
+type aiden_electron_role_probe_protected_t;
+gen_require(`type init_t;')
+allow aiden_electron_role_probe_sender_t self:file { getattr open read write };
+allow aiden_electron_role_probe_sender_t self:process setsockcreate;
+allow aiden_electron_role_probe_sender_t self:unix_stream_socket create_stream_socket_perms;
+allow aiden_electron_role_probe_sender_t aiden_electron_role_probe_protected_t:unix_stream_socket create_stream_socket_perms;
+manage_sock_files_pattern(aiden_electron_role_probe_sender_t, aiden_electron_role_probe_ipc_runtime_t, aiden_electron_role_probe_ipc_runtime_t)
+files_search_pids(aiden_electron_role_probe_sender_t)
+libs_use_ld_so(aiden_electron_role_probe_sender_t)
+libs_use_shared_libs(aiden_electron_role_probe_sender_t)
+dev_rw_null(aiden_electron_role_probe_sender_t)
+allow init_t aiden_electron_role_probe_report_t:file { getattr open write };
+allow aiden_electron_role_probe_sender_t aiden_electron_role_probe_report_t:file { getattr write };
+allow { aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t } aiden_electron_role_probe_sender_t:fd use;
+allow { aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t } aiden_electron_role_probe_sender_t:unix_stream_socket { connectto read write getattr getopt };
+allow { aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t } aiden_electron_role_probe_protected_t:unix_stream_socket { read write getattr getopt };

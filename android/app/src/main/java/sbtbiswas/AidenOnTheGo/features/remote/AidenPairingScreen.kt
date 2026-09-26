@@ -82,7 +82,7 @@ fun AidenPairingScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Paired Macs", fontWeight = FontWeight.Bold) },
+                title = { Text("Paired desktops", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
@@ -186,7 +186,7 @@ fun AidenPairingScreen(
 
             // Pair New Mac Section
             Text(
-                text = "Connect your Mac",
+                text = "Connect your desktop",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = palette.secondary
@@ -194,7 +194,7 @@ fun AidenPairingScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
+                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.secondary
             )
@@ -304,7 +304,7 @@ fun AidenPairingScreen(
                         ) {
                             CircularProgressIndicator(color = palette.accent, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Pairing with Mac...", style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
+                            Text("Pairing with desktop...", style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
                         }
                     }
                 }
@@ -330,7 +330,7 @@ fun AidenPairingScreen(
                         colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
-                        label = { Text("Mac address") },
+                        label = { Text("Desktop address") },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -422,7 +422,7 @@ fun AidenPairingScreen(
             onDismissRequest = { installationPendingRemoval = null },
             title = { Text("Remove ${installation.name}?") },
             text = {
-                Text("This removes the pairing credential and all cached chats, Bots, usage, drafts, and workspace data for this Mac from this device.")
+                Text("This removes the pairing credential and all cached chats, Bots, usage, drafts, and workspace data for this desktop from this device.")
             },
             confirmButton = {
                 TextButton(

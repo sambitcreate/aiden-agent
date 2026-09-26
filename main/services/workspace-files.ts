@@ -6,7 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { readRegularFile } from "./regular-file-read.js";
+import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
+import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
 const MAX_INDEX_DEPTH = 20;
@@ -34,6 +35,8 @@ export interface WorkspaceFileEntry {
   depth: number;
   kind: WorkspaceFileKind;
   symbolic?: boolean;
+  filesystemDevice?: string;
+  filesystemInode?: string;
   size?: number;
   modifiedAt?: number;
 }
@@ -42,6 +45,10 @@ export interface WorkspaceFileIndex {
   entries: WorkspaceFileEntry[];
   truncated: boolean;
   skippedDirectories: number;
+}
+
+export function decodeWorkspaceFileText(buffer: Buffer, suppliedPath: string): string {
+  return decodeText(buffer, suppliedPath);
 }
 
 export interface WorkspaceFileDocument {
@@ -78,7 +85,53 @@ export interface WorkspaceFileWriteHooks {
   recoveryUse?: (recoveryPath: string) => Promise<"clear" | "open" | "unknown">;
 }
 
+export async function linuxRecoveryUse(
+  recoveryPath: string,
+  procRoot = "/proc",
+): Promise<"clear" | "open" | "unknown"> {
+  let target: { dev: number; ino: number };
+  try {
+    const stats = await fs.stat(recoveryPath);
+    target = { dev: stats.dev, ino: stats.ino };
+  } catch {
+    return "unknown";
+  }
+
+  let processEntries: string[];
+  try {
+    processEntries = (await fs.readdir(procRoot)).filter((entry) => /^\d+$/u.test(entry));
+  } catch {
+    return "unknown";
+  }
+
+  const currentUid = process.getuid?.();
+  let complete = true;
+  for (const pid of processEntries) {
+    const processPath = path.join(procRoot, pid);
+    try {
+      const processStats = await fs.stat(processPath);
+      if (currentUid !== undefined && processStats.uid !== currentUid) continue;
+      const descriptors = await fs.readdir(path.join(processPath, "fd"));
+      for (const descriptor of descriptors) {
+        try {
+          const stats = await fs.stat(path.join(processPath, "fd", descriptor));
+          if (stats.dev === target.dev && stats.ino === target.ino) return "open";
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") complete = false;
+        }
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A same-user /proc entry that cannot be inspected must fail closed so
+      // recovery data is never removed while a descriptor may still be open.
+      if (code !== "ENOENT") complete = false;
+    }
+  }
+  return complete ? "clear" : "unknown";
+}
+
 async function recoveryUse(recoveryPath: string): Promise<"clear" | "open" | "unknown"> {
+  if (process.platform === "linux") return linuxRecoveryUse(recoveryPath);
   if (process.platform !== "darwin") return "unknown";
   return new Promise((resolve) => {
     execFile(
@@ -184,6 +237,30 @@ function decodeText(buffer: Buffer, suppliedPath: string): string {
   }
 }
 
+/** One bounded directory scan; never descends or follows directory symlinks. */
+export async function listWorkspaceDirectory(
+  root: string,
+  directory: string,
+  signal?: AbortSignal,
+  identities?: WorkspaceDirectoryIdentities,
+): Promise<WorkspaceFileIndex> {
+  const realRoot = await canonicalRoot(root);
+  if (directory) await resolveExistingPath(realRoot, directory);
+  if (directory.split("/").filter(Boolean).length > MAX_INDEX_DEPTH) {
+    return { entries: [], truncated: true, skippedDirectories: 0 };
+  }
+  // The native helper opens each component with openat(O_NOFOLLOW), then
+  // enumerates the held descriptor. Path swaps cannot redirect enumeration.
+  const result = await listConfinedWorkspaceDirectory(realRoot, directory, signal, identities);
+  const entries: WorkspaceFileEntry[] = result.entries.map(child => ({
+    path: toPortablePath(path.join(directory, child.name)), name: child.name,
+    parentPath: directory, depth: directory.split("/").filter(Boolean).length, kind: child.kind,
+    filesystemDevice: child.device, filesystemInode: child.inode,
+  }));
+  sortWorkspaceEntries(entries);
+  return { entries, truncated: result.truncated, skippedDirectories: 0 };
+}
+
 export async function listWorkspaceFiles(
   root: string,
   signal?: AbortSignal,
@@ -285,6 +362,7 @@ export async function readWorkspaceFile(
   root: string,
   suppliedPath: string,
   signal?: AbortSignal,
+  options: { exclusiveIdentity?: RegularFileIdentity } = {},
 ): Promise<WorkspaceFileDocument> {
   throwIfAborted(signal);
   const { fullPath, relativePath } = await resolveExistingPath(root, suppliedPath);
@@ -295,7 +373,8 @@ export async function readWorkspaceFile(
   }
   // A pathname stat is only a snapshot: another app can grow or replace the
   // file before it is read. Enforce the byte limit on the opened descriptor.
-  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES).catch((error: unknown) => {
+  // Remote handles also bind the descriptor to the issued single-link inode.
+  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES, options).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "EFBIG") {
       throw new Error(`${relativePath} is too large to edit in Aiden.`);
     }

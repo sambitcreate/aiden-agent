@@ -31,8 +31,8 @@ test("migration atomically promotes repeated checkpoints and preserves owner-onl
     const result = await migratePiSessionJournal(journalPath, "fixture-repeated");
     const header = JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!);
     assert.deepEqual(
-      { kind: header.kind, version: header.version, id: header.id },
-      { kind: "header", version: 4, id: "fixture-repeated" },
+      { kind: header.kind, version: header.v, storageVersion: header.storageVersion, id: header.id },
+      { kind: "header", version: 4, storageVersion: 1, id: "fixture-repeated" },
     );
     assert.equal(result.receipt.counts.compactions, 2);
     assert.equal(result.receipt.counts.abandonedEntries, 2);
@@ -47,9 +47,11 @@ test("migration atomically promotes repeated checkpoints and preserves owner-onl
 
     const promoted = await readFile(journalPath, "utf8");
     const alteredLines = promoted.split("\n");
-    const alteredHeader = JSON.parse(alteredLines[0]!);
-    alteredHeader.metadata = { ...alteredHeader.metadata, chatId: "different-chat" };
-    alteredLines[0] = JSON.stringify(alteredHeader);
+    const metadataIndex = alteredLines.findIndex((line) => line.includes('"key":"session-metadata"'));
+    assert.ok(metadataIndex > 0);
+    const alteredMetadata = JSON.parse(alteredLines[metadataIndex]!);
+    alteredMetadata.value = { ...alteredMetadata.value, chatId: "different-chat" };
+    alteredLines[metadataIndex] = JSON.stringify(alteredMetadata);
     await writeFile(journalPath, alteredLines.join("\n"), { mode: 0o600 });
     await assert.rejects(
       migratePiSessionJournal(journalPath, "fixture-repeated"),
@@ -75,7 +77,7 @@ test("migration recovers a promoted journal whose receipt write was interrupted"
     const recovered = await migratePiSessionJournal(journalPath, "fixture-uncompacted");
     assert.equal(recovered.receipt.sourceSha256, first.receipt.sourceSha256);
     assert.equal(
-      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version,
+      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
       4,
     );
   });
@@ -107,7 +109,7 @@ test("migration accepts a torn final append but backup retains exact source byte
     const result = await migratePiSessionJournal(journalPath, "fixture-torn");
     assert.deepEqual(await readFile(result.receipt.backupPath), before);
     assert.equal(
-      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version,
+      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
       4,
     );
   });
@@ -170,7 +172,7 @@ test("randomized repeated checkpoint chains retain valid v4 context", async () =
       const result = await migratePiSessionJournal(journalPath, chatId);
       assert.equal(result.receipt.validation, "passed");
       assert.equal(
-        JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version,
+        JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
         4,
       );
     } finally {

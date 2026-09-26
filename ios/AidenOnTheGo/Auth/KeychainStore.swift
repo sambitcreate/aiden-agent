@@ -7,7 +7,7 @@ protocol KeychainStoring {
     func delete(_ key: KeychainStore.Key) throws
 
     // A device credential is scoped to Aiden's stable installation identifier.
-    // Switching or removing one paired Mac must never read or clear another
+    // Switching or removing one paired desktop must never read or clear another
     // installation's credential.
     func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws
     func load(_ key: KeychainStore.Key, scope: String) throws -> String?

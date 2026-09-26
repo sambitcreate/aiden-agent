@@ -274,7 +274,7 @@
       "post": {
         "operationId": "updateDeviceCapabilities",
         "x-aiden-capability": "server:read",
-        "description": "Additive post-pairing negotiation for the progress capability vocabulary. Only tasks:read and agents:read may be requested; Bot and legacy grants remain pairing-bound. The response returns the authenticated device's complete updated grant list.",
+        "description": "Additive post-pairing negotiation. Any device may request tasks:read and agents:read; only a paired mac or linux device may request simulators:control, which is never advertised to phones or tablets. Bot and legacy grants remain pairing-bound. The response returns the authenticated device's complete updated grant list. Compatibility: an older Aiden cannot load a device record holding simulators:control, so downgrading the serving Mac after a desktop negotiates it requires re-pairing that desktop.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2162,11 +2162,14 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/WorkspaceId"
-          }
+          },
+          { "name": "tree", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "Opt into nonrecursive directory pages. Required when directory or cursor is supplied." },
+          { "name": "directory", "in": "query", "schema": { "type": "string", "pattern": "^file_[A-Za-z0-9_-]{43}$" }, "description": "Opaque directory handle from a file page; omitted for workspace root." },
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" }, "description": "Expiring device/workspace/directory-bound continuation. An evicted snapshot returns handle_expired." }
         ],
         "responses": {
           "200": {
-            "description": "Bounded recursive file index",
+            "description": "Legacy bounded recursive file index, or at most 200 direct children when tree=1. Page responses include directoryPath; nextCursor indicates more captured children. truncated reports omitted/scan-limited entries, not pagination.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3377,6 +3380,258 @@
           }
         }
       }
+    },
+    "/simulators": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listSimulators",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty.",
+        "responses": {
+          "200": {
+            "description": "Simulator listing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulatorListing"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/simulators/open": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "openSimulator",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The opened simulator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulatorOpenResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/simulators/shutdown": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "shutdownSimulator",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Shut down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulatorOk"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/simulators/settings": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "getSimulatorSettings",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Reads a listed simulator's settings.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulatorSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/simulators/action": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "runSimulatorAction",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Runs one control action on a listed simulator.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulatorSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/simulators/hub/{hubPath}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "hubPath",
+          "in": "path",
+          "required": true,
+          "description": "An allowlisted hub path. It spans several segments, for example vendor/serve-sim/helper/{udid}/stream.avcc.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      ],
+      "get": {
+        "operationId": "relaySimulatorHub",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
+        "responses": {
+          "200": {
+            "description": "Relayed hub content"
+          },
+          "101": {
+            "description": "WebSocket upgrade for a listed simulator's helper stream"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "captureSimulatorScreenshot",
+        "x-aiden-capability": "simulators:control",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot accepts POST. The body names one listed simulator; the relay forwards only that field and bounds the request to 1 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "udid"
+                ],
+                "properties": {
+                  "udid": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9-]+$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "PNG screenshot",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3865,7 +4120,8 @@
                 "bot:read",
                 "bot:write",
                 "tasks:read",
-                "agents:read"
+                "agents:read",
+                "simulators:control"
               ]
             },
             "uniqueItems": true
@@ -3891,7 +4147,8 @@
                 "bot:read",
                 "bot:write",
                 "tasks:read",
-                "agents:read"
+                "agents:read",
+                "simulators:control"
               ]
             },
             "uniqueItems": true
@@ -3996,13 +4253,14 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Progress capability vocabulary the device accepts. Only additive progress grants are negotiable after pairing; legacy and Bot grants are never modified by this route.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature.",
             "minItems": 1,
-            "maxItems": 2,
+            "maxItems": 3,
             "items": {
               "enum": [
                 "tasks:read",
-                "agents:read"
+                "agents:read",
+                "simulators:control"
               ]
             },
             "uniqueItems": true
@@ -4037,13 +4295,156 @@
                 "bot:read",
                 "bot:write",
                 "tasks:read",
-                "agents:read"
+                "agents:read",
+                "simulators:control"
               ]
             },
             "uniqueItems": true
           }
         },
         "additionalProperties": false
+      },
+      "SimulatorDevice": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "version",
+          "booted",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "booted": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "iphone",
+              "ipad",
+              "other"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "SimulatorListing": {
+        "type": "object",
+        "required": [
+          "sharing",
+          "status",
+          "devices"
+        ],
+        "properties": {
+          "sharing": {
+            "type": "boolean",
+            "description": "Whether the serving Mac's owner has turned on Share with paired Macs. devices is empty while false."
+          },
+          "status": {
+            "enum": [
+              "disabled",
+              "needs-consent",
+              "installing",
+              "starting",
+              "ready",
+              "stopped",
+              "unavailable",
+              "error"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/SimulatorDevice"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SimulatorDeviceRequest": {
+        "type": "object",
+        "required": [
+          "deviceId"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SimulatorActionRequest": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "type"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": true,
+        "description": "One simulator control action. Fields beyond deviceId and type follow the desktop device-action vocabulary and are validated by the serving Mac, which always runs the action on its own simulators."
+      },
+      "SimulatorOpenResponse": {
+        "type": "object",
+        "required": [
+          "device"
+        ],
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/SimulatorDevice"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SimulatorOk": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SimulatorSettings": {
+        "type": "object",
+        "description": "Simulator settings snapshot (appearance, content size, and similar) as reported by the serving Mac.",
+        "additionalProperties": true
       },
       "SpeechStatus": {
         "type": "object",
@@ -6120,7 +6521,8 @@
             "enum": [
               "scout",
               "planner",
-              "reviewer"
+              "reviewer",
+              "implementer"
             ]
           },
           "label": {
@@ -7280,6 +7682,8 @@
           "maxDepth"
         ],
         "properties": {
+          "directoryPath": { "type": "string", "maxLength": 4096, "description": "Workspace-relative directory, empty for root. Present only for tree pages." },
+          "nextCursor": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" },
           "snapshotId": {
             "type": "string"
           },

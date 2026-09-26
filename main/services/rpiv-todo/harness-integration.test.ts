@@ -1,9 +1,7 @@
+import { InMemorySessionRepo } from "../pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  InMemorySessionRepo,
-  type AgentMessage,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   createFauxCore,

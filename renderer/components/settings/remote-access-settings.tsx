@@ -1,3 +1,4 @@
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
@@ -51,6 +52,7 @@ import type {
   AidenRemoteSettingsSnapshot,
   AidenRemoteTailscaleTakeoverReviewView,
 } from "../../shared/aiden-remote";
+import { isAidenRemoteTlsEndpointFailure } from "../../shared/aiden-remote";
 import {
   groupRemoteDevices,
   remoteConnectionSummary,
@@ -98,9 +100,15 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
       return { badge: status.enabled ? "Connected" : "Configured", description: "This Aiden profile owns the mobile route." };
     }
     case "available":
-      return { badge: "Available", description: "The Aiden mobile route is available on this Mac." };
+      if (status.tailscaleErrorCode === "permission_denied") {
+        return {
+          badge: "Permission needed",
+          description: "Run `sudo tailscale set --operator=$USER` in a terminal, then connect again.",
+        };
+      }
+      return { badge: "Available", description: "The Aiden mobile route is available on this desktop." };
     case "other_aiden_live":
-      return { badge: "In use", description: "Another running Aiden profile owns this Mac’s mobile route. Stop or disconnect it before connecting here." };
+      return { badge: "In use", description: "Another running Aiden profile owns this desktop’s mobile route. Stop or disconnect it before connecting here." };
     case "other_aiden_stale":
       return { badge: "Previous route found", description: "A previous Aiden profile left this route behind. Review it before taking over." };
     case "unrelated_conflict":
@@ -117,14 +125,18 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
             ? "Sign in required"
             : status.tailscaleErrorCode === "https_unavailable"
               ? "HTTPS unavailable"
-              : "Unavailable",
+              : status.tailscaleErrorCode === "permission_denied"
+                ? "Permission needed"
+                : "Unavailable",
         description: status.tailscaleErrorCode === "not_installed" || !status.tailscaleInstalled
           ? "Install Tailscale to use this connection method."
           : status.tailscaleErrorCode === "not_connected"
             ? "Open Tailscale and sign in before connecting Aiden’s mobile route."
             : status.tailscaleErrorCode === "https_unavailable"
               ? "Enable HTTPS for this Tailscale device name, then try again."
-              : "Aiden couldn’t safely inspect the current Tailscale Serve configuration.",
+              : status.tailscaleErrorCode === "permission_denied"
+                ? "Run `sudo tailscale set --operator=$USER` in a terminal, then connect again."
+                : "Aiden couldn’t safely inspect the current Tailscale Serve configuration.",
       };
   }
 }
@@ -143,10 +155,11 @@ function friendlyTailscaleError(error: unknown): string {
   if (message.includes("tailscale_reconciliation_conflict")) return "The route changed after the uncertain update. Aiden left it untouched; inspect Tailscale Serve.";
   if (message.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
   if (message.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
-  if (message.includes("tailscale_not_installed")) return "Install Tailscale on your Mac and phone, then sign in to the same private network. You can also choose On the same Wi-Fi.";
+  if (message.includes("tailscale_not_installed")) return "Install Tailscale on your desktop and phone, then sign in to the same private network. You can also choose On the same Wi-Fi.";
   if (message.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
   if (message.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
-  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this Mac’s mobile route. Wait a moment and try again.";
+  if (message.includes("tailscale_permission_denied")) return "On Linux, allow your user to manage Tailscale once with: sudo tailscale set --operator=$USER";
+  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this desktop’s mobile route. Wait a moment and try again.";
   return message && !message.startsWith("tailscale_") ? message : "Aiden couldn’t safely update the Tailscale route.";
 }
 
@@ -186,7 +199,7 @@ function RemoteAccessInfo() {
       <HoverCardContent align="start" className="w-80">
         <Text variant="small-strong">Aiden stays in control</Text>
         <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
-          Aiden On The Go can use only capabilities and folders approved on this Mac. Provider keys never leave Aiden, and the desktop app must be running. Tailscale is optional.
+          Aiden On The Go can use only capabilities and folders approved on this desktop. Provider keys never leave Aiden, and the desktop app must be running. Tailscale is optional.
         </Text>
       </HoverCardContent>
     </HoverCard>
@@ -230,6 +243,8 @@ function SettingsDeviceRow({
 }
 
 export function RemoteAccessSettings() {
+  const capabilities = useAppCapabilities();
+  const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
   const queryClient = useQueryClient();
   const settingsQuery = useAidenRemoteSettings();
   const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
@@ -333,7 +348,7 @@ export function RemoteAccessSettings() {
       setPairing(null);
       toast.error(settingsQuery.data.pairing
         ? "This pairing code was replaced by a newer pairing window."
-        : "This pairing window was closed on this Mac.");
+        : "This pairing window was closed on this desktop.");
       return;
     }
     if (pairingLifecycle.state === "cancelled") {
@@ -400,6 +415,12 @@ export function RemoteAccessSettings() {
       const nextPairing = review
         ? await aidenRemoteApi.setupPairing(transport, review)
         : await aidenRemoteApi.beginPairing(transport);
+      if (isAidenRemoteTlsEndpointFailure(nextPairing)) {
+        if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
+          toast.error(nextPairing.message);
+        }
+        return false;
+      }
       if (!mounted.current || pairingRequestGeneration.current !== requestGeneration) {
         await aidenRemoteApi.closePairing(nextPairing.pairingSessionId).catch(() => undefined);
         return false;
@@ -541,12 +562,12 @@ export function RemoteAccessSettings() {
     <>
       <FieldSet title="Phone setup">
         <Field label="1. Connect your phone" orientation="vertical"
-          description="Use your Bots and workspaces from your phone or tablet while Aiden runs on this Mac.">
+          description={`Use your ${capabilities.bots ? "Bots and workspaces" : "workspaces"} from your phone or tablet while Aiden runs on this ${hostLabel}.`}>
           <div className="flex flex-col gap-3">
             <RadioGroup value={selectedTransport} onValueChange={(value) => {
               setSetupTransport(value as "lan" | "tailscale"); setSetupError(null);
             }} className="grid gap-2" aria-label="Where will you use Aiden?" disabled={busy !== null}>
-              {([ ["tailscale", "Away from home", "Uses Tailscale on your Mac and phone."],
+              {([ ["tailscale", "Away from home", `Uses Tailscale on your ${hostLabel} and phone.`],
                 ["lan", "On the same Wi-Fi", "No Tailscale needed. Use the same local network."] ] as const).map(([value, title, description]) => (
                 <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-control p-3 ${selectedTransport === value ? "bg-list-selection" : "bg-well"}`}>
                   <RadioGroupItem value={value} />
@@ -568,15 +589,15 @@ export function RemoteAccessSettings() {
           </div>
         </Field>
         <Field label="2. Scan to finish" description="Aiden prepares the connection and shows a one-time code. Scan it in Aiden On The Go, or enter the setup code instead." orientation="vertical">
-          <Text variant="small" color="secondary">Keep Aiden running on your Mac. You can remove a device’s access below.</Text>
+          <Text variant="small" color="secondary">Keep Aiden running on your {hostLabel}. You can remove a device’s access below.</Text>
         </Field>
       </FieldSet>
 
-      <Disclosure title="This Mac settings" summary={`${snapshot.displayName} · ${summary}`}>
+      <Disclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
         <Field
           label={(
             <span className="flex items-center gap-1.5">
-              This Mac
+              This desktop
               <RemoteAccessInfo />
             </span>
           )}
@@ -594,7 +615,7 @@ export function RemoteAccessSettings() {
           </div>
         </Field>
         <Field
-          label="Mac name"
+          label="Desktop name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}
         >
           <form
@@ -608,7 +629,7 @@ export function RemoteAccessSettings() {
               value={displayNameDraft}
               onChange={(event) => setDisplayNameDraft(event.target.value)}
               maxLength={80}
-              aria-label="Mac display name"
+              aria-label="Desktop display name"
               disabled={busy !== null}
             />
             <Button
@@ -673,7 +694,7 @@ export function RemoteAccessSettings() {
           </div>
         </Field> : null}
         {groups.active.length === 0 && groups.pending.length === 0 && groups.inactive.length === 0 ? (
-          <div className="p-4 text-small text-secondary">No devices are paired with this Mac.</div>
+          <div className="p-4 text-small text-secondary">No devices are paired with this desktop.</div>
         ) : (
           <>
             {groups.active.map((device) => (
@@ -885,17 +906,17 @@ export function RemoteAccessSettings() {
       </Disclosure>
 
       <Dialog open={setupReview !== null} onOpenChange={(open) => { if (!open && !busy) setSetupReview(null); }}
-        title="Connect your phone to this Mac?"
+        title={`Connect your phone to this ${hostLabel}?`}
         description={setupReview?.transport === "tailscale"
           ? "Aiden will turn on phone access, prepare its private connection through Tailscale, and show a one-time code."
-          : "Aiden will turn on phone access over your local network and show a one-time code. Your phone and Mac need to be on the same network."}
+          : `Aiden will turn on phone access over your local network and show a one-time code. Your phone and ${hostLabel} need to be on the same network.`}
         confirmLabel={busy === "pairing" ? "Preparing connection…" : "Enable and show code"}
         busy={busy !== null} dismissDisabled={busy !== null}
         onConfirm={async () => { if (setupReview && await beginPairing(setupReview.transport, setupReview)) setSetupReview(null); }}>
-        <Text as="p" variant="small" color="secondary">Paired devices can use the workspaces and capabilities this Mac allows. Your AI keys stay on this Mac; requests still go to the AI service you choose.</Text>
+        <Text as="p" variant="small" color="secondary">Paired devices can use the workspaces and capabilities this {hostLabel} allows. Your AI keys stay on this {hostLabel}; requests still go to the AI service you choose.</Text>
         <Text as="p" variant="small" color="secondary" className="mt-3">Keep Aiden running. Remove a device’s access here at any time. Closing the code window stops pairing; phone access stays on until you turn it off.</Text>
         <details className="mt-3 text-small"><summary className="cursor-pointer rounded-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Review folder browsing access</summary>
-          <Text as="p" variant="small" color="secondary" className="mt-2">{snapshot.approvedRoots.length ? snapshot.approvedRoots.map((root) => root.label).join(", ") : "No additional folders approved for browsing."} Existing permitted workspaces and Bot access stay unchanged.</Text>
+          <Text as="p" variant="small" color="secondary" className="mt-2">{snapshot.approvedRoots.length ? snapshot.approvedRoots.map((root) => root.label).join(", ") : "No additional folders approved for browsing."} Existing permitted workspaces{capabilities.bots ? " and Bot access" : ""} stay unchanged.</Text>
         </details>
         {setupError ? <Callout color="red" role="alert" className="mt-3">{setupError}</Callout> : null}
       </Dialog>
@@ -938,11 +959,11 @@ export function RemoteAccessSettings() {
             </Badge>
             <div className="w-full rounded-control bg-well px-4 py-3 text-left">
               <Text variant="small" color="secondary" className="block">
-                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby Mac address"}
+                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby desktop address"}
               </Text>
               <div className="mt-1 flex items-center justify-between gap-3">
                 <code className="min-w-0 break-all font-mono text-small text-primary">{pairing.endpoint}</code>
-                <CopyButton text={pairing.endpoint} label="Copy Mac address" />
+                <CopyButton text={pairing.endpoint} label="Copy desktop address" />
               </div>
             </div>
             <div
@@ -964,7 +985,7 @@ export function RemoteAccessSettings() {
               <Text variant="small" color="secondary" className="mt-2 block">
                 {pairingTransport === "tailscale"
                   ? "Enter this private address and the setup code on your phone or tablet."
-                  : "Select this discovered Mac, then enter the setup code on your phone or tablet."}
+                  : "Select this discovered desktop, then enter the setup code on your phone or tablet."}
               </Text>
             </div>
             <Text variant="small" color="secondary" role="status" aria-live="polite">
@@ -990,7 +1011,7 @@ export function RemoteAccessSettings() {
         open={movePortReview}
         onOpenChange={setMovePortReview}
         title="Move this Remote Access endpoint?"
-        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this Mac again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
+        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this desktop again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
         confirmLabel="Use Another Port"
         busy={busy === "movePort"}
         keepOpenOnConfirm

@@ -203,6 +203,23 @@ test("shell resolution falls back to the first executable candidate", async () =
   assert.equal(spawnedShell, "/bin/sh");
 });
 
+test("terminal inherits the macOS user CLI directories from a GUI launch", async () => {
+  if (process.platform !== "darwin") return;
+  const owner = ownerState();
+  let childPath = "";
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    shellCandidates: () => ["/bin/sh"],
+    spawnPty: ((_file: string, _args: string[], options: { env: Record<string, string> }) => {
+      childPath = options.env.PATH;
+      return fakePty().pty;
+    }) as typeof spawn,
+  });
+  await service.create("workspace-1", "/tmp", owner.owner);
+  assert.ok(childPath.split(":").includes(path.join(process.env.HOME!, ".local", "bin")));
+  assert.ok(childPath.split(":").includes("/opt/homebrew/bin"));
+});
+
 test("shell resolution rejects descriptively when no candidate is executable", async () => {
   const owner = ownerState();
   const service = new TerminalService({
@@ -309,6 +326,18 @@ test("production spawn-helper discovery reads only the unpacked ASAR directory",
 
   assert.deepEqual(reads, [unpackedPrebuilds]);
   assert.deepEqual(helpers, [
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "node-pty",
+      "build",
+      "Release",
+      "spawn-helper",
+    ),
     path.join(unpackedPrebuilds, "darwin-arm64", "spawn-helper"),
     path.join(unpackedPrebuilds, "darwin-x64", "spawn-helper"),
   ]);
@@ -333,7 +362,19 @@ test("spawn-helper discovery handles node_modules.asar and absent prebuilds", as
     throw new Error("missing");
   });
 
-  assert.deepEqual(helpers, []);
+  assert.deepEqual(helpers, [
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "node_modules.asar.unpacked",
+      "node-pty",
+      "build",
+      "Release",
+      "spawn-helper",
+    ),
+  ]);
   assert.deepEqual(reads, [
     path.join(
       "/Applications",
