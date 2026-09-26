@@ -404,7 +404,7 @@ test("production journal creation and legacy migration obey the device rollout w
     rollout: { load: async () => migrationPolicy, development: false, behaviorEnabled: true },
   });
   assert.ok(await promoted.openChat("rollout-legacy", { createdAt: 0 }));
-  assert.equal(JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).version, 4);
+  assert.equal(JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).v, 4);
   await rm(`${journal}.migration-v1.json`);
   const recovered = new PiCompactionSessionStore({
     root: async () => root,
@@ -439,7 +439,7 @@ test("openChatIfEligible probes the rollout without creating or rewriting journa
   assert.ok(createdOutcome.session);
   const createdPath = (await createdOutcome.session.getMetadata()).path;
   assert.ok((await stat(createdPath)).isFile());
-  assert.equal(JSON.parse((await readFile(createdPath, "utf8")).split("\n")[0]!).version, 4);
+  assert.equal(JSON.parse((await readFile(createdPath, "utf8")).split("\n")[0]!).v, 4);
 
   // (b) A pre-activation journal-less chat is reported ineligible and no
   // journal file appears on disk.

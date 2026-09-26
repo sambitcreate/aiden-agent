@@ -8,6 +8,18 @@ const BUILD_ENVIRONMENT = Object.freeze({
   LC_ALL: "C",
 });
 
+// xcrun must honor a caller-selected Xcode or SDK. Without them, hosts whose
+// Command Line Tools SDK cannot link the helper have no way to build it.
+const DARWIN_TOOLCHAIN_VARIABLES = Object.freeze(["DEVELOPER_DIR", "SDKROOT"]);
+
+function darwinBuildEnvironment(environment) {
+  const selected = {};
+  for (const name of DARWIN_TOOLCHAIN_VARIABLES) {
+    if (environment[name]) selected[name] = environment[name];
+  }
+  return Object.freeze({ ...BUILD_ENVIRONMENT, ...selected });
+}
+
 async function firstExecutable(candidates) {
   for (const candidate of candidates) {
     try {
@@ -29,6 +41,7 @@ export async function nativeCCompileInvocation({
   testingDefine,
   testing = false,
   universalMac = !testing,
+  environment = globalThis.process.env,
 }) {
   const common = [
     "-std=c17",
@@ -52,7 +65,7 @@ export async function nativeCCompileInvocation({
         "-o",
         output,
       ],
-      env: BUILD_ENVIRONMENT,
+      env: darwinBuildEnvironment(environment),
     };
   }
   if (platform === "linux") {

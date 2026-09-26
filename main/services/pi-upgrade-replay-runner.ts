@@ -1,5 +1,6 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
+
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -414,7 +415,7 @@ export async function runPiUpgradeReplayCases(): Promise<PiUpgradeReplayMeasurem
     await writeFile(journal, lines.join("\n"), { mode: 0o600 });
     const migrated = await migratePiSessionJournal(journal, "replay-migration");
     if (migrated.receipt.validation !== "passed" || migrated.receipt.newFormat !== "pi-session-v4" ||
-      JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).version !== 4) {
+      JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).v !== 4) {
       migrationFailures += 1;
     }
   } catch {

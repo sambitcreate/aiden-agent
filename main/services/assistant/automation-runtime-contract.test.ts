@@ -105,7 +105,7 @@ test("repeated attended tool errors are bounded before they can loop indefinitel
   const client = source("../llm-client.ts");
   assert.match(client, /prepareNextTurnWithContext/u);
   assert.match(client, /advanceAttendedToolErrorState/u);
-  assert.match(client, /recoverAttendedToolErrorContext\(context\)/u);
+  assert.match(client, /recoverAttendedToolErrorContext\(nextContext\)/u);
   assert.doesNotMatch(client, /candidate\?\.abort\(\)/u);
 
   const guard = source("./tool-loop-guard.ts");

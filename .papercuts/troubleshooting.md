@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
+- 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
 - 2026-09-21 Subagents layout: this fresh worktree had no `node_modules`; focused `tsx`, TypeScript, and ESLint commands failed on missing packages until `npm ci`. Check dependency installation before interpreting those failures as code regressions.
 
 - 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
@@ -1114,6 +1116,14 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+# Pi 0.87.1 pin migration
+
+- The 0.87.1 typecheck exposed a larger session API break than the digest listed: `InMemorySessionRepo`, `buildSessionContext`, v4 JSONL header shape, and append/move methods changed. Recheck persisted journal compatibility before treating a clean prompt migration as shippable.
+- Pi's `TranscriptContext` is branded, so direct custom stream tests and wrappers need `normalizeContext`; raw `{messages}` fixtures no longer compile.
+- `test:subagents` first hit a CommandLineTools SDK linker error (`arm64e.x1` in MacOSX27.0.tbd). The three subagent native build scripts stripped toolchain variables; pass scoped `DEVELOPER_DIR` and `SDKROOT` through their sanitized child environments.
+- Pi's 0.87.1 catalog removed pinned Codex/Google fixture IDs and added built-in Radius models. Refresh provider fixtures and advance synthetic catalog timestamps beyond the bundled manifest when bumping the pin.
+- The full test command reached Bot native prebuild and found the same stripped SDK selection in `build-bot-inbox-writer.mjs`; preserve scoped `DEVELOPER_DIR` and `SDKROOT` there too.
+- A 0.87.1 provider smoke hung while `server.close()` waited on new SDK keepalive sockets; close loopback connections in fixture teardown. Anthropic now appends `?beta=true`, so assert the single `/v1/messages` pathname.
 ## 2026-09-22 — native recovery verification
 
 - The initial isolated checkout was behind main; fetched `c8c09e0d2` before coding. The local Hermex study checkout also lacked the cited commits; verified/fetched upstream HEAD `aa7830b28a071769c2d26bc08949e38e09f4b388` into Git objects for read-only comparison.
