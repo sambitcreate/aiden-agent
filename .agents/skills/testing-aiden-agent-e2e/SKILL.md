@@ -1,31 +1,46 @@
 ---
 name: testing-aiden-agent-e2e
-description: How to run and write Playwright Electron e2e tests for Aiden Agent on a Linux VM — including the setup steps needed when the box has no system keychain (safeStorage) and how to bypass onboarding by seeding app state instead of clicking through it.
+description: How to write, list, type-check, and run the Playwright Electron e2e tests for Aiden Agent — which parts work on a Linux VM (authoring, type-checking, listing), why the Electron suite itself only runs on macOS, and the harness APIs and locators the specs rely on.
 ---
 
 # Testing Aiden Agent e2e (Playwright + Electron)
 
 ## Devin Secrets Needed
-None for the mock harness — `tests/e2e/fixtures.ts` runs a deterministic mock LM Studio (`startMockLmStudio`) on a random localhost port. Only needed for `AIDEN_E2E_LIVE_LMSTUDIO=1` acceptance runs.
+None for the mock harness. `tests/e2e/fixtures.ts` runs a deterministic mock LM Studio on a random localhost port. You only need a real LM Studio for `npm run test:e2e:live:lmstudio` (`AIDEN_E2E_LIVE_LMSTUDIO=1`, optional `AIDEN_E2E_LMSTUDIO_BASE_URL`).
 
-## Prerequisites (Linux box)
-- Node: `export PATH=$HOME/.nvm/versions/node/v24.19.0/bin:$PATH`
-- `npm ci --ignore-scripts --no-audit --no-fund` skips postinstalls, so the Electron binary may be absent — run `node node_modules/electron/install.js` once.
-- `npm run build` must produce `build/main/index.js` and `build/renderer/main-window.html` before Playwright tests (the fixture launches the built bundle).
-- `node-pty` needs an Electron-ABI rebuild: `npx electron-rebuild -f -w node-pty`.
-- `build/native/aiden-subagent-run-store` must exist and run on the host OS (macOS-only source `native/subagent-run-store/main.c`; on Linux port it: map `st_mtimespec`→`st_mtim`, `st_ctimespec`→`st_ctim`, drop `st_birthtimespec` identity compares — Linux `stat` has no btime and `rename(2)` bumps ctime, breaking post-rename identity checks — `arc4random_buf`→`getrandom`, `renameatx_np`→`syscall(SYS_renameat2)` with `RENAME_EXCL`→`RENAME_NOREPLACE`, `RENAME_SWAP`→`RENAME_EXCHANGE`).
-- Run tests with `DISPLAY=:0 XAUTHORITY=/home/ubuntu/.Xauthority npx playwright test <spec> --workers=1`. The fixture's `APP_ENV_PASSTHROUGH` must include `DISPLAY`/`XAUTHORITY`, and `OS_INJECTED_ENV_NAMES` must include the keys Electron injects on Linux (`CHROME_DESKTOP`, `DBUS_SESSION_BUS_ADDRESS`, `FC_FONTATIONS`, `GDK_BACKEND`, `NO_AT_BRIDGE`) or `assertRuntimeIsolation` fails. The dev log at `userDataDir/logs/aiden-dev.log` is attached to failures — read it first when a launch fails.
+## Where the suite can run
+The Electron suite only runs on macOS. CI runs it on `macos-26` (the `e2e` job in `.github/workflows/ci.yml`, sharded by `scripts/ci-e2e-shards.mjs`). A Linux VM cannot launch the app from this checkout, and a fixture patch will not fix that:
 
-## Skipping onboarding on keychain-less hosts
-`providers:save` always calls `secrets.setInternalKey` → `safeStorage.isEncryptionAvailable()`, even for `needsKey:false` providers (the credential-rotation journal needs it). On Linux boxes without a working keychain (gnome-keyring/kwallet absent or unregistered), onboarding cannot complete via UI — `--password-store=basic` does NOT fix this. Instead seed state into the fixture's isolated `userDataDir` before launch:
-- `settings.json`: `{"settings":{"profileName":"E2E Local User","onboarding":{"version":2,"outcome":"completed","lastSatisfiedStep":"tour","selectedProviderId":"custom:lmstudio"}}}` — `OnboardingFlow` self-hides when `shouldOpenOnboarding(outcome)` is false.
-- `provider-model-cache.json`: `{"byProvider":{"custom:lmstudio":{"models":["aiden-e2e-vision"]}}}` — `listConfiguredProviders` merges this into `provider.models`, which the model picker needs (`useModelSelection` auto-selects when localStorage `PROVIDER_KEY`/`MODEL_KEY` are empty).
-- Combine with `workspaceSeed: true` so a workspace exists (the seeded workspace auto-activates as `list[0]`).
+- `npm run build` builds the native helpers (`build:worktree-remover`, `build:worktree-file-io`, `build:bot-inbox-writer`, `build:subagent-run-store`, `build:subagent-file-mutator`, `build:subagent-shell-runner`). Every one of those scripts (`scripts/build-*.mjs`) prints a skip message and exits 0 when `process.platform !== "darwin"`, so the build "succeeds" on Linux without producing `build/native/*`.
+- The helper sources in `native/` use macOS-only APIs (`st_birthtimespec`, `renameatx_np`, `arc4random_buf`, and others). The development app resolves `build/native/aiden-subagent-run-store`, and `main/index.ts` initializes the subagent run store during startup. Without a working helper, startup fails before any spec gets a window.
+- Do not hand-port the helpers for a test run. The run-store generation tokens that `main/services/subagents/subagent-run-store-io.ts` validates include birth-time fields, and a partial port that drops them breaks the read/write handshake. A Linux helper port has to land as a reviewed repo change with its own tests, not as a VM-local workaround.
+- `tests/e2e/fixtures.ts` launches Electron with an isolated environment. `APP_ENV_PASSTHROUGH` does not forward `DISPLAY`/`XAUTHORITY`, and `assertRuntimeIsolation` only exempts the macOS-injected `__CF_USER_TEXT_ENCODING`. Supporting Linux would also need a reviewed fixture change.
+
+### What does work on a Linux VM
+- Install: `npm ci` (Node `>=22.19`, per `package.json` `engines`).
+- Type-check specs: `npm run type-check:e2e`.
+- Confirm new specs and titles are collected: `npm run test:e2e:list`.
+- Non-Electron unit suites and lint (see the `test:*` scripts in `package.json`).
+- Then push and let the macOS `Deterministic Electron E2E` CI job run the specs, or run them on a Mac.
+
+### Running on macOS
+- Full suite: `npm run test:e2e` (type-checks, runs `npm run build`, then `playwright test --fail-on-flaky-tests`).
+- One spec after a build: `npx playwright test tests/e2e/<spec>.spec.ts --config=playwright.config.ts`.
+- The fixture refuses to launch unless `build/main/index.js` and `build/renderer/main-window.html` exist.
+- When a spec fails, check the `aiden-dev-log` attachment first (`<rootDir>/user-data/logs/aiden-dev.log`), then `electron-process-state`.
+
+## Fixture options and onboarding
+- `portableConfigSeed` (default `"lmstudio"`) writes a keyless `LM Studio (local)` provider pointing at the mock into the isolated config dir. `"empty"` writes no providers.
+- `workspaceSeed` (default `false`) writes one full-permission workspace (`Aiden E2E workspace`) into the isolated user-data `config.json`.
+- Set options per file with `test.use({ workspaceSeed: true })`.
+- First-run setup is not skipped. Call `finishLmStudioOnboarding(page)` from `./fixtures`, which fills the profile name `E2E Local User`, picks LM Studio, waits for model discovery, and clicks "Start using Aiden". This is how the existing specs (for example `chat-message-queue.spec.ts`) get past onboarding.
 
 ## Harness notes
-- `aiden.lmStudio.holdCompletions()` / `releaseCompletions()` hold SSE streams open (real in-flight generation for detach/lifecycle tests). `aiden.lmStudio.requests` captures every request — filter `r.url === "/v1/chat/completions"` and inspect `body.messages` for the last `role:"user"` text to prove sends did/didn't hit the model.
-- Chat titles in the sidebar are generated by the model → they show as `Deterministic E2E response received`, not the prompt text. Locate sidebar entries with `[data-sidebar]` + `getByRole("button", {name: /Deterministic E2E response/})`.
-- Send = `page.locator("textarea").fill(...)` + `.press("Enter")`. Sidebar: `getByRole("button", {name:"New Agent"})`, `{name:"Settings"}`; settings has a `Back to app` button (`router.history.back()` — routes use `createMemoryHistory`, so `page.url()` never changes; navigate via sidebar buttons only).
-- Chat persistence: `userDataDir/chats/index.json` + `chats/<id>.json`; filter out `botId` and `workspaceId === "assistant"` entries.
-- `QueuedMessages` UI: `section[aria-label="Queued messages"]`, text "N queued", buttons "Pause queue"/"Resume queue", `aria-label="Edit queued message N"`, `"Delete queued message N"`, `"Reorder queued message N"`, `"Steer with queued message N"`.
-- A draft detached mid-generation registers in `detachedLifecycleStreams`; navigate away (e.g. New Agent) to detach, then return to the chat while the mock still holds the stream to exercise the drain path.
+- `aiden.lmStudio.holdCompletions()` / `releaseCompletions()` hold SSE streams open, so detach/lifecycle tests get a real in-flight generation. `aiden.lmStudio.requests` captures every request. Filter on `r.url === "/v1/chat/completions"` and read the last `role: "user"` entry in `body.messages` to prove whether a send reached the model.
+- `aiden.lmStudio.enqueueToolScenario({ prompt, calls, finalText })` scripts exact prompt-matched tool calls on the deterministic model.
+- `aiden.relaunch()` restarts Electron against the same isolated data dirs.
+- The model generates the sidebar chat titles, so with the mock they read `Deterministic E2E response received`, not the prompt text. Locate sidebar entries with `[data-sidebar]` plus `getByRole("button", { name: /Deterministic E2E response/ })`.
+- To send a message, call `page.locator("textarea").fill(...)` and then `.press("Enter")`. The sidebar buttons are `getByRole("button", { name: "New Agent" })` and `{ name: "Settings" }`. Settings has a `Back to app` button. Routes use `createMemoryHistory` (`renderer/main/router.tsx`), so `page.url()` never changes; navigate with the UI only.
+- Chats persist to `userDataDir/chats/index.json` and `chats/<id>.json`. When counting user chats, filter out entries with a `botId` and entries where `workspaceId === "assistant"`.
+- `QueuedMessages` (`renderer/components/queued-messages.tsx`) renders `section[aria-label="Queued messages"]` with the text "N queued", the buttons "Pause queue"/"Resume queue", and the per-item labels `Edit queued message N`, `Delete queued message N`, `Reorder queued message N`, `Steer with queued message N`.
+- A draft that is detached mid-generation registers in `detachedLifecycleStreams` (`renderer/lib/chat-terminal-sync.ts`). To exercise the drain path, navigate away (for example New Agent) while the mock holds the stream, then return to the chat.
