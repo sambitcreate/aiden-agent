@@ -885,7 +885,8 @@ final class AidenWorkspaceChatsModel {
         let writeToken = cache.reserveChatWrite()
         do {
             guard try await cache.saveChat(chat, instanceId: instanceId, writeToken: writeToken) else {
-                guard let current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
+                // The winner is admitted in memory even if its disk write failed.
+                guard let current = await cache.admittedChat(instanceId: instanceId, chatId: chat.id),
                       current.workspaceId == workspaceId, !current.isBotChat else {
                     if coordinator.isCurrent(context), generation == (presentationGenerations[chat.id] ?? 0) {
                         presentationGenerations[chat.id, default: 0] &+= 1
@@ -1868,8 +1869,10 @@ final class AidenChatViewModel {
                     // Rebase the receipt on the winning local snapshot. This
                     // does not depend on another network read or resend POST.
                     // Reserve before loading so removal/new writes still win.
+                    // Read the admitted winner, not disk: its file write may
+                    // have failed, leaving no file or an older snapshot.
                     let retryToken = cache.reserveChatWrite()
-                    guard var current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
+                    guard var current = await cache.admittedChat(instanceId: instanceId, chatId: chat.id),
                           !isRemoved, coordinator.isRetained(context) else { return }
                     if !current.messages.contains(where: { $0.id == response.message.id }) {
                         current.messages.append(response.message)
