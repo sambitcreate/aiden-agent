@@ -258,6 +258,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
+    "/streams/{streamId}/inputs",
     "/streams/{streamId}/cancel",
     "/approvals/{approvalId}/respond",
     "/models",
@@ -1526,4 +1527,13 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
     true,
   );
+});
+
+test("native run-input contract preserves nonblank UTF-8 admission bounds", async () => {
+  const spec = record(await json("openapi.json"), "spec");
+  const schemas = record(record(spec.components, "components").schemas, "schemas");
+  const fields = record(record(schemas.ChatRunInputRequest, "request").properties, "fields");
+  const text = record(fields.text, "text");
+  assert.equal(text.pattern, "\\S");
+  assert.equal(text["x-aiden-max-utf8-bytes"], 16384);
 });

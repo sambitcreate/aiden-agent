@@ -1642,3 +1642,50 @@ struct AidenLiveTool: Identifiable, Equatable, Sendable {
     let name: String
     var status: String?
 }
+
+// Admission confirms durable queuing on the Mac, not model consumption.
+enum AidenRunInputMode: String, Codable, Sendable { case steer, queue }
+struct AidenRunInputRequest: Codable, Equatable, Sendable {
+    let requestId: String
+    let mode: AidenRunInputMode
+    let text: String
+}
+struct AidenRunInputReceipt: Codable, Equatable, Sendable {
+    let requestId: String
+    let streamId: String
+    let mode: AidenRunInputMode
+    let accepted: Bool
+    let admission: String?
+    let messageId: String?
+    let reason: String?
+
+    func validates(request: AidenRunInputRequest, streamID: String) -> Bool {
+        guard requestId == request.requestId, streamId == streamID, mode == request.mode else { return false }
+        if accepted { return admission == "queued" && messageId?.isEmpty == false && (messageId?.unicodeScalars.count ?? 0) <= 128 && reason == nil }
+        return admission == nil && messageId == nil && ["not-active", "cancelled", "capacity"].contains(reason ?? "")
+    }
+}
+
+private struct AidenRunInputCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init(_ value: String) { stringValue = value }
+    init?(stringValue: String) { self.init(stringValue) }
+    init?(intValue: Int) { return nil }
+}
+extension AidenRunInputReceipt {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: AidenRunInputCodingKey.self)
+        let accepted = try container.decode(Bool.self, forKey: .init("accepted"))
+        let expected = Set(["requestId", "streamId", "mode", "accepted"] + (accepted ? ["admission", "messageId"] : ["reason"]))
+        guard Set(container.allKeys.map(\.stringValue)) == expected else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid run input receipt shape"))
+        }
+        self.init(requestId: try container.decode(String.self, forKey: .init("requestId")),
+            streamId: try container.decode(String.self, forKey: .init("streamId")),
+            mode: try container.decode(AidenRunInputMode.self, forKey: .init("mode")), accepted: accepted,
+            admission: accepted ? try container.decode(String.self, forKey: .init("admission")) : nil,
+            messageId: accepted ? try container.decode(String.self, forKey: .init("messageId")) : nil,
+            reason: accepted ? nil : try container.decode(String.self, forKey: .init("reason")))
+    }
+}

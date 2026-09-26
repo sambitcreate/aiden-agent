@@ -859,3 +859,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - This host's default developer directory lacks `devicectl`; use `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` with isolated `/tmp/aiden-bot-ios-derived`.
 - Coordinator's physical-device run reports `com.apple.dt.deviceprep Code=-3`, `Unlock Sambit’s iPhone to Continue` for `00008110-00063CD91E98801E`. Do not count unsigned test compilation as XCTest execution or repeatedly launch a locked-device run.
 - A held MockWebServer disconnect exposed OkHttp's default connection retry replaying approval POSTs. Disable transport retries specifically for approval/Stop; keep unknown-outcome UI and authoritative reads instead of restoring captured cards.
+- PR #223 fixer: the worktree-isolation guard rejects `export VAR=$HOME/...` and multi-line python heredoc edits; pass `JAVA_HOME`/`ANDROID_HOME` inline with literal paths and use direct file edits instead.

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -87,6 +88,12 @@ class AidenChatViewModel(
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+    private val _isSubmittingRunInput = MutableStateFlow(false)
+    val isSubmittingRunInput = _isSubmittingRunInput.asStateFlow()
+    private val _hasUnconfirmedRunInput = MutableStateFlow(false)
+    val hasUnconfirmedRunInput = _hasUnconfirmedRunInput.asStateFlow()
+    private val _runInputNotice = MutableStateFlow<String?>(null)
+    val runInputNotice = _runInputNotice.asStateFlow()
     private val _isRespondingToApproval = MutableStateFlow(false)
     val isRespondingToApproval: StateFlow<Boolean> = _isRespondingToApproval.asStateFlow()
 
@@ -141,6 +148,7 @@ class AidenChatViewModel(
     private var agentRosterSelectionTicket = 0L
     private var taskCapabilityDeniedObservationToken: Long? = null
     private var agentCapabilityDeniedObservationToken: Long? = null
+    private var composerEditGeneration = 0L
     private val turnAttempts = AidenTurnAttemptTracker()
     private val attachmentImageLoadMutex = Mutex()
     private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
@@ -176,6 +184,7 @@ class AidenChatViewModel(
 
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value &&
+                !_isSubmittingRunInput.value && !_hasUnconfirmedRunInput.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
 
@@ -184,6 +193,7 @@ class AidenChatViewModel(
         if (currentInstanceId.isNotEmpty()) {
             draftSession = draftStore.beginSession(currentInstanceId, chatId)
             draftSession?.let { session ->
+                _hasUnconfirmedRunInput.value = draftStore.hasUnconfirmedRunInput(session)
                 val savedText = draftStore.load(session)
                 if (!savedText.isNullOrEmpty()) {
                     _draft.value = savedText
@@ -617,6 +627,7 @@ class AidenChatViewModel(
     }
 
     fun updateDraft(text: String) {
+        composerEditGeneration += 1
         _draft.value = text
         draftSession?.let { session ->
             draftStore.save(text, session)
@@ -703,6 +714,11 @@ class AidenChatViewModel(
 
     fun send() {
         if (!canSend) return
+        val session = draftSession ?: return
+        if (!draftStore.canStartTurn(session)) {
+            _presentedError.value = "An instruction from another chat view is unconfirmed. Reopen this chat to review it before sending again."
+            return
+        }
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
@@ -1068,18 +1084,33 @@ class AidenChatViewModel(
     private data class ApprovalSnapshotRead(
         val streamId: String, val client: AidenRemoteClient,
         val approval: AidenPendingApproval?, val state: AidenStreamState?
-    )
+    ) {
+        /** Completes true only when this read published the Mac's authoritative snapshot. */
+        val published = CompletableDeferred<Boolean>()
+    }
     private var approvalSnapshotInFlight: ApprovalSnapshotRead? = null
 
     internal suspend fun restorePendingApproval(streamId: String, isFallback: Boolean = false) {
         val client = activeClient() ?: return
         if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
-        if (isFallback && approvalSnapshotInFlight?.let { it.streamId == streamId && it.client === client &&
-                it.approval == _pendingApproval.value && it.state == _streamState.value } == true) return
+        if (isFallback) {
+            val inFlight = approvalSnapshotInFlight?.takeIf {
+                it.streamId == streamId && it.client === client &&
+                    it.approval == _pendingApproval.value && it.state == _streamState.value
+            }
+            if (inFlight != null) {
+                // Coalesce only while the matching read can still publish. If it fails, is
+                // canceled, or is superseded without publishing, re-evaluate and read again.
+                if (inFlight.published.await() || _pendingApproval.value != null) return
+                return restorePendingApproval(streamId, isFallback = true)
+            }
+        }
         val snapshotGeneration = ++approvalSnapshotGeneration
-        approvalSnapshotInFlight = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
+        val read = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
+        approvalSnapshotInFlight = read
         val expectedApproval = _pendingApproval.value
         val expectedState = _streamState.value
+        var didPublish = false
         try {
             val snapshot = client.streamApproval(streamId)
             if (activeClient() !== client || activeStreamId != streamId ||
@@ -1098,6 +1129,7 @@ class AidenChatViewModel(
                 _pendingApproval.value = null
                 _streamState.value = AidenStreamState.RECONCILING
             }
+            didPublish = true
         } catch (_: Exception) {
             if (activeClient() !== client || activeStreamId != streamId ||
                 snapshotGeneration != approvalSnapshotGeneration ||
@@ -1106,7 +1138,77 @@ class AidenChatViewModel(
             _streamState.value = AidenStreamState.RECONCILING
         } finally {
             if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
+            read.published.complete(didPublish)
         }
+    }
+
+    val supportsRunInput: Boolean
+        get() = _chat.value?.botId != null && coordinator.serverInfo.value?.features?.contains("chat-run-input-v1") == true
+
+    val canSubmitRunInput: Boolean
+        get() = supportsRunInput && canControlCurrentRun && !_isSubmittingRunInput.value &&
+            !_hasUnconfirmedRunInput.value && !_isStopping.value && !_isRespondingToApproval.value &&
+            _streamState.value in listOf(AidenStreamState.RUNNING, AidenStreamState.QUEUED) &&
+            _pendingAttachments.value.isEmpty() && !_isUploadingAttachment.value &&
+            _draft.value.isNotBlank() && _draft.value.toByteArray(Charsets.UTF_8).size <= 16 * 1024
+
+    val currentRunControlId: String? get() = activeStreamId
+
+    fun submitRunInput(mode: AidenRunInputMode, streamId: String) {
+        if (!canSubmitRunInput || activeStreamId != streamId) return
+        val client = activeClient() ?: return
+        val session = draftSession ?: return
+        val text = _draft.value
+        val editGeneration = composerEditGeneration
+        val request = AidenRunInputRequest(UUID.randomUUID().toString(), mode, text)
+        try {
+            if (!draftStore.save(text, session) || !draftStore.setUnconfirmedRunInput(true, session)) return
+            _hasUnconfirmedRunInput.value = true
+        } catch (e: Exception) {
+            _presentedError.value = "The instruction could not be saved on this device. It was not sent."
+            return
+        }
+        _isSubmittingRunInput.value = true
+        viewModelScope.launch {
+            try {
+                if (activeClient() !== client || activeStreamId != streamId || !canControlCurrentRun ||
+                    !supportsRunInput || _isStopping.value ||
+                    _streamState.value !in listOf(AidenStreamState.RUNNING, AidenStreamState.QUEUED)) {
+                    if (draftStore.setUnconfirmedRunInput(false, session)) _hasUnconfirmedRunInput.value = false
+                    return@launch
+                }
+                val receipt = client.submitRunInput(streamId, request)
+                if (activeClient() !== client || draftSession != session) return@launch
+                if (receipt.accepted && composerEditGeneration == editGeneration && _draft.value == text) {
+                    if (!draftStore.save("", session)) throw java.io.IOException("Draft could not be cleared")
+                    _draft.value = ""
+                    composerEditGeneration += 1
+                }
+                if (!draftStore.setUnconfirmedRunInput(false, session)) return@launch
+                _hasUnconfirmedRunInput.value = false
+                val refreshed = !receipt.accepted || reconcileChat()
+                if (activeClient() !== client || draftSession != session) return@launch
+                _runInputNotice.value = if (receipt.accepted)
+                    if (refreshed) "Queued on your Mac. This does not confirm that the model has read it."
+                    else "Queued on your Mac, but the chat could not refresh. Reopen this chat to see the latest messages. This does not confirm that the model has read it."
+                else "Your Mac did not queue this instruction. The draft is kept; review the run before choosing an action again."
+            } catch (e: Exception) {
+                if (e !is CancellationException && activeClient() === client && draftSession == session) {
+                    _runInputNotice.value = "The instruction was not confirmed. Review the chat before sending it again."
+                }
+            } finally { _isSubmittingRunInput.value = false }
+        }
+    }
+
+    fun acknowledgeUnconfirmedRunInput() {
+        if (_isSubmittingRunInput.value) return
+        val session = draftSession ?: return
+        try {
+            if (draftStore.setUnconfirmedRunInput(false, session)) {
+                _hasUnconfirmedRunInput.value = false
+                _runInputNotice.value = null
+            }
+        } catch (e: Exception) { _presentedError.value = e.localizedMessage }
     }
 
     val canControlCurrentRun: Boolean
@@ -1240,10 +1342,11 @@ class AidenChatViewModel(
         val client = activeClient() ?: return false
         return try {
             val remote = client.chat(chatId)
+            if (activeClient() !== client || installationForProgress() == null) return false
             acceptRemoteChat(remote)
             true
         } catch (e: Exception) {
-            if (e !is CancellationException) {
+            if (e !is CancellationException && activeClient() === client && installationForProgress() != null) {
                 _presentedError.value = e.localizedMessage
             }
             false
@@ -1268,7 +1371,9 @@ class AidenChatViewModel(
             for (delayMs in AidenChatTitleReconciliation.retryMilliseconds) {
                 try {
                     delay(delayMs)
+                    if (activeClient() !== client || installationForProgress() == null) return@launch
                     val remote = client.chat(chatId)
+                    if (activeClient() !== client || installationForProgress() == null) return@launch
                     acceptRemoteChat(remote, scheduleTitleRefresh = false)
                     if (!remote.isTitlePending) return@launch
                 } catch (e: Exception) {

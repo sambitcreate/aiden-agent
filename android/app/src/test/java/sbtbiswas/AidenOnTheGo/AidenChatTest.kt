@@ -45,6 +45,48 @@ class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun sharedRunInputReceiptsRequireExactIdentityAndAdmission() {
+        val fixture = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val input = json.parseToJsonElement(fixture).jsonObject.getValue("chatRunInput").jsonObject
+        val request = json.decodeFromString<AidenRunInputRequest>(input.getValue("request").toString())
+        for (key in listOf("accepted", "rejected")) {
+            val receipt = json.decodeFromString<AidenRunInputReceipt>(input.getValue(key).toString())
+            assertTrue(receipt.validates(request, "stream-input-1"))
+            assertFalse(receipt.validates(request, "other-stream"))
+            assertFalse(receipt.copy(requestId = UUID.randomUUID().toString()).validates(request, "stream-input-1"))
+            assertFalse(receipt.copy(mode = AidenRunInputMode.QUEUE).validates(request, "stream-input-1"))
+        }
+        val accepted = json.decodeFromString<AidenRunInputReceipt>(input.getValue("accepted").toString())
+        assertFalse(accepted.copy(admission = "consumed").validates(request, "stream-input-1"))
+        assertFalse(accepted.copy(messageId = "m".repeat(129)).validates(request, "stream-input-1"))
+    }
+
+    @Test
+    fun unconfirmedRunInputMarkerSurvivesEmptyDraftAndPurgesWithInstallation() {
+        val root = kotlin.io.path.createTempDirectory("run-input-marker-").toFile()
+        try {
+            val store = AidenChatDraftStore(root = root)
+            val session = store.beginSession("mac", "bot")
+            assertTrue(store.canStartTurn(session))
+            assertTrue(store.setUnconfirmedRunInput(true, session))
+            assertFalse(store.canStartTurn(session))
+            val newer = store.beginSession("mac", "bot")
+            assertFalse(store.canStartTurn(session))
+            assertFalse(store.canStartTurn(newer))
+            assertTrue(store.save("", newer))
+            assertTrue(store.setUnconfirmedRunInput(false, newer))
+            assertTrue(store.canStartTurn(session))
+            assertTrue(store.setUnconfirmedRunInput(true, newer))
+            val reopened = AidenChatDraftStore(root = root)
+            val next = reopened.beginSession("mac", "bot")
+            assertTrue(reopened.hasUnconfirmedRunInput(next))
+            reopened.purge("mac")
+            assertFalse(reopened.setUnconfirmedRunInput(true, next))
+            assertFalse(reopened.hasUnconfirmedRunInput(reopened.beginSession("mac", "bot")))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
 
     @Test
@@ -168,10 +210,52 @@ class AidenChatTest {
     fun ambiguousResponseCannotSupersedeHeldAuthoritativeApproval() = exerciseRunControl("approval-fallback-overlap")
 
     @Test
+    fun coalescedFallbackRecoversApprovalWhenHeldReadFails() = exerciseRunControl("approval-fallback-failed")
+
+    @Test
+    fun coalescedFallbackRecoversApprovalWhenHeldReadIsCanceled() = exerciseRunControl("approval-fallback-cancelled")
+
+    @Test
     fun latestAdmittedApprovalReadWinsWhenOlderCompletesFirst() = exerciseRunControl("approval-overlap")
 
     @Test
     fun mismatchedStopAcknowledgementShowsFailure() = exerciseRunControl("stop-mismatch")
+
+    @Test
+    fun runInputWaitsForReceiptAndSendsOnce() = exerciseRunControl("input-accepted")
+
+    @Test
+    fun runInputPreservesEditBeforeDispatch() = exerciseRunControl("input-early-edit")
+
+    @Test
+    fun failedDraftDeletionKeepsUnconfirmedGate() = exerciseRunControl("input-delete-failed")
+
+    @Test
+    fun runInputPreservesNewerDraft() = exerciseRunControl("input-newer")
+
+    @Test
+    fun runInputDisconnectPersistsUnconfirmedMarkerWithoutRetry() = exerciseRunControl("input-unknown")
+
+    @Test
+    fun rejectedRunInputKeepsDraftWithoutFallingBackToSend() = exerciseRunControl("input-rejected")
+
+    @Test
+    fun runInputRequiresAdvertisedFeature() = exerciseRunControl("input-unsupported")
+
+    @Test
+    fun acceptedInputTitleRefreshCannotPublishAfterPairingSwitch() = exerciseRunControl("input-title-switch")
+
+    @Test
+    fun acceptedInputRefreshCannotPublishAfterPairingSwitch() = exerciseRunControl("input-switch")
+
+    @Test
+    fun uncertainInputStaysBlockedAfterTerminalSettlement() = exerciseRunControl("input-unknown-terminal")
+
+    @Test
+    fun acceptedInputAfterTerminalWithFailedRefreshShowsStaleNotice() = exerciseRunControl("input-accepted-refresh-failed-terminal")
+
+    @Test
+    fun acceptedInputAfterTerminalSettlementConsumesOnlyCapturedDraft() = exerciseRunControl("input-accepted-terminal")
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
@@ -181,8 +265,14 @@ class AidenChatTest {
         val release = CountDownLatch(1)
         val finishRead = CountDownLatch(1)
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
+        val refreshArrived = CountDownLatch(1)
+        val releaseRefresh = CountDownLatch(1)
+        val admittedReads = java.util.concurrent.atomic.AtomicInteger()
+        val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val failApprovalReads = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failedHeldRead = java.util.concurrent.atomic.AtomicBoolean(false)
+        val approvalReads = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
         val oldRead = CountDownLatch(1)
         val newRead = CountDownLatch(1)
@@ -191,27 +281,42 @@ class AidenChatTest {
         val server = MockWebServer()
         val viewModels = ViewModelStore()
         val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE) +
-            if (scenario == "unsupported") emptyList() else listOf(AidenRemoteCapability.APPROVAL_RESPOND)
+            if (scenario == "unsupported") emptyList() else listOf(AidenRemoteCapability.APPROVAL_RESPOND) +
+                if (scenario.startsWith("input")) listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_WRITE) else emptyList()
         val chat = AidenChat(id = "chat-control", workspaceId = "workspace-control", title = "Controls",
-            botId = if (scenario == "bot-denied") "bot-control" else null, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "revision-control")
-        val status = """{"streamId":"stream-control","chatId":"chat-control","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"""
+            botId = if (scenario == "bot-denied" || scenario.startsWith("input")) "bot-control" else null, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "revision-control")
+        val status = """{"streamId":"stream-control","chatId":"chat-control","turnId":"turn-control","state":"${if (scenario.startsWith("input")) "running" else "waiting_for_approval"}","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"""
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
-                request.path == "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-control","name":"Control Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":[],"connectionMode":"lan","serverTime":"2026-09-22T12:00:00Z"}""")
+                request.path == "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-control","name":"Control Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${if (scenario.startsWith("input") && scenario != "input-unsupported") "[\"chat-run-input-v1\"]" else "[]"},"connectionMode":"lan","serverTime":"2026-09-22T12:00:00Z"}""")
                 request.path == "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
                 request.path == "/api/aiden/v1/chats/chat-control" -> {
                     if (terminal.get()) check(finishRead.await(10, TimeUnit.SECONDS))
-                    MockResponse().setBody(json.encodeToString(chat))
+                    if (admitted.get() && scenario == "input-accepted-refresh-failed-terminal") return MockResponse().setResponseCode(503)
+                    val titleRetry = admitted.get() && scenario == "input-title-switch" && admittedReads.incrementAndGet() > 1
+                    if (admitted.get() && (scenario == "input-switch" || titleRetry)) {
+                        refreshArrived.countDown()
+                        check(releaseRefresh.await(10, TimeUnit.SECONDS))
+                    }
+                    val snapshot = if (admitted.get()) chat.copy(messages = listOf(AidenChatMessage(
+                        id = if (titleRetry) "stale-title" else "message-input", role = AidenChatRole.USER, text = "Original instruction", createdAt = Instant.EPOCH
+                    )), titlePending = if (scenario == "input-title-switch" && !titleRetry) true else null) else chat
+                    MockResponse().setBody(json.encodeToString(snapshot))
                 }
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
                 request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
                 request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
+                    approvalReads.incrementAndGet()
                     if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
                     val id = snapshotId.get()
-                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                    if ((scenario.startsWith("approval-fallback-") && scenario != "approval-fallback-before" ||
+                            scenario == "approval-overlap") && id != "approval-current" ||
                         (scenario == "approval-fallback-before" && id == "approval-old")) {
                         (if (id == "approval-old") oldRead else newRead).countDown()
                         check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
+                        if (scenario == "approval-fallback-failed" && failedHeldRead.compareAndSet(false, true)) {
+                            return MockResponse().setResponseCode(503)
+                        }
                     }
                     MockResponse().setBody("""{"approval":{"approvalId":"${id}","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}""")
                 }
@@ -219,6 +324,19 @@ class AidenChatTest {
                     writes.incrementAndGet()
                     arrived.countDown()
                     check(release.await(10, TimeUnit.SECONDS))
+                    if (scenario.startsWith("input")) {
+                        val input = json.decodeFromString<AidenRunInputRequest>(request.body.readUtf8())
+                        assertEquals("/api/aiden/v1/streams/stream-control/inputs", request.path)
+                        assertEquals(input.requestId, request.getHeader("Idempotency-Key"))
+                        assertEquals("Original instruction", input.text)
+                        if (scenario.startsWith("input-unknown")) return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                        admitted.set(scenario != "input-rejected")
+                        return MockResponse().setBody(Json { explicitNulls = false }.encodeToString(AidenRunInputReceipt(
+                            input.requestId, "stream-control", input.mode, scenario != "input-rejected",
+                            admission = if (scenario == "input-rejected") null else "queued",
+                            messageId = if (scenario == "input-rejected") null else "message-input",
+                            reason = if (scenario == "input-rejected") "not-active" else null)))
+                    }
                     if (scenario.startsWith("stop-")) {
                         val responseStatus = if (scenario == "stop-mismatch") status.replace("stream-control", "stream-other") else status.replace("waiting_for_approval", "reconciling")
                         return MockResponse().setResponseCode(202).setBody(responseStatus)
@@ -249,6 +367,96 @@ class AidenChatTest {
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
                 val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
                 viewModels.put("control", model)
+                if (scenario.startsWith("input")) {
+                    withTimeout(5_000) { model.streamState.first { it == AidenStreamState.RUNNING } }
+                    model.updateDraft("Original instruction")
+                    model.submitRunInput(AidenRunInputMode.STEER, "stale-stream")
+                    assertEquals(0, writes.get())
+                    if (scenario == "input-unsupported") {
+                        assertFalse(model.supportsRunInput)
+                        model.submitRunInput(AidenRunInputMode.STEER, "stream-control")
+                        yield()
+                        assertEquals(0, writes.get())
+                        return@runBlocking
+                    }
+                    model.updateDraft(" \n\t")
+                    assertFalse(model.canSubmitRunInput)
+                    model.updateDraft("🦊".repeat(5000))
+                    assertFalse(model.canSubmitRunInput)
+                    model.updateDraft("Original instruction")
+                    assertTrue(model.canSubmitRunInput)
+                    model.submitRunInput(AidenRunInputMode.STEER, "stream-control")
+                    if (scenario == "input-early-edit") model.updateDraft("Newer instruction")
+                    model.submitRunInput(AidenRunInputMode.QUEUE, "stream-control")
+                    withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
+                    assertEquals(if (scenario == "input-early-edit") "Newer instruction" else "Original instruction", model.draft.value)
+                    if (scenario == "input-newer") model.updateDraft("Newer instruction")
+                    if (scenario == "input-delete-failed") {
+                        val draftFile = drafts.root.walkTopDown().first { it.isFile && it.extension == "json" }
+                        check(draftFile.delete())
+                        check(draftFile.mkdir())
+                        File(draftFile, "undeletable-child").writeText("fixture")
+                    }
+                    if (scenario.endsWith("terminal")) {
+                        terminal.set(true)
+                        withTimeout(5_000) { model.streamState.first { it == AidenStreamState.DONE } }
+                        finishRead.countDown()
+                        withTimeout(5_000) { while (model.currentRunControlId != null) kotlinx.coroutines.delay(10) }
+                        assertFalse(model.canSend)
+                    }
+                    release.countDown()
+                    if (scenario == "input-switch" || scenario == "input-title-switch") {
+                        withContext(Dispatchers.IO) { assertTrue(refreshArrived.await(5, TimeUnit.SECONDS)) }
+                        installations.addInstallation(AidenPairingExchange(
+                            instanceId = "instance-other", deviceId = "device-other", endpoint = server.url("/api/aiden/v1").toString(),
+                            serverSpkiSha256 = "sha256/other", credential = "synthetic-other", capabilities = grants), null)
+                        coordinator.refreshClient()
+                        releaseRefresh.countDown()
+                        withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
+                        if (scenario == "input-title-switch") {
+                            kotlinx.coroutines.delay(200)
+                            assertEquals("message-input", model.chat.value!!.messages.last().id)
+                            assertEquals("message-input", cache.loadChat("instance-control", chat.id)!!.messages.last().id)
+                        } else {
+                            assertTrue(model.chat.value!!.messages.isEmpty())
+                            assertTrue(cache.loadChat("instance-control", chat.id)?.messages.orEmpty().isEmpty())
+                        }
+                        return@runBlocking
+                    }
+                    withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
+                    assertEquals(1, writes.get())
+                    if (scenario == "input-accepted-refresh-failed-terminal") assertTrue(model.runInputNotice.value!!.contains("chat could not refresh"))
+                    if (scenario == "input-accepted-terminal") assertEquals("message-input", model.chat.value!!.messages.last().id)
+                    assertEquals(when (scenario) {
+                        "input-accepted", "input-accepted-terminal", "input-accepted-refresh-failed-terminal" -> ""
+                        "input-newer", "input-early-edit" -> "Newer instruction"
+                        else -> "Original instruction"
+                    }, model.draft.value)
+                    assertEquals(scenario in listOf("input-unknown", "input-unknown-terminal", "input-delete-failed"), model.hasUnconfirmedRunInput.value)
+                    assertFalse(model.canSend)
+                    // A fresh store represents process restart; unknown outcomes remain gated.
+                    val reopened = AidenChatDraftStore(directory)
+                    val reopenedSession = reopened.beginSession("instance-control", chat.id)
+                    assertEquals(scenario in listOf("input-unknown", "input-unknown-terminal", "input-delete-failed"), reopened.hasUnconfirmedRunInput(reopenedSession))
+                    if (scenario == "input-early-edit") assertEquals("Newer instruction", reopened.load(reopenedSession))
+                    if (scenario.startsWith("input-unknown")) {
+                        model.submitRunInput(AidenRunInputMode.STEER, "stream-control")
+                        assertEquals(1, writes.get())
+                        model.acknowledgeUnconfirmedRunInput()
+                        assertFalse(model.hasUnconfirmedRunInput.value)
+                        if (scenario.endsWith("terminal")) {
+                            assertTrue(model.canSend)
+                            // A second open view owns the newer draft session and admission marker.
+                            val secondSession = drafts.beginSession("instance-control", chat.id)
+                            drafts.setUnconfirmedRunInput(true, secondSession)
+                            model.send()
+                            yield()
+                            assertEquals(1, writes.get())
+                            assertTrue(model.presentedError.value!!.contains("another chat view"))
+                        }
+                    }
+                    return@runBlocking
+                }
                 withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
                 if (scenario == "approval-fallback-before") {
                     snapshotId.set("approval-old")
@@ -264,19 +472,29 @@ class AidenChatTest {
                     assertEquals("approval-new", model.pendingApproval.value?.id)
                     return@runBlocking
                 }
-                if (scenario == "approval-fallback-overlap") {
+                if (scenario.startsWith("approval-fallback-") && scenario != "approval-fallback-before") {
+                    approvalReads.set(0)
                     model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
                     withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
                     snapshotId.set("approval-new")
                     val read = async { model.restorePendingApproval("stream-control") }
                     withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
-                    failApprovalReads.set(true)
+                    // Any redundant fallback would fail, but must not supersede the held admitted read.
+                    if (scenario == "approval-fallback-overlap") failApprovalReads.set(true)
                     release.countDown()
-                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    // The ambiguous response coalesces with the held read and waits for its outcome.
+                    withTimeout(5_000) { model.presentedError.first { it != null } }
+                    yield()
+                    assertTrue(model.isRespondingToApproval.value)
+                    assertEquals(1, approvalReads.get())
+                    if (scenario == "approval-fallback-cancelled") read.cancel()
                     releaseNew.countDown()
-                    read.await()
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    runCatching { read.await() }
+                    // A failed or canceled coalesced read must leave the fallback able to recover the card.
                     assertEquals("approval-new", model.pendingApproval.value?.id)
                     assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                    assertEquals(if (scenario == "approval-fallback-overlap") 1 else 2, approvalReads.get())
                     return@runBlocking
                 }
                 if (scenario == "approval-overlap") {
@@ -352,6 +570,7 @@ class AidenChatTest {
         } finally {
             releaseOld.countDown()
             releaseNew.countDown()
+            releaseRefresh.countDown()
             release.countDown()
             finishRead.countDown()
             runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }

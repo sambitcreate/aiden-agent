@@ -1712,6 +1712,18 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    func submitRunInput(streamID: String, request: AidenRunInputRequest) async throws -> AidenRunInputReceipt {
+        guard UUID(uuidString: request.requestId) != nil,
+              !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              request.text.utf8.count <= 16 * 1024 else { throw AidenRemoteClientError.invalidResponse }
+        let receipt: AidenRunInputReceipt = try await send(
+            method: "POST", path: ["streams", streamID, "inputs"], body: request,
+            headers: ["Idempotency-Key": request.requestId]
+        )
+        guard receipt.validates(request: request, streamID: streamID) else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,

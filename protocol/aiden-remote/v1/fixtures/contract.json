@@ -922,5 +922,27 @@
       "retryable": false,
       "details": { "currentRevision": "workspace_revision_8" }
     }
+  },
+  "chatRunInput": {
+    "request": {
+      "requestId": "cc7748a3-ae1c-4d32-aef2-8aebc3f48502",
+      "mode": "steer",
+      "text": "Use the smaller scope."
+    },
+    "accepted": {
+      "requestId": "cc7748a3-ae1c-4d32-aef2-8aebc3f48502",
+      "streamId": "stream-input-1",
+      "mode": "steer",
+      "accepted": true,
+      "admission": "queued",
+      "messageId": "message-input-1"
+    },
+    "rejected": {
+      "requestId": "cc7748a3-ae1c-4d32-aef2-8aebc3f48502",
+      "streamId": "stream-input-1",
+      "mode": "steer",
+      "accepted": false,
+      "reason": "not-active"
+    }
   }
 }

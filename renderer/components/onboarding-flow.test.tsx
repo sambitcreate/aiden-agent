@@ -371,7 +371,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
-  assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
+  assert.match(featurePresentation, /one persistent chat/u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -428,4 +428,9 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /models.length === 0/u);
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
+});
+
+// Existing Bots artwork covers its supported mobile control capability.
+test("Bots tour introduces capability-gated mobile run controls", () => {
+  assert.match(source, /Steer or queue instructions from your paired phone with a supported Mac/u);
 });

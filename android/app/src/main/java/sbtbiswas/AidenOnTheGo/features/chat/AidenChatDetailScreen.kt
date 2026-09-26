@@ -127,6 +127,10 @@ fun AidenChatDetailScreen(
     val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isStopping by viewModel.isStopping.collectAsState()
+    val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
+    val hasUnconfirmedRunInput by viewModel.hasUnconfirmedRunInput.collectAsState()
+    val runInputNotice by viewModel.runInputNotice.collectAsState()
+    val runInputServer by coordinator.serverInfo.collectAsState()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
@@ -478,6 +482,35 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (hasUnconfirmedRunInput && !isSubmittingRunInput) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Text("An instruction may already be queued on your Mac. Review the chat before sending again.",
+                            style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        TextButton(onClick = { viewModel.acknowledgeUnconfirmedRunInput() }) {
+                            Text("I’ve reviewed the chat")
+                        }
+                    }
+                } else runInputNotice?.let { notice ->
+                    Text(notice, style = MaterialTheme.typography.bodySmall, color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 16.dp))
+                }
+                val runInputStreamId = viewModel.currentRunControlId
+                if (runInputStreamId != null && chat?.botId != null && runInputServer?.features?.contains("chat-run-input-v1") == true && isStreaming) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { viewModel.submitRunInput(AidenRunInputMode.STEER, runInputStreamId) },
+                                enabled = viewModel.canSubmitRunInput && !isSubmittingRunInput && !hasUnconfirmedRunInput,
+                                shape = RoundedCornerShape(16.dp)) { Text("Steer") }
+                            TextButton(onClick = { viewModel.submitRunInput(AidenRunInputMode.QUEUE, runInputStreamId) },
+                                enabled = viewModel.canSubmitRunInput && !isSubmittingRunInput && !hasUnconfirmedRunInput,
+                                shape = RoundedCornerShape(16.dp)) { Text("Queue") }
+                            if (isSubmittingRunInput) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
+                        Text("Plain text only. Your Mac queues the instruction before the model reads it.",
+                            style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                    }
+                }
+
                 // 1:1 Parity iOS Glass Composer
                 AidenComposerView(
                     draft = draft,
@@ -488,7 +521,7 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend,
+                    canSend = viewModel.canSend && !hasUnconfirmedRunInput && !isSubmittingRunInput,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,

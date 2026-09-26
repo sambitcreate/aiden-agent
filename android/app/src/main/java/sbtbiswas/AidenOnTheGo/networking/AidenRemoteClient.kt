@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -899,6 +900,21 @@ class AidenRemoteClient(
 
     suspend fun cancelTurn(chatId: String, turnId: String) {
         cancelStream(turnId)
+    }
+
+    suspend fun submitRunInput(streamId: String, request: AidenRunInputRequest): AidenRunInputReceipt {
+        require(request.text.isNotBlank() && request.text.toByteArray(Charsets.UTF_8).size <= 16 * 1024)
+        return executeRequest(
+            "/streams/$streamId/inputs", method = "POST", bodyJson = json.encodeToString(request),
+            idempotencyKey = UUID.fromString(request.requestId), retryConnectionFailure = false
+        ) { bytes ->
+            val body = json.parseToJsonElement(String(bytes, Charsets.UTF_8)).jsonObject
+            val receipt = json.decodeFromString<AidenRunInputReceipt>(body.toString())
+            val expected = setOf("requestId", "streamId", "mode", "accepted") +
+                if (receipt.accepted) setOf("admission", "messageId") else setOf("reason")
+            if (body.keys != expected || !receipt.validates(request, streamId)) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
     }
 
     suspend fun respondToApproval(

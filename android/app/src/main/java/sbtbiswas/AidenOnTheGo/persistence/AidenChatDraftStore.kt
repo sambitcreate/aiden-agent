@@ -84,8 +84,7 @@ class AidenChatDraftStore(
         if (!isCurrent(session) || !isBounded(text)) return false
         val file = fileURL(session.instanceId, session.chatId)
         if (text.isEmpty()) {
-            if (file.exists()) file.delete()
-            return true
+            return !file.exists() || file.delete()
         }
         val envelope = Envelope(
             version = 1,
@@ -102,7 +101,30 @@ class AidenChatDraftStore(
     }
 
     @Synchronized
+    fun canStartTurn(session: Session): Boolean =
+        !runInputMarker(session).exists()
+
+    @Synchronized
+    fun hasUnconfirmedRunInput(session: Session): Boolean =
+        isCurrent(session) && runInputMarker(session).exists()
+
+    @Synchronized
+    fun setUnconfirmedRunInput(value: Boolean, session: Session): Boolean {
+        if (!isCurrent(session)) return false
+        val file = runInputMarker(session)
+        if (value) {
+            file.parentFile?.mkdirs()
+            file.writeText("unconfirmed", Charsets.UTF_8)
+        } else if (file.exists() && !file.delete()) return false
+        return true
+    }
+
+    private fun runInputMarker(session: Session): File =
+        File(fileURL(session.instanceId, session.chatId).path + ".run-input")
+
+    @Synchronized
     fun remove(instanceId: String, chatId: String) {
+        File(fileURL(instanceId, chatId).path + ".run-input").delete()
         invalidate(instanceId, chatId)
         val file = fileURL(instanceId, chatId)
         if (file.exists()) file.delete()
