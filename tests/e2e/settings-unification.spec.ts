@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -185,23 +187,20 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
       .getByRole("button", { name: "Appearance", exact: true })
       .click();
   };
-  const readPresets = () =>
-    page.evaluate(async () => {
-      const { ipc } = (
-        window as unknown as {
-          aidenAPI: {
-            ipc: {
-              invoke(channel: string): Promise<{
-                light: { preset: string };
-                dark: { preset: string };
-              }>;
-            };
-          };
-        }
-      ).aidenAPI;
-      const appearance = await ipc.invoke("settings:getAppearance");
-      return { light: appearance.light.preset, dark: appearance.dark.preset };
-    });
+  // settings:getAppearance reports the live preview, which leads the
+  // debounced durable write. Read the persisted file so a relaunch cannot
+  // race the save.
+  const readPresets = async () => {
+    try {
+      const appearance = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      ).settings?.appearance;
+      return { light: appearance?.light?.preset, dark: appearance?.dark?.preset };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
   const themes = () => page.getByRole("radiogroup", { name: "Themes", exact: true });
   const tile = (name: string) => themes().getByRole("radio", { name, exact: true });
 
