@@ -467,6 +467,14 @@ jobs:
           # granting setuid-root to chrome-sandbox inside the PR-controlled
           # checkout, where untrusted install scripts could swap the target.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # Namespace-sandboxed renderers stay dumpable (setuid-sandboxed ones
+          # were not), so the specs' intentional renderer crashes would pipe
+          # full cores to the image's apport handler. The renderer is not
+          # reaped until the dump drains, which stalls crash detection past
+          # the specs' timeouts. Intentional test crashes need no core files.
+          echo "previous core_pattern: $(cat /proc/sys/kernel/core_pattern)"
+          sudo sysctl -w kernel.core_pattern=core
+          ulimit -c 0
           xvfb-run --auto-servernum npm run test:e2e
 
       - name: Build sanitized E2E failure receipt

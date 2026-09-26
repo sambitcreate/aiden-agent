@@ -32,9 +32,7 @@ test("current native crash before the first commit retries its pending URL", asy
       logLevel: "silent",
     });
     const electron = createRequire(import.meta.url)("electron") as string;
-    // Match the Aiden Electron fixture's GPU switch: hosted runners have no GPU,
-    // and a software GPU process under Linux's namespace sandbox can stall
-    // startup long enough to starve this timing-sensitive fixture.
+    // Match the Aiden Electron fixture's GPU switch; hosted runners have no GPU.
     // SIGKILL on timeout: Chromium turns SIGTERM into a clean exit 0, which
     // would hide a hang behind a missing result file instead of its stderr.
     const run = await promisify(execFile)(electron, ["--disable-gpu", entry], {

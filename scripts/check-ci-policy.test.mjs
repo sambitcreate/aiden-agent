@@ -150,6 +150,12 @@ test("Linux pull-request E2E never grants privileges to checkout content", async
   const e2e = linuxJob.match(/- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
   assert.ok(e2e, "Linux E2E gate is missing");
   assert.match(e2e, /sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u);
+  // Dumpable namespace-sandboxed renderers must not stall on apport core dumps.
+  const commands = e2e.replace(/^\s*#.*$/gmu, "");
+  const e2eRun = commands.indexOf("npm run test:e2e");
+  assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") >= 0);
+  assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") < e2eRun);
+  assert.ok(commands.indexOf("ulimit -c 0") >= 0 && commands.indexOf("ulimit -c 0") < e2eRun);
   assert.doesNotMatch(e2e.replace(/^\s*#.*$/gmu, ""), /chrome-sandbox|--no-sandbox/u);
 });
 
