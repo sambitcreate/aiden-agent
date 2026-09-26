@@ -33,3 +33,4 @@
   startup.
 - `npm --prefix packages/cli run type-check` runs only in the `cli-linux` Docker job. It is not part of root `npm test`, so run it locally after merging main. Main-side dependency interfaces (for example `WorkspaceWorktreeApplicationDependencies`) must be wired in `packages/cli/src/remote-worktrees.ts`.
 - `packages/cli-playground` installs standalone in CI, so it needs its own `@types/node`.
+- AGENTS.md now names `aiden catalog models-dev fetch` as an approved models.dev caller (coordinator decision 2026-09-26). It is the CLI counterpart of the Settings action, with the same endpoint and constraints and a display-only cache.
