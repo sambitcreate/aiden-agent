@@ -426,6 +426,11 @@ final class AidenAppearanceStore {
             .applyingContrast(Self.clamp(requested, to: 0...100), baseline: baseline)
     }
 
+    func selectTheme(_ preset: AidenThemePresetID) {
+        lightPreset = preset
+        darkPreset = preset
+    }
+
     func uiFont(for scheme: ColorScheme) -> AidenUIFontID { scheme == .dark ? darkUIFont : lightUIFont }
     func codeFont(for scheme: ColorScheme) -> AidenCodeFontID { scheme == .dark ? darkCodeFont : lightCodeFont }
     func translucentSidebar(for scheme: ColorScheme) -> Bool { scheme == .dark ? darkTranslucentSidebar : lightTranslucentSidebar }
@@ -522,9 +527,14 @@ struct AidenAppearanceRoot<Content: View>: View {
 
 struct AidenAppearanceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @Bindable var appearance: AidenAppearanceStore
     @AppStorage(AidenRemoteLiveActivityManager.responseExcerptPreferenceKey)
     private var showsLiveActivityResponseExcerpts = false
+
+    private var selectedPreset: AidenThemePresetID? {
+        appearance.lightPreset == appearance.darkPreset ? appearance.lightPreset : nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -538,39 +548,21 @@ struct AidenAppearanceSettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section("Light Style") {
-                    presetPicker(selection: $appearance.lightPreset, scheme: .light)
-                    variantControls(
-                        uiFont: $appearance.lightUIFont,
-                        codeFont: $appearance.lightCodeFont,
-                        contrast: $appearance.lightContrast,
-                        translucentSidebar: $appearance.lightTranslucentSidebar
-                    )
-                }
-
-                Section("Dark Style") {
-                    presetPicker(selection: $appearance.darkPreset, scheme: .dark)
-                    variantControls(
-                        uiFont: $appearance.darkUIFont,
-                        codeFont: $appearance.darkCodeFont,
-                        contrast: $appearance.darkContrast,
-                        translucentSidebar: $appearance.darkTranslucentSidebar
-                    )
-                }
-
-                Section("Text and Motion") {
-                    Stepper("UI size: \(appearance.uiFontSize)", value: $appearance.uiFontSize, in: 12...18)
-                    Stepper("Code size: \(appearance.codeFontSize)", value: $appearance.codeFontSize, in: 10...18)
-                    Picker("Reduce Motion", selection: $appearance.reduceMotion) {
-                        ForEach(AidenReduceMotionPreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
+                Section {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 100), spacing: 10)],
+                        spacing: 16
+                    ) {
+                        ForEach(AidenThemePresetID.allCases) { preset in
+                            themeTile(for: preset)
                         }
                     }
-                    Picker("Diff markers", selection: $appearance.diffMarkers) {
-                        ForEach(AidenDiffMarkerPreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
-                        }
-                    }
+                    .padding(.vertical, 6)
+                    .listRowSeparator(.hidden)
+                } header: {
+                    Text("Themes")
+                } footer: {
+                    Text("Current theme: \(selectedPreset?.title ?? "Custom")")
                 }
 
                 Section {
@@ -591,56 +583,64 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private func variantControls(
-        uiFont: Binding<AidenUIFontID>,
-        codeFont: Binding<AidenCodeFontID>,
-        contrast: Binding<Int>,
-        translucentSidebar: Binding<Bool>
-    ) -> some View {
-        Picker("UI font", selection: uiFont) {
-            ForEach(AidenUIFontID.allCases) { font in Text(font.title).tag(font) }
-        }
-        Picker("Code font", selection: codeFont) {
-            ForEach(AidenCodeFontID.allCases) { font in Text(font.title).tag(font) }
-        }
-        VStack(alignment: .leading) {
-            HStack {
-                Text("Contrast")
-                Spacer()
-                Text("\(contrast.wrappedValue)").foregroundStyle(.secondary)
+    private func themeTile(for preset: AidenThemePresetID) -> some View {
+        let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
+        let selected = preset == selectedPreset
+        return Button {
+            appearance.selectTheme(preset)
+        } label: {
+            VStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(preview.canvas)
+                    .aspectRatio(1.52, contentMode: .fit)
+                    .overlay {
+                        Text("Aa")
+                            .font(.system(size: 30, weight: .medium))
+                            .foregroundStyle(preview.foreground)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(preview.accent)
+                            .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                            .frame(width: 11, height: 11)
+                            .padding(8)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(palette.accent)
+                                .frame(width: 21, height: 21)
+                                .background(palette.raised, in: Circle())
+                                .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
+                                .offset(x: 7, y: -7)
+                        }
+                    }
+                    .accessibilityHidden(true)
+                Text(preset.title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(selected ? palette.foreground : palette.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(
+                        selected ? palette.accent.opacity(0.12) : .clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
             }
-            Slider(
-                value: Binding(
-                    get: { Double(contrast.wrappedValue) },
-                    set: { contrast.wrappedValue = Int($0.rounded()) }
-                ),
-                in: 0...100,
-                step: 1
-            )
-            .accessibilityLabel("Contrast")
-            .accessibilityValue("\(contrast.wrappedValue) percent")
         }
-        Toggle("Translucent sidebar", isOn: translucentSidebar)
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.title)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     }
+}
 
-    private func presetPicker(
-        selection: Binding<AidenThemePresetID>,
-        scheme: ColorScheme
-    ) -> some View {
-        Picker("Style", selection: selection) {
-            ForEach(AidenThemePresetID.allCases) { preset in
-                let palette = AidenThemeCatalog.palette(preset: preset, scheme: scheme)
-                Label {
-                    Text(preset.title)
-                } icon: {
-                    Image(systemName: "circle.fill").foregroundStyle(palette.accent)
-                }
-                .tag(preset)
-            }
+private extension AidenThemePresetID {
+    /// The scheme that visually defines each preset on its tile.
+    var tileSignatureScheme: ColorScheme {
+        switch self {
+        case .graphite, .dusk, .midnight: .dark
+        default: .light
         }
-        .pickerStyle(.inline)
-        .labelsHidden()
     }
 }
 

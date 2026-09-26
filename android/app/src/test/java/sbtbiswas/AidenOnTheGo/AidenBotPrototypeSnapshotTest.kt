@@ -1,7 +1,10 @@
 package sbtbiswas.AidenOnTheGo
 
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
 import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
@@ -11,8 +14,12 @@ import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeScreen
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import androidx.compose.ui.unit.dp
+import java.io.File
 
 class AidenBotPrototypeSnapshotTest {
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     @Test
     fun testAllPresetThemePalettesAreDefined() {
         assertEquals(9, AidenThemePresetID.values().size)
@@ -114,6 +121,19 @@ class AidenBotPrototypeSnapshotTest {
         assertEquals(20.dp, AidenUi.ScreenGutter)
         assertEquals(30.dp, AidenUi.ComposerRadius)
         assertFalse(AidenUi.ScrollableSheetGesturesEnabled)
+    }
+
+    @Test
+    fun testThemeTileSelectionPersistsThroughAppearanceStore() {
+        val storageDir = File(tempFolder.root, "appearance")
+        val store = AidenAppearanceStore(storageDir)
+        assertEquals(AidenThemePresetID.AIDEN, store.config.value.preset)
+
+        store.updatePreset(AidenThemePresetID.DUSK)
+        assertEquals(AidenThemePresetID.DUSK, store.config.value.preset)
+
+        val reloaded = AidenAppearanceStore(storageDir)
+        assertEquals(AidenThemePresetID.DUSK, reloaded.config.value.preset)
     }
 
     @Test
