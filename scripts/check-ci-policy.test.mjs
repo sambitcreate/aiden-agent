@@ -217,10 +217,10 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /branches:\s*\n\s*- main/u);
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /permissions:\s*\n\s*contents: read/u);
-  assert.match(workflow, /publish:[\s\S]*permissions:\s*\n\s*contents: write/u);
+  assert.doesNotMatch(workflow, /contents: write/u);
   assert.match(workflow, /group: model-catalog-refresh-main/u);
   assert.match(workflow, /cancel-in-progress: true/u);
-  assert.match(workflow, /GITHUB_ACTOR.*github-actions\[bot\]/u);
+  assert.match(workflow, /author_email.*41898282\+github-actions\[bot\]@users\.noreply\.github\.com/u);
   assert.match(workflow, /chore: refresh models\.dev catalog/u);
   assert.match(workflow, /changed_paths.*git diff-tree/u);
   assert.match(workflow, /changed_paths.*resources\/model-capabilities\.json/u);
@@ -232,8 +232,9 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/u);
   assert.match(workflow, /sha256sum --check model-capabilities\.json\.sha256/u);
   assert.match(workflow, /needs: refresh/u);
-  assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
-  assert.match(workflow, /git push.*HEAD:main/u);
+  assert.match(workflow, /CATALOG_DEPLOY_KEY: \$\{\{ secrets\.CATALOG_DEPLOY_KEY \}\}/u);
+  assert.match(workflow, /StrictHostKeyChecking=yes/u);
+  assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" HEAD:main/u);
 });
 
 test("Pullfrog allows aggregate release reviews to finish", async () => {
