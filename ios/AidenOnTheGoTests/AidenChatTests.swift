@@ -1199,6 +1199,16 @@ final class AidenChatTests: XCTestCase {
             durationMs: 1_000, target: nil, detail: "pi-vcc · 0.4s · ~25900 → 6758 tokens", lineChanges: nil
         )
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Compacted context pi-vcc · 0.4s · ~25900 → 6758 tokens")
+        XCTAssertTrue(AidenAgentActivityPresentation.isCompactContextOnly([step]))
+        let read = AidenAgentStep(
+            id: "read-1", order: 1, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .completed, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: 1_000, target: "README.md", detail: nil, lineChanges: nil
+        )
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, read]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, step]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([]))
         let decoded = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
         XCTAssertEqual(decoded.detail, step.detail)
     }
