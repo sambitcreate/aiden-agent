@@ -1113,6 +1113,32 @@ test("a streaming revoke during a peer refresh or open is never undone", async (
   });
 });
 
+test("closing a paired Mac's simulator while it is still opening wins over the open", async () => {
+  for (const closeWith of ["session", "chat"] as const) {
+    await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
+      await service.refreshPeers();
+      const open = peers.port.open;
+      let proceed: () => void = () => undefined;
+      let waiting = false;
+      peers.port.open = async (hostId, deviceId) => {
+        waiting = true;
+        await new Promise<void>((resolve) => (proceed = resolve));
+        return open(hostId, deviceId);
+      };
+      const opening = service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+      await waitFor(() => waiting);
+      if (closeWith === "session") await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE });
+      else service.closeChat("c");
+      proceed();
+      await assert.rejects(opening, /closed while it was opening/u);
+      assert.deepEqual(service.sessionsForChat("c"), [], closeWith);
+      peers.port.open = open;
+      await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+      assert.equal(service.sessionsForChat("c").length, 1, "a fresh open after the close still works");
+    });
+  }
+});
+
 test("proxied streams to a paired Mac close when it stops being ready or streaming is revoked", async () => {
   await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers, closed }) => {
     await service.refreshPeers();

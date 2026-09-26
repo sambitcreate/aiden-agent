@@ -817,9 +817,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           throw new Error("That simulator is no longer available.");
         }
         const epoch = peerEpoch;
+        const closed = closeCount(input.chatId, hostId, input.deviceId);
         const opened = await peerPort().open(hostId, input.deviceId);
         if (epoch !== peerEpoch || !consent.streaming || peers.get(hostId) !== entry) {
           throw new Error("Simulator streaming was turned off while opening.");
+        }
+        if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
+          throw new Error("The simulator was closed while it was opening.");
         }
         entry.devices = entry.devices.map((device) =>
           device.id === opened.id ? { ...opened, hostId, platform: "ios" } : device,
