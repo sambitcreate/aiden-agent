@@ -153,6 +153,7 @@ import { isAppendReconciliationRequired } from "../shared/chat-message-contract"
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import type {
   AskUserQuestionPromptV1,
   AskUserQuestionResponseV1,
@@ -185,6 +186,7 @@ function toolLabel(toolName: string): string {
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(chatId));
@@ -196,7 +198,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   const bot = useBot(chat.data?.botId);
   const settings = useSettings();
-  const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
+  const computerUseGloballyEnabled =
+    capabilities.computerUse && settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
@@ -2202,7 +2205,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                         className="mt-2.5 rounded-control bg-well px-3 py-2"
                       >
                         Aiden cannot safely authorize this action from this view. Deny it here or
-                        review the exact action on the Mac that owns this chat.
+                        review the exact action on the device that owns this chat.
                       </Text>
                     ) : pendingWorkspaceWrite ? (
                       <SubagentWorkspaceWriteApproval

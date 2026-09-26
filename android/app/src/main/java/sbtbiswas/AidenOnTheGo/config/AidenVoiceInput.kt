@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 enum class AidenVoiceInputMode(val wireValue: String, val title: String) {
     ON_DEVICE("on-device", "On this device"),
-    PAIRED_MAC("paired-mac", "Paired Mac");
+    PAIRED_MAC("paired-mac", "Paired desktop");
 
     companion object {
         fun fromWireValue(value: String?): AidenVoiceInputMode =

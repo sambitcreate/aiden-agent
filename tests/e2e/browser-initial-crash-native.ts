@@ -64,7 +64,9 @@ void app
         }
       ).create("initial-crash", url, undefined, false);
       const guest = tab.view.webContents;
+      console.error("[initial-crash] tab created");
       await requested;
+      console.error("[initial-crash] first request held");
       assert.equal(guest.getURL(), "");
       assert.equal(guest.navigationHistory.getAllEntries().length, 0);
       const crashed = new Promise<void>((resolve) =>
@@ -72,6 +74,7 @@ void app
       );
       guest.forcefullyCrashRenderer();
       await crashed;
+      console.error("[initial-crash] renderer gone");
       const before = {
         nativeCrashed: guest.isCrashed(),
         nativeLoading: guest.isLoadingMainFrame(),

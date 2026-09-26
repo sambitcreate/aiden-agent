@@ -187,7 +187,7 @@ fun aidenBotInboxActivityStatus(
             if (canRespondToApproval) {
                 AidenBotInboxActivityStatus("Approval needed", "verified_user")
             } else {
-                AidenBotInboxActivityStatus("Waiting for approval on Mac", "computer")
+                AidenBotInboxActivityStatus("Waiting for desktop approval", "computer")
             }
         }
         AidenBotConversationActivityState.RECONCILING -> AidenBotInboxActivityStatus("Updating", "sync")
@@ -435,7 +435,7 @@ fun AidenBotsHomeScreen(
                             AidenEmptyState(
                                 icon = Icons.Default.WifiOff,
                                 title = "Bots couldn’t load",
-                                body = errorMessage ?: "Reconnect to your Mac and try again.",
+                                body = errorMessage ?: "Reconnect to your paired desktop and try again.",
                                 modifier = Modifier.padding(top = 36.dp),
                                 action = {
                                     Button(
@@ -456,7 +456,7 @@ fun AidenBotsHomeScreen(
                                 body = if (connectionState == AidenConnectionState.CONNECTED)
                                     "Create a familiar helper with one persistent conversation and its own capabilities."
                                 else
-                                    "Reconnect to your Mac to load Bots.",
+                                    "Reconnect to your paired desktop to load Bots.",
                                 modifier = Modifier.padding(top = 36.dp),
                                 action = if (connectionState == AidenConnectionState.CONNECTED) {
                                     {
