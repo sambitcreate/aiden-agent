@@ -451,6 +451,7 @@ export class BrowserService {
           requestHeaders: applyBrowserGuestIdentityHeaders(
             browserPreviewRequestHeaders(details.requestHeaders, authorization),
             guestUserAgent,
+            details.url,
           ),
         });
       });

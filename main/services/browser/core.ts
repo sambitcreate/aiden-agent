@@ -94,37 +94,67 @@ export function browserGuestUserAgent(raw: string): string {
   return `${mozilla} ${platform} AppleWebKit/537.36 (KHTML, like Gecko) ${chrome} Safari/537.36`;
 }
 
-function browserHeaderWithout(headers: Record<string, string>, name: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== name.toLowerCase()) result[key] = value;
-  }
-  return result;
+const BROWSER_GREASE_CHARS = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
+const BROWSER_GREASE_VERSIONS = ["8", "99", "24"];
+
+/**
+ * The brand list Chromium itself exposes through `navigator.userAgentData` in
+ * an unbranded build such as Electron: one GREASE brand plus "Chromium",
+ * spelled and ordered from the major version as in Chromium's
+ * `GenerateBrandVersionList`. The guest renderer never claims "Google Chrome",
+ * so the wire headers must not either.
+ */
+export function browserGuestBrands(userAgent: string): Array<{ brand: string; version: string }> {
+  const major = Number(userAgent.match(/Chrome\/(\d+)/u)?.[1] ?? "0");
+  const chars = BROWSER_GREASE_CHARS;
+  const grease = {
+    brand: `Not${chars[major % chars.length]}A${chars[(major + 1) % chars.length]}Brand`,
+    version: BROWSER_GREASE_VERSIONS[major % BROWSER_GREASE_VERSIONS.length],
+  };
+  const chromium = { brand: "Chromium", version: String(major) };
+  return major % 2 === 0 ? [grease, chromium] : [chromium, grease];
 }
 
-/** Keep Client Hints aligned with the reconstructed Chromium user agent. */
+/** Chromium sends UA Client Hints only to potentially trustworthy origins. */
+function browserTrustworthyRequestUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" || url.protocol === "wss:") return true;
+    if (url.protocol !== "http:" && url.protocol !== "ws:") return false;
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host.endsWith(".localhost") ||
+      /^127(?:\.\d+){3}$/u.test(host) || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Electron emits no UA Client Hint headers, while the guest renderer still
+ * exposes Chromium's `navigator.userAgentData`. Mirror only the default
+ * low-entropy hints from that same metadata so `User-Agent`, `sec-ch-ua*`, and
+ * page JavaScript describe one guest. High-entropy hints are never forged;
+ * pages read them from `navigator.userAgentData.getHighEntropyValues()`.
+ */
 export function applyBrowserGuestIdentityHeaders(
   headers: Record<string, string>,
   userAgent: string,
+  requestUrl: string,
   platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
-  const major = userAgent.match(/Chrome\/(\d+)/u)?.[1] ?? "142";
-  const full = userAgent.match(/Chrome\/([\d.]+)/u)?.[1] ?? `${major}.0.0.0`;
-  const chPlatform =
-    platform === "darwin" ? '"macOS"' : platform === "win32" ? '"Windows"' : '"Linux"';
-  let next = browserHeaderWithout(headers, "User-Agent");
-  next = browserHeaderWithout(next, "sec-ch-ua");
-  next = browserHeaderWithout(next, "sec-ch-ua-mobile");
-  next = browserHeaderWithout(next, "sec-ch-ua-platform");
-  next = browserHeaderWithout(next, "sec-ch-ua-full-version");
-  next = browserHeaderWithout(next, "sec-ch-ua-full-version-list");
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (name !== "user-agent" && !name.startsWith("sec-ch-ua")) next[key] = value;
+  }
   next["User-Agent"] = userAgent;
-  next["sec-ch-ua"] = `"Chromium";v="${major}", "Not=A?Brand";v="24", "Google Chrome";v="${major}"`;
+  if (!browserTrustworthyRequestUrl(requestUrl)) return next;
+  next["sec-ch-ua"] = browserGuestBrands(userAgent)
+    .map(({ brand, version }) => `"${brand}";v="${version}"`)
+    .join(", ");
   next["sec-ch-ua-mobile"] = "?0";
-  next["sec-ch-ua-platform"] = chPlatform;
-  next["sec-ch-ua-full-version"] = `"${full}"`;
-  next["sec-ch-ua-full-version-list"] =
-    `"Chromium";v="${full}", "Not=A?Brand";v="24.0.0.0", "Google Chrome";v="${full}"`;
+  next["sec-ch-ua-platform"] =
+    platform === "darwin" ? '"macOS"' : platform === "win32" ? '"Windows"' : '"Linux"';
   return next;
 }
 

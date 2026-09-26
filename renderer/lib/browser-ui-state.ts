@@ -83,7 +83,10 @@ export function browserNativeViewObstructed(
 
 export function visibleBrowserNativeOccluders(root: ParentNode = document): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter((element) => {
-    if (element.closest('[data-state="closed"], [aria-hidden="true"], [inert]')) return false;
+    // A modal's `hideOthers` isolation (aria-hidden plus its `data-aria-hidden`
+    // marker) only hides siblings from assistive tech; they remain painted,
+    // including the modal's own full-window overlay, so they still occlude.
+    if (element.closest('[data-state="closed"], [aria-hidden="true"]:not([data-aria-hidden="true"]), [inert]')) return false;
     if (element.hasAttribute("popover")) {
       try {
         if (!element.matches(":popover-open")) return false;
