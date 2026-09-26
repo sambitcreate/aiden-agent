@@ -90,15 +90,26 @@ export function verifyNativeHelper(file, platform = process.platform, arch = pro
  * installer can detect a stale binary whose sources changed after the build.
  */
 export function nativeHelperSourceHash(repositoryRoot, helper) {
-  const directory = join(repositoryRoot, "native", helper);
-  const sources = readdirSync(directory).filter((name) => /\.(?:c|h)$/u.test(name)).sort();
   const hash = createHash("sha256");
-  for (const name of sources) {
-    hash.update(name);
-    hash.update("\0");
-    hash.update(readFileSync(join(directory, name)));
-    hash.update("\0");
-  }
+  const add = (directory, pattern, prefix) => {
+    let names;
+    try {
+      names = readdirSync(directory);
+    } catch (error) {
+      if (error?.code === "ENOENT" && prefix) return;
+      throw error;
+    }
+    for (const name of names.filter((entry) => pattern.test(entry)).sort()) {
+      hash.update(`${prefix}${name}`);
+      hash.update("\0");
+      hash.update(readFileSync(join(directory, name)));
+      hash.update("\0");
+    }
+  };
+  add(join(repositoryRoot, "native", helper), /\.(?:c|h)$/u, "");
+  // Helpers include ../shared/*.h, so a shared header edit must also mark
+  // every prebuilt stale.
+  add(join(repositoryRoot, "native", "shared"), /\.h$/u, "shared/");
   return hash.digest("hex");
 }
 

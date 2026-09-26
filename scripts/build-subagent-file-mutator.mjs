@@ -1,10 +1,10 @@
 /* global console, process */
 
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { buildNativeCExecutable } from "./native-c-build-core.mjs";
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,32 +16,17 @@ const output = path.join(
   testing ? "aiden-subagent-file-mutator-test" : "aiden-subagent-file-mutator",
 );
 
-if (!["darwin", "linux"].includes(process.platform)) {
-  console.log("Unsupported platform for subagent file-mutator.");
+if (process.platform !== "darwin" && process.platform !== "linux") {
+  console.log("Skipping the subagent file-mutator build on this platform.");
   process.exit(0);
 }
 
-await mkdir(path.dirname(output), { recursive: true });
-const args = [
-  ...(process.platform === "darwin" ? ["clang"] : []),
-  "-std=c17",
-  "-Wall",
-  "-Wextra",
-  "-Werror",
-  "-O2",
-  ...(process.platform === "darwin" ? ["-mmacosx-version-min=14.4"] : ["-Wno-deprecated-declarations"]),
-  ...(testing
-    ? ["-DAIDEN_SUBAGENT_FILE_MUTATOR_TESTING=1"]
-    : process.platform === "darwin" ? ["-arch", "arm64", "-arch", "x86_64"] : []),
-  path.join(repositoryRoot, "native", "subagent-file-mutator", "main.c"),
-  ...(process.platform === "linux" ? ["-lcrypto"] : []),
-  "-o",
+await buildNativeCExecutable({
+  executeFile,
+  repositoryRoot,
+  source: path.join(repositoryRoot, "native", "subagent-file-mutator", "main.c"),
   output,
-];
-await executeFile(process.platform === "darwin" ? "/usr/bin/xcrun" : "cc", args, {
-  cwd: repositoryRoot,
-  env: { ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}), PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
-  maxBuffer: 1024 * 1024,
-  timeout: 120_000,
+  testing,
+  testingDefine: "AIDEN_SUBAGENT_FILE_MUTATOR_TESTING",
 });
 console.log(`Built ${path.relative(repositoryRoot, output)}`);

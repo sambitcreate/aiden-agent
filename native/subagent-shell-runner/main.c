@@ -1,7 +1,8 @@
-#ifndef __APPLE__
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#else
 #define _GNU_SOURCE
 #endif
-#define _DARWIN_C_SOURCE
 
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -17,16 +18,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#ifndef __APPLE__
+#include <sys/prctl.h>
+#endif
 #include <time.h>
 #include <unistd.h>
-
-#ifdef __APPLE__
-#define AIDEN_SHELL "/bin/zsh"
-#define AIDEN_SHELL_ENV "SHELL=/bin/zsh"
-#else
-#define AIDEN_SHELL "/bin/sh"
-#define AIDEN_SHELL_ENV "SHELL=/bin/sh"
-#endif
 
 #define COMMAND_LIMIT (64U * 1024U)
 #define STREAM_LIMIT (512U * 1024U)
@@ -292,13 +288,38 @@ static bool cleanup_group(pid_t group, pid_t original_group, pid_t direct_child,
   if (setpgid(0, original_group) != 0) return false;
   (void)kill(-group, SIGKILL);
   int ignored_status;
-  while (waitpid(direct_child, &ignored_status, 0) < 0 && errno == EINTR) {}
   deadline = monotonic_ms() + 1000U;
+#ifndef __APPLE__
+  /* As a Linux child subreaper, the helper adopts ordinary orphaned shell
+   * descendants. Reap every child that stayed in the occupied process group
+   * so a zombie cannot make kill(-group, 0) report a false cleanup failure. */
+  while (monotonic_ms() < deadline) {
+    pid_t reaped = waitpid(-group, &ignored_status, WNOHANG);
+    if (reaped > 0) continue;
+    if (reaped < 0 && errno == EINTR) continue;
+    if (reaped < 0 && errno == ECHILD) break;
+    if (reaped < 0) break;
+    usleep(10000);
+  }
+#endif
+  while (monotonic_ms() < deadline) {
+    pid_t reaped = waitpid(direct_child, &ignored_status, WNOHANG);
+    if (reaped == direct_child || (reaped < 0 && errno == ECHILD)) break;
+    if (reaped < 0 && errno == EINTR) continue;
+    if (reaped < 0) break;
+    usleep(10000);
+  }
   while (monotonic_ms() < deadline && process_group_exists(group)) usleep(10000);
   return !process_group_exists(group);
 }
 
 static int run_shell(const char *root_path, int root_fd, const struct request *request) {
+#ifndef __APPLE__
+  /* Electron is not guaranteed to be a child subreaper, and minimal desktop
+   * or container sessions may not reap an orphan before the cleanup deadline.
+   * Adopt ordinary descendants here so cleanup confirmation is deterministic. */
+  if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) return 70;
+#endif
   int stdout_pipe[2];
   int stderr_pipe[2];
   if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) return 70;
@@ -325,26 +346,30 @@ static int run_shell(const char *root_path, int root_fd, const struct request *r
     snprintf(config, sizeof(config), "XDG_CONFIG_HOME=%s/config", private_root);
     snprintf(cache, sizeof(cache), "XDG_CACHE_HOME=%s/cache", private_root);
     snprintf(data, sizeof(data), "XDG_DATA_HOME=%s/data", private_root);
+#ifdef __APPLE__
+    /* zsh -f (NO_RCS) skips startup files; ZDOTDIR=/dev/null is the backstop. */
+    const char *shell_path = "/bin/zsh";
+    char *shell_environment = "SHELL=/bin/zsh";
+    char *arguments[] = {"/bin/zsh", "-f", "-c", (char *)request->command,
+                         "aiden-subagent", NULL};
+#else
+    /* POSIX sh -f means noglob, so it must not be passed. The scrubbed
+       environment leaves ENV unset, so sh -c reads no startup file. */
+    const char *shell_path = "/bin/sh";
+    char *shell_environment = "SHELL=/bin/sh";
+    char *arguments[] = {"/bin/sh", "-c", (char *)request->command,
+                         "aiden-subagent", NULL};
+#endif
     char *environment[] = {
       "PATH=/usr/bin:/bin:/usr/sbin:/sbin", home, temporary, config, cache, data,
-      "LANG=C", "LC_ALL=C", AIDEN_SHELL_ENV, "TERM=dumb", "NO_COLOR=1", "CI=1",
+      "LANG=C", "LC_ALL=C", shell_environment, "TERM=dumb", "NO_COLOR=1", "CI=1",
       "PAGER=cat", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/usr/bin/false",
       "SSH_ASKPASS=/usr/bin/false", "SSH_ASKPASS_REQUIRE=force", "GIT_CONFIG_NOSYSTEM=1",
       "GIT_CONFIG_GLOBAL=/dev/null", "NPM_CONFIG_USERCONFIG=/dev/null",
       "NPM_CONFIG_UPDATE_NOTIFIER=false", "NPM_CONFIG_FUND=false", "NPM_CONFIG_AUDIT=false",
       "ZDOTDIR=/dev/null", NULL,
     };
-#ifdef __APPLE__
-    /* zsh -f (NO_RCS) skips startup files; ZDOTDIR=/dev/null is the backstop. */
-    char *arguments[] = {AIDEN_SHELL, "-f", "-c", (char *)request->command,
-                         "aiden-subagent", NULL};
-#else
-    /* POSIX sh -f means noglob, so it must not be passed. The scrubbed
-       environment leaves ENV unset, so sh -c reads no startup file. */
-    char *arguments[] = {AIDEN_SHELL, "-c", (char *)request->command,
-                         "aiden-subagent", NULL};
-#endif
-    execve(AIDEN_SHELL, arguments, environment);
+    execve(shell_path, arguments, environment);
     _exit(126);
   }
   (void)setpgid(child, child);

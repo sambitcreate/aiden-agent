@@ -28,3 +28,11 @@ export function canUseStoredProviderKey(
 ): boolean {
   return draft.needsKey && sameProviderConnection(saved, draft);
 }
+
+/** Keyless-to-keyless changes cannot expose, bind, or rotate a provider secret. */
+export function providerTransitionNeedsCredentialAccess(
+  previous: ProviderConnection | null | undefined,
+  current: ProviderConnection | null | undefined,
+): boolean {
+  return previous?.needsKey === true || current?.needsKey === true;
+}

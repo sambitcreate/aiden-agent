@@ -4,6 +4,8 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
+- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; main@0.43.0 merged and review-gated (42 conflicts resolved by ownership, two independent review passes, full local suite green). Linux runtime smoke, Linux CI burn-in, Gemini Live orb and managed-worktree checks on real Linux remain before the main merge. Enforcing Fedora GNOME VM validated the SELinux file-descriptor probes, Electron role transitions, protected-socket transfer, payload inventory, root-managed generation staging, and fail-closed security-label preservation. Release provenance and cross-platform installer delivery are implemented. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. Computer Use remains disabled on Linux.
+
 [MCP session context audit](mcp-session-context-audit.md) — Partial: advertised-capability status implemented for review; resources, server instructions and request-boundary instruction refresh remain explicit deliverables. Skill invocation is separately green in PR #214.
 [Skill and MCP session context](skill-mcp-session-context-plan.md) — Partial: skill invocation policy implemented in PR #214; implementation CI/review passed, physical iOS launch blocked by device lock. MCP metadata/resources/instructions and boundary refresh deferred.
 [Scoped MCP server instructions](mcp-server-instructions-plan.md) — Implemented for review: bounded generation-owned service guidance filtered by final tool admission. Resource operations and trusted AGENTS request-boundary refresh remain open. Related slices: #214 and #226.
@@ -83,5 +85,6 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Sidebar Chat Activity](completed/sidebar-chat-activity-plan.md)                               | Complete | Complete, revisioned per-chat activity appears as an accessible static ring with no polling or perpetual animation.                                |
 | [Pi Compaction Compatibility](completed/compaction-reliability-plan.md)                         | Complete | Aiden's adapter now matches the audited Pi baseline 1:1 and persists only closed, privacy-safe provider-failure metadata for durable UI.             |
 | [Pi Thinking Disclosure](completed/pi-thinking-disclosure-plan.md)                              | Complete | Provider-neutral readable Pi thinking, a one-second inspectable preview, and a durable local presentation toggle now match the audited Pi contract.  |
+| [Linux Desktop Support](completed/linux-desktop-support-plan.md)                                   | Complete | Linux x64/arm64 AppImage, DEB, and RPM packages, explicit platform capability tradeoffs, native helpers, and hosted Ubuntu/Fedora package and E2E acceptance all pass.                                                                     |
 
 Move a plan to `completed/` only when its original delivery scope is complete. Keep the original plan as historical documentation; follow-on work belongs in a new active plan.

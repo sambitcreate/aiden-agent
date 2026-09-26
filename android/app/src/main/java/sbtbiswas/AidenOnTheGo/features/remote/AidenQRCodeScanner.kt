@@ -89,7 +89,7 @@ fun AidenQRCodeScanner(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Point your camera at the QR code displayed in Aiden on your Mac to pair instantly.",
+                text = "Point your camera at the QR code displayed in Aiden on your desktop to pair instantly.",
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.secondary,
                 textAlign = TextAlign.Center

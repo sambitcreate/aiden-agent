@@ -38,11 +38,15 @@ import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-s
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { SimulatorSettings } from "../components/settings/simulator-settings";
+import {
+  availableSettingsDestinations,
+  SETTINGS_DESTINATIONS,
+  type SettingsSection,
+} from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import { SettingsPage } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
-import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
@@ -102,7 +106,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
-  modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
+  modelData: "Arrange your models by capability and pace. Your map stays on this device.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",
@@ -122,15 +126,22 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
-  const section = initialSection ?? "providers";
-  const [search, setSearch] = React.useState("");
   const capabilities = useAppCapabilities();
+  const section =
+    initialSection === "computerUse" && !capabilities.computerUse
+      ? "providers"
+      : (initialSection ?? "providers");
+  const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
-  // Simulator settings exist only in builds with the devices capability.
-  const availableNav = capabilities.devices ? NAV : NAV.filter((item) => item.id !== "simulator");
+  const availableDestinationIds = new Set(
+    availableSettingsDestinations(capabilities).map((destination) => destination.id),
+  );
+  const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
-    ? availableNav.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
+    ? availableNav.filter((item) =>
+        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
+      )
     : availableNav;
   const ActiveSection = CONTENT[section];
 

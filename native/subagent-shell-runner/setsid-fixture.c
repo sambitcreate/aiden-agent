@@ -1,6 +1,9 @@
-#ifndef __APPLE__
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#else
 #define _GNU_SOURCE
 #endif
+
 #include <errno.h>
 #include <signal.h>
 #include <poll.h>

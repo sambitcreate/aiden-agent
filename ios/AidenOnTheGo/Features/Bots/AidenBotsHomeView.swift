@@ -278,7 +278,7 @@ func aidenBotInboxActivityStatus(
     case .waitingForApproval:
         canRespondToApproval
             ? .init(label: "Approval needed", symbol: "checkmark.shield")
-            : .init(label: "Waiting for approval on Mac", symbol: "desktopcomputer")
+            : .init(label: "Waiting for desktop approval", symbol: "desktopcomputer")
     case .reconciling: .init(label: "Updating", symbol: "arrow.triangle.2.circlepath")
     }
 }
@@ -564,7 +564,7 @@ struct AidenBotsHomeView: View {
                 Text(
                     coordinator.connectionState == .connected
                         ? "Create a Bot to give a familiar helper one persistent conversation and its own capabilities."
-                        : "Reconnect to your Mac to load Bots."
+                        : "Reconnect to your paired desktop to load Bots."
                 )
             } actions: {
                 if coordinator.connectionState == .connected {

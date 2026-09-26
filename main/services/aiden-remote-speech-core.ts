@@ -71,7 +71,7 @@ export class AidenRemoteSpeechServiceCore {
     return {
       engine: {
         ready: engine.ready,
-        error: engine.ready ? null : "The Mac speech engine is unavailable. Restart Aiden Agent and try again.",
+        error: engine.ready ? null : "The desktop speech engine is unavailable. Restart Aiden Agent and try again.",
       },
       selectedModelId: settings.localVoiceModel || null,
       models: this.dependencies.listModels().map((model) => ({
@@ -146,7 +146,7 @@ export class AidenRemoteSpeechServiceCore {
     }
     const id = modelId(value.modelId);
     const installed = this.dependencies.listModels().some((candidate) => candidate.id === id && candidate.installed);
-    if (!installed) throw new AidenRemoteServiceError("operation_stale", "The selected speech model is not installed on the Mac.", 409, true);
+    if (!installed) throw new AidenRemoteServiceError("operation_stale", "The selected speech model is not installed on the desktop.", 409, true);
     return this.transcriptionLane.run(async () => {
       // A queued request may wait while model management runs. Revalidate at
       // execution time so deletion cannot leave an admitted request pointing at
@@ -156,7 +156,7 @@ export class AidenRemoteSpeechServiceCore {
       if (!stillInstalled) {
         throw new AidenRemoteServiceError(
           "operation_stale",
-          "The selected speech model is no longer installed on the Mac.",
+          "The selected speech model is no longer installed on the desktop.",
           409,
           true,
         );

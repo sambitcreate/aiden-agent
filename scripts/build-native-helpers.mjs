@@ -24,13 +24,13 @@ const dockerTargets = process.argv.slice(2).flatMap((arg, index, argv) => (arg =
 
 if (dockerTargets.length > 0) {
   for (const target of dockerTargets) {
-    // Debian bookworm image: cc + libssl-dev cover the OpenSSL-linked helpers.
+    // Debian bookworm image: build-essential provides the cc the helpers need.
     const result = spawnSync("docker", [
       "run", "--rm", "--platform", target,
       "-v", `${repositoryRoot}:/repo`, "-w", "/repo",
       "node:22-bookworm",
       "sh", "-c",
-      "apt-get update -qq && apt-get install -y -qq build-essential libssl-dev >/dev/null && node scripts/build-native-helpers.mjs",
+      "apt-get update -qq && apt-get install -y -qq build-essential >/dev/null && node scripts/build-native-helpers.mjs",
     ], { stdio: "inherit" });
     if (result.status !== 0) throw new Error(`Docker build for ${target} failed.`);
   }

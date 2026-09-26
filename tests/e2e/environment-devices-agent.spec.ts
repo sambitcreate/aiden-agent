@@ -91,6 +91,8 @@ const toolNamesIn = (body: unknown): string[] =>
   );
 
 test.describe("Simulator agent tools", () => {
+  // Local iOS Simulators need Xcode; devicesEnabled() is false off macOS.
+  test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
   test.use({
     workspaceSeed: true,
     appEnvironment: {

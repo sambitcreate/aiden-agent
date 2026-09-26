@@ -321,7 +321,7 @@ fun AidenScheduledTasksScreen(
                             refresh()
                             loadRuns(selectedTask.id)
                         } catch (_: CancellationException) {
-                            // Cancellation does not prove whether the Mac accepted the run.
+                            // Cancellation does not prove whether the paired desktop accepted the run.
                         } catch (error: Exception) {
                             pendingRunKeys.failed(selectedTask.id, error)
                             if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
@@ -439,7 +439,7 @@ private fun AidenScheduledTaskList(
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "Aiden shows a permission review before saving unattended work. If a proposal can't be fully reviewed here, Aiden asks you to confirm it on your Mac.",
+                    "Aiden shows a permission review before saving unattended work. If a proposal can't be fully reviewed here, Aiden asks you to confirm it on your paired desktop.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
@@ -715,7 +715,7 @@ private fun AidenScheduledTaskDetail(
         ) { Text("Delete automation") }
 
         if (!isConnected) {
-            Text("Connect to your Mac to run or change this task.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            Text("Connect to your paired desktop to run or change this task.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         } else if (!canManage) {
             Text("This paired device has read-only scheduled task access.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         }

@@ -35,3 +35,4 @@
 - `packages/cli-playground` installs standalone in CI, so it needs its own `@types/node`.
 - AGENTS.md now names `aiden catalog models-dev fetch` as an approved models.dev caller (coordinator decision 2026-09-26). It is the CLI counterpart of the Settings action, with the same endpoint and constraints and a display-only cache.
 - The native shell runner passes `-f` only to zsh (macOS). On Linux `/bin/sh -f` is noglob; a glob regression test in subagent-shell-runner-io.test.ts covers this.
+- Merging #71 (Linux desktop) took main's native C ports and `native-c-build-core.mjs` build scripts. The PR's OpenSSL/renameat2 shims were dropped because `native/shared/aiden-platform.h` carries its own SHA-256. `nativeHelperSourceHash` now also hashes `native/shared/*.h`, so a shared-header edit marks prebuilts stale. The PR's speech core carries main's "desktop" wording.

@@ -1,7 +1,7 @@
 /* global Buffer */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,6 +102,28 @@ test("verifyNativeHelper accepts the Mach-O shape on darwin", () => {
     assert.equal(verifyNativeHelper(x64OnlyFile, "darwin", "arm64"), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("nativeHelperSourceHash changes when the helper or a shared header changes", () => {
+  const root = scratch();
+  try {
+    mkdirSync(path.join(root, "native", "demo"), { recursive: true });
+    writeFileSync(path.join(root, "native", "demo", "main.c"), "int main(void) { return 0; }\n");
+    const withoutShared = nativeHelperSourceHash(root, "demo");
+    mkdirSync(path.join(root, "native", "shared"));
+    const header = path.join(root, "native", "shared", "aiden-platform.h");
+    writeFileSync(header, "#define A 1\n");
+    const withShared = nativeHelperSourceHash(root, "demo");
+    assert.notEqual(withShared, withoutShared);
+    assert.equal(nativeHelperSourceHash(root, "demo"), withShared);
+    writeFileSync(header, "#define A 2\n");
+    const editedShared = nativeHelperSourceHash(root, "demo");
+    assert.notEqual(editedShared, withShared);
+    writeFileSync(path.join(root, "native", "demo", "main.c"), "int main(void) { return 1; }\n");
+    assert.notEqual(nativeHelperSourceHash(root, "demo"), editedShared);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

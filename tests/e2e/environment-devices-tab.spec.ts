@@ -5,9 +5,23 @@ const TAB_NAMES = ["Review", "Subagents", "Files", "Browser", "Simulator"];
 test.describe("Simulator tab", () => {
   test.use({ workspaceSeed: true, appEnvironment: { AIDEN_EXPERIMENTAL_DEVICES: "1" } });
 
+  test("stays hidden off macOS even when the flag is set", async ({ aiden }) => {
+    test.skip(process.platform === "darwin", "covered by the macOS test below");
+    const page = aiden.page;
+    await finishLmStudioOnboarding(page);
+    const tools = page.getByRole("complementary", { name: "Environment work surface" });
+    if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
+    await expect(tools).toBeVisible();
+    const tabs = tools.getByRole("tablist", { name: "Environment views" }).getByRole("tab");
+    await expect(tabs).toHaveCount(TAB_NAMES.length - 1);
+    await expect(tools.getByRole("tab", { name: "Simulator", exact: true })).toHaveCount(0);
+    await expect(page.locator("#environment-devices-panel")).toHaveCount(0);
+  });
+
   test("is the last keyboard-reachable Environment tab, persists, and hides without the flag", async ({
     aiden,
   }) => {
+    test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
     const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
