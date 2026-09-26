@@ -16,6 +16,13 @@ export interface GenerationContextProfile {
   /** Present when the generation appended AGENTS.md guidance to its prompt. */
   instructions?: ReturnType<typeof createAgentsInstructionTracker>;
   instructionRoots?: AgentsInstructionRoots;
+  /** Effective workspace permission; `ask` and `full` build different prompts. */
+  permission?: string;
+}
+
+export interface GenerationContextScope {
+  instructionRoots?: AgentsInstructionRoots;
+  permission?: string;
 }
 
 /**
@@ -24,15 +31,17 @@ export interface GenerationContextProfile {
  */
 export function createGenerationContextProfile(
   options: GenerationContextOptions,
-  instructionRoots?: AgentsInstructionRoots,
+  scope: GenerationContextScope = {},
   read?: AgentsInstructionOptions["read"],
 ): GenerationContextProfile {
+  const { instructionRoots, permission } = scope;
   return {
     options,
     instructions: instructionRoots
       ? createAgentsInstructionTracker(instructionRoots, read)
       : undefined,
     instructionRoots,
+    permission,
   };
 }
 
@@ -43,12 +52,14 @@ export interface ContextProfileRequest {
   supportsImages: boolean;
   /** AGENTS.md roots a generation started now would read. */
   instructionRoots: AgentsInstructionRoots;
+  /** The chat workspace's current effective permission. */
+  permission: string;
 }
 
 /**
  * Reuse a remembered profile only while it describes the next request: same
- * model shape and the same currently authorized AGENTS.md scope. A workspace
- * path or permission change discards it (without touching the old roots), so
+ * model shape, workspace permission and currently authorized AGENTS.md scope.
+ * A workspace path or permission change discards it (without touching the old roots), so
  * the caller rebuilds from the current ambient scope instead.
  */
 export async function rememberedContextOptions(
@@ -61,7 +72,8 @@ export async function rememberedContextOptions(
     options.providerId !== request.providerId ||
     options.modelId !== request.modelId ||
     options.contextWindow !== request.contextWindow ||
-    options.supportsImages !== request.supportsImages
+    options.supportsImages !== request.supportsImages ||
+    (profile.permission !== undefined && profile.permission !== request.permission)
   ) {
     return undefined;
   }

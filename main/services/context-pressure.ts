@@ -25,6 +25,7 @@ import {
   createGenerationContextProfile,
   rememberedContextOptions,
   type GenerationContextProfile,
+  type GenerationContextScope,
 } from "./context-profile.js";
 import { buildAgentTools } from "./tools.js";
 import { draftUserPiMessage } from "./generation-messages.js";
@@ -38,9 +39,9 @@ const generationProfiles = new Map<string, GenerationContextProfile>();
 export function rememberChatContextProfile(
   chatId: string,
   options: GenerationContextOptions,
-  instructionRoots?: AgentsInstructionRoots,
+  scope?: GenerationContextScope,
 ): void {
-  generationProfiles.set(chatId, createGenerationContextProfile(options, instructionRoots));
+  generationProfiles.set(chatId, createGenerationContextProfile(options, scope));
 }
 
 export function forgetChatContextProfile(chatId: string): void {
@@ -224,13 +225,15 @@ export async function chatContextPressure(
   const messages = await journalMessages(chatId, chat.createdAt);
   if (!messages) return null;
   const supportsImages = model.input.includes("image");
+  const currentScope = await currentInstructionScope(chat.workspaceId);
   const base =
     (await rememberedContextOptions(generationProfiles.get(chatId), {
       providerId,
       modelId,
       contextWindow: model.contextWindow,
       supportsImages,
-      instructionRoots: (await currentInstructionScope(chat.workspaceId)).instructionRoots,
+      instructionRoots: currentScope.instructionRoots,
+      permission: currentScope.permission,
     })) ?? (await ambientContextOptions(chatId, model.contextWindow, supportsImages));
   if (!base) return null;
   // Keep the generation-accurate static context (tools + system prompt) while

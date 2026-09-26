@@ -2281,7 +2281,10 @@ export const llmClient = {
         providerId: model.provider,
         modelId: model.id,
       };
-      rememberChatContextProfile(params.chatId, generationContextOptions, agentsInstructionRoots);
+      rememberChatContextProfile(params.chatId, generationContextOptions, {
+        instructionRoots: agentsInstructionRoots,
+        permission,
+      });
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -2438,7 +2441,10 @@ export const llmClient = {
         onContextProjection: (projection, projectionOptions) => {
           // The harness keeps these options current with host-disclosed tool
           // and prompt updates, so ambient reads reuse the live profile.
-          rememberChatContextProfile(params.chatId, projectionOptions, agentsInstructionRoots);
+          rememberChatContextProfile(params.chatId, projectionOptions, {
+            instructionRoots: agentsInstructionRoots,
+            permission,
+          });
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,

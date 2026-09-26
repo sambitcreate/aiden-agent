@@ -759,7 +759,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [contextFeed, contextLiveGeneration]);
   React.useEffect(() => {
     if (!contextLiveGeneration) void contextFeed.refresh();
-  }, [contextFeed, chatId, draft, providerId, model, chat.data?.updatedAt, contextLiveGeneration]);
+    // Workspace path and permission shape the next request's system prompt
+    // and AGENTS.md scope, so a change re-prices the meter.
+  }, [
+    contextFeed,
+    chatId,
+    draft,
+    providerId,
+    model,
+    chat.data?.updatedAt,
+    contextLiveGeneration,
+    effectiveWorkspace?.permission,
+    effectiveWorkspace?.folderPath,
+  ]);
   const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
 
   React.useEffect(() => {

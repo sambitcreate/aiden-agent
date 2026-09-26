@@ -230,11 +230,11 @@ test("remembered profiles never re-read a workspace whose path or permission cha
     modelId: "m",
   };
   const reads: string[] = [];
-  const profile = createGenerationContextProfile(options, roots, async (root) => {
+  const profile = createGenerationContextProfile(options, { instructionRoots: roots, permission: "ask" }, async (root) => {
     reads.push(root.canonicalPath);
     return f.read(root as { canonicalPath: string });
   });
-  const request = { providerId: "p", modelId: "m", contextWindow: 32_000, supportsImages: false };
+  const request = { providerId: "p", modelId: "m", contextWindow: 32_000, supportsImages: false, permission: "ask" };
   // The old workspace's guidance changes after the scope moved on.
   await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "OLD_SCOPE_EDITED_AND_LONGER");
   const moved = path.join(f.root, "other-workspace");
@@ -248,6 +248,11 @@ test("remembered profiles never re-read a workspace whose path or permission cha
   // The same scope is reused and repriced.
   const same = await rememberedContextOptions(profile, { ...request, instructionRoots: roots });
   assert.match(same?.systemPrompt ?? "", /OLD_SCOPE_EDITED_AND_LONGER/);
+  // ask <-> full keeps the roots but builds a different host prompt.
+  assert.equal(
+    await rememberedContextOptions(profile, { ...request, permission: "full", instructionRoots: roots }),
+    undefined,
+  );
   // A model shape change also falls back to the ambient profile.
   assert.equal(
     await rememberedContextOptions(profile, { ...request, modelId: "other", instructionRoots: roots }),
