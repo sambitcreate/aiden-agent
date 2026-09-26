@@ -29,7 +29,7 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
-import type { PiSessionPort } from "./pi-session-port.js";
+import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
@@ -108,7 +108,7 @@ class PiCompactionSessionError extends Error {
   }
 }
 
-class CompactionSummaryBudgetError extends Error {
+export class CompactionSummaryBudgetError extends Error {
   readonly name = "CompactionSummaryBudgetError";
 
   constructor(
@@ -132,6 +132,67 @@ function budgetDiagnosticFields(error: CompactionSummaryBudgetError) {
     safetyTokens: error.safetyTokens,
     contextWindowTokens: error.contextWindowTokens,
     overBudgetTokens: error.overBudgetTokens,
+  };
+}
+
+type CompactionRecoveryStage = "local-compiler" | "semantic-summary" | "checkpoint";
+
+/**
+ * Closed diagnostic fields for a failed compaction. The caught error's own
+ * cause wins; an attempted budget recovery is reported through the recovery
+ * stage and budget token counts, and is the top-level cause only when nothing
+ * more specific is known.
+ */
+export function compactionFailureDiagnosticFields(input: {
+  error: unknown;
+  reason: string;
+  sessionFailed: boolean;
+  hostFailure?: "inference" | "policy";
+  budgetFailure?: CompactionSummaryBudgetError;
+  recoveryStage?: CompactionRecoveryStage;
+}): Record<string, string | number> {
+  const { error, hostFailure, budgetFailure, recoveryStage } = input;
+  const budget = error instanceof CompactionSummaryBudgetError ? error : budgetFailure;
+  return {
+    compactionReason: input.reason,
+    compactionFailure: input.sessionFailed ? "journal" :
+      error instanceof CompactionSummaryBudgetError ? "summary-budget" :
+        error instanceof CompactionError && error.code === "summarization_failed" ? "summary-provider" :
+          error instanceof VccError ? "local-compiler" :
+            hostFailure === "inference" ? "host-inference" :
+              hostFailure === "policy" ? "host-policy" :
+                budgetFailure ? "budget-recovery" : "other",
+    ...(budget ? budgetDiagnosticFields(budget) : {}),
+    ...(recoveryStage ? { recoveryStage } : {}),
+    ...(error instanceof VccError ? { localCompilerCause: error.code } : {}),
+  };
+}
+
+/** One prepared compaction channel as a self-contained local-compiler input. */
+function recoveryChannelInput(
+  messages: readonly AgentMessage[],
+  preparation: CompactionPreparation,
+  contextWindow: number,
+) {
+  const branch: PiSessionEntry[] = messages.map((message, index) => ({
+    type: "message",
+    id: `budget-recovery:${index}`,
+    seq: index,
+    parentId: index === 0 ? null : `budget-recovery:${index - 1}`,
+    timestamp: message.timestamp,
+    message,
+  }));
+  return {
+    branch,
+    preparation: {
+      ...preparation,
+      messagesToSummarize: [...messages],
+      turnPrefixMessages: [],
+      isSplitTurn: false,
+      retainedTail: [],
+      previousSummary: undefined,
+    },
+    contextWindow,
   };
 }
 
@@ -490,7 +551,7 @@ export class PiCompactionCoordinator {
     const engine = compactionEngineFrom(this.options.engine);
     let started = false;
     let budgetFailure: CompactionSummaryBudgetError | undefined;
-    let recoveryStage: "local-compiler" | "semantic-summary" | "checkpoint" | undefined;
+    let recoveryStage: CompactionRecoveryStage | undefined;
     let removeParentAbort = () => {};
     try {
       const branch = await this.options.session.getBranch();
@@ -555,19 +616,34 @@ export class PiCompactionCoordinator {
               ...budgetDiagnosticFields(error),
             },
           });
-          // The local compiler reduces the *same prepared branch* without
-          // publishing a checkpoint. Pi then writes the final semantic summary
-          // only after its ordinary bounded request succeeds.
+          // The local compiler reduces each prepared channel without publishing
+          // a checkpoint. Pi then writes the final semantic summary through its
+          // ordinary bounded path, so the prior checkpoint still reaches the
+          // update prompt and a split turn still gets its turn-prefix summary.
           recoveryStage = "local-compiler";
-          const local = await compileLocal();
+          const reduceChannel = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+            if (messages.length === 0) return messages;
+            try {
+              const local = await (this.options.compileVcc ?? compileVccInWorker)(
+                recoveryChannelInput(messages, preparation, this.options.model.contextWindow),
+                abortController.signal,
+              );
+              return [{ role: "user", content: local.summary, timestamp: Date.now() }];
+            } catch (reductionError) {
+              // A channel already smaller than any local reduction is kept raw;
+              // its own bounded request still fails closed if it cannot fit.
+              if (reductionError instanceof VccError && reductionError.code === "insufficient_reduction") {
+                return messages;
+              }
+              throw reductionError;
+            }
+          };
+          const messagesToSummarize = await reduceChannel(preparation.messagesToSummarize);
+          const turnPrefixMessages = preparation.isSplitTurn
+            ? await reduceChannel(preparation.turnPrefixMessages)
+            : preparation.turnPrefixMessages;
           recoveryStage = "semantic-summary";
-          result = await summarize({
-            ...preparation,
-            messagesToSummarize: [{ role: "user", content: local.summary, timestamp: Date.now() }],
-            turnPrefixMessages: [],
-            isSplitTurn: false,
-            previousSummary: undefined,
-          });
+          result = await summarize({ ...preparation, messagesToSummarize, turnPrefixMessages });
           recoveryStage = "checkpoint";
         }
       }
@@ -669,20 +745,9 @@ export class PiCompactionCoordinator {
       if (!aborted) {
         writeDiagnosticEvent({
           level: "warn", area: "generation", event: "compaction-failed",
-          outcome: "failed", fields: {
-            compactionReason: reason,
-            compactionFailure: sessionFailed ? "journal" :
-              budgetFailure ? "budget-recovery" :
-                error instanceof CompactionSummaryBudgetError ? "summary-budget" :
-                  error instanceof CompactionError && error.code === "summarization_failed" ? "summary-provider" :
-                    error instanceof VccError ? "local-compiler" :
-                  hostFailure === "inference" ? "host-inference" :
-                    hostFailure === "policy" ? "host-policy" : "other",
-            ...(budgetFailure ? budgetDiagnosticFields(budgetFailure) :
-              error instanceof CompactionSummaryBudgetError ? budgetDiagnosticFields(error) : {}),
-            ...(recoveryStage ? { recoveryStage } : {}),
-            ...(error instanceof VccError ? { localCompilerCause: error.code } : {}),
-          },
+          outcome: "failed", fields: compactionFailureDiagnosticFields({
+            error, reason, sessionFailed, hostFailure, budgetFailure, recoveryStage,
+          }),
         });
       }
       const errorMessage = hostFailure

@@ -39,6 +39,12 @@ test("main-only provider diagnostics distinguish model availability without pers
   assert.equal(connection.providerCategory, "network");
   assert.equal(connection.transportCause, "connection-error");
   assert.doesNotMatch(JSON.stringify(connection), /PRIVATE_PROVIDER_DETAIL/u);
+  const hangUp = providerFailureDiagnosticFields({
+    kind: "provider_failed", reason: "request-failed", attempts: 1,
+    finalMessage: { errorMessage: `socket hang up ${PRIVATE_CANARY}` },
+  });
+  assert.equal(hangUp.providerCategory, "network");
+  assert.equal(hangUp.transportCause, "socket-closed");
 });
 
 function classify(
