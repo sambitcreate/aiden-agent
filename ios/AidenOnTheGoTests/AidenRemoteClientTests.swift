@@ -3907,12 +3907,12 @@ final class AidenRemoteClientTests: XCTestCase {
         try await chatCache.saveActiveStream(
             .init(deviceId: "device-1", streamId: "stream-1", turnId: "turn-1", lastSequence: 2),
             instanceId: "instance-1",
-            chatId: "chat-1"
+            chatId: "chat-1", chatWriteToken: chatCache.reserveChatWrite()
         )
         try await chatCache.saveActiveStream(
             .init(deviceId: "device-2", streamId: "stream-2", turnId: "turn-2", lastSequence: 4),
             instanceId: "instance-2",
-            chatId: "chat-2"
+            chatId: "chat-2", chatWriteToken: chatCache.reserveChatWrite()
         )
         try await scheduledCache.store(instanceId: "instance-1", tasks: [], settings: nil)
         try await scheduledCache.store(instanceId: "instance-2", tasks: [], settings: nil)
@@ -4069,7 +4069,7 @@ final class AidenRemoteClientTests: XCTestCase {
                         lastSequence: 0
                     ),
                     instanceId: "instance-race",
-                    chatId: "chat-race"
+                    chatId: "chat-race", chatWriteToken: cache.reserveChatWrite()
                 )
             }
         }
