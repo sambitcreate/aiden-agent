@@ -6,7 +6,7 @@ import {
   SkillRegistry,
   type SkillRegistryDependencies,
 } from "./skill-registry.js";
-import { buildSkillTools } from "./skill-tools.js";
+import { buildSkillTools, piResourcesForSkillSnapshot } from "./skill-tools.js";
 import type { DiscoveredSkill, Skill, Workspace } from "./types.js";
 
 function workspace(id: string, folderPath = `/trusted/${id}`): Workspace {
@@ -398,4 +398,59 @@ test("a skill scan completing after global disable cannot publish instructions",
   });
   h.setConfigured([configured()]);
   assert.deepEqual((await h.registry.snapshot("one")).skills, []);
+});
+
+test("invocation policies independently gate catalogs, tools, and authoritative user resolution", async () => {
+  const h = harness();
+  h.setDiscovered([
+    discovered("global", { id: "both", name: "Both" }),
+    discovered("global", { id: "user", name: "User", modelInvocable: false }),
+    discovered("global", { id: "model", name: "Model", userInvocable: false }),
+    discovered("global", { id: "neither", name: "Neither", modelInvocable: false, userInvocable: false }),
+  ]);
+  const snapshot = await h.registry.snapshot("one");
+  assert.deepEqual(snapshot.catalog.map(({ name }) => name).sort(), ["Both", "User"]);
+  assert.deepEqual(buildSkillTools(snapshot).map(({ name }) => name).sort(), ["skill_both", "skill_model"]);
+  assert.deepEqual(piResourcesForSkillSnapshot(snapshot).skills?.map(({ name }) => name).sort(), ["Both", "Model"]);
+  const prompt = formatAvailableSkills(snapshot)!;
+  assert.match(prompt, /<name>Model<\/name>/u);
+  assert.doesNotMatch(prompt, /<name>(User|Neither)<\/name>|global instructions/u);
+  for (const skill of snapshot.skills) {
+    if (skill.userInvocable === false) {
+      await assert.rejects(h.registry.resolve("one", skill.invocationId), /does not allow user invocation/u);
+      await assert.rejects(h.registry.resolveFresh("one", skill.invocationId), /does not allow user invocation/u);
+    } else {
+      assert.equal((await h.registry.resolveFresh("one", skill.invocationId)).name, skill.name);
+    }
+  }
+});
+
+test("policy edits expire user selections while existing model tools retain their snapshotted policy", async () => {
+  const h = harness();
+  const original = discovered("global");
+  h.setDiscovered([original]);
+  const before = await h.registry.snapshot("one");
+  const tools = buildSkillTools(before);
+  h.setDiscovered([{ ...original, modelInvocable: false, userInvocable: false }]);
+  await assert.rejects(h.registry.resolveFresh("one", before.catalog[0]!.invocationId), /expired or changed/u);
+  h.registry.invalidate();
+  const after = await h.registry.snapshot("one");
+  assert.notEqual(after.fingerprint, before.fingerprint);
+  assert.equal(after.catalog.length, 0);
+  assert.equal(buildSkillTools(after).length, 0);
+  assert.match(JSON.stringify(await tools[0]!.execute("in-flight", {})), /global instructions/u);
+});
+
+test("an invocation opt-out never reveals a shadowed lower-priority skill", async () => {
+  const h = harness();
+  h.setDiscovered([
+    discovered("workspace", { modelInvocable: false, userInvocable: false }),
+    discovered("global"),
+  ]);
+  const snapshot = await h.registry.snapshot("one");
+  assert.equal(snapshot.catalog.filter(({ available }) => available).length, 0);
+  assert.equal(buildSkillTools(snapshot).length, 0);
+  assert.equal(formatAvailableSkills(snapshot), undefined);
+  const shadowed = snapshot.skills.find(({ source }) => source === "global")!;
+  await assert.rejects(h.registry.resolveFresh("one", shadowed.invocationId), /Shadowed/u);
 });

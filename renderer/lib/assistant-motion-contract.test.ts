@@ -94,7 +94,7 @@ test("Scheduled Tasks remains a visible control surface for Live Computer Use", 
   assert.match(root, /onAssistantAutomationComposerRequested/u);
   assert.match(root, /openNewChat\(ASSISTANT_AUTOMATION_DRAFT\)/u);
   assert.match(chatPane, /initialText=\{draft\?\.initialText\}/u);
-  assert.match(composer, /text: initialText/u);
+  assert.match(composer, /initialText \|\| loadComposerDraft\(chatId\)\.text/u);
   assert.match(dock, /scheduledTasks/u);
   assert.match(
     source("../../main/services/gemini-live/service-main.ts"),

@@ -1009,7 +1009,11 @@ final class AidenChatViewModel {
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
+    private var approvalSnapshotGeneration: UInt64 = 0
+    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
+    private(set) var isRespondingToApproval = false
+    private(set) var isStopping = false
     private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
         didSet {
             if pendingAttachments != oldValue { composerGeneration &+= 1 }
@@ -2212,71 +2216,60 @@ final class AidenChatViewModel {
         ))
     }
 
+    var canControlCurrentRun: Bool {
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, isStreaming,
+              activeStreamID != nil,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId,
+              installation.deviceCapabilities.contains(.chatWrite) else { return false }
+        return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+            && installation.hasNegotiatedAccess(to: .botWrite))
+    }
+
     func stop() async {
-        guard !isReadOnlyPresentation else { return }
-        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
-        guard !isRemoved else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
-        let previousState = streamState
-        pendingApproval = nil
-        streamState = .cancelled
+        guard canControlCurrentRun, !isStopping,
+              let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isStopping = true
+        defer { isStopping = false }
         do {
-            let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
-            guard !isRemoved, coordinator.isCurrent(context) else { return }
-            guard status.streamId == stream.streamId, status.chatId == chat.id else { return }
-            if activeStreamID == stream.streamId {
-                await apply(
-                    status,
-                    streamID: stream.streamId,
-                    context: context,
-                    feedbackPolicy: .restoredStream
-                )
+            let status = try await coordinator.remoteClient(for: context).cancelStream(id: streamID)
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard status.streamId == streamID, status.chatId == chat.id else {
+                presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
+                return
             }
-            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
-        } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
+            await apply(status, streamID: streamID, context: context, feedbackPolicy: .restoredStream)
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(streamID)")
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
-            presentedError = error.localizedDescription
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
-    func respondToApproval(_ decision: AidenApprovalDecision) async {
-        guard !isReadOnlyPresentation else { return }
-        guard let approval = pendingApproval, approval.expiresAt > Date() else {
+    func respondToApproval(_ decision: AidenApprovalDecision, approvalID: String) async {
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isRespondingToApproval, !isStopping,
+              let approval = pendingApproval, approval.id == approvalID else { return }
+        guard approval.expiresAt > Date() else {
             pendingApproval = nil
             return
         }
-        let previousState = streamState
-        guard let streamID = activeStreamID else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else {
-            streamState = .reconciling
-            presentedError = String(localized: "Approval access changed. Reopen this chat on the active Aiden Agent and review the request again.")
-            return
-        }
+        guard let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isRespondingToApproval = true
+        defer { isRespondingToApproval = false }
         let capabilities = approvalCapabilities(for: context)
         let authorization = AidenApprovalResponseAuthorization.resolve(
-            approval: approval,
-            decision: decision,
-            capabilities: capabilities
+            approval: approval, decision: decision, capabilities: capabilities
         )
         guard authorization == .allowed else {
-            presentedError = switch authorization {
-            case .allowed:
-                nil
-            case .approvalResponseRequired:
-                String(localized: "Approval response access was removed from this paired device. The request has been refreshed without sending a decision.")
-            case .scheduleWriteRequired:
-                String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
-            case .hostApprovalRequired:
-                String(localized: "This request can only be approved on your Mac.")
-            }
+            presentedError = String(localized: "Approval access changed. Review the current request on your Mac.")
+            pendingApproval = nil
             streamState = .reconciling
-            coordinator.haptics.play(.warning, scope: hapticScope)
             await restorePendingApproval(streamID: streamID, context: context)
             return
         }
@@ -2284,19 +2277,25 @@ final class AidenChatViewModel {
         streamState = .running
         do {
             let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            guard response.approvalId == approval.id, response.decision == decision else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard response.approvalId == approval.id, response.decision == decision else {
+                presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
+                if pendingApproval == nil {
+                    await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+                }
+                return
+            }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
-        } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            pendingApproval = approval
-            streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            pendingApproval = approval
-            streamState = previousState
-            presentedError = error.localizedDescription
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
+            // Never resurrect the captured card or retry a possibly accepted decision.
+            if pendingApproval == nil {
+                await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+            }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -2637,14 +2636,30 @@ final class AidenChatViewModel {
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
     }
 
-    private func restorePendingApproval(
+    func restorePendingApproval(
         streamID: String,
         context: AidenRemoteRequestContext,
-        announce: Bool = false
+        announce: Bool = false,
+        isFallback: Bool = false
     ) async {
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        if isFallback, let read = approvalSnapshotInFlight,
+           read.streamID == streamID, coordinator.isCurrent(read.context),
+           read.approval == pendingApproval, read.state == streamState { return }
+        approvalSnapshotGeneration &+= 1
+        let snapshotGeneration = approvalSnapshotGeneration
+        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
+        defer {
+            if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+        }
+        let expectedApproval = pendingApproval
+        let expectedState = streamState
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
+                  pendingApproval == expectedApproval, streamState == expectedState else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
@@ -2672,7 +2687,9 @@ final class AidenChatViewModel {
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
+                  pendingApproval == expectedApproval, streamState == expectedState else { return }
             pendingApproval = nil
             streamState = .reconciling
             await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
@@ -2689,7 +2706,9 @@ final class AidenChatViewModel {
             return AidenApprovalCapabilities(canRespond: false, canWriteSchedules: false)
         }
         return AidenApprovalCapabilities(
-            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond),
+            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond)
+                && (chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+                    && installation.hasNegotiatedAccess(to: .botWrite))),
             canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
         )
     }
@@ -3779,6 +3798,18 @@ private struct AidenMessageView: View {
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
+            if message.role == .assistant,
+               presentationStyle != .botMessages,
+               let rows = AidenChronologicalProjection.rows(
+                   text: message.text,
+                   reasoning: message.reasoning ?? "",
+                   timeline: message.timeline
+               ) {
+                AidenChronologicalTranscript(rows: rows, active: false)
+            } else {
+            if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
+                AidenReasoningCard(text: reasoning, label: "Thought", active: false)
+            }
             if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
@@ -3789,6 +3820,7 @@ private struct AidenMessageView: View {
             }
             if !visibleText.isEmpty {
                 messageText
+            }
             }
             if let attachments = message.attachments, !attachments.isEmpty {
                 let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
@@ -3900,61 +3932,32 @@ private struct AidenActivityFeed: View {
     private var visibleSteps: [AidenAgentStep] { steps ?? timeline.steps }
     private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
+    private var compactOnly: Bool { AidenAgentActivityPresentation.isCompactContextOnly(visibleSteps) }
+    /// A healthy lone compaction is fully told by its own line in the header, so the
+    /// expanded list would only repeat it; progress text still needs the disclosure.
+    private var stepInHeader: Bool { compactOnly && timeline.issueCount == 0 }
+    private var allowsDisclosure: Bool {
+        !stepInHeader || !(progressText ?? "").isEmpty
+    }
+    private var showsCollapsedTicker: Bool {
+        isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed
+    }
+    private var headline: String {
+        if stepInHeader, let last = visibleSteps.last {
+            return AidenAgentActivityPresentation.line(for: last)
+        }
+        return AidenAgentActivityPresentation.summary(timeline)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isExpanded ? 4 : 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(
-                    alignment: isRunning && !isExpanded && showsRunningRowsWhenCollapsed ? .bottom : .center,
-                    spacing: 8
-                ) {
-                    Group {
-                        if isRunning && !isExpanded && showsRunningRowsWhenCollapsed {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows) { step in
-                                    AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
-                                        .frame(height: 24)
-                                        .id(step.id)
-                                        .transition(.opacity)
-                                }
-                            }
-                            .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
-                            .clipped()
-                        } else {
-                            Text(AidenAgentActivityPresentation.summary(timeline))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondary)
-                                .lineLimit(1)
-                                .aidenActivityShimmer(isRunning)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if timeline.issueCount > 0 {
-                        Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.warning)
-                    }
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(AidenAgentActivityPresentation.summary(timeline))
-            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
-
-            if isExpanded {
+        VStack(alignment: .leading, spacing: isExpanded && allowsDisclosure ? 4 : 0) {
+            header
+            if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(visibleSteps) { step in
-                        AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    if !stepInHeader {
+                        ForEach(visibleSteps) { step in
+                            AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                        }
                     }
                     if let progressText, !progressText.isEmpty {
                         Divider()
@@ -3980,6 +3983,65 @@ private struct AidenActivityFeed: View {
             if timeline.issueCount > 0 { isExpanded = true }
         }
     }
+
+    @ViewBuilder
+    private var header: some View {
+        if allowsDisclosure {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                headerRow.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(headline)
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+        } else {
+            headerRow
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(headline)
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: showsCollapsedTicker ? .bottom : .center, spacing: 8) {
+            Group {
+                if showsCollapsedTicker {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { step in
+                            AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                                .frame(height: 24)
+                                .id(step.id)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
+                    .clipped()
+                } else {
+                    Text(headline)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                        .aidenActivityShimmer(isRunning)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if timeline.issueCount > 0 {
+                Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+            }
+
+            if allowsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+        }
+    }
 }
 
 private struct AidenActivityStepLine: View {
@@ -4000,6 +4062,12 @@ private struct AidenActivityStepLine: View {
             Text(AidenAgentActivityPresentation.line(for: step))
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if let file = step.producedFile {
+                Text("File \(file.operation) · \(file.relativePath.components(separatedBy: "/").last ?? file.relativePath)")
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .accessibilityLabel("File \(file.operation): \(file.relativePath)")
+            }
             if let changes = step.lineChanges, changes.additions > 0 || changes.deletions > 0 {
                 Text("+\(changes.additions) −\(changes.deletions)")
                     .font(.caption2.monospaced().weight(.medium))
@@ -4935,6 +5003,15 @@ private struct AidenLiveResponseView: View {
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
+    private var chronologicalRows: [AidenChronologicalRow]? {
+        guard presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: model.liveText,
+            reasoning: model.reasoning,
+            timeline: model.activityTimeline
+        )
+    }
+
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
@@ -4956,7 +5033,7 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
+            if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
                     Text(activity.label)
@@ -4967,7 +5044,7 @@ private struct AidenLiveResponseView: View {
                 .transition(.opacity)
             }
 
-            if !model.reasoning.isEmpty {
+            if chronologicalRows == nil && !model.reasoning.isEmpty {
                 AidenReasoningCard(
                     text: model.reasoning,
                     label: AidenAgentActivityPresentation.reasoningLabel(
@@ -4979,7 +5056,7 @@ private struct AidenLiveResponseView: View {
                     .transition(.opacity)
             }
 
-            if let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
+            if chronologicalRows == nil, let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
                     active: model.isStreaming,
@@ -4988,11 +5065,34 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if !model.tools.isEmpty {
+            } else if chronologicalRows == nil && !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
             }
 
-            if let visualizingLabel {
+            if let chronologicalRows {
+                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isStreaming)
+                    .contextMenu {
+                        if !visibleText.isEmpty {
+                            Button {
+                                UIPasteboard.general.string = visibleText
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+                    .accessibilityActions {
+                        if !visibleText.isEmpty {
+                            Button("Copy response") {
+                                UIPasteboard.general.string = visibleText
+                            }
+                        }
+                    }
+            }
+
+            if let visualizingLabel,
+               !(chronologicalRows?.contains(where: { row in
+                   row.kind == .tool && row.steps.contains(where: { $0.toolName == "render_artifact" && $0.isActive })
+               }) ?? false) {
                 AidenActivityPhaseCard(label: visualizingLabel)
                     .transition(.opacity)
             }
@@ -5004,14 +5104,14 @@ private struct AidenLiveResponseView: View {
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
-                    onDeny: { Task { await model.respondToApproval(.deny) } },
-                    onAllow: { Task { await model.respondToApproval(.allow) } }
+                    onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
+                    onAllow: { Task { await model.respondToApproval(.allow, approvalID: approval.id) } }
                 )
-                .disabled(model.isReadOnlyPresentation)
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
             }
 
-            if !visibleText.isEmpty {
+            if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
@@ -5219,6 +5319,42 @@ private extension View {
     }
 }
 
+private struct AidenChronologicalTranscript: View {
+    @Environment(\.aidenPalette) private var palette
+    let rows: [AidenChronologicalRow]
+    let active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(rows) { row in
+                switch row.kind {
+                case .text:
+                    AidenMessageTextView(role: .assistant, content: row.text)
+                        .foregroundStyle(palette.foreground)
+                case .reasoning:
+                    if let step = row.steps.first {
+                        let label = step.finishedAt == nil ? "Thinking" : "Thought \(AidenAgentActivityPresentation.duration(step.durationMs))"
+                        if row.text.isEmpty {
+                            AidenActivityPhaseCard(label: label, active: active && step.finishedAt == nil)
+                        } else {
+                            AidenReasoningCard(text: row.text, label: label, active: active && step.finishedAt == nil)
+                        }
+                    }
+                case .tool:
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(row.steps) { step in
+                            AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -5284,12 +5420,13 @@ private struct AidenReasoningCard: View {
 private struct AidenActivityPhaseCard: View {
     @Environment(\.aidenPalette) private var palette
     let label: String
+    var active: Bool = true
 
     var body: some View {
         Text(label)
             .font(.caption.weight(.semibold))
             .foregroundStyle(palette.secondary)
-            .aidenActivityShimmer(true)
+            .aidenActivityShimmer(active)
             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             .padding(.horizontal, 12)
             .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -5598,8 +5735,8 @@ private struct AidenComposerView: View {
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.isReadOnlyPresentation)
-                    .accessibilityLabel("Stop response")
+                    .disabled(!model.canControlCurrentRun || model.isStopping)
+                    .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
                 } else {
                     Button {
                         voiceInput.stopBeforeSubmittingDraft()

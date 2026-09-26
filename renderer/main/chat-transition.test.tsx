@@ -34,6 +34,12 @@ test("chat route renders ChatPane without remounting it per chatId", () => {
   );
 });
 
+test("chat pane hides the generic tool phase when a chronological row owns it", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
+  assert.match(pane, /resolveVisibleAgentActivity\(timelineActivity/u);
+});
+
 test("chat pane owns its own per-chat reset instead of relying on a remount", () => {
   const pane = source("./chat-pane.tsx");
 
@@ -262,7 +268,8 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   // including a one-time seed owned by that exact renderer draft.
   const composerSource = source("../components/composer.tsx");
   assert.match(composerSource, /const \[draft, dispatchDraft\] = React\.useReducer/u);
-  assert.match(composerSource, /text: initialText/u);
+  assert.match(composerSource, /text: restoredText/u);
+  assert.match(composerSource, /loadComposerDraft\(chatId\)\.text/u);
   assert.match(
     composerSource,
     /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u,
@@ -274,15 +281,16 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
   const effect = between(
     scrollArea,
-    'if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");',
-    "resizeObserver.observe(element);",
+    "React.useLayoutEffect(() => {\n    const element = viewport.current;",
+    "const resolvedToolbar",
   );
 
-  const syncIndex = effect.indexOf("\n    update();");
+  const syncIndex = effect.indexOf('if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");');
   const frameIndex = effect.indexOf("requestAnimationFrame(update)");
-  assert.notEqual(syncIndex, -1, "ScrollArea must run update() synchronously in the layout effect");
+  assert.notEqual(syncIndex, -1, "ScrollArea must settle synchronously in the layout effect");
   assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
+  assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
 });
 
 test("scroll area still pads the viewport for its overlaid chrome", () => {
@@ -290,10 +298,10 @@ test("scroll area still pads the viewport for its overlaid chrome", () => {
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height or the composer overlaps the transcript.
+  // their measured height plus any clearance for chrome floating above the footer.
   assert.match(
     scrollArea,
-    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: footerHeight \+ Math\.max\(0, scrollContentBottomOffset\),\s*\}\}/u,
   );
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
@@ -321,7 +329,7 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
-test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
+test("revisited generations expose Stop and queue/redirect without admitting a second turn early", () => {
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
@@ -329,13 +337,22 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
-  assert.match(pane, /canSteer=\{ready && \(\(isGenerating && canStopGeneration\) \|\| Boolean\(visibleDetachedProjection\)\)/u);
-  assert.match(pane, /if \(!\(canStopGeneration \|\| visibleDetachedProjection\) \|\| isStoppingGeneration\) return/u);
+  assert.match(pane, /onRedirect=\{draft \? undefined : redirectMessage\}/u);
+  assert.match(
+    pane,
+    /!\(canStopGeneration \|\| visibleDetachedProjection\) \|\|\s*isStoppingGeneration \|\|\s*stopRequestedRef\.current/u,
+  );
+  // Stop closes busy admission synchronously, before React re-renders.
+  assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
+  assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);
+  const queueAdmission = between(pane, "const queueMessage = React.useCallback(", "const steerMessage = React.useCallback(");
+  assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
+  assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
   assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
   assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
-  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+  assert.match(pane, /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u);
 });
 
 test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
@@ -412,7 +429,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
-  assert.match(pane, /enabled: !draft && ready/u);
+  assert.match(pane, /enabled:\s*!draft &&\s*ready/u);
 });
 
 

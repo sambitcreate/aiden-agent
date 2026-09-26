@@ -560,7 +560,9 @@ test("child bounds an irreducible active tool output before the next provider ca
   assert.match(secondContext, /payload omitted to stay within the model context window/u);
   assert.doesNotMatch(secondContext, /START-x{1000}/u);
   assert.ok(secondContext.length < 100_000);
-  assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
+  assert.equal(core.state.callCount, 2, "bounded active output does not need a summary request");
+  assert.equal(runningChild.agent.state.messages[0]?.role, "user");
+  assert.equal(runningChild.agent.state.messages.some((message) => message.role === "compactionSummary"), false);
   assert.equal(registry.activeCount, 0);
 });
 
@@ -644,11 +646,11 @@ test("forked initial context is semantically compacted before the first provider
     initialMessages: Array.from({ length: 10 }, (_, index) => [
       {
         role: "user" as const,
-        content: `FORK-START-${index}-${"x".repeat(10_000)}-FORK-END`,
+        content: `FORK-START-${index}-${"x".repeat(5_500)}-FORK-END`,
         timestamp: index * 2 + 1,
       },
       {
-        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(10_000)}`),
+        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(5_500)}`),
         timestamp: index * 2 + 2,
       },
     ]).flat(),

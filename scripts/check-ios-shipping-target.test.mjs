@@ -416,7 +416,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
   );
   assert.doesNotMatch(botAvatar, /\.onDisappear \{ canonicalImage = nil \}/u);
-  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
+  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(!model\.isConnected \|\| model\.isReadOnlyPresentation \|\| model\.isRespondingToApproval \|\| model\.isStopping\)/u);
   assert.match(botSwift, /--bot-first-prototype-theme/u);
   assert.match(botSwift, /--bot-first-prototype-state/u);
   assert.match(botSwift, /--bot-first-prototype-screen/u);
@@ -612,7 +612,7 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
     .sort();
 
   assert.deepEqual(iosLogos, desktopLogos);
-  assert.equal(iosLogos.length, 41);
+  assert.equal(iosLogos.length, 42);
   await Promise.all(
     iosLogos.map(async (slug) => {
       const [desktopArtwork, iosArtwork] = await Promise.all([
@@ -993,7 +993,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     chat,
-    /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if !visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
+    /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if (?:chronologicalRows == nil && )?!visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
   );
   assert.match(
     chat,

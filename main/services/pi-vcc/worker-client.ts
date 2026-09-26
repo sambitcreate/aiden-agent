@@ -1,10 +1,14 @@
-import { vccErrorMessage, type VccOperation } from "./errors.js";
+import { parseVccFailureCode, VccError, vccErrorMessage, type VccOperation } from "./errors.js";
 import { Worker } from "node:worker_threads";
 import type { VccRecallInput } from "./recall-core.js";
 import type { compileVcc, VccCompileInput } from "./compiler.js";
 
 type WorkerInput = VccCompileInput | VccRecallInput;
 type WorkerOutput = ReturnType<typeof compileVcc> | string;
+const workerError = (operation: VccOperation, code: unknown): Error =>
+  operation === "compile"
+    ? new VccError(parseVccFailureCode(code))
+    : new Error(vccErrorMessage(operation, code));
 let activeWorkers = 0;
 const waiting: Array<() => void> = [];
 
@@ -26,7 +30,7 @@ function acquireWorker(operation: VccOperation, signal?: AbortSignal): Promise<(
     };
     if (signal?.aborted) return abort();
     if (activeWorkers < 2) return start();
-    if (waiting.length >= 32) return reject(new Error(vccErrorMessage(operation, "busy")));
+    if (waiting.length >= 32) return reject(workerError(operation, "busy"));
     waiting.push(start);
     signal?.addEventListener("abort", abort, { once: true });
   });
@@ -76,7 +80,7 @@ function executeWorker(
         },
       );
     } catch {
-      reject(new Error(vccErrorMessage(operation, "worker_failed")));
+      reject(workerError(operation, "worker_failed"));
       return;
     }
     let settled = false;
@@ -91,13 +95,13 @@ function executeWorker(
           if (error) reject(error);
           else resolve(result!);
         },
-        () => reject(new Error(vccErrorMessage(operation, "cleanup_failed"))),
+        () => reject(workerError(operation, "cleanup_failed")),
       );
     };
     const abort = () =>
       finish(new DOMException(vccErrorMessage(operation, "cancelled"), "AbortError"));
     const timer = setTimeout(
-      () => finish(new Error(vccErrorMessage(operation, "timeout"))),
+      () => finish(workerError(operation, "timeout")),
       15_000,
     );
     signal?.addEventListener("abort", abort, { once: true });
@@ -105,11 +109,11 @@ function executeWorker(
     worker.once("message", (message) =>
       message?.ok && message.result
         ? finish(undefined, message.result)
-        : finish(new Error(vccErrorMessage(operation, message?.code))),
+        : finish(workerError(operation, message?.code)),
     );
-    worker.once("error", () => finish(new Error(vccErrorMessage(operation, "worker_failed"))));
+    worker.once("error", () => finish(workerError(operation, "worker_failed")));
     worker.once("exit", () => {
-      if (!settled) finish(new Error(vccErrorMessage(operation, "worker_exited")));
+      if (!settled) finish(workerError(operation, "worker_exited"));
     });
   });
 }

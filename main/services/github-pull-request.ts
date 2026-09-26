@@ -8,22 +8,37 @@ import { constants as fsConstants } from "fs";
 import { access } from "fs/promises";
 import * as os from "os";
 import { promisify } from "util";
+import {
+  normalizeGitHubHost,
+  normalizeGitHubRepositoryIdentity,
+  parseGitHubPullRequestUrl,
+  canonicalGitHubPullRequestUrl,
+} from "../../renderer/shared/chat-pull-requests.js";
 import type {
   GitHubPullRequestCheck,
   GitHubPullRequestCheckStatus,
   GitHubPullRequestChecksState,
+  GitHubPullRequestCreateInput,
+  GitHubPullRequestCreateResult,
+  GitHubPullRequestListStatus,
+  GitHubPullRequestReviewDecision,
   GitHubPullRequestStatus,
   GitHubPullRequestSummary,
   GitHubPullRequestAvailability,
+  GitHubRepositoryStatus,
 } from "./types.js";
 
 export type {
   GitHubPullRequestCheck,
   GitHubPullRequestCheckStatus,
   GitHubPullRequestChecksState,
+  GitHubPullRequestCreateInput,
+  GitHubPullRequestCreateResult,
+  GitHubPullRequestListStatus,
   GitHubPullRequestStatus,
   GitHubPullRequestSummary,
   GitHubPullRequestAvailability,
+  GitHubRepositoryStatus,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -62,7 +77,11 @@ interface CommandOptions {
 }
 
 export interface GitHubPullRequestServiceOptions {
-  runner?: (cwd: string, args: string[], options: CommandOptions) => Promise<CommandResult>;
+  runner?: (
+    cwd: string,
+    args: string[],
+    options: CommandOptions,
+  ) => Promise<CommandResult>;
   resolveBinary?: () => Promise<string>;
   timeoutMs?: number;
   maxBufferBytes?: number;
@@ -90,20 +109,48 @@ interface RawPullRequest {
   isDraft?: unknown;
   headRefName?: unknown;
   baseRefName?: unknown;
+  headRefOid?: unknown;
+  author?: unknown;
+  reviewDecision?: unknown;
+  mergeable?: unknown;
+  updatedAt?: unknown;
   statusCheckRollup?: unknown;
 }
+
+const PR_JSON_FIELDS = [
+  "number",
+  "title",
+  "url",
+  "state",
+  "isDraft",
+  "headRefName",
+  "baseRefName",
+  "headRefOid",
+  "author",
+  "reviewDecision",
+  "mergeable",
+  "updatedAt",
+  "statusCheckRollup",
+].join(",");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function boundedString(value: unknown, maxLength = MAX_RENDERER_STRING_CHARS): string | undefined {
+function boundedString(
+  value: unknown,
+  maxLength = MAX_RENDERER_STRING_CHARS,
+): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.replace(/\p{Cc}+/gu, " ").trim();
   return trimmed.length > 0 ? trimmed.slice(0, maxLength) : undefined;
 }
 
-function replaceAllLiteral(value: string, search: string, replacement: string): string {
+function replaceAllLiteral(
+  value: string,
+  search: string,
+  replacement: string,
+): string {
   return search ? value.split(search).join(replacement) : value;
 }
 
@@ -112,7 +159,12 @@ function safeHttpUrl(value: unknown): string | undefined {
   if (!candidate) return undefined;
   try {
     const url = new URL(candidate);
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) {
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      !url.hostname ||
+      url.username ||
+      url.password
+    ) {
       return undefined;
     }
     return url.toString().slice(0, MAX_RENDERER_STRING_CHARS);
@@ -126,15 +178,23 @@ function redactAbsolutePaths(value: string): string {
 }
 
 function publicCommandMessage(error: unknown, cwd: string): string {
-  const raw = error instanceof Error ? error.message : String(error || "GitHub CLI failed.");
+  const raw =
+    error instanceof Error
+      ? error.message
+      : String(error || "GitHub CLI failed.");
   const withoutWorkspace = replaceAllLiteral(raw, cwd, "the workspace");
   const withoutHome = replaceAllLiteral(withoutWorkspace, os.homedir(), "~");
-  return redactAbsolutePaths(withoutHome)
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
-    .replace(/([?&](?:access_token|auth|key|password|private_token|signature|token)=)[^&\s]+/gi, "$1***")
-    .replace(/\p{Cc}+/gu, " ")
-    .trim()
-    .slice(0, 600) || "GitHub CLI failed.";
+  return (
+    redactAbsolutePaths(withoutHome)
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
+      .replace(
+        /([?&](?:access_token|auth|key|password|private_token|signature|token)=)[^&\s]+/gi,
+        "$1***",
+      )
+      .replace(/\p{Cc}+/gu, " ")
+      .trim()
+      .slice(0, 600) || "GitHub CLI failed."
+  );
 }
 
 function isAbortError(error: unknown): boolean {
@@ -142,20 +202,40 @@ function isAbortError(error: unknown): boolean {
   return err?.code === "ABORT_ERR" || err?.name === "AbortError";
 }
 
-function commandFailureKind(error: unknown): Exclude<GitHubPullRequestAvailability, "ready" | "not-repo"> {
+function commandFailureKind(
+  error: unknown,
+): Exclude<GitHubPullRequestAvailability, "ready" | "not-repo"> {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT") return "missing-tool";
   const execError = error as ExecFileException | undefined;
   const combined = `${execError?.stdout ?? ""}\n${execError?.stderr ?? ""}\n${execError?.message ?? ""}`;
-  if (/gh(?:.*?)not found|spawn .*gh ENOENT|ENOENT/u.test(combined)) return "missing-tool";
-  if (/none of the git remotes|no git remotes|not a github repository|point to a known github host/iu.test(combined)) {
+  if (/gh(?:.*?)not found|spawn .*gh ENOENT|ENOENT/u.test(combined))
+    return "missing-tool";
+  if (
+    /none of the git remotes|no git remotes|not a github repository|point to a known github host/iu.test(
+      combined,
+    )
+  ) {
     return "not-github";
   }
-  if (/auth login|not logged into|authentication required|HTTP 401|unauthorized|could not authenticate/iu.test(combined)) {
+  if (
+    /auth login|not logged into|authentication required|HTTP 401|unauthorized|could not authenticate/iu.test(
+      combined,
+    )
+  ) {
     return "unauthenticated";
   }
-  if (/unknown flag: --json|unknown (?:json )?field|available fields/iu.test(combined)) return "unsupported";
-  if (/no pull requests? found|no open pull requests? found|could not find any pull requests?/iu.test(combined)) {
+  if (
+    /unknown flag: --json|unknown (?:json )?field|available fields/iu.test(
+      combined,
+    )
+  )
+    return "unsupported";
+  if (
+    /no pull requests? found|no open pull requests? found|could not find any pull requests?/iu.test(
+      combined,
+    )
+  ) {
     return "no-pull-request";
   }
   return "error";
@@ -167,10 +247,14 @@ function checkTimestamp(value: unknown): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-export function normalizeGitHubCheckStatus(node: RawStatusCheckNode): GitHubPullRequestCheckStatus {
+export function normalizeGitHubCheckStatus(
+  node: RawStatusCheckNode,
+): GitHubPullRequestCheckStatus {
   const status = boundedString(node.status)?.toUpperCase();
   if (status && status !== "COMPLETED") return "pending";
-  const value = boundedString(node.conclusion)?.toUpperCase() ?? boundedString(node.state)?.toUpperCase();
+  const value =
+    boundedString(node.conclusion)?.toUpperCase() ??
+    boundedString(node.state)?.toUpperCase();
   switch (value) {
     case "SUCCESS":
       return "success";
@@ -202,15 +286,18 @@ function rawCheckUrl(node: RawStatusCheckNode): string | undefined {
 }
 
 function extractRawChecks(value: unknown): RawStatusCheckNode[] {
-  const nodes = isRecord(value) && isRecord(value.contexts) && Array.isArray(value.contexts.nodes)
-    ? value.contexts.nodes
-    : isRecord(value) && Array.isArray(value.contexts)
-      ? value.contexts
-      : isRecord(value) && Array.isArray(value.nodes)
-        ? value.nodes
-        : Array.isArray(value)
-          ? value
-          : [];
+  const nodes =
+    isRecord(value) &&
+    isRecord(value.contexts) &&
+    Array.isArray(value.contexts.nodes)
+      ? value.contexts.nodes
+      : isRecord(value) && Array.isArray(value.contexts)
+        ? value.contexts
+        : isRecord(value) && Array.isArray(value.nodes)
+          ? value.nodes
+          : Array.isArray(value)
+            ? value
+            : [];
   return nodes.filter(isRecord) as RawStatusCheckNode[];
 }
 
@@ -219,21 +306,34 @@ function shouldReplaceCheck(
   next: { check: GitHubPullRequestCheck; timestamp: number },
 ): boolean {
   if (!previous) return true;
-  const isUnstartedPending = (entry: { check: GitHubPullRequestCheck; timestamp: number }) =>
-    entry.timestamp === 0 && (entry.check.status === "pending" || entry.check.status === "action-required");
+  const isUnstartedPending = (entry: {
+    check: GitHubPullRequestCheck;
+    timestamp: number;
+  }) =>
+    entry.timestamp === 0 &&
+    (entry.check.status === "pending" ||
+      entry.check.status === "action-required");
   if (isUnstartedPending(next)) return true;
   if (isUnstartedPending(previous)) return false;
   return next.timestamp >= previous.timestamp;
 }
 
-export function dedupeGitHubChecks(rawChecks: RawStatusCheckNode[]): GitHubPullRequestCheck[] {
-  const entries = new Map<string, { check: GitHubPullRequestCheck; workflow?: string; timestamp: number }>();
+export function dedupeGitHubChecks(
+  rawChecks: RawStatusCheckNode[],
+): GitHubPullRequestCheck[] {
+  const entries = new Map<
+    string,
+    { check: GitHubPullRequestCheck; workflow?: string; timestamp: number }
+  >();
   for (const raw of rawChecks) {
     const name = rawCheckName(raw);
     if (!name) continue;
     const workflow = boundedString(raw.workflowName);
     const key = `${workflow ?? ""}${CHECK_IDENTITY_SEPARATOR}${name}`;
-    const timestamp = Math.max(checkTimestamp(raw.completedAt), checkTimestamp(raw.startedAt));
+    const timestamp = Math.max(
+      checkTimestamp(raw.completedAt),
+      checkTimestamp(raw.startedAt),
+    );
     const url = rawCheckUrl(raw);
     const description = boundedString(raw.description);
     const check: GitHubPullRequestCheck = {
@@ -248,31 +348,76 @@ export function dedupeGitHubChecks(rawChecks: RawStatusCheckNode[]): GitHubPullR
 
   const nameCounts = new Map<string, number>();
   for (const entry of entries.values()) {
-    nameCounts.set(entry.check.name, (nameCounts.get(entry.check.name) ?? 0) + 1);
+    nameCounts.set(
+      entry.check.name,
+      (nameCounts.get(entry.check.name) ?? 0) + 1,
+    );
   }
 
   return [...entries.values()].map(({ check, workflow }) => ({
     ...check,
-    name: workflow && (nameCounts.get(check.name) ?? 0) > 1 ? `${workflow} / ${check.name}` : check.name,
+    name:
+      workflow && (nameCounts.get(check.name) ?? 0) > 1
+        ? `${workflow} / ${check.name}`
+        : check.name,
   }));
 }
 
 export function rollupGitHubChecksState(
   checks: readonly GitHubPullRequestCheck[],
 ): GitHubPullRequestChecksState | null {
-  if (checks.some((check) => check.status === "failure" || check.status === "cancelled")) return "failing";
-  if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
+  if (
+    checks.some(
+      (check) => check.status === "failure" || check.status === "cancelled",
+    )
+  )
+    return "failing";
+  if (
+    checks.some(
+      (check) =>
+        check.status === "pending" || check.status === "action-required",
+    )
+  ) {
     return "pending";
   }
   if (checks.some((check) => check.status === "success")) return "passing";
   return null;
 }
 
-export function parseGitHubPullRequest(rawJson: string): GitHubPullRequestSummary {
-  const parsed = JSON.parse(rawJson) as unknown;
-  if (!isRecord(parsed)) throw new Error("GitHub CLI returned an invalid pull request response.");
+function normalizeReviewDecision(
+  value: unknown,
+): GitHubPullRequestReviewDecision | null {
+  switch (boundedString(value)?.toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes-requested";
+    case "REVIEW_REQUIRED":
+      return "review-required";
+    default:
+      return null;
+  }
+}
+
+function normalizeMergeable(value: unknown): boolean | null {
+  switch (boundedString(value)?.toUpperCase()) {
+    case "MERGEABLE":
+      return true;
+    case "CONFLICTING":
+      return false;
+    default:
+      return null;
+  }
+}
+
+function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
+  if (!isRecord(parsed))
+    throw new Error("GitHub CLI returned an invalid pull request response.");
   const raw = parsed as RawPullRequest;
-  const number = typeof raw.number === "number" && Number.isInteger(raw.number) ? raw.number : 0;
+  const number =
+    typeof raw.number === "number" && Number.isInteger(raw.number)
+      ? raw.number
+      : 0;
   const title = boundedString(raw.title);
   const url = safeHttpUrl(raw.url);
   const stateValue = boundedString(raw.state)?.toUpperCase();
@@ -281,8 +426,18 @@ export function parseGitHubPullRequest(rawJson: string): GitHubPullRequestSummar
   if (!number || !title || !url || !headBranch || !baseBranch) {
     throw new Error("GitHub CLI returned an incomplete pull request response.");
   }
-  const state = stateValue === "MERGED" ? "merged" : stateValue === "CLOSED" ? "closed" : "open";
+  const state =
+    stateValue === "MERGED"
+      ? "merged"
+      : stateValue === "CLOSED"
+        ? "closed"
+        : "open";
   const allChecks = dedupeGitHubChecks(extractRawChecks(raw.statusCheckRollup));
+  const headSha = boundedString(raw.headRefOid, 64)?.toLowerCase();
+  const author = isRecord(raw.author)
+    ? boundedString(raw.author.login, 128)
+    : undefined;
+  const updatedAt = checkTimestamp(raw.updatedAt);
   return {
     number,
     title,
@@ -291,9 +446,49 @@ export function parseGitHubPullRequest(rawJson: string): GitHubPullRequestSummar
     ...(raw.isDraft === true ? { isDraft: true } : {}),
     headBranch,
     baseBranch,
+    ...(headSha ? { headSha } : {}),
+    ...(author ? { author } : {}),
+    reviewDecision: normalizeReviewDecision(raw.reviewDecision),
+    mergeable: normalizeMergeable(raw.mergeable),
+    ...(updatedAt > 0 ? { updatedAt } : {}),
     checks: allChecks.slice(0, MAX_CHECKS),
     checksState: rollupGitHubChecksState(allChecks),
   };
+}
+
+export function parseGitHubPullRequest(
+  rawJson: string,
+): GitHubPullRequestSummary {
+  return parseRawPullRequest(JSON.parse(rawJson) as unknown);
+}
+
+export function parseGitHubPullRequestList(
+  rawJson: string,
+): GitHubPullRequestSummary[] {
+  const parsed = JSON.parse(rawJson) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      "GitHub CLI returned an invalid pull request list response.",
+    );
+  }
+  return parsed.map((entry) => parseRawPullRequest(entry));
+}
+
+/**
+ * Derive the canonical (host, repository, number) identity from a `gh`
+ * pull request payload. `gh` echoes the PR's canonical URL; parsing it is
+ * the one place we trust for the remote identity — never the pasted URL or
+ * the local git remote, which may use a redirect/rename.
+ */
+export function pullRequestIdentityFromSummary(
+  summary: GitHubPullRequestSummary,
+):
+  | { host: string; repository: string; number: number; url: string }
+  | undefined {
+  const ref = parseGitHubPullRequestUrl(summary.url);
+  return ref && ref.number === summary.number
+    ? { ...ref, url: canonicalGitHubPullRequestUrl(ref) }
+    : undefined;
 }
 
 export function githubCliEnvironment(): NodeJS.ProcessEnv {
@@ -338,8 +533,12 @@ async function defaultRunner(
 }
 
 export class GitHubPullRequestService {
-  private readonly runner: NonNullable<GitHubPullRequestServiceOptions["runner"]>;
-  private readonly resolveBinary: NonNullable<GitHubPullRequestServiceOptions["resolveBinary"]>;
+  private readonly runner: NonNullable<
+    GitHubPullRequestServiceOptions["runner"]
+  >;
+  private readonly resolveBinary: NonNullable<
+    GitHubPullRequestServiceOptions["resolveBinary"]
+  >;
   private readonly timeoutMs: number;
   private readonly maxBufferBytes: number;
 
@@ -350,49 +549,348 @@ export class GitHubPullRequestService {
     this.maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   }
 
-  async currentPullRequest(cwd: string, signal?: AbortSignal): Promise<GitHubPullRequestStatus> {
+  private async run(
+    cwd: string,
+    args: string[],
+    signal?: AbortSignal,
+  ): Promise<CommandResult> {
+    return this.runner(cwd, args, {
+      binary: await this.resolveBinary(),
+      signal,
+      timeoutMs: this.timeoutMs,
+      maxBuffer: this.maxBufferBytes,
+    });
+  }
+
+  private fallbackMessage(
+    availability: Exclude<GitHubPullRequestAvailability, "ready" | "not-repo">,
+    error: unknown,
+    cwd: string,
+  ): string {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const messages: Record<typeof availability, string> = {
+      "missing-tool": "Install GitHub CLI, then run `gh auth login`.",
+      unauthenticated:
+        "Run `gh auth login` on this Mac, then refresh source control.",
+      "no-pull-request":
+        "No GitHub pull request is linked to the current branch.",
+      "not-github": "This repository's remote is not hosted on GitHub.",
+      unsupported: "Update GitHub CLI so Aiden can read pull request status.",
+      error:
+        code === "ETIMEDOUT" ||
+        code === "ERR_CHILD_PROCESS_TIMEOUT" ||
+        (error as { killed?: unknown } | undefined)?.killed === true
+          ? `GitHub CLI did not answer within ${Math.max(1, Math.round(this.timeoutMs / 1000))} seconds.`
+          : error instanceof SyntaxError
+            ? "GitHub CLI returned an invalid pull request response."
+            : publicCommandMessage(error, cwd),
+    };
+    return messages[availability];
+  }
+
+  async currentPullRequest(
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<GitHubPullRequestStatus> {
     try {
-      const result = await this.runner(
+      const result = await this.run(
+        cwd,
+        ["pr", "view", "--json", PR_JSON_FIELDS],
+        signal,
+      );
+      return {
+        availability: "ready",
+        pullRequest: parseGitHubPullRequest(result.stdout),
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
+      };
+    }
+  }
+
+  /**
+   * Resolve the GitHub repository the workspace's remote points at. Works for
+   * github.com and GHES hosts; returns "not-github"/"missing-tool" etc. for
+   * non-GitHub remotes or unavailable CLI setups.
+   */
+  async resolveRepository(
+    cwd: string,
+    signal?: AbortSignal,
+    repository?: string,
+  ): Promise<GitHubRepositoryStatus> {
+    try {
+      const result = await this.run(
+        cwd,
+        [
+          "repo",
+          "view",
+          ...(repository ? [repository] : []),
+          "--json",
+          "nameWithOwner,url",
+        ],
+        signal,
+      );
+      const parsed = JSON.parse(result.stdout) as unknown;
+      if (!isRecord(parsed))
+        throw new Error("GitHub CLI returned an invalid repository response.");
+      const nameWithOwner = normalizeGitHubRepositoryIdentity(
+        parsed.nameWithOwner,
+      );
+      if (!nameWithOwner) {
+        throw new Error("GitHub CLI returned an invalid repository response.");
+      }
+      let host: string | undefined;
+      const url = boundedString(parsed.url);
+      if (url) {
+        try {
+          host = normalizeGitHubHost(new URL(url).hostname);
+        } catch {
+          host = undefined;
+        }
+      }
+      return {
+        availability: "ready",
+        repository: { host: host ?? "github.com", nameWithOwner },
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
+      };
+    }
+  }
+
+  /**
+   * Read one pull request by number in an explicit repository. `repoSelector`
+   * is the gh `-R` value: `owner/repo` on github.com, `HOST/owner/repo` on GHES.
+   */
+  async getPullRequest(
+    cwd: string,
+    repoSelector: string,
+    number: number,
+    signal?: AbortSignal,
+  ): Promise<GitHubPullRequestStatus> {
+    try {
+      const result = await this.run(
         cwd,
         [
           "pr",
           "view",
+          String(number),
+          "-R",
+          repoSelector,
           "--json",
-          "number,title,url,state,isDraft,headRefName,baseRefName,statusCheckRollup",
+          PR_JSON_FIELDS,
         ],
-        {
-          binary: await this.resolveBinary(),
-          signal,
-          timeoutMs: this.timeoutMs,
-          maxBuffer: this.maxBufferBytes,
-        },
+        signal,
       );
-      return { availability: "ready", pullRequest: parseGitHubPullRequest(result.stdout) };
+      return {
+        availability: "ready",
+        pullRequest: parseGitHubPullRequest(result.stdout),
+      };
     } catch (error) {
       if (signal?.aborted || isAbortError(error)) throw error;
       const availability = commandFailureKind(error);
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      const fallbackMessages: Record<typeof availability, string> = {
-        "missing-tool": "Install GitHub CLI, then run `gh auth login`.",
-        "unauthenticated": "Run `gh auth login` on this Mac, then refresh source control.",
-        "no-pull-request": "No GitHub pull request is linked to the current branch.",
-        "not-github": "This repository's remote is not hosted on GitHub.",
-        "unsupported": "Update GitHub CLI so Aiden can read pull request status.",
-        "error":
-          code === "ETIMEDOUT" ||
-          code === "ERR_CHILD_PROCESS_TIMEOUT" ||
-          (error as { killed?: unknown } | undefined)?.killed === true
-            ? `GitHub CLI did not answer within ${Math.max(1, Math.round(this.timeoutMs / 1000))} seconds.`
-            : error instanceof SyntaxError
-              ? "GitHub CLI returned an invalid pull request response."
-              : publicCommandMessage(error, cwd),
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
       };
-      return { availability, message: fallbackMessages[availability] };
+    }
+  }
+
+  /**
+   * Read one pull request from its GitHub URL. `gh` resolves repository and
+   * host from the URL itself; the canonical (host, repository, number) is then
+   * taken from the URL `gh` reports back — the caller must not trust the pasted
+   * input for identity.
+   */
+  async getPullRequestByUrl(
+    cwd: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<GitHubPullRequestStatus> {
+    try {
+      const result = await this.run(
+        cwd,
+        ["pr", "view", url, "--json", PR_JSON_FIELDS],
+        signal,
+      );
+      return {
+        availability: "ready",
+        pullRequest: parseGitHubPullRequest(result.stdout),
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
+      };
+    }
+  }
+
+  /**
+   * Find pull requests on the repository whose head branch matches exactly —
+   * the lookup reconciliation and post-push detection both use. Includes closed
+   * and merged PRs so callers can distinguish "no PR" from "closed PR".
+   */
+  async findForBranch(
+    cwd: string,
+    branch: string,
+    signal?: AbortSignal,
+    repository?: string,
+  ): Promise<GitHubPullRequestListStatus> {
+    try {
+      const result = await this.run(
+        cwd,
+        [
+          "pr",
+          "list",
+          "--head",
+          branch,
+          "--state",
+          "all",
+          "--limit",
+          "30",
+          "--json",
+          PR_JSON_FIELDS,
+          ...(repository ? ["-R", repository] : []),
+        ],
+        signal,
+      );
+      const pullRequests = parseGitHubPullRequestList(result.stdout);
+      if (pullRequests.length >= 30) {
+        return {
+          availability: "error",
+          message:
+            "The branch lookup reached its result limit. Check GitHub before retrying creation.",
+        };
+      }
+      return { availability: "ready", pullRequests };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
+      };
+    }
+  }
+
+  /** List repository pull requests for the link chooser. Defaults to open. */
+  async listPullRequests(
+    cwd: string,
+    options: {
+      state?: "open" | "closed" | "merged" | "all";
+      limit?: number;
+      headBranch?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<GitHubPullRequestListStatus> {
+    const args = [
+      "pr",
+      "list",
+      "--state",
+      options.state ?? "open",
+      "--limit",
+      String(Math.min(Math.max(options.limit ?? 30, 1), 50)),
+    ];
+    if (options.headBranch) args.push("--head", options.headBranch);
+    args.push("--json", PR_JSON_FIELDS);
+    try {
+      const result = await this.run(cwd, args, signal);
+      return {
+        availability: "ready",
+        pullRequests: parseGitHubPullRequestList(result.stdout),
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      return {
+        availability,
+        message: this.fallbackMessage(availability, error, cwd),
+      };
+    }
+  }
+
+  /**
+   * Create a pull request via `gh pr create`. The CLI prints the new PR URL on
+   * success; we then resolve the canonical summary through `getPullRequestByUrl`
+   * so stored links never carry identity taken from local state.
+   *
+   * Outcome triage matters: a timeout, kill, or network error can mean GitHub
+   * created the PR anyway. Those return "unknown" — the caller must reconcile
+   * via `findForBranch` before retrying or reporting failure.
+   */
+  async createPullRequest(
+    cwd: string,
+    input: GitHubPullRequestCreateInput,
+    signal?: AbortSignal,
+  ): Promise<GitHubPullRequestCreateResult> {
+    const args = ["pr", "create", "--title", input.title];
+    args.push("--body", input.body ?? "");
+    if (input.baseBranch) args.push("--base", input.baseBranch);
+    if (input.headBranch) args.push("--head", input.headBranch);
+    if (input.draft) args.push("--draft");
+    if (input.repository) args.push("-R", input.repository);
+    try {
+      const result = await this.run(cwd, args, signal);
+      const createdUrl = boundedString(result.stdout)
+        ?.split(/\s+/u)
+        .find((token) => parseGitHubPullRequestUrl(token) !== undefined);
+      if (!createdUrl) {
+        return {
+          kind: "unknown",
+          message:
+            "GitHub CLI finished without reporting the new pull request URL.",
+        };
+      }
+      const resolved = await this.getPullRequestByUrl(cwd, createdUrl, signal);
+      if (resolved.availability === "ready" && resolved.pullRequest) {
+        return { kind: "created", pullRequest: resolved.pullRequest };
+      }
+      return {
+        kind: "unknown",
+        message:
+          resolved.message ??
+          "GitHub created the pull request but its details could not be read back.",
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      const availability = commandFailureKind(error);
+      // Deterministic pre-request failures cannot have created anything: the
+      // CLI never talked to GitHub (missing binary/auth) or GitHub rejected
+      // the inputs before mutation. Everything else — timeouts, kills, network
+      // flakes, ambiguous exit codes — is unknown and must be reconciled.
+      if (
+        availability === "missing-tool" ||
+        availability === "unauthenticated"
+      ) {
+        return {
+          kind: "failed",
+          availability,
+          message: this.fallbackMessage(availability, error, cwd),
+        };
+      }
+      return {
+        kind: "unknown",
+        message: this.fallbackMessage(availability, error, cwd),
+      };
     }
   }
 }
 
 const githubPullRequestService = new GitHubPullRequestService();
 
-export const githubCurrentPullRequest = (folderPath: string, signal?: AbortSignal) =>
-  githubPullRequestService.currentPullRequest(folderPath, signal);
+export const githubCurrentPullRequest = (
+  folderPath: string,
+  signal?: AbortSignal,
+) => githubPullRequestService.currentPullRequest(folderPath, signal);
+
+export const githubPullRequests = githubPullRequestService;

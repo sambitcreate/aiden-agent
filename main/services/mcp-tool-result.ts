@@ -1,4 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { boundedToolOutput } from "./tool-output-context.js";
+import { MAX_STORED_TOOL_OUTPUT_CHARS } from "./tool-output-store.js";
 
 export const MAX_MCP_RESULT_TEXT_CHARS = 32_000;
 const MAX_PARTS = 64;
@@ -62,10 +64,10 @@ function structuredText(value: unknown): string {
   return json + (fieldsOmitted ? "\n[Structured fields omitted: key or field limit.]" : "");
 }
 
-function toText(result: unknown): string {
+function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts = MAX_PARTS): string {
   if (!record(result)) throw new Error("MCP tool returned an invalid result.");
   const parts: string[] = [];
-  let remaining = MAX_MCP_RESULT_TEXT_CHARS - OMITTED.length;
+  let remaining = maxChars - OMITTED.length;
   let truncated = false;
   const append = (text: string) => {
     const separator = parts.length ? "\n" : "";
@@ -85,7 +87,7 @@ function toText(result: unknown): string {
     append(structured.length > limit ? structured.slice(0, limit) + "\n[Structured content truncated.]" : structured);
   }
   if (Array.isArray(result.content)) {
-    for (let index = 0; index < Math.min(result.content.length, MAX_PARTS); index += 1) {
+    for (let index = 0; index < Math.min(result.content.length, maxParts); index += 1) {
       const part: unknown = result.content[index];
       if (!record(part)) append("[Invalid MCP content block omitted.]");
       else if (part.type === "text" && typeof part.text === "string") append(part.text);
@@ -96,7 +98,7 @@ function toText(result: unknown): string {
       } else append("[Unsupported MCP content block omitted.]");
       if (remaining <= 0) { truncated = true; break; }
     }
-    if (result.content.length > MAX_PARTS) truncated = true;
+    if (result.content.length > maxParts) truncated = true;
   } else if (result.content !== undefined) {
     append("[Invalid MCP content list omitted.]");
   }
@@ -118,5 +120,8 @@ export function mcpAgentToolResult(result: unknown): AgentToolResult<null> {
 export async function executeMcpAgentTool(
   callTool: () => Promise<unknown>,
 ): Promise<AgentToolResult<null>> {
-  return mcpAgentToolResult(await callTool());
+  const result = await callTool();
+  const text = await boundedToolOutput(toText(result, MAX_STORED_TOOL_OUTPUT_CHARS, 2_048), MAX_MCP_RESULT_TEXT_CHARS);
+  if ((result as { isError?: unknown } | null)?.isError === true) throw new Error(text);
+  return { content: [{ type: "text", text }], details: null };
 }

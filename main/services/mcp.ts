@@ -1,7 +1,11 @@
+import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import type { McpStatus } from "../../renderer/shared/mcp-status.js";
+import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
 // / SSE) via the official MCP SDK, caches clients, and exposes their tools as
 // pi agent tools for the generation loop.
 
+import { createMcpResourceTool } from "./mcp-resources.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Type } from "@earendil-works/pi-ai";
@@ -17,6 +21,7 @@ import {
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
 import {
   mcpCredentialConnectionSnapshot,
@@ -317,12 +322,7 @@ class McpManager {
     server: McpServer,
     isCurrent: () => boolean = () => true,
     expectedGeneration: number = this.statusGeneration(server.id),
-  ): Promise<{
-    connected: boolean;
-    toolCount: number;
-    tools: string[];
-    error?: string;
-  }> {
+  ): Promise<McpStatus> {
     try {
       return await this.statusClients.run(
         server.id,
@@ -338,24 +338,14 @@ class McpManager {
             makeTransport(await resolveAuth(server, active), active) as never,
           );
         },
-        async (client, connectionIsCurrent) => {
-          if (!isCurrent() || !connectionIsCurrent()) {
-            throw new Error("The MCP connection was superseded.");
-          }
-          const { tools } = (await client.listTools()) as {
-            tools: McpToolInfo[];
-          };
-          return {
-            connected: true,
-            toolCount: tools.length,
-            tools: tools.map((t) => t.name),
-          };
-        },
+        (client, connectionIsCurrent) =>
+          inspectInitializedMcpStatus(client, () => isCurrent() && connectionIsCurrent()),
         async (client) => client.close(),
       );
     } catch (error) {
       return {
         connected: false,
+        serverCapabilities: null,
         toolCount: 0,
         tools: [],
         error: error instanceof Error ? error.message : String(error),
@@ -364,13 +354,18 @@ class McpManager {
   }
 
   /** Build pi agent tools for a connected server. Tool names are prefixed with the server name. */
-  async agentToolsFor(
+  async agentContextFor(
     server: McpServer,
     generation: number,
-  ): Promise<AgentTool[]> {
+  ): Promise<{ tools: AgentTool[]; instructions?: McpServerInstructionSnapshot }> {
+    const lease = mcpConfigurationLeases.acquire(server.id);
     const client = await this.ensureConnected(server, generation);
-    const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-    return tools.map((t): AgentTool => ({
+    lease.assertCurrent();
+    const { tools } = client.getServerCapabilities()?.tools
+      ? (await client.listTools()) as { tools: McpToolInfo[] }
+      : { tools: [] };
+    lease.assertCurrent();
+    const agentTools = tools.map((t): AgentTool => markToolOutputSource({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,
@@ -391,6 +386,10 @@ class McpManager {
         );
       },
     }));
+    if (client.getServerCapabilities()?.resources) {
+      agentTools.push(createMcpResourceTool(server, client, lease));
+    }
+    return { tools: agentTools, instructions: snapshotMcpServerInstructions(server, agentTools, client.getInstructions()) };
   }
 
   connectionGeneration(id: string): number {
@@ -407,24 +406,25 @@ export const mcpManager = new McpManager();
 /** Merge tools from enabled servers. Strict callers fail closed instead of silently losing access. */
 export async function collectMcpAgentTools(
   servers: McpServer[],
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
 ): Promise<AgentTool[]> {
   const all: AgentTool[] = [];
   for (const server of servers) {
     if (!server.enabled) continue;
     try {
       let generation = 0;
-      const serverTools = await withConfiguredMcp(
+      const serverContext = await withConfiguredMcp(
         server.id,
         mcpRuntimeConnectionSnapshot(server),
-        () => mcpManager.agentToolsFor(server, generation),
+        () => mcpManager.agentContextFor(server, generation),
         () => true,
         () => {
           generation = mcpManager.connectionGeneration(server.id);
         },
       );
-      assertUniqueMcpAgentToolNames([...all, ...serverTools]);
-      all.push(...serverTools);
+      assertUniqueMcpAgentToolNames([...all, ...serverContext.tools]);
+      all.push(...serverContext.tools);
+      if (serverContext.instructions) options.onServerInstructions?.(serverContext.instructions);
     } catch (error) {
       if (options.strict) {
         throw new Error(

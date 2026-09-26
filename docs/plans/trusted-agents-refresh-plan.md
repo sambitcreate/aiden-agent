@@ -1,0 +1,19 @@
+# Trusted AGENTS instruction refresh
+
+Status: Implemented for PR review; local validation and both independent Sol reviews clear.
+
+Ordinary generations load user-authored instructions from the portable config root AGENTS.md (normally ~/.aiden/AGENTS.md), then the authorized workspace root AGENTS.md. Workspace files are withheld when either effective or persisted workspace permission is none. Bot and Assistant lanes keep their explicitly granted prompt sources and do not acquire ambient instruction access. The global Skills enable switch continues to govern skills independently; AGENTS files do not enable any skill or tool.
+
+Root identities are pinned when preparing the generation. Before and after loading, revalidate workspace identity/permission and managed-worktree admission, lexical-to-canonical root identity, cancellation and file bounds. Native descriptor-relative regular-file reads reuse the existing bounded UTF-8 file reader, with no symlink fallback. Missing/blank files omit guidance; unsafe/nonregular/oversized files or changed roots fail closed. Root directories missing at generation creation become eligible only on a new generation. Only root AGENTS.md is loaded: no ancestor crawl, nested discovery, remote lookup, or automatic filesystem scan.
+
+Each file is capped at16KiB UTF-8. JSON records preserve global-then-workspace ordering and explicitly subordinate file guidance to host policy, direct user requests, tool availability and approvals. A generation-owned random marker replaces the previous exact appendix, preserving other prompt contributions and tool references. Files refresh before the first model turn and in Pi's prepareNextTurnWithContext hook for later logical model turns; in-flight calls and transport retries retain their request snapshot. Context capacity and projection options update before dispatch/compaction for the next turn. A main-owned beforeProviderRequest fence rechecks scope and pinned root identities immediately before every dispatch, including retries, without reloading bodies or changing schemas.
+
+Tests: additions/edits/deletion, blank/missing files, global/workspace precedence, symlink/nonregular/size denial, pinned root replacement, permission/cancellation races, hostile quoting, capacity and real native UTF-8 reading. Real Pi harness test proves a file edit by a tool reaches the second provider call while the first prompt and tool schemas remain unchanged. No native DTO/transcript changes; existing generic tool activity contracts remain unchanged. Existing onboarding workspace tile/artwork gains concise instruction disclosure.
+
+Separate from MCP PRs214/226/229/230; llm-client integration must preserve final MCP guidance plus this refresh appendix. No dependency or in-flight tool-schema updates.
+
+Validation: loader7 (including native UTF-8 and provider-scope fence), Pi runtime/generation context81, Bots447, scheduled151, onboarding56 pass. Type-check, ESLint and whitespace checks pass. Independent Sol medium blast-radius/adversarial reviewers clear. No native suite rerun: iOS/Android tool labels/transcript DTOs are unchanged and this is main-owned prompt assembly only. Physical iOS not relaunched.
+
+Review hardening: root AGENTS files must have exactly one link. The shared native reader enforces this at the descriptor boundary before and after reading, with linked-file and link-race regressions.
+
+Hard-link correction validation: AGENTS7, native file-mutator27, shared reader IO14, generative UI42 plus artifact2 and browser containment5 pass; type-check and lint pass. No mobile DTO or transcript changes; physical iOS remains untouched.

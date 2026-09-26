@@ -13,6 +13,8 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -67,6 +69,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
@@ -116,6 +119,7 @@ fun AidenChatDetailScreen(
         )
     )
 
+    val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
     val hasActiveStream by viewModel.hasActiveStream.collectAsState()
@@ -125,6 +129,8 @@ fun AidenChatDetailScreen(
     val tools by viewModel.tools.collectAsState()
     val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
+    val isStopping by viewModel.isStopping.collectAsState()
+    val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
@@ -319,7 +325,8 @@ fun AidenChatDetailScreen(
                 actions = {
                     if (isStreaming) {
                         IconButton(
-                            onClick = { viewModel.cancelTurn() }
+                            onClick = { viewModel.cancelTurn() },
+                            enabled = viewModel.canControlCurrentRun && !isStopping
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
                         }
@@ -410,7 +417,8 @@ fun AidenChatDetailScreen(
                                         horizontalArrangement = Arrangement.End
                                     ) {
                                         Button(
-                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY) },
+                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY, approval.id) },
+                                            enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
                                             shape = RoundedCornerShape(10.dp)
                                         ) {
                                             Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
@@ -418,7 +426,8 @@ fun AidenChatDetailScreen(
                                         if (approval.canAllow) {
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Button(
-                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW) },
+                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id) },
+                                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
                                                 colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                                                 shape = RoundedCornerShape(10.dp)
                                             ) {
@@ -481,6 +490,7 @@ fun AidenChatDetailScreen(
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
+                    canStop = viewModel.canControlCurrentRun && !isStopping,
                     canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
@@ -776,6 +786,8 @@ private fun AssistantMessageRow(
     } else null
 
     val displayText = projection?.finalText ?: message.text
+    val chronologicalRows = if (isBotChat) null else
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline)
     val progressText = projection?.progressText ?: ""
     val attachments = message.attachments.orEmpty()
     val imageAttachments = aidenEligibleImageAttachments(attachments)
@@ -783,6 +795,30 @@ private fun AssistantMessageRow(
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        if (chronologicalRows != null) {
+            AidenMessageActionContainer(
+                onCopy = { onCopy(displayText) },
+                onShare = { onShare(displayText) },
+                onReply = { onReply(displayText) }
+            ) {
+                AidenChronologicalTranscript(
+                    rows = chronologicalRows,
+                    active = false,
+                    palette = palette,
+                    onCopy = onCopy,
+                    onOpenUrl = onOpenUrl
+                )
+            }
+        } else {
+        if (!message.reasoning.isNullOrEmpty()) {
+            AidenChronologicalReasoningCard(
+                row = AidenChronologicalRow("legacy-reasoning-${message.id}",
+                    AidenChronologicalRow.Kind.REASONING, message.reasoning),
+                active = false,
+                palette = palette
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
         // Step Timeline items if present
         message.timeline?.let { timeline ->
             if (timeline.steps.isNotEmpty()) {
@@ -840,6 +876,7 @@ private fun AssistantMessageRow(
                     }
                 }
             }
+        }
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
@@ -913,6 +950,8 @@ private fun ActiveStreamingCard(
             (activityTimeline == null && liveText.isEmpty())
         )
     val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
+    val chronologicalRows = if (isBotChat) null else
+        AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -921,6 +960,27 @@ private fun ActiveStreamingCard(
             .fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            if (chronologicalRows != null) {
+                AidenChronologicalTranscript(
+                    rows = chronologicalRows,
+                    active = true,
+                    palette = palette,
+                    onCopy = {},
+                    onOpenUrl = {}
+                )
+                if (visualizingLabel != null && chronologicalRows.none { row ->
+                    row.kind == AidenChronologicalRow.Kind.TOOL &&
+                        row.steps.any { it.toolName == "render_artifact" && it.isActive }
+                }) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    AidenActivityShimmerLabel(
+                        label = visualizingLabel,
+                        active = true,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.secondary
+                    )
+                }
+            } else {
             // Reasoning
             if (reasoning.isNotEmpty()) {
                 AidenActivityShimmerLabel(
@@ -1014,6 +1074,123 @@ private fun ActiveStreamingCard(
                     )
                 }
             }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenChronologicalTranscript(
+    rows: List<AidenChronologicalRow>,
+    active: Boolean,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    onCopy: (String) -> Unit,
+    onOpenUrl: (String) -> Unit
+) {
+    val lastTextId = rows.lastOrNull { it.kind == AidenChronologicalRow.Kind.TEXT }?.id
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { row ->
+            key(row.id) {
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TEXT -> {
+                        if (active) {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = row.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = palette.foreground,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (row.id == lastTextId) AidenStreamingCursor(palette = palette)
+                            }
+                        } else {
+                            RichFormattedMessage(row.text, palette, onCopy, onOpenUrl)
+                        }
+                    }
+                    AidenChronologicalRow.Kind.REASONING -> {
+                        val step = row.steps.firstOrNull()
+                        AidenChronologicalReasoningCard(
+                            row = row,
+                            active = active && step?.finishedAt == null,
+                            palette = palette
+                        )
+                    }
+                    AidenChronologicalRow.Kind.TOOL -> {
+                        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                row.steps.forEach { step ->
+                                    AidenActivityShimmerLabel(
+                                        label = AidenAgentActivityPresentation.line(step),
+                                        active = active && step.isActive,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.secondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenChronologicalReasoningCard(
+    row: AidenChronologicalRow,
+    active: Boolean,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+) {
+    if (row.text.isBlank()) {
+        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+            AidenActivityShimmerLabel(
+                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thinking",
+                active = active,
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.secondary,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+        return
+    }
+    var expanded by rememberSaveable(row.id) { mutableStateOf(active) }
+    var userControlled by rememberSaveable(row.id) { mutableStateOf(false) }
+    LaunchedEffect(row.id, active) {
+        if (active && !userControlled) {
+            kotlinx.coroutines.delay(1_000)
+            if (!userControlled) expanded = false
+        }
+    }
+    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clickable {
+                    userControlled = true
+                    expanded = !expanded
+                }
+            ) {
+                AidenActivityShimmerLabel(
+                    label = if (active) "Thinking" else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thought",
+                    active = active,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.secondary,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse reasoning" else "Expand reasoning",
+                    tint = palette.secondary
+                )
+            }
+            if (expanded) {
+                Text(
+                    text = row.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.secondary,
+                    modifier = Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState()).padding(top = 6.dp)
+                )
+            }
         }
     }
 }
@@ -1059,6 +1236,14 @@ private fun AidenTimelineCollapsibleCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+    val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
+    val allowsDisclosure = !compactOnly || timeline.issueCount > 0
+    val headline = if (compactOnly && !allowsDisclosure) {
+        timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
+            ?: AidenAgentActivityPresentation.summary(timeline)
+    } else {
+        AidenAgentActivityPresentation.summary(timeline)
+    }
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
@@ -1072,7 +1257,10 @@ private fun AidenTimelineCollapsibleCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+                    .then(
+                        if (allowsDisclosure) Modifier.clickable { isExpanded = !isExpanded }
+                        else Modifier
+                    )
             ) {
                 Icon(
                     imageVector = if (timeline.issueCount > 0) Icons.Default.Warning else Icons.Default.CheckCircle,
@@ -1082,21 +1270,23 @@ private fun AidenTimelineCollapsibleCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = AidenAgentActivityPresentation.summary(timeline),
+                    text = headline,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = palette.secondary,
-                    modifier = Modifier.size(18.dp)
-                )
+                if (allowsDisclosure) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            if (isExpanded) {
+            if (allowsDisclosure && isExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1117,6 +1307,11 @@ private fun AidenTimelineCollapsibleCard(
                                 color = palette.foreground,
                                 modifier = Modifier.weight(1f)
                             )
+                            step.producedFile?.let { file ->
+                                Text("File ${file.operation} · ${file.relativePath.substringAfterLast('/')}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.foreground, maxLines = 1)
+                            }
                             step.lineChanges?.let { lines ->
                                 Surface(
                                     color = palette.canvas,
