@@ -525,6 +525,7 @@
         "renderer/lib/remote-pairing-lifecycle.test.ts",
         "renderer/lib/rich-link.test.ts",
         "renderer/lib/scheduled-mcp-access-contract.test.ts",
+        "renderer/lib/scroll-follow.test.ts",
         "renderer/lib/scrollbar-gutter-contract.test.ts",
         "renderer/lib/streaming-motion-contract.test.ts",
         "renderer/lib/settings-section.test.ts",

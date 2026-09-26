@@ -19,10 +19,10 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -147,7 +147,16 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
+    var followLatest by remember(listState) {
+        mutableStateOf(
+            AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        )
+    }
+    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -157,6 +166,8 @@ fun AidenChatDetailScreen(
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+    val currentChat by rememberUpdatedState(chat)
+    val currentlyStreaming by rememberUpdatedState(isStreaming)
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -290,10 +301,53 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    val isScrolledUp by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+    LaunchedEffect(listState) {
+        var lastItemCount = -1
+        var wasScrolling = false
+        snapshotFlow {
+            val itemCount = AidenChatScroll.reverseLayoutItemCount(
+                currentChat?.messages?.size ?: 0,
+                currentlyStreaming
+            )
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            ) to itemCount
+        }.collect { (viewport, itemCount) ->
+            val (scrolling, index, offset) = viewport
+            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
+            lastItemCount = itemCount
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
+                    contentChanged,
+                    itemCount,
+                    consumedItemCount
+                )
+            ) {
+                return@collect
+            }
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            }
         }
+    }
+
+    // Keyed by listState too: a chat switch with an equal item count must still
+    // consume the new list's insertion epoch.
+    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
+        val itemCount = AidenChatScroll.reverseLayoutItemCount(
+            chat?.messages?.size ?: 0,
+            isStreaming
+        )
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
+            listState.scrollToItem(AidenChatScroll.latestItemIndex())
+            followLatest = true
+        }
+        consumedItemCount = itemCount
     }
 
     workspaceFileReference?.let { reference ->
@@ -642,10 +696,12 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = isScrolledUp,
+                visible = !followLatest,
                 onClick = {
+                    followLatest = true
                     scope.launch {
-                        listState.animateScrollToItem(0)
+                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+                        followLatest = true
                     }
                 },
                 modifier = Modifier
