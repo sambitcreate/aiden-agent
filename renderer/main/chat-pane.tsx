@@ -1,4 +1,13 @@
-import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
+import {
+  beginChatDraftSend,
+  createChatDraft,
+  discardChatDraft,
+  finishChatDraftSend,
+  getChatDraft,
+  retainChatDraft,
+  subscribeChatDrafts,
+  updateChatDraft,
+} from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
 import { chatMessageQueue } from "../lib/chat-message-queue";
 import { useChatMessageQueue } from "../lib/use-chat-message-queue";
@@ -34,12 +43,16 @@ import {
   subagentMcpMutationAllowLabel,
 } from "../components/subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
+import { SubagentRunGrantApproval } from "../components/subagent-run-grant-approval";
+import { FormFillApproval } from "../components/form-fill-approval";
 import {
   chatsApi,
   aidenRemoteApi,
   createChatTurnId,
   settingsApi,
   startGeneration,
+  steerGeneration,
+  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -47,6 +60,7 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
@@ -85,14 +99,16 @@ import {
   type ToolActivity,
 } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
+import { assistantPresentationRows } from "../lib/assistant-message-presentation";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
+  hasActiveThinkingStep,
   hasActiveToolStep,
   latestActiveAgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -126,8 +142,10 @@ import {
 } from "../lib/chat-terminal-sync";
 import {
   ASSISTANT_WORKSPACE_ID,
+  isFormFillBatchApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
@@ -156,6 +174,7 @@ const TOOL_LABELS: Record<string, string> = {
   run_command: "Run command",
   write_file: "Write file",
   computer_use: "Computer Use",
+  form_fill: "Form fill",
 };
 
 function toolLabel(toolName: string): string {
@@ -188,10 +207,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
     : chat.data?.botId || bot.data
-    ? "Side questions are not available in Bot chats."
-    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
-      ? "Side questions are not available in Assistant chats."
-      : undefined;
+      ? "Side questions are not available in Bot chats."
+      : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+        ? "Side questions are not available in Assistant chats."
+        : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -202,6 +221,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
+  // A durable terminal message can reach the cache before detached ownership is
+  // cleared. During that handoff there is no longer a response to stop or steer.
+  const cachedMessages = chat.data?.messages;
+  const visibleDetachedProjection =
+    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -278,7 +302,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining
+        : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
   const botReadinessMessage = chat.data?.botId
@@ -396,6 +420,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  // Closes busy admission in the same tick as Stop, before React re-renders.
+  const stopRequestedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    stopRequestedRef.current = isStoppingGeneration;
+  }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
@@ -420,8 +449,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
-  const todoSnapshotReadFence =
-    todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence();
+  const todoSnapshotReadFence = (todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence());
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
@@ -599,8 +627,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId, Boolean(draft)]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
-  const visibleDetachedProjection =
-    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
   React.useEffect(() => {
@@ -682,7 +708,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const renameChat = React.useCallback(
     async (title: string) => {
-      if (getChatDraft(chatId)) { updateChatDraft(chatId, { title }); return; }
+      if (getChatDraft(chatId)) {
+        updateChatDraft(chatId, { title });
+        return;
+      }
       await chatsApi.rename(chatId, title);
       qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
         current ? { ...current, title } : current,
@@ -790,6 +819,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!effectiveWorkspaceId) return;
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
+
+  // The PR rail/push dialog read the presented chat even without subagents.
+  React.useLayoutEffect(() => {
+    environmentPanel.setActiveChat(chatId, effectiveWorkspaceId ?? null);
+    return () => environmentPanel.setActiveChat(null, null);
+  }, [chatId, effectiveWorkspaceId, environmentPanel.setActiveChat]);
 
   React.useLayoutEffect(() => {
     if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
@@ -1178,7 +1213,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
       if (options?.btw) {
-        if (getChatDraft(chatId)) throw new Error("Send the first message before asking a side question.");
+        if (getChatDraft(chatId))
+          throw new Error("Send the first message before asking a side question.");
         if (attachments.length > 0 || skillInvocation) {
           throw new Error("Side questions do not accept attachments or skills.");
         }
@@ -1200,12 +1236,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               : current,
           );
         } catch (error) {
-          setBtwView((current) => current?.requestId === "pending" ? null : current);
+          setBtwView((current) => (current?.requestId === "pending" ? null : current));
           throw error;
         }
         return;
       }
-      if (chatMessageQueue(chatId).getSnapshot().messages.length === 0) chatMessageQueue(chatId).resume();
+      if (chatMessageQueue(chatId).getSnapshot().messages.length === 0)
+        chatMessageQueue(chatId).resume();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
@@ -1240,24 +1277,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 model,
                 computerUseEnabled: firstDraft.chat.computerUseEnabled,
                 turnId: messageTurnId,
-                message: { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
+                message: {
+                  role: "user",
+                  content: text,
+                  attachments: attachments.length ? attachments : undefined,
+                },
                 skillInvocation,
               })
             : await chatsApi.appendMessage(
-            chatId,
-            {
-              role: "user",
-              content: text,
-              attachments: attachments.length ? attachments : undefined,
-            },
-            {
-              providerId,
-              model,
-              autoTitle: true,
-              turnId: messageTurnId,
-              skillInvocation,
-            },
-          );
+                chatId,
+                {
+                  role: "user",
+                  content: text,
+                  attachments: attachments.length ? attachments : undefined,
+                },
+                {
+                  providerId,
+                  model,
+                  autoTitle: true,
+                  turnId: messageTurnId,
+                  skillInvocation,
+                },
+              );
         } catch (appendError) {
           if (isAppendReconciliationRequired(appendError)) {
             setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
@@ -1265,7 +1306,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           throw appendError;
         }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
+        await installAppendedChatSnapshot(qc, chatId, updated);
         if (firstDraft) finishChatDraftSend(chatId, true);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (
@@ -1311,34 +1352,130 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
-    if (!generationRef.current || !canStopGeneration) return;
+    if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = visibleDetachedProjection;
+      setIsStoppingGeneration(true);
+      void stopDetachedGeneration(streamId).then((cancelled) => {
+        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+      }).catch((error: unknown) => {
+        if (chatIdRef.current === chatId) {
+          setIsStoppingGeneration(false);
+          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+        }
+      });
+      return true;
+    }
+    if (!generationRef.current || !canStopGeneration) return false;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration]);
+    return true;
+  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
+
+  React.useEffect(() => {
+    // Detached Stop has no pane-owned terminal callback. The shell clears its
+    // exact stream after authoritative settlement; release the local stop UI.
+    if (!detachedGenerationDraining && !generationRef.current) setIsStoppingGeneration(false);
+  }, [detachedGenerationDraining, detachedProjection]);
 
   const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
     chatId,
-    contextKey: JSON.stringify([providerId, model, effectiveWorkspaceId, effectiveWorkspace?.permission]),
-    enabled: !draft && ready && !isGenerating && !isStartingGeneration && !isStoppingGeneration &&
-      !detachedGenerationDraining && !thinkingSaving && !computerUseSaving &&
-      !environmentPanel.gitOperationBusy && !imageArtifactRecoveryPending &&
-      !imageArtifactRecoveryUnavailable && !questionnaire && approvals.length === 0,
+    contextKey: JSON.stringify([
+      providerId,
+      model,
+      effectiveWorkspaceId,
+      effectiveWorkspace?.permission,
+    ]),
+    enabled:
+      !draft &&
+      ready &&
+      !isGenerating &&
+      !isStartingGeneration &&
+      !isStoppingGeneration &&
+      !detachedGenerationDraining &&
+      !thinkingSaving &&
+      !computerUseSaving &&
+      !environmentPanel.gitOperationBusy &&
+      !imageArtifactRecoveryPending &&
+      !imageArtifactRecoveryUnavailable &&
+      !questionnaire &&
+      approvals.length === 0,
     send: (message) => {
-      if (visionSupported === false && message.attachments.some((attachment) => attachment.kind === "image")) {
-        return Promise.reject(new Error("Switch to a vision-capable model before resuming these queued images."));
+      if (
+        visionSupported === false &&
+        message.attachments.some((attachment) => attachment.kind === "image")
+      ) {
+        return Promise.reject(
+          new Error("Switch to a vision-capable model before resuming these queued images."),
+        );
       }
-      return handleSend(message.text, message.attachments, message.skillInvocation, message.options);
+      return handleSend(
+        message.text,
+        message.attachments,
+        message.skillInvocation,
+        message.options,
+      );
     },
   });
 
-  const queueMessage = React.useCallback(async (
-    text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1,
-    options?: { visualize?: boolean; btw?: boolean },
-  ) => {
-    messageQueue.add({ id: createChatTurnId(), text, attachments, skillInvocation,
-      options: options?.visualize ? { visualize: true } : undefined });
-  }, [messageQueue]);
+  const queueMessage = React.useCallback(
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { visualize?: boolean; btw?: boolean },
+    ) => {
+      if (stopRequestedRef.current) {
+        throw new Error("Aiden is stopping this response. Send your message after it stops.");
+      }
+      messageQueue.add({
+        id: createChatTurnId(),
+        text,
+        attachments,
+        skillInvocation,
+        options: options?.visualize ? { visualize: true } : undefined,
+      });
+    },
+    [messageQueue],
+  );
+
+  const steerMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Steer requires text without attachments or a skill.");
+      }
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      await steerGeneration(streamId, text);
+    },
+    [isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const redirectMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Redirect requires text without attachments or a skill.");
+      }
+      if (
+        !(canStopGeneration || visibleDetachedProjection) ||
+        isStoppingGeneration ||
+        stopRequestedRef.current
+      ) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      const replacement = {
+        id: createChatTurnId(), text, attachments: [] as Attachment[],
+      };
+      messageQueue.replaceWith(replacement, () => {
+        const stopping = handleStop();
+        if (stopping) stopRequestedRef.current = true;
+        return stopping;
+      });
+    },
+    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
+  );
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -1378,7 +1515,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [cancelAgentForContextChange, environmentPanel.setCancelAgentHandler]);
 
   const decideApproval = React.useCallback(
-    async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
+    async (
+      prompt: ApprovalPrompt,
+      decision: "allow" | "deny",
+      options?: { formFillExcludedOrders?: number[] },
+    ) => {
       if (decidingApprovalRef.current) return;
       const decisionChatId = chatId;
       decidingApprovalRef.current = prompt.approvalId;
@@ -1387,7 +1528,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (prompt.source === "remote") {
           await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
         } else {
-          await chatsApi.approve(prompt.approvalId, decision);
+          await chatsApi.approve(prompt.approvalId, decision, options);
         }
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
@@ -1441,7 +1582,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
       if (!effectiveWorkspace) return;
-      if (getChatDraft(chatId)?.sending) throw new Error("Wait for the first message to finish saving.");
+      if (getChatDraft(chatId)?.sending)
+        throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
           "Wait for the current Git operation to finish before changing workspace access.",
@@ -1478,7 +1620,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (computerUseSaving || isStartingGeneration || isGenerating) return;
       setComputerUseSaving(true);
       try {
-        if (getChatDraft(chatId)) { updateChatDraft(chatId, { computerUseEnabled: enabled }); return; }
+        if (getChatDraft(chatId)) {
+          updateChatDraft(chatId, { computerUseEnabled: enabled });
+          return;
+        }
         const updated = await chatsApi.setComputerUse(chatId, enabled);
         qc.setQueryData(queryKeys.chat(chatId), updated);
       } catch (changeError) {
@@ -1809,8 +1954,31 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingShell =
     pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
+  const pendingRunGrantClaim =
+    typeof pendingDetails === "object" && pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-run-grant";
+  const pendingRunGrant = pending && isSubagentRunGrantApprovalDetails(pending.details)
+    ? pending.details : undefined;
+  const invalidPendingRunGrant = pendingRunGrantClaim && pendingRunGrant === undefined;
+  const pendingFormFillClaim =
+    typeof pendingDetails === "object" &&
+    pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "form-fill-batch";
+  const pendingFormFill =
+    pending && isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const invalidPendingFormFill = pendingFormFillClaim && pendingFormFill === undefined;
   const invalidPendingPrivilegedApproval =
-    invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
+    invalidPendingWorkspaceWrite ||
+    invalidPendingMcpMutation ||
+    invalidPendingShell ||
+    invalidPendingRunGrant ||
+    invalidPendingFormFill;
+  const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
+  React.useEffect(() => {
+    setFormFillExcludedOrders([]);
+  }, [pending?.approvalId]);
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
@@ -1832,16 +2000,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  // The reasoning disclosure owns exposed reasoning for the whole turn, even
-  // after its timeline step settles. Visualizing owns only the live artifact
-  // render window; detached projections hide that block and keep narration.
-  const visualizingBlockVisible =
+  const visualizingLive =
     hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
-    !streamComplete &&
-    !visibleDetachedProjection;
-  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
-    reasoningVisible: Boolean(displayedStreamingReasoning),
-    visualizingVisible: visualizingBlockVisible,
+    !streamComplete && !visibleDetachedProjection;
+  const timelineActivity = visualizingLive &&
+    agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
+      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      : agentActivity;
+  const chronologicalLiveRows = assistantPresentationRows(
+    displayedStreamingText ?? "",
+    displayedGenerationTimeline,
+    displayedStreamingReasoning ?? "",
+  );
+  const visibleAgentActivity = resolveVisibleAgentActivity(timelineActivity, {
+    reasoningVisible:
+      hasActiveThinkingStep(displayedGenerationTimeline) &&
+      chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
+    visualizingVisible:
+      visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
+        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+    toolVisible:
+      chronologicalLiveRows?.some((row) => row.kind === "activity" &&
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.status === "pending" || step.status === "running"))) === true,
   });
 
   React.useEffect(() => {
@@ -1863,435 +2044,475 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+
   return (
     <>
-    <ScrollArea
-      className="h-full min-h-0"
-      title={
-        bot.data ? (
-          <span className="flex min-w-0 items-center gap-2">
-            <BotAvatar
-              botId={bot.data.id}
-              avatar={bot.data.avatar}
-              name={bot.data.name}
-              photoLoading="immediate"
-              size="small"
-            />
-            <span className="min-w-0">
-              <span className="flex items-center gap-2">
-                <span className="truncate">{bot.data.name}</span>
-                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                  Bot
+      <ScrollArea
+        className="h-full min-h-0"
+        title={
+          bot.data ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <BotAvatar
+                botId={bot.data.id}
+                avatar={bot.data.avatar}
+                name={bot.data.name}
+                photoLoading="immediate"
+                size="small"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-2">
+                  <span className="truncate">{bot.data.name}</span>
+                  <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                    Bot
+                  </span>
+                </span>
+                <span className="block truncate text-small font-normal text-secondary">
+                  {chat.data?.title ?? "New conversation"}
                 </span>
               </span>
-              <span className="block truncate text-small font-normal text-secondary">
-                {chat.data?.title ?? "New conversation"}
-              </span>
             </span>
-          </span>
-        ) : (
-          (chat.data?.title ?? "New agent")
-        )
-      }
-      actions={
-        <>
-          <OpenInEditorPicker
-            workspaceId={effectiveWorkspace?.id}
-            folderPath={effectiveWorkspace?.folderPath}
-          />
-          <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
-          <QuickViewToggle disabled={!effectiveWorkspace} />
-          <Button
-            iconOnly
-            variant="toolbar"
-            size="large"
-            onClick={terminal.toggle}
-            disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-            aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-            aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-            aria-pressed={terminal.open}
-            title={`Toggle terminal (${terminalShortcut})`}
-            data-terminal-toggle
-          >
-            <TerminalSquare />
-          </Button>
-        </>
-      }
-      autoScrollToBottom
-      autoScrollDeps={[
-        messages.length,
-        displayedStreamingText,
-        displayedStreamingReasoning,
-        displayedGenerationTimeline,
-        agentActivity?.phase,
-        approvals.length,
-        questionnaire?.promptId,
-        displayedStreamingArtifacts.length,
-      ]}
-      showScrollToBottomButton
-      scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
-      footer={
-        <>
-          <EventPresence
-            present={Boolean(pending)}
-            className="aiden-dock-inset chat-content-column pb-2"
-          >
-            {pending ? (
-              <div>
-                <p className="sr-only" role="status">
-                  {invalidPendingPrivilegedApproval
-                    ? "Invalid privileged approval blocked"
-                    : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
-                </p>
-                <section
-                  ref={approvalCardRef}
-                  aria-labelledby={`approval-title-${pending.approvalId}`}
-                  aria-describedby={`approval-summary-${pending.approvalId}`}
-                  className="rounded-card bg-popover p-3 shadow-popover"
-                >
-                  <div className="flex items-start gap-2.5">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
-                      <ShieldQuestion className="size-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <Text
-                        variant="small-strong"
-                        as="p"
-                        id={`approval-title-${pending.approvalId}`}
-                      >
-                        {invalidPendingPrivilegedApproval
-                          ? "Invalid privileged approval blocked"
-                          : pendingWorkspaceWrite
-                            ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
-                                pendingWorkspaceWrite.operation,
-                              ).toLocaleLowerCase("en-US")}`
-                            : pendingMcpMutation
-                              ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
-                              : pendingShell
-                                ? `${pendingShell.childLabel} wants to run a full-host command`
-                                : `${toolLabel(pending.toolName)} needs approval`}
-                      </Text>
-                      <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                        {invalidPendingPrivilegedApproval
-                          ? "This malformed privileged action cannot be allowed. Deny it to continue."
-                          : pendingWorkspaceWrite
-                            ? "Review this one exact file change before Aiden continues."
-                            : pendingMcpMutation
-                              ? "Review this one exact external mutation before Aiden continues."
-                              : pendingShell
-                                ? "Review this one exact full-host command before Aiden continues."
-                                : "Review this one action before Aiden continues."}
-                      </Text>
+          ) : (
+            (chat.data?.title ?? "New agent")
+          )
+        }
+        actions={
+          <>
+            <OpenInEditorPicker
+              workspaceId={effectiveWorkspace?.id}
+              folderPath={effectiveWorkspace?.folderPath}
+            />
+            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+            <QuickViewToggle disabled={!effectiveWorkspace} />
+            <Button
+              iconOnly
+              variant="toolbar"
+              size="large"
+              onClick={terminal.toggle}
+              disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+              aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+              aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+              aria-pressed={terminal.open}
+              title={`Toggle terminal (${terminalShortcut})`}
+              data-terminal-toggle
+            >
+              <TerminalSquare />
+            </Button>
+          </>
+        }
+        autoScrollToBottom
+        autoScrollDeps={[
+          messages.length,
+          displayedStreamingText,
+          displayedStreamingReasoning,
+          displayedGenerationTimeline,
+          agentActivity?.phase,
+          approvals.length,
+          questionnaire?.promptId,
+          displayedStreamingArtifacts.length,
+        ]}
+        showScrollToBottomButton
+        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
+        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
+        footer={
+          <>
+            <EventPresence
+              present={Boolean(pending)}
+              className="aiden-dock-inset chat-content-column pb-2"
+            >
+              {pending ? (
+                <div>
+                  <p className="sr-only" role="status">
+                    {invalidPendingPrivilegedApproval
+                      ? "Invalid privileged approval blocked"
+                      : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
+                  </p>
+                  <section
+                    ref={approvalCardRef}
+                    aria-labelledby={`approval-title-${pending.approvalId}`}
+                    aria-describedby={`approval-summary-${pending.approvalId}`}
+                    className="rounded-card bg-popover p-3 shadow-popover"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
+                        <ShieldQuestion className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <Text
+                          variant="small-strong"
+                          as="p"
+                          id={`approval-title-${pending.approvalId}`}
+                        >
+                          {invalidPendingPrivilegedApproval
+                            ? "Invalid privileged approval blocked"
+                            : pendingWorkspaceWrite
+                              ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
+                                  pendingWorkspaceWrite.operation,
+                                ).toLocaleLowerCase("en-US")}`
+                              : pendingMcpMutation
+                                ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
+                                : pendingShell
+                                  ? `${pendingShell.childLabel} wants to run a full-host command`
+                                  : pendingRunGrant
+                                    ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
+                                  : `${toolLabel(pending.toolName)} needs approval`}
+                        </Text>
+                        <Text variant="small" color="secondary" as="p" className="mt-0.5">
+                          {invalidPendingPrivilegedApproval
+                            ? "This malformed privileged action cannot be allowed. Deny it to continue."
+                            : pendingWorkspaceWrite
+                              ? "Review this one exact file change before Aiden continues."
+                              : pendingMcpMutation
+                                ? "Review this one exact external mutation before Aiden continues."
+                                : pendingShell
+                                  ? "Review this one exact full-host command before Aiden continues."
+                                  : pendingRunGrant
+                                    ? "Review this grant for the entire subagent run."
+                                  : "Review this one action before Aiden continues."}
+                        </Text>
+                      </div>
                     </div>
-                  </div>
-                  {!pendingCanAllow ? (
-                    <Text
-                      variant="small"
-                      as="p"
-                      id={`approval-summary-${pending.approvalId}`}
-                      className="mt-2.5 rounded-control bg-well px-3 py-2"
-                    >
-                      Aiden cannot safely authorize this action from this view. Deny it here or
-                      review the exact action on the Mac that owns this chat.
-                    </Text>
-                  ) : pendingWorkspaceWrite ? (
-                    <SubagentWorkspaceWriteApproval
-                      details={pendingWorkspaceWrite}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : pendingMcpMutation ? (
-                    <SubagentMcpMutationApproval
-                      details={pendingMcpMutation}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : pendingShell ? (
-                    <SubagentShellApproval
-                      details={pendingShell}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : (
-                    <Text
-                      variant="small"
-                      as="p"
-                      id={`approval-summary-${pending.approvalId}`}
-                      className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
-                    >
-                      {pending.summary}
-                    </Text>
-                  )}
-                  <div className="mt-2.5 flex justify-end gap-2">
-                    <Button
-                      ref={approvalDenyRef}
-                      variant="transparent"
-                      size="small"
-                      disabled={decidingApprovalId === pending.approvalId}
-                      onClick={() => void decideApproval(pending, "deny")}
-                    >
-                      Deny
-                    </Button>
-                    {pendingCanAllow ? (
+                    {!pendingCanAllow ? (
+                      <Text
+                        variant="small"
+                        as="p"
+                        id={`approval-summary-${pending.approvalId}`}
+                        className="mt-2.5 rounded-control bg-well px-3 py-2"
+                      >
+                        Aiden cannot safely authorize this action from this view. Deny it here or
+                        review the exact action on the Mac that owns this chat.
+                      </Text>
+                    ) : pendingWorkspaceWrite ? (
+                      <SubagentWorkspaceWriteApproval
+                        details={pendingWorkspaceWrite}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingMcpMutation ? (
+                      <SubagentMcpMutationApproval
+                        details={pendingMcpMutation}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingShell ? (
+                      <SubagentShellApproval
+                        details={pendingShell}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingRunGrant ? (
+                      <SubagentRunGrantApproval
+                        details={pendingRunGrant}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingFormFill ? (
+                      <FormFillApproval
+                        details={pendingFormFill}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                        onDeselectChange={setFormFillExcludedOrders}
+                      />
+                    ) : (
+                      <Text
+                        variant="small"
+                        as="p"
+                        id={`approval-summary-${pending.approvalId}`}
+                        className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+                      >
+                        {pending.summary}
+                      </Text>
+                    )}
+                    <div className="mt-2.5 flex justify-end gap-2">
                       <Button
-                        variant="accent"
+                        ref={approvalDenyRef}
+                        variant="transparent"
                         size="small"
                         disabled={decidingApprovalId === pending.approvalId}
-                        onClick={() => void decideApproval(pending, "allow")}
+                        onClick={() => void decideApproval(pending, "deny")}
                       >
-                        {decidingApprovalId === pending.approvalId
-                          ? "Sending…"
-                          : pendingMcpMutation
-                            ? subagentMcpMutationAllowLabel(pendingMcpMutation)
-                            : "Allow once"}
+                        {pendingFormFill ? "Cancel" : "Deny"}
                       </Button>
-                    ) : null}
-                  </div>
-                </section>
-              </div>
+                      {pendingCanAllow ? (
+                        <Button
+                          variant="accent"
+                          size="small"
+                          disabled={decidingApprovalId === pending.approvalId}
+                          onClick={() =>
+                            void decideApproval(
+                              pending,
+                              "allow",
+                              pendingFormFill ? { formFillExcludedOrders } : undefined,
+                            )
+                          }
+                        >
+                          {decidingApprovalId === pending.approvalId
+                            ? "Sending…"
+                            : pendingFormFill
+                              ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
+                              : pendingMcpMutation
+                                ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                                : pendingRunGrant
+                                  ? "Allow for run"
+                                : "Allow once"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+            </EventPresence>
+            <TodoPanel snapshot={todoSnapshot} />
+            {btwView ? (
+              <BtwCard
+                view={btwView}
+                onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
+                onCancel={async () => {
+                  if (btwView.requestId !== "pending") {
+                    await chatsApi.btwCancel(chatId, btwView.requestId);
+                  }
+                }}
+                onClear={async () => {
+                  await chatsApi.btwClear(chatId);
+                  setBtwView(null);
+                }}
+                onClose={async () => {
+                  if (
+                    btwView.requestId !== "pending" &&
+                    (btwView.status === "starting" || btwView.status === "running")
+                  ) {
+                    await chatsApi.btwCancel(chatId, btwView.requestId);
+                  }
+                  setBtwView(null);
+                }}
+              />
             ) : null}
-          </EventPresence>
-          <TodoPanel snapshot={todoSnapshot} />
-          {btwView ? (
-            <BtwCard
-              view={btwView}
-              onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
-              onCancel={async () => {
-                if (btwView.requestId !== "pending") {
-                  await chatsApi.btwCancel(chatId, btwView.requestId);
+            {questionnaire ? (
+              <AskUserQuestionComposer
+                key={questionnaire.promptId}
+                prompt={questionnaire}
+                submitting={questionnaireSubmitting}
+                onRespond={answerQuestionnaire}
+              />
+            ) : (
+              <Composer
+                // Keyed so the draft and attachments stay scoped to one chat. The
+                // route no longer remounts the pane, and Composer owns that text
+                // without a chatId reset of its own.
+                key={chatId}
+                ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
+                readinessSettingsSection={
+                  !chatReadinessMessage && !botReadinessMessage
+                    ? modelReadinessMessage
+                      ? "providers"
+                      : computerUseReadinessMessage
+                        ? "computerUse"
+                        : undefined
+                    : undefined
                 }
-              }}
-              onClear={async () => {
-                await chatsApi.btwClear(chatId);
-                setBtwView(null);
-              }}
-              onClose={async () => {
-                if (
-                  btwView.requestId !== "pending" &&
-                  (btwView.status === "starting" || btwView.status === "running")
-                ) {
-                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                readinessMessage={
+                  imageArtifactRecoveryUnavailable
+                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    : imageArtifactRecoveryPending
+                      ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                      : readinessMessage
                 }
-                setBtwView(null);
-              }}
+                hasMessages={hasMessages}
+                chatId={chatId}
+                initialText={draft?.initialText}
+                onSend={handleSend}
+                freezeWhileSending={Boolean(draft)}
+                firstMessageSaving={draft?.sending === true}
+                onQueue={draft ? undefined : queueMessage}
+                onSteer={draft ? undefined : steerMessage}
+                onRedirect={draft ? undefined : redirectMessage}
+                hasQueuedMessages={queuedState.messages.length > 0}
+                queuedMessages={
+                  <QueuedMessages
+                    key={chatId}
+                    queue={messageQueue}
+                    returnFocus={() => composerRef.current}
+                  />
+                }
+                onStop={() => {
+                  messageQueue.discard();
+                  if (handleStop()) stopRequestedRef.current = true;
+                }}
+                isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
+                canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                stoppingGeneration={isStoppingGeneration}
+                configurationBusy={thinkingSaving}
+                inputRef={composerRef}
+                workspace={effectiveWorkspace}
+                gitBranch={git.data?.isRepo ? git.data.branch : undefined}
+                gitDetached={git.data?.detached}
+                gitUnborn={git.data?.unborn}
+                onOpenFolder={openFolder}
+                onChangePermission={changePermission}
+                workspacePickerEnabled={isNewChat}
+                workspaces={workspaces}
+                onSelectWorkspace={moveNewChatToWorkspace}
+                onCreateScratchWorkspace={createScratchWorkspace}
+                onCreateGitWorktree={createGitWorktree}
+                onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
+                gitOperationBusy={environmentPanel.gitOperationBusy}
+                workspaceChangeBlockedReason={
+                  documentAppendReconciliationRequired
+                    ? "Reload Aiden before changing this chat's workspace."
+                    : settingsBlockedReason
+                }
+                gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
+                gitWorktreeDescription={
+                  isNewChat
+                    ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
+                    : "Creates a separate workspace and opens a new chat. This conversation stays here."
+                }
+                visionSupported={visionSupported}
+                computerUse={
+                  computerUseGloballyEnabled
+                    ? {
+                        enabled: chatComputerUseEnabled,
+                        ready: computerUseReady,
+                        checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
+                        saving: computerUseSaving,
+                        detail: computerUseStatusDetail,
+                      }
+                    : undefined
+                }
+                onChangeComputerUse={changeComputerUse}
+                currentChatTitle={chat.data?.title}
+                latestAssistantResponse={latestAssistantResponse}
+                slashNavigationBlockedReason={settingsBlockedReason}
+                sideQuestionBlockedReason={sideQuestionBlockedReason}
+                slashSessionBlockedReason={
+                  documentAppendReconciliationRequired
+                    ? "Reload Aiden before copying this chat."
+                    : imageArtifactRecoveryUnavailable
+                      ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
+                      : imageArtifactRecoveryPending
+                        ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                        : undefined
+                }
+                slashPaletteBlocked={Boolean(pending)}
+                slashActionBusy={isGenerating || isStartingGeneration}
+                onOpenSettings={(section) =>
+                  void navigate({
+                    to: "/settings",
+                    search: section ? { section } : {},
+                  })
+                }
+                onRenameChat={renameChat}
+                onOpenReview={() => environmentPanel.openReview("changes")}
+                sessionChat={draft ? undefined : (chat.data ?? undefined)}
+                authenticatedProviders={authenticatedProviders}
+                onCloneChat={() => copyChat()}
+                onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
+                onExportChat={exportChat}
+                onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
+                onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
+                onLogoutProvider={logoutProvider}
+                thinkingControl={
+                  googleThinkingSupported ? (
+                    <ThinkingControl
+                      level={googleThinkingLevel}
+                      levels={googleThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeGoogleThinking(level)}
+                    />
+                  ) : codexThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel="Codex"
+                      level={codexThinkingLevel}
+                      levels={codexThinkingLevels}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeCodexThinking(level)}
+                    />
+                  ) : anthropicThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel="Claude"
+                      level={anthropicThinkingLevel}
+                      levels={anthropicThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeAnthropicThinking(level)}
+                    />
+                  ) : providerThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel={selectedProvider?.label ?? "Model"}
+                      level={providerThinkingLevel}
+                      levels={providerThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeProviderThinking(level)}
+                    />
+                  ) : localReasoningVisibilitySupported ? (
+                    <ReasoningVisibilityControl
+                      visible={showLocalModelReasoning}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+                    />
+                  ) : undefined
+                }
+                modelPicker={
+                  <ModelPicker
+                    providers={settings.data ? (providers.data ?? []) : []}
+                    providerId={providerId}
+                    model={model}
+                    onChange={(nextProviderId, nextModel) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                    }}
+                    disabled={isGenerating || isStartingGeneration || thinkingSaving}
+                    settingsBlockedReason={settingsBlockedReason}
+                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                  />
+                }
+              />
+            )}
+          </>
+        }
+      >
+        {chat.isLoading || providers.isLoading ? (
+          <div
+            className="flex min-h-full items-center justify-center"
+            aria-label="Loading conversation"
+          >
+            <Text variant="small" color="secondary">
+              Loading…
+            </Text>
+          </div>
+        ) : messages.length === 0 && displayedStreamingText === null ? (
+          <div className="flex min-h-full items-center justify-center">
+            <EmptyState
+              title="What would you like to work on?"
+              description={
+                (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
+                  ? undefined
+                  : "Set up a provider in Settings to start."
+              }
             />
-          ) : null}
-          {questionnaire ? (
-            <AskUserQuestionComposer
-              key={questionnaire.promptId}
-              prompt={questionnaire}
-              submitting={questionnaireSubmitting}
-              onRespond={answerQuestionnaire}
-            />
-          ) : (
-            <Composer
-            // Keyed so the draft and attachments stay scoped to one chat. The
-            // route no longer remounts the pane, and Composer owns that text
-            // without a chatId reset of its own.
+          </div>
+        ) : (
+          <MessageList
             key={chatId}
-            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-            readinessSettingsSection={!chatReadinessMessage && !botReadinessMessage ? (modelReadinessMessage ? "providers" : computerUseReadinessMessage ? "computerUse" : undefined) : undefined}
-            readinessMessage={
-              imageArtifactRecoveryUnavailable
+            chatId={chatId}
+            messages={messages}
+            streamingText={displayedStreamingText}
+            streamingReasoning={displayedStreamingReasoning}
+            streamingArtifacts={displayedStreamingArtifacts}
+            streamComplete={streamComplete || visibleDetachedProjection !== null}
+            onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+            timeline={displayedGenerationTimeline}
+            liveSubagents={displayedLiveSubagents}
+            subagentsEnabled={environmentPanel.subagentsEnabled}
+            onOpenSubagent={environmentPanel.openSubagent}
+            agentActivity={visibleAgentActivity}
+            error={
+              error ??
+              (imageArtifactRecoveryUnavailable
                 ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
-                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                  : readinessMessage
-            }
-            hasMessages={hasMessages}
-            chatId={chatId}
-            initialText={draft?.initialText}
-            onSend={handleSend}
-            freezeWhileSending={Boolean(draft)}
-            firstMessageSaving={draft?.sending === true}
-            onQueue={draft ? undefined : queueMessage}
-            hasQueuedMessages={queuedState.messages.length > 0}
-            queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
-              canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
-              returnFocus={() => composerRef.current}
-              onSteer={(id) => {
-                if (!canStopGeneration || isStoppingGeneration) return;
-                messageQueue.move(id, 0);
-                messageQueue.resume();
-                handleStop();
-              }} />}
-            onStop={() => { messageQueue.pause(); handleStop(); }}
-            isGenerating={isGenerating || isStartingGeneration}
-            canStopGeneration={canStopGeneration}
-            configurationBusy={thinkingSaving}
-            inputRef={composerRef}
-            workspace={effectiveWorkspace}
-            gitBranch={git.data?.isRepo ? git.data.branch : undefined}
-            gitDetached={git.data?.detached}
-            gitUnborn={git.data?.unborn}
-            onOpenFolder={openFolder}
-            onChangePermission={changePermission}
-            workspacePickerEnabled={isNewChat}
-            workspaces={workspaces}
-            onSelectWorkspace={moveNewChatToWorkspace}
-            onCreateScratchWorkspace={createScratchWorkspace}
-            onCreateGitWorktree={createGitWorktree}
-            onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
-            gitOperationBusy={environmentPanel.gitOperationBusy}
-            workspaceChangeBlockedReason={
-              documentAppendReconciliationRequired
-                ? "Reload Aiden before changing this chat's workspace."
-                : settingsBlockedReason
-            }
-            gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
-            gitWorktreeDescription={
-              isNewChat
-                ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
-                : "Creates a separate workspace and opens a new chat. This conversation stays here."
-            }
-            visionSupported={visionSupported}
-            computerUse={
-              computerUseGloballyEnabled
-                ? {
-                    enabled: chatComputerUseEnabled,
-                    ready: computerUseReady,
-                    checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
-                    saving: computerUseSaving,
-                    detail: computerUseStatusDetail,
-                  }
-                : undefined
-            }
-            onChangeComputerUse={changeComputerUse}
-            currentChatTitle={chat.data?.title}
-            latestAssistantResponse={latestAssistantResponse}
-            slashNavigationBlockedReason={settingsBlockedReason}
-            sideQuestionBlockedReason={sideQuestionBlockedReason}
-            slashSessionBlockedReason={
-              documentAppendReconciliationRequired
-                ? "Reload Aiden before copying this chat."
-                : imageArtifactRecoveryUnavailable
-                  ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
-                  : imageArtifactRecoveryPending
-                    ? "Delete this chat to discard the unrecovered visual artifact before copying."
-                    : undefined
-            }
-            slashPaletteBlocked={Boolean(pending)}
-            slashActionBusy={isGenerating || isStartingGeneration}
-            onOpenSettings={(section) =>
-              void navigate({
-                to: "/settings",
-                search: section ? { section } : {},
-              })
-            }
-            onRenameChat={renameChat}
-            onOpenReview={() => environmentPanel.openReview("changes")}
-            sessionChat={draft ? undefined : chat.data ?? undefined}
-            authenticatedProviders={authenticatedProviders}
-            onCloneChat={() => copyChat()}
-            onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
-            onExportChat={exportChat}
-            onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
-            onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
-            onLogoutProvider={logoutProvider}
-            thinkingControl={
-              googleThinkingSupported ? (
-                <ThinkingControl
-                  level={googleThinkingLevel}
-                  levels={googleThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeGoogleThinking(level)}
-                />
-              ) : codexThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel="Codex"
-                  level={codexThinkingLevel}
-                  levels={codexThinkingLevels}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeCodexThinking(level)}
-                />
-              ) : anthropicThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel="Claude"
-                  level={anthropicThinkingLevel}
-                  levels={anthropicThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeAnthropicThinking(level)}
-                />
-              ) : providerThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel={selectedProvider?.label ?? "Model"}
-                  level={providerThinkingLevel}
-                  levels={providerThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeProviderThinking(level)}
-                />
-              ) : localReasoningVisibilitySupported ? (
-                <ReasoningVisibilityControl
-                  visible={showLocalModelReasoning}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                />
-              ) : undefined
-            }
-            modelPicker={
-              <ModelPicker
-                providers={settings.data ? (providers.data ?? []) : []}
-                providerId={providerId}
-                model={model}
-                onChange={(nextProviderId, nextModel) => {
-                  if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                }}
-                disabled={isGenerating || isStartingGeneration || thinkingSaving}
-                settingsBlockedReason={settingsBlockedReason}
-                hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-              />
+                  ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                  : null)
             }
           />
-          )}
-        </>
-      }
-    >
-      {chat.isLoading || providers.isLoading ? (
-        <div
-          className="flex min-h-full items-center justify-center"
-          aria-label="Loading conversation"
-        >
-          <Text variant="small" color="secondary">
-            Loading…
-          </Text>
-        </div>
-      ) : messages.length === 0 && displayedStreamingText === null ? (
-        <div className="flex min-h-full items-center justify-center">
-          <EmptyState
-            title="What would you like to work on?"
-            description={
-              (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
-                ? undefined
-                : "Set up a provider in Settings to start."
-            }
-          />
-        </div>
-      ) : (
-        <MessageList
-          key={chatId}
-          chatId={chatId}
-          messages={messages}
-          streamingText={displayedStreamingText}
-          streamingReasoning={displayedStreamingReasoning}
-          streamingArtifacts={displayedStreamingArtifacts}
-          streamComplete={streamComplete || visibleDetachedProjection !== null}
-          onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-          timeline={displayedGenerationTimeline}
-          liveSubagents={displayedLiveSubagents}
-          subagentsEnabled={environmentPanel.subagentsEnabled}
-          onOpenSubagent={environmentPanel.openSubagent}
-          agentActivity={visibleAgentActivity}
-          error={
-            error ??
-            (imageArtifactRecoveryUnavailable
-              ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-              : imageArtifactRecoveryPending
-                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
-                : null)
-          }
-        />
-      )}
-    </ScrollArea>
+        )}
+      </ScrollArea>
     </>
   );
 }

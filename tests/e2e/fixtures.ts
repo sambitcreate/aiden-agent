@@ -139,12 +139,18 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
-  relaunch: (afterClose?: () => Promise<void>) => Promise<Page>;
+  /** Relaunches the app; `appEnvironment` replaces the test's extra app environment. */
+  relaunch: (
+    afterClose?: () => Promise<void>,
+    appEnvironment?: Record<string, string>,
+  ) => Promise<Page>;
 };
 
 type AidenE2eOptions = {
   portableConfigSeed: PortableConfigSeed;
   workspaceSeed: boolean;
+  /** Extra variables for the app process, such as experimental feature flags. */
+  appEnvironment: Record<string, string>;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -302,7 +308,11 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
             : undefined,
         );
         const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
-        const latestUser = [...(completion?.messages ?? [])].reverse().find(({ role }) => role === "user");
+        // pi-ai forwards tool-result images as a follow-up user message; that
+        // carrier is not the user's prompt.
+        const latestUser = [...(completion?.messages ?? [])]
+          .reverse()
+          .find(({ role, content }) => role === "user" && !JSON.stringify(content ?? "").includes("Attached image(s) from tool result:"));
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
@@ -700,7 +710,13 @@ function formatFailure(error: unknown): string {
 export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
-  aiden: async ({ browserName: _browserName, portableConfigSeed, workspaceSeed }, use, testInfo) => {
+  appEnvironment: [{}, { option: true }],
+  aiden: async (
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment },
+    use,
+    testInfo,
+  ) => {
+    let extraAppEnvironment = appEnvironment;
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
     let app: ElectronApplication | undefined;
@@ -761,6 +777,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           XDG_CONFIG_HOME: testXdgConfigDir,
           XDG_DATA_HOME: testXdgDataDir,
           ...(redirectOrigin ? { [LM_STUDIO_REDIRECT_ENV]: redirectOrigin } : {}),
+          ...extraAppEnvironment,
         };
         const launchArgs = [
           "-r",
@@ -808,7 +825,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
-        relaunch: async (afterClose) => {
+        relaunch: async (afterClose, nextAppEnvironment) => {
+          if (nextAppEnvironment) extraAppEnvironment = nextAppEnvironment;
           const previous = app;
           app = undefined;
           await closeAiden(previous);

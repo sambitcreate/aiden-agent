@@ -1,4 +1,5 @@
 import type { Chat } from "./types";
+import { discardComposerDraft } from "./composer-draft-store";
 
 /** A new-agent surface is renderer-only until its first user message commits. */
 export interface ChatDraft {
@@ -31,7 +32,10 @@ export function createChatDraft(
   // Multiple New activations can supersede navigation before a pane mounts.
   // Only keep drafts that acquired a view owner or have a send to settle.
   for (const [previousId, previous] of drafts) {
-    if (!owners.has(previousId) && !previous.sending) drafts.delete(previousId);
+    if (!owners.has(previousId) && !previous.sending) {
+      drafts.delete(previousId);
+      discardComposerDraft(previousId);
+    }
   }
   const now = Date.now();
   const draft: ChatDraft = {
@@ -69,7 +73,10 @@ export function finishChatDraftSend(id: string, committed: boolean): void {
 
 export function discardChatDraft(id: string): void {
   if (drafts.get(id)?.sending) return;
-  if (drafts.delete(id)) notify();
+  if (drafts.delete(id)) {
+    discardComposerDraft(id);
+    notify();
+  }
 }
 
 /** Delay disposal one microtask so StrictMode's effect replay can reacquire it. */

@@ -162,3 +162,42 @@ test("FIFO ordering within the default lane", () => {
   assert.equal(queue.dequeue()?.text, "d2");
   assert.equal(queue.dequeue()?.text, "d3");
 });
+
+
+test("queue bounds reject excess work without dropping accepted prompts", () => {
+  const queue = createTelegramQueue(makeDeps());
+  for (let i = 0; i < 20; i++) queue.enqueue(turn("default", `prompt-${i}`));
+  assert.throws(() => queue.enqueue(turn("priority", "overflow")), /queue is full/);
+  assert.equal(queue.size(), 20);
+  assert.equal(queue.dequeue()?.text, "prompt-0");
+  queue.enqueue(turn("priority", "replacement"));
+  assert.equal(queue.dequeue()?.text, "replacement");
+});
+
+test("queue deduplicates exact source and preserves FIFO when editing", () => {
+  const queue = createTelegramQueue(makeDeps());
+  const first = queue.enqueue({ ...turn("default", "first"), sourceMessageId: 1 });
+  queue.enqueue({ ...turn("default", "retry"), sourceMessageId: 1 });
+  queue.enqueue({ ...turn("default", "second"), sourceMessageId: 2 });
+  assert.equal(queue.size(), 2);
+  assert.equal(queue.replace(first.id!, { ...first, text: "edited" }), true);
+  assert.equal(queue.dequeue()?.text, "edited");
+  assert.equal(queue.dequeue()?.text, "second");
+});
+
+test("oversized queue edits preserve the old prompt and position", () => {
+  const queue = createTelegramQueue(makeDeps());
+  const first = queue.enqueue(turn("default", "first"));
+  queue.enqueue(turn("default", "second"));
+  assert.throws(() => queue.replace(first.id!, { ...first, text: "x".repeat(32 * 1024 * 1024) }), /queue is full/);
+  assert.equal(queue.dequeue()?.text, "first");
+  assert.equal(queue.dequeue()?.text, "second");
+});
+
+test("Interrupt takes precedence over existing priority follow-ups", () => {
+  const queue = createTelegramQueue(makeDeps());
+  queue.enqueue(turn("priority", "older continuation"));
+  queue.enqueue({ ...turn("priority", "replacement"), dispatchNext: true });
+  assert.equal(queue.dequeue()?.text, "replacement");
+  assert.equal(queue.dequeue()?.text, "older continuation");
+});

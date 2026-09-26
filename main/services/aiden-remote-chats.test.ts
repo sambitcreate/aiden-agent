@@ -41,7 +41,7 @@ function fixture(
     attachments?: AidenRemoteAttachmentStore;
     isTitlePending?: (chatId: string) => boolean;
     onListRegular?: (workspaceId?: string) => void;
-    onPayloadGet?: () => void;
+    onPayloadGet?: () => void | Promise<void>;
     botArchived?: boolean;
     botAvailable?: boolean;
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
@@ -80,7 +80,7 @@ function fixture(
       listSummaryMetadata: async () =>
         current && current.botId === undefined ? [structuredClone(current)] : [],
       get: async () => {
-        fixtureOptions.onPayloadGet?.();
+        await fixtureOptions.onPayloadGet?.();
         return {
           chat: current ? structuredClone(current) : null,
           imageArtifactRecoveryPending: fixtureOptions.imageArtifactRecoveryPending === true,
@@ -249,6 +249,41 @@ test("chat projection is path-free and excludes private Pi protocol and reasonin
   assert.equal(JSON.stringify(projection).includes("reasoning"), false);
   assert.equal(JSON.stringify(projection).includes("/Users/private"), false);
   assert.match(projection.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
+});
+
+test("chat history carries bounded displayable parent reasoning with valid spans", () => {
+  const source = chat({ messages: [{
+    id: "assistant-1", role: "assistant", content: "Done.", createdAt: 2_000,
+    reasoning: "First\n\nSecond",
+    timeline: {
+      version: 3, generationId: "stream-1", status: "completed", startedAt: 1_000,
+      finishedAt: 2_000, steps: [
+        { id: "think-1", order: 0, kind: "thinking", startedAt: 1_000, updatedAt: 1_100,
+          finishedAt: 1_100, contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+        { id: "tool-1", order: 1, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+          label: "Read file", status: "completed", startedAt: 1_100, updatedAt: 1_200,
+          finishedAt: 1_200, contentOffset: 0 },
+        { id: "think-2", order: 2, kind: "thinking", startedAt: 1_200, updatedAt: 1_300,
+          finishedAt: 1_300, contentOffset: 0, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+      ],
+    },
+  }] });
+  const projection = projectAidenRemoteChat(source);
+  assert.equal(projection.messages[0]?.reasoning, "First\n\nSecond");
+  assert.equal(projection.messages[0]?.timeline?.steps[2]?.kind === "thinking" &&
+    projection.messages[0]?.timeline?.steps[2]?.reasoningEndOffset, 13);
+});
+
+test("optional history reasoning yields to the whole response budget", () => {
+  const source = chat({ messages: Array.from({ length: 12 }, (_, index) => ({
+    id: `assistant-${index}`, role: "assistant" as const, content: "Done.",
+    reasoning: "r".repeat(90_000), createdAt: 2_000 + index,
+  })) });
+  const projection = projectAidenRemoteChat(source);
+  assert.ok(projection.messages.some((message) => message.reasoning));
+  assert.ok(projection.messages.some((message) => !message.reasoning));
+  assert.ok(Buffer.byteLength(JSON.stringify(projection), "utf8") <= 1_048_576);
+  assert.equal(projection.messages.length, source.messages.length);
 });
 
 test("chat projection preserves visible parent message text exactly regardless of appearance", () => {
@@ -1498,4 +1533,56 @@ test("attachment references enforce device, chat, expiry, revocation, dimensions
     }),
     (error: unknown) => (error as { code?: string }).code === "handle_capacity",
   );
+});
+
+test("attachment uploads cannot finish after device revocation or chat deletion during lookup", async () => {
+  for (const revoke of ["device", "chat"] as const) {
+    const attachments = new AidenRemoteAttachmentStore();
+    let resume!: () => void;
+    const held = new Promise<void>((resolve) => { resume = resolve; });
+    const app = fixture(chat(), { attachments, onPayloadGet: () => held });
+    const pending = app.service.uploadAttachment("device-1", "chat-1", {
+      kind: "text", name: "private.txt", mimeType: "text/plain", text: "private",
+    });
+    if (revoke === "device") app.service.revokeDevice("device-1");
+    else attachments.beginChatDeletion("chat-1")();
+    resume();
+    await assert.rejects(pending, (error: unknown) =>
+      (error as { code?: string }).code === "handle_invalid");
+  }
+});
+
+test("chat cleanup releases upload capacity across devices and preserves other chats", () => {
+  const store = new AidenRemoteAttachmentStore({ maxEntries: 3 });
+  const input = { kind: "text", name: "private.txt", mimeType: "text/plain", text: "private" };
+  const first = store.upload("device-1", "chat-1", input);
+  const second = store.upload("device-2", "chat-1", input);
+  const retained = store.upload("device-1", "chat-2", input);
+  const finish = store.beginChatDeletion("chat-1");
+  assert.throws(() => store.upload("device-1", "chat-1", input));
+  store.revokeChat("chat-1");
+  store.revokeChat("chat-1");
+  finish();
+  for (const [device, id] of [["device-1", first.id], ["device-2", second.id]]) {
+    assert.throws(() => store.consume(device!, "chat-1", [id]));
+  }
+  assert.equal(store.consume("device-1", "chat-2", [retained.id])?.[0]?.text, "private");
+  store.upload("device-1", "chat-3", input);
+  const nextDeletion = store.beginChatDeletion("chat-1");
+  finish();
+  assert.throws(() => store.beginUpload("device-1", "chat-1"));
+  nextDeletion();
+});
+
+test("invalidated uploads remain bounded until their retained request bodies settle", () => {
+  const store = new AidenRemoteAttachmentStore();
+  const leases = Array.from({ length: 256 }, () => store.beginUpload("device-1", "chat-1"));
+  store.revokeDevice("device-1");
+  assert.throws(() => store.beginUpload("device-2", "chat-2"),
+    (error: unknown) => (error as { code?: string }).code === "handle_capacity");
+  for (const lease of leases) {
+    assert.throws(() => lease.assertCurrent());
+    lease.release();
+  }
+  store.beginUpload("device-2", "chat-2").release();
 });

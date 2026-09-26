@@ -18,7 +18,7 @@ import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactFrame } from "./html-artifact-frame";
-import type { AgentActivity } from "../lib/agent-activity";
+import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
   resolveSubagentChipFocusHandoff,
@@ -27,11 +27,9 @@ import {
 } from "../lib/subagent-panel-state";
 import {
   hasActiveThinkingStep,
-  hasActiveToolStep,
   isToolStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
 import {
@@ -40,24 +38,6 @@ import {
 } from "../lib/html-artifact-transcript";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
-const MINIMUM_VISUALIZING_MS = 700;
-
-function useMinimumPresence(present: boolean, minimumMs: number): boolean {
-  const [visible, setVisible] = React.useState(present);
-  const shownAtRef = React.useRef(present ? performance.now() : 0);
-  React.useEffect(() => {
-    if (present) {
-      shownAtRef.current = performance.now();
-      setVisible(true);
-      return;
-    }
-    const remaining = Math.max(0, minimumMs - (performance.now() - shownAtRef.current));
-    const timer = window.setTimeout(() => setVisible(false), remaining);
-    return () => window.clearTimeout(timer);
-  }, [minimumMs, present]);
-  return visible;
-}
-
 interface MessageListProps {
   chatId: string;
   messages: ChatMessage[];
@@ -99,20 +79,12 @@ function AssistantResponse({
   streamComplete,
   onStreamHandoffComplete,
 }: AssistantResponseProps) {
-  const rows = assistantPresentationRows(content, timeline);
+  const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
-  // The one reasoning disclosure owns both the live and settled thought state.
-  // Other live phases continue in the activity row below the transcript.
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
-  const visualizingLive =
-    streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
-  // Fast local renders may finish in one or two frames. Keep the real phase
-  // visible long enough to be perceived, while retaining a single reasoning
-  // surface when the turn already contains thought text.
-  const visualizing = useMinimumPresence(visualizingLive, MINIMUM_VISUALIZING_MS);
-  const reasoningLabel = visualizing ? "Visualizing" : reasoningActivityLabel(timeline, active);
-  const showReasoning = Boolean(reasoning) || visualizing;
+  const reasoningLabel = reasoningActivityLabel(timeline, active);
+  const showReasoning = Boolean(reasoning);
   if (!rows || !timeline) {
     const activityTimeline = timeline
       ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
@@ -125,7 +97,7 @@ function AssistantResponse({
           <ReasoningBlock
             content={reasoning ?? ""}
             streaming={streaming && !streamComplete}
-            active={active || visualizing}
+            active={active}
             label={reasoningLabel}
           />
         ) : null}
@@ -157,16 +129,20 @@ function AssistantResponse({
 
   return (
     <>
-      {showReasoning ? (
-        <ReasoningBlock
-          content={reasoning ?? ""}
-          streaming={streaming && !streamComplete}
-          active={active || visualizing}
-          label={reasoningLabel}
-        />
-      ) : null}
       {subagentChips && !subagentActivityKey ? subagentChips : null}
       {rows.map((row, index) => {
+        if (row.kind === "reasoning") {
+          const stepActive = streaming && !streamComplete && row.step.finishedAt === undefined;
+          return (
+            <ReasoningBlock
+              key={row.key}
+              content={row.content}
+              streaming={stepActive}
+              active={stepActive}
+              label={reasoningActivityLabel(activityTimelineFragment(timeline, [row.step]), stepActive)}
+            />
+          );
+        }
         if (row.kind === "activity") {
           return (
             <React.Fragment key={row.key}>
@@ -423,75 +399,44 @@ export function MessageList({
 }
 
 function AgentActivityTransition({ activity }: { activity: AgentActivity | null }) {
-  interface ExitingActivity {
-    id: number;
-    value: AgentActivity;
-  }
-  const currentRef = React.useRef(activity);
   const [current, setCurrent] = React.useState(activity);
-  const [exiting, setExiting] = React.useState<ExitingActivity[]>([]);
-  const exitIdRef = React.useRef(0);
-  const exitTimersRef = React.useRef(new Map<number, number>());
-
   React.useEffect(() => {
-    const old = currentRef.current;
-    if (old?.phase === activity?.phase && old?.label === activity?.label) return;
-    currentRef.current = activity;
-    setCurrent(activity);
-    if (!old) return;
-    if (document.documentElement.dataset.reduceMotion === "true") {
-      setExiting([]);
+    if (current?.phase === activity?.phase && current?.label === activity?.label) return;
+    const delay = activityPresentationDelay(
+      current,
+      activity,
+      document.documentElement.dataset.reduceMotion === "true",
+    );
+    if (!delay) {
+      setCurrent(activity);
       return;
     }
-    const id = ++exitIdRef.current;
-    setExiting([{ id, value: old }]);
-    const timer = window.setTimeout(() => {
-      exitTimersRef.current.delete(id);
-      setExiting((items) => items.filter((item) => item.id !== id));
-    }, 180);
-    exitTimersRef.current.set(id, timer);
-  }, [activity]);
+    const timer = window.setTimeout(() => setCurrent(activity), delay);
+    return () => window.clearTimeout(timer);
+  }, [activity?.phase, activity?.label, activity?.orbState, current]);
 
-  React.useEffect(
-    () => () => {
-      for (const timer of exitTimersRef.current.values()) window.clearTimeout(timer);
-      exitTimersRef.current.clear();
-    },
-    [],
-  );
-
-  if (!current && exiting.length === 0) return null;
-  const row = (value: AgentActivity, presence: "in" | "out", key: string) => (
+  if (!current) return null;
+  return (
     <div
-      key={key}
       role="status"
-      aria-live={presence === "in" ? "polite" : "off"}
-      aria-hidden={presence === "out" ? "true" : undefined}
-      className={`agent-activity-layer flex w-fit max-w-full items-center gap-2 py-0.5 ${
-        presence === "in" ? "agent-event-in" : "agent-event-out"
-      }`}
-      data-agent-activity={value.phase}
+      aria-live="polite"
+      className="agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2 py-0.5"
+      data-agent-activity={current.phase}
     >
-      <AidenOrb state={value.orbState} size={20} className="shrink-0 text-primary" />
+      <AidenOrb state={current.orbState} size={20} className="shrink-0 text-primary" />
       <Text
         variant="small"
         color="secondary"
         className={
-          value.phase === "thinking" ||
-          value.phase === "loading" ||
-          value.phase === "visualizing"
+          current.phase === "thinking" ||
+          current.phase === "loading" ||
+          current.phase === "visualizing"
             ? "agent-thinking-shimmer min-w-0 break-words"
             : "min-w-0 break-words"
         }
       >
-        {value.label}
+        {current.label}
       </Text>
-    </div>
-  );
-  return (
-    <div className="agent-activity-transition grid">
-      {exiting.map((item) => row(item.value, "out", `out:${item.id}`))}
-      {current ? row(current, "in", `in:${current.phase}:${current.label}`) : null}
     </div>
   );
 }

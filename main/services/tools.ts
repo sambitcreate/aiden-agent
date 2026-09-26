@@ -1,3 +1,4 @@
+import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // Assembles the pi agent tool set for a generation: Web Search + Agent Skills +
 // MCP server tools, based on current settings. Empty when nothing is enabled.
 //
@@ -14,6 +15,8 @@ import { skillRegistry } from "./skill-registry-main.js";
 import { buildSkillTools } from "./skill-tools.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import type { FormFillService } from "./form-fill/service.js";
+import { createFormFillAgentTool } from "./form-fill/tool.js";
 import {
   scheduleTaskToolsForContext,
   type AssistantScheduleModelSelection,
@@ -34,6 +37,8 @@ export { skillToolKey } from "./skill-registry-core.js";
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
+  /** Main-only generation sink, populated only by admitted MCP discovery. */
+  onMcpServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void;
   /** Workspace identity used as the default target for agent-created schedules. */
   workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
@@ -44,8 +49,14 @@ export interface ToolContext {
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Optional generation-scoped Form Fill Specialist. Present only when enabled and ready. */
+  formFill?: FormFillService;
   /** Main-created tools bound to this generation's workspace and browser host. */
   browserTools?: readonly AgentTool[];
+  /** Main-created simulator tools, present only when the device gate held at generation start. */
+  deviceTools?: readonly AgentTool[];
+  /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. A getter is read per command. */
+  shellPathPrefix?: string | (() => string | null | undefined);
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
@@ -102,6 +113,7 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
   return collectMcpAgentTools(servers, {
     strict: ctx.mcpServerIds !== undefined,
+    onServerInstructions: ctx.onMcpServerInstructions,
   });
 }
 
@@ -160,7 +172,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.computerUse && ctx.formFill) tools.push(createFormFillAgentTool(ctx.formFill));
   if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
+  if (ctx.permission !== "none" && ctx.deviceTools) tools.push(...ctx.deviceTools);
   if (ctx.allowScheduling !== false) {
     tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
   }
@@ -172,7 +186,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.
   if (ctx.includeCodingTools !== false && ctx.workspaceRoot && ctx.permission !== "none") {
-    tools.push(...buildCodingTools(ctx.workspaceRoot));
+    tools.push(
+      ...buildCodingTools(ctx.workspaceRoot, undefined, ctx.shellPathPrefix ? { pathPrefix: ctx.shellPathPrefix } : {}),
+    );
     if (ctx.shareImage) {
       tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));
     }

@@ -77,7 +77,8 @@ enum class AidenChatAgentState {
 enum class AidenChatAgentRole {
     @SerialName("scout") SCOUT,
     @SerialName("planner") PLANNER,
-    @SerialName("reviewer") REVIEWER
+    @SerialName("reviewer") REVIEWER,
+    @SerialName("implementer") IMPLEMENTER
 }
 
 @Serializable
@@ -195,7 +196,7 @@ object AidenChatProgressCodec {
 
     private val identifierPattern = Regex("^[A-Za-z0-9._:-]{1,128}$")
     private val epochPattern = Regex("^[A-Za-z0-9._:-]{1,64}$")
-    private val roles = setOf("scout", "planner", "reviewer")
+    private val roles = setOf("scout", "planner", "reviewer", "implementer")
     private val taskStatuses = setOf("pending", "in_progress", "completed", "deleted")
     private val agentStates = setOf(
         "queued", "starting", "running", "needs_attention", "completed", "failed",
@@ -404,6 +405,7 @@ object AidenChatProgressCodec {
             role = when (roleRaw) {
                 "scout" -> AidenChatAgentRole.SCOUT
                 "planner" -> AidenChatAgentRole.PLANNER
+                "implementer" -> AidenChatAgentRole.IMPLEMENTER
                 else -> AidenChatAgentRole.REVIEWER
             },
             label = agentLabel,

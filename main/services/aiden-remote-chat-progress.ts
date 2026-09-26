@@ -55,6 +55,7 @@ const ROLES = {
   scout: "Scout",
   planner: "Planner",
   reviewer: "Reviewer",
+  implementer: "Implementer",
 } as const;
 
 /** Dedicated full-snapshot observation; never grants access to a turn-owner stream. */

@@ -47,6 +47,7 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
   opencode: new URL("../assets/provider-logos/opencode.svg", import.meta.url).href,
   "opencode-go": new URL("../assets/provider-logos/opencode-go.svg", import.meta.url).href,
   openrouter: new URL("../assets/provider-logos/openrouter.svg", import.meta.url).href,
+  tailscale: new URL("../assets/provider-logos/tailscale.svg", import.meta.url).href,
   together: new URL("../assets/provider-logos/together.svg", import.meta.url).href,
   "vercel-ai-gateway": new URL("../assets/provider-logos/vercel-ai-gateway.svg", import.meta.url)
     .href,
