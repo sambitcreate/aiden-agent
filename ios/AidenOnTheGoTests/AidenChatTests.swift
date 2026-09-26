@@ -984,7 +984,9 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     func testSupersededCreateKeepsAdmittedWinnerRowWhenItsDiskWriteFails() async throws {
-        for mode in ["missing", "stale"] {
+        // "own": the create's own detail write fails (no winner).
+        // "omitted": a list admitted after the winner omits the chat and wins.
+        for mode in ["missing", "stale", "own", "omitted"] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-superseded-create-io-\(UUID())")
             defer { restoreChatsDirectory(root: root); try? FileManager.default.removeItem(at: root) }
             let gate = AidenChatWriteTestGate()
@@ -1011,19 +1013,34 @@ final class AidenChatTests: XCTestCase {
             await gate.arm()
             let creating = Task { await workspace.create() }
             await waitForChatWrite(gate)
-            try failWinnerDiskWrite(root: root, mode: mode)
+            try failWinnerDiskWrite(root: root, mode: mode == "stale" ? "stale" : "missing")
             var newer = detail.chat
-            newer.title = "Newer snapshot"
-            do {
-                try await cache.saveChat(newer, instanceId: instance, writeToken: cache.reserveChatWrite())
-                XCTFail("The winner's disk write must fail (\(mode))")
-            } catch {}
+            if mode != "own" {
+                newer.title = "Newer snapshot"
+                do {
+                    try await cache.saveChat(newer, instanceId: instance, writeToken: cache.reserveChatWrite())
+                    XCTFail("The winner's disk write must fail (\(mode))")
+                } catch {}
+            }
+            if mode == "omitted" {
+                let listed = try await cache.saveChats([], instanceId: instance, workspaceId: "workspace-1", writeToken: cache.reserveChatWrite())
+                XCTAssertTrue(listed, mode)
+            }
             await gate.release()
             let created = await creating.value
             XCTAssertEqual(created?.title, newer.title, mode)
             XCTAssertEqual(workspace.chats.first { $0.id == newer.id }?.title, newer.title, mode)
             XCTAssertEqual(publications.map(\.title), [newer.title], mode)
             XCTAssertEqual(removals, [], mode)
+            // Offline cold reopen: the list cache stayed writable even though
+            // the detail file did not, so the created row must be durable.
+            let reopened = AidenChatCache(root: root)
+            let rows = await reopened.loadChats(instanceId: instance, workspaceId: "workspace-1")
+            if mode == "omitted" {
+                XCTAssertFalse(rows?.contains { $0.id == newer.id } == true, mode)
+            } else {
+                XCTAssertEqual(rows?.first { $0.id == newer.id }?.title, newer.title, mode)
+            }
         }
     }
 
