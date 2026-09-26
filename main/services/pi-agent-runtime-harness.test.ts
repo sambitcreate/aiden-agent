@@ -2203,7 +2203,178 @@ test("managed steering is accepted only while active and queued input is durable
       (entry.data as { chatMessageId?: string }).chatMessageId === "visible-steer-message"),
     true,
   );
+  assert.deepEqual(await harness.takeUndeliveredQueuedMessages(), []);
 });
+
+function steerWaitTool(): { tool: AgentTool; atTool: Promise<void>; release: () => void } {
+  let started!: () => void;
+  const atTool = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tool: AgentTool = {
+    name: "wait_for_steer",
+    label: "Wait",
+    description: "Wait for steering input.",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _args, signal) => {
+      started();
+      await Promise.race([
+        released,
+        new Promise<void>((resolve) => {
+          if (signal?.aborted) resolve();
+          else signal?.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      ]);
+      return { content: [{ type: "text", text: "ready" }], details: null };
+    },
+  };
+  return { tool, atTool, release };
+}
+
+test("Stop before Pi emits accepted steering reports it as undelivered", async () => {
+  const projected: string[] = [];
+  const { tool, atTool } = steerWaitTool();
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("never reached"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: async (message) => {
+        projected.push(String(message.role === "user" ? message.content : ""));
+        return "visible";
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "keep this guidance", timestamp: 2 }).accepted,
+    true,
+  );
+  await harness.cancelAndSettle();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.deepEqual(projected, []);
+  const undelivered = await harness.takeUndeliveredQueuedMessages();
+  assert.deepEqual(
+    undelivered.map((message) => (message.role === "user" ? message.content : undefined)),
+    ["keep this guidance"],
+  );
+  // Taking is one-shot, and nothing reached the journal.
+  assert.deepEqual(await harness.takeUndeliveredQueuedMessages(), []);
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "keep this guidance",
+    ),
+    false,
+  );
+});
+
+test("a failed visible projection of queued input is a managed session failure with recovery", async () => {
+  const faults: string[] = [];
+  const { tool, atTool, release } = steerWaitTool();
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not run"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: async () => {
+        faults.push("projection");
+        throw new Error("chat store unavailable");
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "failed guidance", timestamp: 2 }).accepted,
+    true,
+  );
+  release();
+  const outcome = await running;
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
+  assert.deepEqual(faults, ["projection"]);
+  const undelivered = await harness.takeUndeliveredQueuedMessages();
+  assert.deepEqual(
+    undelivered.map((message) => (message.role === "user" ? message.content : undefined)),
+    ["failed guidance"],
+  );
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "failed guidance",
+    ),
+    false,
+  );
+});
+
+for (const lateResult of ["saved", "failed"] as const) {
+  test(`cancellation does not wait on a stalled queued projection (${lateResult} later)`, async () => {
+    const { tool, atTool, release } = steerWaitTool();
+    let projectionStarted!: () => void;
+    const atProjection = new Promise<void>((resolve) => {
+      projectionStarted = resolve;
+    });
+    let finishProjection!: (id: string) => void;
+    let failProjection!: (error: Error) => void;
+    let projectionSignal: AbortSignal | undefined;
+    const { harness } = await managedTestHarness(
+      [
+        fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+        fauxAssistantMessage("must not run"),
+      ],
+      {
+        tools: [tool],
+        beforeQueuedUser: (_message, signal) => {
+          projectionSignal = signal;
+          projectionStarted();
+          return new Promise<string>((resolve, reject) => {
+            finishProjection = resolve;
+            failProjection = reject;
+          });
+        },
+      },
+    );
+    const running = harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "start", timestamp: 1 },
+    });
+    await atTool;
+    assert.equal(
+      harness.queueSteer({ role: "user", content: "in flight", timestamp: 2 }).accepted,
+      true,
+    );
+    release();
+    await atProjection;
+    // The stalled, non-abortable write must not block Stop from settling.
+    await harness.cancelAndSettle();
+    assert.equal((await running).kind, "app_cancelled");
+    assert.equal(projectionSignal?.aborted, true);
+    const quarantine = harness.pendingDurabilitySettlement();
+    assert.ok(quarantine, "the in-flight projection is quarantined as detached durability");
+    const undelivered = harness.takeUndeliveredQueuedMessages();
+    if (lateResult === "saved") finishProjection("late-visible-id");
+    else failProjection(new Error("late failure"));
+    await quarantine;
+    assert.deepEqual(
+      (await undelivered).map((message) => (message.role === "user" ? message.content : undefined)),
+      lateResult === "saved" ? [] : ["in flight"],
+    );
+  });
+}
 
 test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {
   let continuationChecks = 0;

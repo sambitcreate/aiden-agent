@@ -418,6 +418,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  // Closes busy admission in the same tick as Stop, before React re-renders.
+  const stopRequestedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    stopRequestedRef.current = isStoppingGeneration;
+  }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
@@ -1418,6 +1423,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (stopRequestedRef.current) {
+        throw new Error("Aiden is stopping this response. Send your message after it stops.");
+      }
       messageQueue.add({
         id: createChatTurnId(),
         text,
@@ -1435,7 +1443,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Steer requires text without attachments or a skill.");
       }
       const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration) {
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         throw new Error("The current response has ended. Send your message normally.");
       }
       await steerGeneration(streamId, text);
@@ -1448,13 +1456,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (!text.trim() || attachments.length > 0 || skillInvocation) {
         throw new Error("Redirect requires text without attachments or a skill.");
       }
-      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) {
+      if (
+        !(canStopGeneration || visibleDetachedProjection) ||
+        isStoppingGeneration ||
+        stopRequestedRef.current
+      ) {
         throw new Error("The current response has ended. Send your message normally.");
       }
       const replacement = {
         id: createChatTurnId(), text, attachments: [] as Attachment[],
       };
-      messageQueue.replaceWith(replacement, handleStop);
+      messageQueue.replaceWith(replacement, () => {
+        const stopping = handleStop();
+        if (stopping) stopRequestedRef.current = true;
+        return stopping;
+      });
     },
     [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
@@ -2291,10 +2307,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onStop={() => {
                   messageQueue.discard();
-                  handleStop();
+                  if (handleStop()) stopRequestedRef.current = true;
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
                 canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
                 workspace={effectiveWorkspace}

@@ -278,6 +278,30 @@ test("Steer queues text guidance without stopping the active response", async ({
   await expect(page.getByText("Use a shorter answer", { exact: true })).toBeVisible();
 });
 
+test("Stop before Aiden reads accepted Steer guidance returns it to the draft", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Response that will be stopped");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Guidance that must not vanish");
+  await page.getByRole("button", { name: "Choose message action" }).click();
+  await page.getByRole("menuitem", { name: /Steer · Add guidance without stopping/u }).click();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect(composer).toHaveValue("Guidance that must not vanish");
+  lmStudio.releaseCompletions!();
+  expect(
+    lmStudio.requests.some((request) =>
+      JSON.stringify(request.body).includes("Guidance that must not vanish"),
+    ),
+  ).toBe(false);
+});
+
 test("rejected and unknown Steer receipts keep the draft without replaying it", async ({ aiden }) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);

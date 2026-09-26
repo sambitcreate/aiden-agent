@@ -12,6 +12,7 @@ import {
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
 } from "./chat-terminal-sync.js";
+import { loadComposerDraft, subscribeGuidanceRestore } from "./composer-draft-store.js";
 
 interface FakeBridge {
   listeners: Map<string, Set<(payload: unknown) => void>>;
@@ -610,6 +611,85 @@ test("a lifecycle-detached start rejection clears through authoritative fallback
     assert.equal(visibleErrors, 0);
   } finally {
     unsubscribe();
+    restore();
+  }
+});
+
+test("Stop returns accepted but unread Steer guidance to the mounted composer", () => {
+  const { bridge, restore } = installFakeBridge();
+  const restored: string[][] = [];
+  const unsubscribe = subscribeGuidanceRestore("chat-guidance", (guidance) => {
+    restored.push([...guidance]);
+  });
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-guidance",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-guidance",
+    );
+    handle.cancel("user_stop");
+    for (const handler of bridge.listeners.get("chat:done") ?? []) {
+      handler({ streamId: "another-stream", content: "", undeliveredGuidance: ["not mine"] });
+      handler({
+        streamId: handle.streamId,
+        content: "",
+        undeliveredGuidance: ["Use the staging database", 42, " "],
+      });
+    }
+    assert.deepEqual(restored, [["Use the staging database"]]);
+  } finally {
+    unsubscribe();
+    restore();
+  }
+});
+
+test("a detached stream's unread Steer guidance is saved to the chat's draft", async () => {
+  const { bridge, restore } = installFakeBridge();
+  const values = new Map<string, string>();
+  const priorStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = bridge.listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      bridge.listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
+    () => undefined,
+  );
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-detached-guidance",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-detached-guidance",
+    );
+    handle.cancel("lifecycle");
+    for (const handler of bridge.listeners.get("chat:done") ?? []) {
+      handler({
+        streamId: handle.streamId,
+        content: "",
+        undeliveredGuidance: ["Prefer the smaller patch"],
+      });
+    }
+    assert.equal(loadComposerDraft("chat-detached-guidance").text, "Prefer the smaller patch");
+  } finally {
+    unsubscribe();
+    globalThis.localStorage = priorStorage;
     restore();
   }
 });

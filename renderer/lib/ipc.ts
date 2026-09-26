@@ -146,6 +146,10 @@ import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemotePairingBootstrapView,
@@ -1089,6 +1093,7 @@ interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 interface ChatError {
   streamId: string;
@@ -1097,6 +1102,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1243,6 +1249,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
@@ -1253,6 +1260,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),

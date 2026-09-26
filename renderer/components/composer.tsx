@@ -91,8 +91,10 @@ import {
 import {
   loadComposerDraft,
   markComposerSubmission,
+  mergeRestoredGuidance,
   saveComposerDraftText,
   settleComposerSubmission,
+  subscribeGuidanceRestore,
 } from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
@@ -148,6 +150,8 @@ interface ComposerProps {
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
+  /** Stop has been requested; no busy Queue/Steer/Redirect may be admitted until it settles. */
+  stoppingGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
   /** New-agent drafts cannot accept edits while their first message commits. */
@@ -301,6 +305,7 @@ export function Composer({
   hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
+  stoppingGeneration = false,
   configurationBusy = false,
   freezeWhileSending = false,
   firstMessageSaving = false,
@@ -388,6 +393,14 @@ export function Composer({
     dispatchDraft({ type: "update", value: text });
     saveComposerDraftText(chatId, text);
   }, [chatId]);
+  React.useEffect(
+    () =>
+      subscribeGuidanceRestore(chatId, (guidance) => {
+        setText((current) => mergeRestoredGuidance(current, guidance));
+        toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
+      }),
+    [chatId, setText],
+  );
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
@@ -504,7 +517,8 @@ export function Composer({
     }) &&
     !configurationBusy &&
     !firstMessageSaving &&
-    !sessionCommandBusy;
+    !sessionCommandBusy &&
+    !(isGenerating && stoppingGeneration);
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
   const selectedSkillState = React.useMemo(

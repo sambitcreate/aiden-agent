@@ -7,8 +7,10 @@ import type { ProviderArtwork } from "../shared/provider-artwork";
 import {
   loadComposerDraft,
   markComposerSubmission,
+  restoreUndeliveredGuidance,
   saveComposerDraftText,
   settleComposerSubmission,
+  subscribeGuidanceRestore,
 } from "../lib/composer-draft-store";
 
 function source(relativePath: string): string {
@@ -57,6 +59,42 @@ test("submission refuses to clear a draft when its recovery marker cannot be sav
   } finally {
     globalThis.localStorage = prior;
   }
+});
+
+test("undelivered Steer guidance is appended to the draft, never resent", () => {
+  const values = new Map<string, string>();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  try {
+    // Unmounted chat: the device-local draft keeps the existing text first.
+    saveComposerDraftText("guidance-chat", "Unsent note");
+    restoreUndeliveredGuidance("guidance-chat", ["Use smaller commits"]);
+    assert.equal(loadComposerDraft("guidance-chat").text, "Unsent note\n\nUse smaller commits");
+
+    // Mounted composer: it merges with its live text, so storage is left to it.
+    const received: string[][] = [];
+    const unsubscribe = subscribeGuidanceRestore("guidance-chat", (guidance) => {
+      received.push([...guidance]);
+    });
+    restoreUndeliveredGuidance("guidance-chat", ["Second thought"]);
+    unsubscribe();
+    assert.deepEqual(received, [["Second thought"]]);
+    assert.equal(loadComposerDraft("guidance-chat").text, "Unsent note\n\nUse smaller commits");
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
+
+test("busy composer actions are closed while Stop is settling", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /stoppingGeneration = false,/u);
+  assert.match(composer, /!sessionCommandBusy &&\s*!\(isGenerating && stoppingGeneration\)/u);
+  assert.match(composer, /subscribeGuidanceRestore\(chatId, \(guidance\) => \{/u);
+  assert.match(composer, /mergeRestoredGuidance\(current, guidance\)/u);
 });
 
 test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {

@@ -338,7 +338,16 @@ test("revisited generations expose Stop and queue/redirect without admitting a s
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
   assert.match(pane, /onRedirect=\{draft \? undefined : redirectMessage\}/u);
-  assert.match(pane, /if \(!\(canStopGeneration \|\| visibleDetachedProjection\) \|\| isStoppingGeneration\) \{/u);
+  assert.match(
+    pane,
+    /!\(canStopGeneration \|\| visibleDetachedProjection\) \|\|\s*isStoppingGeneration \|\|\s*stopRequestedRef\.current/u,
+  );
+  // Stop closes busy admission synchronously, before React re-renders.
+  assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
+  assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);
+  const queueAdmission = between(pane, "const queueMessage = React.useCallback(", "const steerMessage = React.useCallback(");
+  assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
+  assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
   assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
   assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
