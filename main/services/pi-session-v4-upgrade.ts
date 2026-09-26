@@ -3,7 +3,7 @@ import type { JsonValue } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { constants as fsConstants } from "node:fs";
-import { chmod, copyFile, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
@@ -18,6 +18,11 @@ interface OldHeader {
   legacyParentSessionPath?: string;
   metadata?: Record<string, JsonValue>;
 }
+
+/** Retained Pi 0.84.4 operation/usage records, keyed by their original id. */
+export const LEGACY_RECORD_NAMESPACE = "aiden.pi-legacy-record";
+/** Key prefix of the finish record synthesized for an interrupted legacy operation. */
+export const LEGACY_RECOVERY_PREFIX = "pi087-upgrade-recovered-";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid legacy Pi v4 journal record.");
@@ -43,7 +48,7 @@ export function parseOldPiV4Header(line: string): OldHeader | undefined {
 }
 
 /** Convert only complete, validated 0.84.4 v4 mutations into 0.87.1's storage v1 records. */
-export function convertOldPiV4Journal(source: string): { journal: string; header: OldHeader } {
+export function convertOldPiV4Journal(source: string): { journal: string; header: OldHeader; interruptedOperations: string[] } {
   const physical = source.split("\n");
   const header = parseOldPiV4Header(physical[0] ?? "");
   if (!header) throw new Error("The legacy Pi v4 journal has an invalid header.");
@@ -66,6 +71,8 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
   if (header.metadata !== undefined) {
     append({ kind: "value", op: "set", namespace: "aiden", key: "session-metadata", value: header.metadata });
   }
+  const recordIds = new Set<string>();
+  const openOperations = new Map<string, Record<string, unknown>>();
   let previousSeq = 0;
   for (const line of complete) {
     if (!line) throw new Error("The legacy Pi v4 journal has an empty mutation.");
@@ -76,7 +83,7 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
     if (mutation.kind === "entry") {
       const { kind: _kind, lane: _lane, ...entry } = mutation;
       const id = entry.id;
-      if (typeof id !== "string" || !id || ids.has(id) || !nullableId(entry.parentId) ||
+      if (typeof id !== "string" || !id || ids.has(id) || recordIds.has(id) || !nullableId(entry.parentId) ||
           (entry.parentId !== null && !ids.has(entry.parentId)) || !integer(entry.timestamp) || typeof entry.type !== "string") {
         throw new Error("The legacy Pi v4 journal has an invalid entry.");
       }
@@ -109,17 +116,44 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
         append({ kind: "value", op: mutation.label === undefined ? "delete" : "set",
           namespace: address.namespace, key: address.key, ...(mutation.label === undefined ? {} : { value: mutation.label }) });
       } else throw new Error("The legacy Pi v4 journal has an invalid fact.");
-    } else if (mutation.kind === "record" && typeof mutation.id === "string" && typeof mutation.type === "string") {
+    } else if (mutation.kind === "record" && typeof mutation.id === "string" && mutation.id &&
+        typeof mutation.type === "string" && typeof mutation.lane === "string") {
+      // Mirror the 0.84.4 loader: ids are unique across entries and records,
+      // and a finish closes the open operation it names on its own lane.
+      if (ids.has(mutation.id) || recordIds.has(mutation.id)) throw new Error("The legacy Pi v4 journal has a duplicate record id.");
+      recordIds.add(mutation.id);
+      if (mutation.type === "operation_started") {
+        openOperations.set(mutation.id, mutation);
+      } else if (mutation.type === "operation_finished" && typeof mutation.runId === "string" &&
+          openOperations.get(mutation.runId)?.lane === mutation.lane) {
+        openOperations.delete(mutation.runId);
+      }
       if (mutation.type === "usage") {
         append({ kind: "usage", id: mutation.id, usage: mutation.usage,
           adjustment: mutation.cause === "adjustment",
           ...(typeof mutation.entryId === "string" ? { entryId: mutation.entryId } : {}),
           ...(mutation.details === undefined ? {} : { details: mutation.details }) });
       }
-      // Keep operation records, including an interrupted operation, for
-      // recovery inspection. A crash between start and finish is valid v4.
-      append({ kind: "value", op: "set", namespace: "aiden.pi-legacy-record", key: mutation.id, value: mutation });
+      // Keep the exact operation history for audit and rollback.
+      append({ kind: "value", op: "set", namespace: LEGACY_RECORD_NAMESPACE, key: mutation.id, value: mutation });
     } else throw new Error("The legacy Pi v4 journal has an invalid mutation.");
+  }
+  // A crash between operation_started and operation_finished is valid v4.
+  // Pi 0.87.1 restores operations only from configured-lane values, which a
+  // converted branch-only journal never has, so resolve the old operation here
+  // instead of leaving an open record nothing reads. Every acknowledged entry
+  // and lane move is already in the journal, so the recorded branch tip is the
+  // recovered state. The unfinished operation is closed as aborted: work it
+  // never acknowledged (for example an uncommitted navigation) is not replayed.
+  const interruptedOperations: string[] = [];
+  for (const [runId, started] of openOperations) {
+    const id = `${LEGACY_RECOVERY_PREFIX}${runId}`;
+    if (ids.has(id) || recordIds.has(id)) throw new Error("The legacy Pi v4 journal has a conflicting recovery record.");
+    interruptedOperations.push(runId);
+    append({ kind: "value", op: "set", namespace: LEGACY_RECORD_NAMESPACE, key: id, value: {
+      kind: "record", id, lane: started.lane, type: "operation_finished", timestamp: started.timestamp,
+      runId, outcome: "aborted", recoveredBy: "aiden-pi-0.87.1-upgrade",
+    } });
   }
   if (!lanes.has("main")) {
     append({ kind: "value", op: "set", namespace: "pi.branch.tip", key: "main", value: null });
@@ -128,7 +162,46 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
     cwd: header.cwd, nextSeq,
     ...(header.parentSessionId === undefined ? {} : { parentSessionId: header.parentSessionId }),
     ...(header.legacyParentSessionPath === undefined ? {} : { legacyParentSessionPath: header.legacyParentSessionPath }) };
-  return { header, journal: [nextHeader, ...writes].map((value) => JSON.stringify(value)).join("\n") + "\n" };
+  return { header, interruptedOperations, journal: [nextHeader, ...writes].map((value) => JSON.stringify(value)).join("\n") + "\n" };
+}
+
+/**
+ * Create the rollback copy owner-only from its first byte, or adopt an exact
+ * copy left by an interrupted earlier attempt after restricting it too. The
+ * descriptor is checked and chmodded directly so a swapped path cannot redirect
+ * either step.
+ */
+async function writePrivateBackup(backupPath: string, source: Buffer): Promise<void> {
+  const noFollow = fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+  let handle;
+  try {
+    handle = await open(backupPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow, 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  if (handle) {
+    try {
+      await handle.writeFile(source);
+      await handle.chmod(0o600);
+      await handle.sync();
+    } catch (error) {
+      await handle.close();
+      await unlink(backupPath).catch(() => undefined);
+      throw error;
+    }
+    await handle.close();
+    return;
+  }
+  const existing = await open(backupPath, fsConstants.O_RDONLY | noFollow);
+  try {
+    if (!(await existing.stat()).isFile()) throw new Error("The existing Pi 0.84.4 backup is not a regular file.");
+    await existing.chmod(0o600);
+    if (!(await existing.readFile()).equals(source)) {
+      throw new Error("The existing Pi 0.84.4 backup differs from the source journal.");
+    }
+  } finally {
+    await existing.close();
+  }
 }
 
 /** Keep exact old bytes for rollback and atomically publish the validated new storage format. */
@@ -140,14 +213,7 @@ export async function upgradeOldPiV4File(filePath: string): Promise<void> {
   const { journal, header } = convertOldPiV4Journal(decoded);
   const backupPath = `${filePath}.pi084-backup`;
   const stagedPath = `${filePath}.${randomUUID()}.pi087.tmp`;
-  try {
-    await copyFile(filePath, backupPath, fsConstants.COPYFILE_EXCL);
-    await chmod(backupPath, 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const backup = await readRegularFile(backupPath);
-  if (!backup.equals(source)) throw new Error("The existing Pi 0.84.4 backup differs from the source journal.");
+  await writePrivateBackup(backupPath, source);
   try {
     await writeFile(stagedPath, journal, { mode: 0o600, flag: "wx" });
     const repository = new JsonlSessionRepo({

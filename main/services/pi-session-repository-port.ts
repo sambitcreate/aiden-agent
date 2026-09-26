@@ -84,6 +84,7 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
   readonly #activeMetadata = new Map<string, PiPersistentSessionMetadata>();
   readonly #activeSessions = new Map<string, Session<JsonlSessionMetadata>>();
   readonly #root: string;
+  readonly #pendingCreates = new Set<string>();
 
   constructor(root: string) {
     this.#root = root;
@@ -177,17 +178,31 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
     metadata: Record<string, unknown>;
   }): Promise<PiSessionPort<PiPersistentSessionMetadata>> {
     const custom = JSON.parse(JSON.stringify(options.metadata)) as Record<string, JsonValue>;
-    const session = await this.#repository.create({
-        ...options,
-      }, TODO_CONTEXT);
+    if (this.#pendingCreates.has(options.id)) throw new Error(`Session already exists: ${options.id}`);
+    this.#pendingCreates.add(options.id);
+    let session: Session<JsonlSessionMetadata>;
     try {
-      await session.setValue(AIDEN_METADATA, custom, TODO_CONTEXT);
-    } catch (error) {
-      // create() has already published the file and claimed the session id.
-      // Release both before the caller retries this chat.
-      await session.close(TODO_CONTEXT);
-      await this.#repository.delete(session.metadata, TODO_CONTEXT);
-      throw error;
+      try {
+        session = await this.#repository.create({ ...options }, TODO_CONTEXT);
+      } catch (error) {
+        // An earlier create may have stopped after Pi claimed the id but
+        // before Aiden recorded ownership (a crash, or a failed rollback
+        // delete). Reclaim only that exact empty, unowned file, then retry.
+        if (!(await this.#reclaimUnownedCreate(options.id, options.cwd))) throw error;
+        session = await this.#repository.create({ ...options }, TODO_CONTEXT);
+      }
+      try {
+        await session.setValue(AIDEN_METADATA, custom, TODO_CONTEXT);
+      } catch (error) {
+        // create() has already published the file and claimed the session id.
+        // Release both before the caller retries this chat. If the delete
+        // itself fails, the next create() reclaims the orphan above.
+        await session.close(TODO_CONTEXT).catch(() => undefined);
+        await this.#repository.delete(session.metadata, TODO_CONTEXT).catch(() => undefined);
+        throw error;
+      }
+    } finally {
+      this.#pendingCreates.delete(options.id);
     }
     const metadata: PiPersistentSessionMetadata = {
       ...session.metadata,
@@ -200,6 +215,32 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
     this.#activeMetadata.set(metadata.path, metadata);
     this.#activeSessions.set(metadata.path, session);
     return createPiSessionPort(session, metadata);
+  }
+
+  /** Remove a header-only journal Pi created for this id that Aiden never owned. */
+  async #reclaimUnownedCreate(id: string, cwd: string): Promise<boolean> {
+    if ([...this.#activeSessions.values()].some((session) => session.metadata.id === id)) return false;
+    let reclaimed = false;
+    for (const candidate of await this.#repository.list({ cwd }, TODO_CONTEXT)) {
+      if (candidate.id !== id || candidate.storageVersion !== 1) continue;
+      let bytes: Buffer;
+      try {
+        bytes = await readRegularFile(candidate.path, METADATA_SCAN_BYTES);
+      } catch (error) {
+        // Larger than a bare header: never an abandoned create.
+        if ((error as NodeJS.ErrnoException).code === "EFBIG") continue;
+        throw error;
+      }
+      const lines = decodeUtf8(bytes).split("\n");
+      let header: Record<string, unknown> | undefined;
+      try { header = JSON.parse(lines[0] ?? "") as Record<string, unknown>; } catch { continue; }
+      if (!isDeepStrictEqual(header, {
+        v: 4, kind: "header", id, storageVersion: 1, createdAt: candidate.createdAt, cwd: candidate.cwd,
+      }) || lines.slice(1).some((line) => line.trim())) continue;
+      await this.#repository.delete(candidate, TODO_CONTEXT);
+      reclaimed = true;
+    }
+    return reclaimed;
   }
 
   async delete(metadata: PiPersistentSessionMetadata): Promise<void> {

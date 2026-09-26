@@ -18,6 +18,7 @@ import {
 import { migratePiSessionJournal, parsePiSessionMigrationReceipt } from "./pi-session-migration.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { decodeLegacyPiSession } from "./pi-legacy-session.js";
+import { convertOldPiV4Journal, parseOldPiV4Header } from "./pi-session-v4-upgrade.js";
 import {
   piUpgradeBehaviorEnabledAtStartup,
   piUpgradeJournalCreationEligible,
@@ -290,6 +291,36 @@ async function isCompletedEmptyMigration(promotedPath: string, chatId: string, r
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+const PI084_BACKUP_SUFFIX = ".jsonl.pi084-backup";
+
+/**
+ * A Pi 0.84.4 rollback copy is disposable only when it holds no conversation:
+ * an owned header-only journal, or the exact source of a promoted journal that
+ * is itself the completed scaffolding of an empty v3 migration. Any other body
+ * is private history.
+ */
+async function isDisposablePi084Backup(backupPath: string, chatId: string, root: string): Promise<boolean> {
+  const history = await inspectJournalHistory(backupPath);
+  if (history.chatId !== chatId) return false;
+  let backupText: string;
+  try {
+    backupText = decodeUtf8(await readRegularFile(backupPath, JOURNAL_HEADER_SCAN_BYTES));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EFBIG") return false;
+    throw error;
+  }
+  // inspectJournalHistory also accepts v3 and current headers; this suffix is
+  // only ever written for an owned Pi 0.84.4 journal.
+  const header = parseOldPiV4Header(backupText.split("\n", 1)[0] ?? "");
+  if (header?.id !== chatId || header.metadata?.kind !== SESSION_METADATA_KIND || header.metadata.chatId !== chatId) return false;
+  if (!history.hasBody) return true;
+  const promotedPath = backupPath.slice(0, -".pi084-backup".length);
+  if (!(await isCompletedEmptyMigration(promotedPath, chatId, root))) return false;
+  let converted: string;
+  try { converted = convertOldPiV4Journal(backupText).journal; } catch { return false; }
+  return converted === decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -986,6 +1017,15 @@ export class PiCompactionSessionStore {
             if (!(await isCompletedEmptyMigration(promoted, chatId, root))) return true;
             continue;
           }
+          if (candidate.endsWith(PI084_BACKUP_SUFFIX)) {
+            try {
+              if (!(await isDisposablePi084Backup(candidate, chatId, root))) return true;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+              throw error;
+            }
+            continue;
+          }
           if (!candidate.endsWith(".jsonl")) return true;
           try {
             const history = await inspectJournalHistory(candidate);
@@ -1014,6 +1054,8 @@ export class PiCompactionSessionStore {
         if (history.chatId === chatId) {
           if (entry.name.endsWith(".jsonl.v3-backup")) {
             if (!(await isCompletedEmptyMigration(candidate.slice(0, -".v3-backup".length), chatId, root))) return true;
+          } else if (entry.name.endsWith(PI084_BACKUP_SUFFIX)) {
+            if (!(await isDisposablePi084Backup(candidate, chatId, root))) return true;
           } else if (!entry.name.endsWith(".jsonl") ||
               (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
         }
