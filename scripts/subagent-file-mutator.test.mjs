@@ -994,3 +994,52 @@ test("startup refuses a root whose pinned identity does not match", async (t) =>
   assert.equal(result.signal, null);
   assert.equal(stdout, "");
 });
+
+
+test("read-html rejects multiply-linked guidance and link changes after open", async (t) => {
+  if (process.platform !== "darwin") return;
+  const root = await fixture(t, "aiden-read-guidance-links-");
+  const outside = await fixture(t, "aiden-outside-guidance-");
+  const secret = path.join(outside, "secret");
+  const target = path.join(root, "AGENTS.md");
+  await writeFile(secret, "PRIVATE");
+  await link(secret, target);
+  const helper = startHelper(t, root);
+  assert.equal(await helper.request(`read-html linked ${encoded("AGENTS.md")}`), "error conflict");
+  await helper.close();
+  await rm(target);
+  await writeFile(target, "SAFE");
+  const marker = path.join(root, "opened.marker");
+  const racing = startHelper(t, root, testingBinary, {
+    AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_AFTER_HTML_OPEN: marker,
+  });
+  const pending = racing.request(`read-html raced ${encoded("AGENTS.md")}`);
+  await waitForFile(marker);
+  await link(target, path.join(outside, "new-link"));
+  await writeFile(`${marker}.continue`, "continue");
+  assert.equal(await pending, "error conflict");
+  await racing.close();
+});
+
+
+test("read-html rejects a hard-link replacement before descriptor open", async (t) => {
+  if (process.platform !== "darwin") return;
+  const root = await fixture(t, "aiden-read-guidance-swap-");
+  const outside = await fixture(t, "aiden-guidance-secret-");
+  await mkdir(path.join(root, "nested"));
+  const target = path.join(root, "nested", "AGENTS.md");
+  const secret = path.join(outside, "secret");
+  await writeFile(target, "SAFE");
+  await writeFile(secret, "PRIVATE");
+  const marker = path.join(root, "walk.marker");
+  const helper = startHelper(t, root, testingBinary, {
+    AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_DURING_HTML_READ: marker,
+  });
+  const pending = helper.request(`read-html swapped ${encoded("nested/AGENTS.md")}`);
+  await waitForFile(marker);
+  await rm(target);
+  await link(secret, target);
+  await writeFile(`${marker}.continue`, "continue");
+  assert.equal(await pending, "error conflict");
+  await helper.close();
+});

@@ -220,9 +220,17 @@ export interface PiRuntimeSessionBinding {
   session: PiSessionPort | Promise<PiSessionPort>;
   initialMessages?: readonly AgentMessage[];
   compaction: Omit<PiCompactionCoordinatorOptions, "session">;
-  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
+  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[], visibleChatMessageId?: string) => Promise<void>;
   /** Host adapter for atomically journaling a visible user plus its sync marker. */
   appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
+  /**
+   * Foreground projection must save queued user guidance before Pi can
+   * continue. It runs inside the managed fault boundary: app cancellation
+   * aborts `signal` and stops waiting, while a rejection closes the run as a
+   * `session` host failure. Accepted input that never became visible chat is
+   * returned by `takeUndeliveredQueuedMessages()`.
+   */
+  beforeQueuedUser?: (message: AgentMessage, signal: AbortSignal) => Promise<string>;
   signal?: AbortSignal;
   /** Foreground continue() does not emit its already-journaled user tail. */
   journalUserMessages?: boolean;
@@ -766,6 +774,15 @@ export class PiAgentRuntimeHarness {
   private compactionPromise?: Promise<PiCompactionCoordinator>;
   private pendingDurableMessages: AgentMessage[] = [];
   private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
+  /** Visible-chat projections that app cancellation stopped waiting for. */
+  private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> = [];
+  /**
+   * Settlements of those projections, kept for the rest of the run even once
+   * they settle. A save that lands after cancellation never reached Pi's
+   * journal, so the host must run transaction recovery (not commit the turn)
+   * however quickly the save finished.
+   */
+  private cancelledQueuedProjectionSettlements: Array<Promise<void>> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
   private activeEffectOperation:
@@ -1283,6 +1300,10 @@ export class PiAgentRuntimeHarness {
         }
         // The managed initial input is already durable and Agent.continue()
         // does not re-emit it. Any emitted user is queued steer/follow-up input.
+        const visibleChatMessageId =
+          event.message.role === "user" && durability.beforeQueuedUser
+            ? await this.projectQueuedUser(durability.beforeQueuedUser, event.message)
+            : undefined;
         this.pendingDurableMessages.push(event.message);
         this.capturedTurnMessages.push(structuredClone(event.message));
         if (event.message.role === "user") {
@@ -1299,7 +1320,7 @@ export class PiAgentRuntimeHarness {
         // Pi emits an assistant tool plan before executing its tools and emits
         // tool results before the next provider step. Awaiting here makes both
         // boundaries durable before any external effect or continuation.
-        await this.flushDurableMessages();
+        await this.flushDurableMessages(visibleChatMessageId);
       });
 
       const hostPrepare = options.prepareNextTurnWithContext;
@@ -1539,6 +1560,8 @@ export class PiAgentRuntimeHarness {
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];
     this.acceptedQueuedMessages = [];
+    this.uncertainQueuedProjections = [];
+    this.cancelledQueuedProjectionSettlements = [];
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
     this.lastAssistantMessage = undefined;
@@ -2161,6 +2184,48 @@ export class PiAgentRuntimeHarness {
     return { accepted: true, queue: "follow-up" };
   }
 
+  /**
+   * Accepted steer/follow-up input that never became visible chat: still
+   * queued in Pi when the run ended (for example after Stop), or its visible
+   * projection failed. Call after the managed run settles and before reset();
+   * the caller must return these to the user rather than silently drop them.
+   *
+   * This never waits on host storage, so the caller can deliver its terminal
+   * at once. A projection that cancellation stopped waiting for is reported
+   * separately: `late` settles with that input only if its visible save did
+   * not land, so a late save is never returned to the user as well.
+   */
+  takeUndeliveredQueuedMessages(): {
+    messages: AgentMessage[];
+    late?: Promise<AgentMessage[]>;
+  } {
+    if (this.running || this.managedRunning) {
+      throw new Error("Pi runtime harness is busy.");
+    }
+    const accepted = this.acceptedQueuedMessages;
+    const uncertain = this.uncertainQueuedProjections;
+    this.acceptedQueuedMessages = [];
+    this.uncertainQueuedProjections = [];
+    const pending: Array<{ message: AgentMessage; operation: Promise<unknown> }> = [];
+    for (const projection of uncertain) {
+      const index = accepted.findIndex((item) => item.fingerprint === projection.fingerprint);
+      if (index < 0) continue;
+      const [item] = accepted.splice(index, 1);
+      pending.push({ message: structuredClone(item.message), operation: projection.operation });
+    }
+    const messages = accepted.map(({ message }) => structuredClone(message));
+    if (pending.length === 0) return { messages };
+    const late = Promise.all(
+      pending.map(({ message, operation }) =>
+        operation.then(
+          (id) => (typeof id === "string" && id.length > 0 ? [] : [message]),
+          () => [message],
+        ),
+      ),
+    ).then((results) => results.flat());
+    return { messages, late };
+  }
+
   abort(): void {
     this.appCancelRequested = true;
     this.managedQueueOpen = false;
@@ -2183,10 +2248,15 @@ export class PiAgentRuntimeHarness {
   /**
    * A non-abortable host storage callback can outlive app cancellation. The
    * caller must quarantine its session until this snapshot settles and then
-   * run transaction recovery before allowing another turn.
+   * run transaction recovery before allowing another turn. A queued-input
+   * projection that cancellation stopped waiting for stays in the snapshot
+   * even after it settles, because a late save is absent from Pi's journal.
    */
   pendingDurabilitySettlement(): Promise<void> | undefined {
-    const operations = [...this.detachedDurabilityOperations];
+    const operations = [
+      ...this.detachedDurabilityOperations,
+      ...this.cancelledQueuedProjectionSettlements,
+    ];
     return operations.length > 0 ? Promise.allSettled(operations).then(() => undefined) : undefined;
   }
 
@@ -2237,6 +2307,8 @@ export class PiAgentRuntimeHarness {
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];
     this.acceptedQueuedMessages = [];
+    this.uncertainQueuedProjections = [];
+    this.cancelledQueuedProjectionSettlements = [];
     this.lastAssistantMessage = undefined;
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
@@ -2416,7 +2488,60 @@ export class PiAgentRuntimeHarness {
     }
   }
 
-  private async flushDurableMessages(): Promise<void> {
+  private async projectQueuedUser(
+    project: NonNullable<PiRuntimeSessionBinding["beforeQueuedUser"]>,
+    message: AgentMessage,
+  ): Promise<string> {
+    const durability = this.durability;
+    const signal = this.managedAbortController?.signal ?? new AbortController().signal;
+    let operation: Promise<string>;
+    try {
+      operation = Promise.resolve(project(message, signal));
+    } catch (error) {
+      operation = Promise.reject(error);
+    }
+    const settled = await waitForManagedPromise(operation, signal);
+    if (settled.kind === "cancelled") {
+      // The host write may still land. Quarantine it like any other detached
+      // durability operation and decide delivery only once it settles.
+      this.trackDetachedDurability(operation);
+      this.cancelledQueuedProjectionSettlements.push(
+        operation.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      this.uncertainQueuedProjections.push({
+        fingerprint: snapshotQueuedMessage(message)?.fingerprint ?? "",
+        operation,
+      });
+      this.agent.abort();
+      throw new PiManagedCancellationError();
+    }
+    const error =
+      settled.kind === "failed"
+        ? settled.error
+        : typeof settled.value === "string" && settled.value.length > 0
+          ? undefined
+          : new Error("Queued user input was not saved in the visible chat.");
+    if (error === undefined && settled.kind === "completed") return settled.value;
+    // The accepted item stays in acceptedQueuedMessages, so the host can
+    // return it to the user after this structured session failure.
+    this.managedHostFault ??= "session";
+    try {
+      durability?.onJournalError?.(error);
+    } catch {
+      // Diagnostics cannot widen or replace the closed session fault.
+    }
+    this.reportFault({ source: "session", error: toError(error) });
+    this.agent.abort();
+    throw new PiAgentRuntimeHostError(
+      "Queued user input could not be saved in the visible chat.",
+      "session",
+    );
+  }
+
+  private async flushDurableMessages(visibleChatMessageId?: string): Promise<void> {
     const durability = this.durability;
     if (!durability || this.pendingDurableMessages.length === 0) return;
     const batch = this.pendingDurableMessages;
@@ -2425,6 +2550,7 @@ export class PiAgentRuntimeHarness {
       const operation = (durability.appendMessages ?? appendPiMessages)(
         await this.resolveSession(),
         batch,
+        visibleChatMessageId,
       );
       const signal = this.managedAbortController?.signal;
       if (!signal) {

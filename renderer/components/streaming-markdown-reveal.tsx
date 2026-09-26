@@ -3,6 +3,7 @@ import { MARKDOWN_CLASSNAME, MarkdownContent, MarkdownInline } from "./markdown"
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import {
   advanceStreamingRevealSchedule,
+  clampStreamingRevealSchedule,
   parseStreamingReveal,
   splitStreamingRevealUnit,
   streamingRevealHandoffDelay,
@@ -73,6 +74,12 @@ export function StreamingMarkdownReveal({
   scheduleInputRef.current = { unitCount, complete, reducedMotion };
 
   React.useEffect(() => {
+    const clamped = clampStreamingRevealSchedule(scheduleRef.current, unitCount);
+    if (clamped !== scheduleRef.current) {
+      scheduleRef.current = clamped;
+      setRevealedCount(unitCount);
+    }
+    if (scheduleRef.current.revealedCount >= unitCount) return;
     let frame = 0;
     const tick = (now: number) => {
       const next = advanceStreamingRevealSchedule(
@@ -84,11 +91,11 @@ export function StreamingMarkdownReveal({
         setRevealedCount(next.revealedCount);
       }
       scheduleRef.current = next;
-      frame = window.requestAnimationFrame(tick);
+      if (next.revealedCount < unitCount) frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [unitCount, complete, reducedMotion]);
 
   const visibleCount = reducedMotion ? unitCount : revealedCount;
   const visible = visibleBlocks(blocks, visibleCount);

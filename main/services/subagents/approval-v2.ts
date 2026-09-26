@@ -1,6 +1,63 @@
 import { createHash, randomUUID } from "node:crypto";
 import { types as utilTypes } from "node:util";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
+import type { WorkspacePermission } from "../types.js";
+
+/** One in-memory decision for one child run and one privileged lane. */
+export class SubagentRunGrantV2 {
+  private state: "pending" | "granted" | "denied";
+  private pending?: Promise<boolean>;
+  private readonly authorityDigest: string;
+
+  constructor(
+    authority: SubagentAuthorityV2,
+    private readonly permission: WorkspacePermission,
+    private readonly signal?: AbortSignal,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.authorityDigest = subagentAuthorityDigestV2(authority);
+    this.state = permission === "full" ? "granted" : "pending";
+  }
+
+  valid(authority: SubagentAuthorityV2, permission: WorkspacePermission): boolean {
+    return this.state === "granted" &&
+      !this.signal?.aborted &&
+      permission === this.permission &&
+      authority.expiresAt > this.now() &&
+      subagentAuthorityDigestV2(authority) === this.authorityDigest;
+  }
+
+  async ensure(
+    authority: SubagentAuthorityV2,
+    permission: WorkspacePermission,
+    request: () => Promise<boolean>,
+  ): Promise<boolean> {
+    if (this.valid(authority, permission)) return true;
+    if (this.state !== "pending" && !this.pending) return false;
+    if (this.state === "denied" || this.signal?.aborted ||
+      authority.expiresAt <= this.now() ||
+      permission !== this.permission ||
+      subagentAuthorityDigestV2(authority) !== this.authorityDigest) return false;
+    if (this.permission !== "ask") return false;
+    this.pending ??= Promise.resolve().then(request).then(
+      (allowed) => {
+        this.state = this.state !== "denied" && allowed && !this.signal?.aborted
+          ? "granted" : "denied";
+        return this.valid(authority, permission);
+      },
+      () => {
+        this.state = "denied";
+        return false;
+      },
+    );
+    return this.pending;
+  }
+
+  revoke(): void {
+    this.state = "denied";
+  }
+}
 
 export const MAX_CANONICAL_ARGUMENT_BYTES = 64 * 1024;
 const MAX_CANONICAL_DEPTH = 32;

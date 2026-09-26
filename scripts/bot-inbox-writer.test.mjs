@@ -46,6 +46,8 @@ async function runWriter(root, overrides = {}, input = Buffer.alloc(0)) {
   const stderr = [];
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  // A writer that rejects its arguments exits before reading stdin; EPIPE here is expected, not a failure.
+  child.stdin.on("error", () => undefined);
   child.stdin.end(input);
   const result = await new Promise((resolve, reject) => {
     child.once("error", reject);

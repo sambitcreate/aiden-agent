@@ -38,7 +38,19 @@ For complex workflows, record concise implementation friction in `.papercuts/tro
 
 When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
 
+"Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
+
 Changes to shared server contracts or transcript/activity UI must also be checked against both native clients. Inspect iOS and Android consumers, update their implementations and focused tests when behavior is shared, and run the applicable mobile suites even when the originating change is on desktop or server.
+
+When writing or extending tests (TDD or otherwise): tautological tests are harmful. Do not assert the same expression or logic as the system under test, loop an exported constant list through a guard defined from that list and only expect true, or assert that a mock was called with exactly the object the test just constructed with no independent invariant.
+
+Change-detector tests are harmful. Do not lock incidental implementation: exact Tailwind or `className` strings, full JSX snippets, CSS keyframe bodies, private setter call text, rename-sensitive helper spellings, or large snapshots of strings or DOM with no behavioral claim.
+
+Do not create regression tests for bug fixes without a genuine gap in behavior testing. A test must reproduce the user-visible or API-visible failure mode, or provide an independent oracle for the fixed invariant. `doesNotThrow`, "still works", and ticket-ID-only stubs are not enough. Prefer extending an existing behavioral suite over a one-off that only locks the fix's source shape.
+
+Do not add or extend tests that `readFileSync` production `.ts` / `.tsx` / `.css` (or handler sources) and `assert.match` / `assert.doesNotMatch` / substring counts against that source as the primary oracle. Prefer calling the real function with fixtures; rendering (`renderToStaticMarkup` / Testing Library) and asserting structure or behavior; Playwright e2e for user-visible flows; and, for IPC, register-and-invoke or AST-based channel inventory rather than grepping channel string literals out of handler files. Existing `*contract*.test.ts` files that already grep source may stay until a follow-up cleanup. Do not grow them. When you change a surface that is only covered by a source-grep contract, replace or supplement that coverage with a behavioral test in the same PR rather than adding more `assert.match` lines.
+
+House-style examples to emulate (do not rewrite these files as part of instruction-only work): `renderer/lib/chat-message-queue.test.ts`, `main/services/portable-config-core.test.ts`, `main/services/data-store.resilience.test.ts`, and focused parse/validate handler tests that call parsers.
 
 ## Onboarding
 

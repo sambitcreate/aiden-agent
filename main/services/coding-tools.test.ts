@@ -9,6 +9,7 @@ import {
   buildCodingTools,
   buildSubagentCodingTools,
   DISCLOSURE_APPROVAL_TOOL_NAMES,
+  runCommandEnv,
   summarizeToolCall,
 } from "./coding-tools.js";
 import { createShareImageTool } from "./share-image-tool.js";
@@ -1354,6 +1355,17 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
     const result = await runCommand.execute("test", { command: `command -v ${commandName}` });
     assert.equal(result.content[0]?.type, "text");
     assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(path.join(localBin, commandName)));
+    // A device shim prefix still wins lookup while the GUI directories stay reachable.
+    const pinned = buildCodingTools(home, undefined, { pathPrefix: "/aiden/devices/bin" }).find(
+      (tool) => tool.name === "run_command",
+    );
+    assert.ok(pinned);
+    const pinnedResult = await pinned.execute("pinned", { command: `printf '%s\\n' "$PATH"; command -v ${commandName}` });
+    const [pinnedPath, pinnedLookup] = (pinnedResult.content[0]?.type === "text" ? pinnedResult.content[0].text : "")
+      .trim()
+      .split("\n");
+    assert.ok(pinnedPath?.startsWith("/aiden/devices/bin:/usr/bin:/bin:"));
+    assert.equal(pinnedLookup, path.join(localBin, commandName));
   } finally {
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
@@ -1374,6 +1386,38 @@ test("agent command PATH preserves inherited entries and non-macOS environments"
   assert.ok(agentCommandEnvironment({ ...parent, PATH: "" }, "darwin").PATH?.startsWith(":"));
   assert.deepEqual(agentCommandEnvironment(parent, "linux"), parent);
   assert.deepEqual(parent, { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" });
+});
+
+test("run_command keeps PATH unless a device shim directory is attached", async () => {
+  const environment = { PATH: "/usr/bin:/bin", HOME: "/Users/me" };
+  assert.equal(runCommandEnv({}, environment), environment);
+  assert.equal(runCommandEnv({ pathPrefix: "" }, environment), environment);
+  assert.deepEqual(runCommandEnv({ pathPrefix: "/data/devices/bin" }, environment), {
+    PATH: `/data/devices/bin${path.delimiter}/usr/bin:/bin`,
+    HOME: "/Users/me",
+  });
+  assert.equal(environment.PATH, "/usr/bin:/bin");
+  // A getter is read per command, so a revoke drops the shim from the next one.
+  let shim: string | null = "/data/devices/bin";
+  const live = { pathPrefix: () => shim };
+  assert.equal(runCommandEnv(live, environment).PATH, `/data/devices/bin${path.delimiter}/usr/bin:/bin`);
+  shim = null;
+  assert.equal(runCommandEnv(live, environment), environment);
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-path-"));
+  try {
+    const plain = buildCodingTools(root).find((tool) => tool.name === "run_command");
+    const pinned = buildCodingTools(root, undefined, { pathPrefix: "/aiden/devices/bin" }).find(
+      (tool) => tool.name === "run_command",
+    );
+    assert.ok(plain && pinned);
+    const text = (result: { content: readonly { type: string; text?: string }[] }) =>
+      result.content.map((part) => part.text ?? "").join("");
+    assert.doesNotMatch(text(await plain.execute("plain", { command: 'printf %s "$PATH"' })), /\/aiden\/devices\/bin/u);
+    assert.match(text(await pinned.execute("pinned", { command: 'printf %s "$PATH"' })), /^\/aiden\/devices\/bin:/u);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("parent write and edit tools cannot commit after cancellation", async () => {
@@ -1426,6 +1470,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 0,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 11 },
     });
 
     const overwritten = await writeFile.execute("overwrite", {
@@ -1437,6 +1482,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 18 },
     });
 
     const edited = await editFile.execute("edit", {
@@ -1449,6 +1495,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "edited", bytes: 27 },
     });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -2093,4 +2140,16 @@ test("grep reports protected, oversized, and total-byte incompleteness", async (
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("POSIX colon filenames retain actual write and edit provenance", { skip: process.platform === "win32" }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-colon-file-"));
+  try {
+    const tools = buildCodingTools(root);
+    const written = await tools.find((tool) => tool.name === "write_file")!.execute("write", { path: "foo:bar.txt", content: "alpha" });
+    assert.deepEqual((written.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "written", bytes: 5 });
+    const edited = await tools.find((tool) => tool.name === "edit_file")!.execute("edit", { path: "foo:bar.txt", old_string: "alpha", new_string: "beta" });
+    assert.deepEqual((edited.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "edited", bytes: 4 });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
