@@ -701,9 +701,10 @@ class AidenChatViewModel(
         viewModelScope.launch {
             _isLoading.value = true
             try {
+                val writeToken = chatCache.reserveChatWrite()
                 val remote = client.chat(chatId)
                 if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
-                acceptRemoteChat(remote)
+                acceptRemoteChat(remote, writeToken)
             } catch (e: Exception) {
                 if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
@@ -809,6 +810,9 @@ class AidenChatViewModel(
         _streamState.value = AidenStreamState.QUEUED
 
         val idempotencyKey = turnAttempts.key(request)
+        val requestToken = chatCache.reserveChatWrite()
+        val pairingCreatedAt = coordinator.installationStore.installations.value
+            .firstOrNull { it.instanceId == instanceId && it.deviceId == deviceId }?.createdAt
 
         viewModelScope.launch {
             try {
@@ -820,18 +824,29 @@ class AidenChatViewModel(
                     lastSequence = 0
                 )
 
-                val cleanMessages = updatedChat.messages.filter { it.id != optimisticId }.toMutableList()
-                if (cleanMessages.none { it.id == response.message.id }) {
-                    cleanMessages.add(response.message)
-                }
-                val acceptedChat = updatedChat.copy(messages = cleanMessages)
-                _chat.value = acceptedChat
-                if (instanceId.isNotEmpty()) {
-                    chatCache.saveChat(acceptedChat, instanceId)
-                    chatCache.saveActiveStream(stream, instanceId, chatId)
-                }
                 turnAttempts.reset()
                 _selectedSkill.value = null
+                val retainedInstallation = coordinator.installationStore.installations.value.any {
+                    it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == pairingCreatedAt
+                }
+                if (!retainedInstallation) {
+                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _streamState.value = null
+                    return@launch
+                }
+                val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
+                val accepted = chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
+                if (activeClient() !== client) {
+                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _streamState.value = null
+                    return@launch
+                }
+                if (accepted == null || !chatCache.isChatWriteRetained(instanceId, chatId, requestToken)) {
+                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _streamState.value = null
+                    return@launch
+                }
+                _chat.value = accepted.chat
 
                 _liveText.value = ""
                 _reasoning.value = ""
@@ -839,9 +854,9 @@ class AidenChatViewModel(
                 _activityTimeline.value = null
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
-                _streamState.value = AidenStreamState.QUEUED
+                _streamState.value = if (accepted.stream == null) null else AidenStreamState.QUEUED
 
-                startStreaming(stream)
+                accepted.stream?.let { startStreaming(it) }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
                     val fallbackMessages = _chat.value?.messages?.filter { it.id != optimisticId } ?: emptyList()
@@ -1796,9 +1811,10 @@ class AidenChatViewModel(
         val generation = transcriptGeneration
         val client = activeClient() ?: return false
         return try {
+            val writeToken = chatCache.reserveChatWrite()
             val remote = client.chat(chatId)
             if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return false
-            acceptRemoteChat(remote)
+            if (!acceptRemoteChat(remote, writeToken)) return false
             clearRecoveryWarning()
             true
         } catch (e: Exception) {
@@ -1809,16 +1825,21 @@ class AidenChatViewModel(
         }
     }
 
-    private fun acceptRemoteChat(remote: AidenChat, scheduleTitleRefresh: Boolean = true) {
-        if (_isStarting.value) return
-        _chat.value = remote
+    private fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
+        if (_isStarting.value) return false
+        val admitted = if (instanceId.isNotEmpty()) {
+            // Admission is recorded before disk IO. A failed write must not lose the
+            // winner or allow an older request in another presentation to replace it.
+            runCatching { chatCache.saveChat(remote, instanceId, writeToken) }
+            chatCache.admittedChat(instanceId, chatId)
+        } else remote
+        if (admitted == null) return false
+        _chat.value = admitted
         resolveModelSelection()
-        if (instanceId.isNotEmpty()) {
-            chatCache.saveChat(remote, instanceId)
-        }
-        if (scheduleTitleRefresh && remote.isTitlePending) {
+        if (scheduleTitleRefresh && admitted.isTitlePending) {
             schedulePendingTitleRefresh()
         }
+        return true
     }
 
     private fun schedulePendingTitleRefresh() {
@@ -1830,10 +1851,11 @@ class AidenChatViewModel(
                     delay(delayMs)
                     if (_isStarting.value) continue
                     val generation = transcriptGeneration
+                    val writeToken = chatCache.reserveChatWrite()
                     val remote = client.chat(chatId)
                     if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) continue
-                    acceptRemoteChat(remote, scheduleTitleRefresh = false)
-                    if (!remote.isTitlePending) return@launch
+                    acceptRemoteChat(remote, writeToken, scheduleTitleRefresh = false)
+                    if (_chat.value?.isTitlePending == false) return@launch
                 } catch (e: Exception) {
                     if (e is CancellationException) return@launch
                 }

@@ -8,6 +8,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
+import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
+import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
@@ -23,12 +25,14 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Date
+import java.util.concurrent.atomic.AtomicLong
 
 class AidenChatCache(
     private val storageDir: File? = null,
     root: File? = null,
     legacyRoots: List<File>? = null,
-    private val maximumSummaryCacheBytes: Int = 64 * 1024 * 1024
+    private val maximumSummaryCacheBytes: Int = 64 * 1024 * 1024,
+    private val beforeActiveStreamWrite: (() -> Unit)? = null
 ) {
     @Serializable
     data class ActiveStream(
@@ -86,6 +90,29 @@ class AidenChatCache(
 
     val root: File
     val legacyRoots: List<File>
+
+    private val writeClock = AtomicLong()
+    private val chatRemovalTokens = mutableMapOf<String, MutableMap<String, Long>>()
+    private data class ReceiptMessage(val message: AidenChatMessage, val throughWriteToken: Long)
+    private val receiptMessages = mutableMapOf<String, MutableMap<String, MutableList<ReceiptMessage>>>()
+    private val receiptTokens = mutableMapOf<String, MutableMap<String, Long>>()
+    private val receiptStreams = mutableMapOf<String, MutableMap<String, ActiveStream>>()
+    private val chatWriteTokens = mutableMapOf<String, MutableMap<String, Long>>()
+    private val admittedChats = mutableMapOf<String, MutableMap<String, AidenChat>>()
+    private val summaryWriteTokens = mutableMapOf<String, Long>()
+    private val purgeWriteTokens = mutableMapOf<String, Long>()
+
+    // Reserve before scheduling a deferred writer, not when its IO task runs.
+    fun reserveChatWrite(): Long = writeClock.incrementAndGet()
+
+    @Synchronized
+    fun reserveSummaryMutation(instanceId: String): Long = reserveChatWrite().also {
+        summaryWriteTokens[instanceId] = it
+    }
+
+    @Synchronized
+    fun isSummaryWriteRetained(instanceId: String, writeToken: Long): Boolean =
+        writeToken > (purgeWriteTokens[instanceId] ?: 0L)
 
     private val _chats = MutableStateFlow<Map<String, AidenChat>>(emptyMap())
     val chats: StateFlow<Map<String, AidenChat>> = _chats.asStateFlow()
@@ -174,14 +201,18 @@ class AidenChatCache(
     fun saveSummaries(
         summaries: List<AidenChatSummary>,
         instanceId: String,
-        unchangedPrefixCount: Int = 0
-    ) {
+        unchangedPrefixCount: Int = 0,
+        writeToken: Long = reserveChatWrite()
+    ): Boolean {
+        if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
+            writeToken < (summaryWriteTokens[instanceId] ?: 0L)) return false
         if (summaries.size > maxSummaryCount || summaries.map { it.id }.toSet().size != summaries.size) {
             throw IllegalArgumentException("Chat summary cache must contain at most 10,000 unique IDs")
         }
         if (unchangedPrefixCount !in 0..summaries.size) {
             throw IllegalArgumentException("Unchanged summary prefix is invalid")
         }
+        summaryWriteTokens[instanceId] = writeToken
         val manifestFile = fileURL("summary-manifests", instanceId)
         val existing = loadEnvelope<ChatSummaryManifestEnvelope>(manifestFile)
         val cachedPrefixMatches = unchangedPrefixCount == 0 ||
@@ -272,6 +303,7 @@ class AidenChatCache(
             )
         }
         publishSummaries(instanceId, summaries)
+        return true
     }
 
     private fun cleanupSummaryChunks(directory: File, retainedChunkIds: Set<String>) {
@@ -298,6 +330,7 @@ class AidenChatCache(
 
     @Synchronized
     fun removeSummary(instanceId: String, chatId: String) {
+        reserveSummaryMutation(instanceId)
         val current = summariesForInstance(instanceId)
         if (current.none { it.id == chatId }) return
         saveSummaries(current.filterNot { it.id == chatId }, instanceId)
@@ -307,12 +340,14 @@ class AidenChatCache(
     fun updateSummaryActivity(
         instanceId: String,
         chatId: String,
-        activity: AidenChatSummaryActivity
+        activity: AidenChatSummaryActivity,
+        writeToken: Long? = null
     ) {
         val current = summariesForInstance(instanceId)
         val existing = current.firstOrNull { it.id == chatId } ?: return
         if (existing.activity == activity) return
-        saveSummaries(current.map { if (it.id == chatId) it.copy(activity = activity) else it }, instanceId)
+        saveSummaries(current.map { if (it.id == chatId) it.copy(activity = activity) else it }, instanceId,
+            writeToken = writeToken ?: reserveChatWrite())
     }
 
     @Synchronized
@@ -323,26 +358,100 @@ class AidenChatCache(
         return envelope.chat
     }
 
+    // The accepted response remains usable even when its best-effort disk write fails.
     @Synchronized
-    fun saveChat(chat: AidenChat, instanceId: String) {
+    fun admittedChat(instanceId: String, chatId: String): AidenChat? {
+        admittedChats[instanceId]?.get(chatId)?.let { return it }
+        // Never recover a removed winner from a file left by a failed cleanup.
+        if (chatWriteTokens[instanceId]?.containsKey(chatId) == true || purgeWriteTokens.containsKey(instanceId)) return null
+        return loadChat(instanceId, chatId)
+    }
+
+    @Synchronized
+    fun saveChat(chat: AidenChat, instanceId: String, writeToken: Long = reserveChatWrite(), summaryWriteToken: Long = writeToken): Boolean {
+        if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
+            writeToken <= (chatWriteTokens[instanceId]?.get(chat.id) ?: 0L)) return false
+        chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chat.id] = writeToken
+        val pending = receiptMessages[instanceId]?.get(chat.id)
+        // Only snapshots already in flight when the receipt was accepted need
+        // its overlay. A later-requested snapshot can retire it, and its admitted
+        // high-water also prevents older in-flight snapshots from returning.
+        pending?.removeAll { writeToken > it.throughWriteToken }
+        val accepted = pending.orEmpty().fold(chat) { snapshot, receipt -> mergeReceipt(snapshot, receipt.message) }
+        persistAdmittedChat(accepted, instanceId, summaryWriteToken)
+        return true
+    }
+
+    // Caller holds the cache monitor and has already established request authority.
+    private fun persistAdmittedChat(chat: AidenChat, instanceId: String, summaryWriteToken: Long) {
+        val ownsSummary = summaryWriteToken >= (summaryWriteTokens[instanceId] ?: 0L)
+        admittedChats.getOrPut(instanceId) { mutableMapOf() }[chat.id] = chat
+        val visibleSummaries = summariesForInstance(instanceId).associateBy { it.id }.toMutableMap()
+        if (ownsSummary) {
+            summaryWriteTokens[instanceId] = summaryWriteToken
+            if (chat.isBotChat) visibleSummaries.remove(chat.id)
+            else visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, visibleSummaries[chat.id]?.activity ?: AidenChatSummaryActivity.IDLE)
+            publishSummaries(instanceId, visibleSummaries.values.toList())
+        }
         val envelope = ChatEnvelope(instanceId = instanceId, chat = chat)
         saveEnvelope(envelope, fileURL("chats", instanceId, chat.id))
         val map = _chats.value.toMutableMap()
         map[chat.id] = chat
         _chats.value = map
-        if (chat.isBotChat) {
-            removeSummary(instanceId, chat.id)
-        } else {
-            val activity = summariesForInstance(instanceId)
-                .firstOrNull { it.id == chat.id }
-                ?.activity
-                ?: AidenChatSummaryActivity.IDLE
-            upsertSummary(AidenChatSummary.fromChat(chat, activity), instanceId)
+        if (ownsSummary) saveSummaries(visibleSummaries.values.toList(), instanceId, writeToken = summaryWriteToken)
+    }
+
+    private fun mergeReceipt(chat: AidenChat, message: AidenChatMessage): AidenChat {
+        if (chat.messages.any { it.id == message.id }) return chat
+        val messages = chat.messages.toMutableList()
+        val position = messages.indexOfFirst {
+            it.createdAt.isAfter(message.createdAt) ||
+                (it.createdAt == message.createdAt && it.role == AidenChatRole.ASSISTANT)
+        }.let { if (it < 0) messages.size else it }
+        messages.add(position, message)
+        return chat.copy(messages = messages)
+    }
+
+    data class AcceptedTurn(val chat: AidenChat, val stream: ActiveStream?)
+
+    @Synchronized
+    fun isChatWriteRetained(instanceId: String, chatId: String, token: Long): Boolean =
+        token > (purgeWriteTokens[instanceId] ?: 0L) && token > (chatRemovalTokens[instanceId]?.get(chatId) ?: 0L)
+
+    @Synchronized
+    fun acceptTurnReceipt(candidate: AidenChat, message: AidenChatMessage, stream: ActiveStream, instanceId: String, requestToken: Long): AcceptedTurn? {
+        if (!isChatWriteRetained(instanceId, candidate.id, requestToken)) return null
+        val winner = if ((chatWriteTokens[instanceId]?.get(candidate.id) ?: 0L) > requestToken) {
+            admittedChat(instanceId, candidate.id) ?: return null
+        } else candidate
+        val pending = receiptMessages.getOrPut(instanceId) { mutableMapOf() }
+            .getOrPut(candidate.id) { mutableListOf() }
+        if (pending.none { it.message.id == message.id }) pending.add(ReceiptMessage(message, writeClock.get()))
+        val accepted = pending.fold(winner) { snapshot, receipt -> mergeReceipt(snapshot, receipt.message) }
+        // Merge the accepted mutation without minting response-time authority.
+        // A later-started GET must remain eligible in either completion order.
+        // A prior admitted winner keeps its own authority and metadata.
+        chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[candidate.id] =
+            maxOf(requestToken, chatWriteTokens[instanceId]?.get(candidate.id) ?: 0L)
+        runCatching { persistAdmittedChat(accepted, instanceId, requestToken) }
+        if (requestToken > (receiptTokens[instanceId]?.get(candidate.id) ?: 0L)) {
+            receiptTokens.getOrPut(instanceId) { mutableMapOf() }[candidate.id] = requestToken
+            receiptStreams.getOrPut(instanceId) { mutableMapOf() }[candidate.id] = stream
+            runCatching {
+                saveActiveStream(stream, instanceId, candidate.id,
+                    summaryWriteToken = maxOf(requestToken, summaryWriteTokens[instanceId] ?: 0L))
+            }.onFailure {
+                // Never leave an older receipt resumable after a failed replacement.
+                // Keep the accepted in-memory marker even when storage is unavailable.
+                runCatching { fileURL("streams", instanceId, candidate.id).delete() }
+            }
         }
+        return AcceptedTurn(accepted, loadActiveStream(instanceId, candidate.id))
     }
 
     @Synchronized
     fun loadActiveStream(instanceId: String, chatId: String): ActiveStream? {
+        receiptStreams[instanceId]?.get(chatId)?.let { return it }
         val file = fileURL("streams", instanceId, chatId)
         val envelope = loadEnvelope<StreamEnvelope>(file) ?: return null
         if (envelope.instanceId != instanceId || envelope.chatId != chatId) return null
@@ -350,14 +459,16 @@ class AidenChatCache(
     }
 
     @Synchronized
-    fun saveActiveStream(stream: ActiveStream, instanceId: String, chatId: String) {
+    fun saveActiveStream(stream: ActiveStream, instanceId: String, chatId: String, summaryWriteToken: Long? = null) {
+        beforeActiveStreamWrite?.invoke()
         val envelope = StreamEnvelope(instanceId = instanceId, chatId = chatId, stream = stream)
         saveEnvelope(envelope, fileURL("streams", instanceId, chatId))
-        updateSummaryActivity(instanceId, chatId, AidenChatSummaryActivity.ACTIVE)
+        updateSummaryActivity(instanceId, chatId, AidenChatSummaryActivity.ACTIVE, summaryWriteToken)
     }
 
     @Synchronized
     fun removeActiveStream(instanceId: String, chatId: String) {
+        receiptStreams[instanceId]?.remove(chatId)
         val file = fileURL("streams", instanceId, chatId)
         if (file.exists()) file.delete()
         updateSummaryActivity(instanceId, chatId, AidenChatSummaryActivity.IDLE)
@@ -373,6 +484,11 @@ class AidenChatCache(
 
     @Synchronized
     fun removeChat(instanceId: String, chatId: String) {
+        val removalToken = reserveSummaryMutation(instanceId)
+        chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chatId] = removalToken
+        chatRemovalTokens.getOrPut(instanceId) { mutableMapOf() }[chatId] = removalToken
+        admittedChats[instanceId]?.remove(chatId)
+        receiptMessages[instanceId]?.remove(chatId)
         val chatFile = fileURL("chats", instanceId, chatId)
         if (chatFile.exists()) chatFile.delete()
         removeActiveStream(instanceId, chatId)
@@ -386,6 +502,12 @@ class AidenChatCache(
 
     @Synchronized
     fun purge(instanceId: String) {
+        purgeWriteTokens[instanceId] = reserveChatWrite()
+        chatWriteTokens.remove(instanceId)
+        admittedChats.remove(instanceId)
+        receiptStreams.remove(instanceId)
+        receiptTokens.remove(instanceId)
+        receiptMessages.remove(instanceId)
         purgeNamespace(root, instanceId)
         for (legacy in legacyRoots) {
             if (legacy.canonicalPath != root.canonicalPath) {

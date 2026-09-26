@@ -140,6 +140,9 @@ final class AidenHomeModel {
     private var loadingAttempt: LoadAttempt?
     private let chatCache: AidenChatCache
     private var summaryCacheGeneration: UInt64 = 0
+    private var latestSummaryRequestToken: UInt64 = 0
+    private var persistedLocalGeneration: UInt64 = 0
+    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool)] = [:]
 
     init(chatCache: AidenChatCache = .shared) {
         self.chatCache = chatCache
@@ -156,33 +159,42 @@ final class AidenHomeModel {
         chats.removeAll { $0.id == chat.id }
         chats.append(AidenChatSummary(chat: chat, preservingActivity: activity))
         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
-        persistCurrentSummaries()
+        persistCurrentSummaries(changedID: chat.id)
     }
 
     func setActivity(_ activity: AidenChatSummaryActivity, forChatID chatID: String) {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               chats[index].activity != activity else { return }
         chats[index].activity = activity
-        persistCurrentSummaries()
+        persistCurrentSummaries(changedID: chatID, activityOnly: true)
     }
 
     func removeChat(id: String) {
         guard chats.contains(where: { $0.id == id }) else { return }
         chats.removeAll { $0.id == id }
-        persistCurrentSummaries()
+        persistCurrentSummaries(changedID: id)
     }
 
-    private func persistCurrentSummaries() {
+    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false) {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
         let generation = nextSummaryCacheGeneration()
-        let writeToken = chatCache.reserveChatWrite()
+        let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
+        let pending = localSummaryEdits[changedID]
+        let onlyActivity = activityOnly && !(pending.map { $0.generation > persistedLocalGeneration && !$0.activityOnly } ?? false)
+        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity)
+        let editTokens = localSummaryEdits.filter { $0.value.generation > persistedLocalGeneration }.mapValues(\.token)
+        let changedIDs = Set(editTokens.keys)
+        let activityOnlyIDs = Set(localSummaryEdits.filter { $0.value.activityOnly && changedIDs.contains($0.key) }.keys)
         Task {
-            try? await chatCache.saveChatSummaries(
+            let accepted = try? await chatCache.saveChatSummaries(
                 snapshot,
                 instanceId: context.instanceId,
-                generation: generation, writeToken: writeToken
+                generation: generation, writeToken: writeToken, preservingCursor: true, changedIDs: changedIDs, editTokens: editTokens, activityOnlyIDs: activityOnlyIDs
             )
+            if accepted == true, contentContext == context {
+                persistedLocalGeneration = max(persistedLocalGeneration, generation)
+            }
         }
     }
 
@@ -204,10 +216,14 @@ final class AidenHomeModel {
         writeToken: UInt64,
         isCurrent: @MainActor () -> Bool = { true }
     ) async throws {
+        guard nextChatCursor == requestedCursor, isCurrent() else { throw CancellationError() }
+        let admitted = await chatCache.loadChatSummaries(instanceId: instanceId)
+        guard isCurrent(), nextChatCursor == requestedCursor else { throw CancellationError() }
+        if let admitted, admitted.nextCursor != requestedCursor { throw CancellationError() }
         let validated: [AidenChatSummary]
         do {
             validated = try AidenChatSummaryPage.validatedContinuation(
-                current: chats,
+                current: admitted?.summaries ?? chats,
                 requestedCursor: requestedCursor,
                 page: page
             )
@@ -221,34 +237,46 @@ final class AidenHomeModel {
         )
         let generation = nextSummaryCacheGeneration()
         do {
-            try await chatCache.saveChatSummaries(
+            guard try await chatCache.saveChatSummaries(
                 snapshot,
                 instanceId: instanceId,
                 generation: generation, writeToken: writeToken
-            )
+            ) else { throw CancellationError() }
         } catch {
             paginationState = .failed(error.localizedDescription)
             throw error
         }
-        guard generation == summaryCacheGeneration, isCurrent() else {
-            throw CancellationError()
+        let state = await chatCache.summaryState(instanceId: instanceId)
+        guard isCurrent() else { throw CancellationError() }
+        // Publish the actual admitted page, including partial-deletion filtering
+        // and any newer cross-owner detail updates that followed admission.
+        chats = state.snapshot?.summaries ?? []
+        for (id, edit) in localSummaryEdits where edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) {
+            if edit.activityOnly {
+                if let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary { chats[index].activity = row.activity }
+            } else {
+                chats.removeAll { $0.id == id }
+                if let row = edit.summary { chats.append(row) }
+            }
         }
-        chats = validated
-        nextChatCursor = page.nextCursor
+        chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
+        nextChatCursor = state.snapshot?.nextCursor
         paginationState = .idle
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected,
               let context = try? coordinator.requestContext() else { return }
-        let writeToken = chatCache.reserveChatWrite()
+        let requestEditGeneration = summaryCacheGeneration
+        let plan = AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation)
+        let writeToken = plan.loadsChats ? chatCache.reserveSummaryWrite(instanceId: context.instanceId) : 0
+        if plan.loadsChats { latestSummaryRequestToken = writeToken }
         let attempt = LoadAttempt(context: context)
-        let plan = AidenHomeLoadPlan(
-            installation: coordinator.installationStore.activeInstallation
-        )
         if contentContext != context {
             contentContext = context
             summaryCacheGeneration &+= 1
+            localSummaryEdits = [:]
+            persistedLocalGeneration = 0
             chats = []
             nextChatCursor = nil
             paginationState = .idle
@@ -257,7 +285,7 @@ final class AidenHomeModel {
             modelCatalog = nil
             if plan.loadsChats,
                let cached = await chatCache.loadChatSummaries(instanceId: context.instanceId),
-               coordinator.isCurrent(context) {
+               coordinator.isCurrent(context), latestSummaryRequestToken == writeToken {
                 chats = cached.summaries
                 nextChatCursor = cached.nextCursor
             }
@@ -271,6 +299,7 @@ final class AidenHomeModel {
         }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
         if !plan.loadsUsage { usage = nil }
+        guard !plan.loadsChats || latestSummaryRequestToken == writeToken else { return }
         loadingAttempt = attempt
         isLoading = true
         errorMessage = nil
@@ -315,15 +344,28 @@ final class AidenHomeModel {
                     )
                     let generation = nextSummaryCacheGeneration()
                     do {
-                        try await chatCache.saveChatSummaries(
+                        _ = try await chatCache.saveChatSummaries(
                             snapshot,
                             instanceId: context.instanceId,
                             generation: generation, writeToken: writeToken
                         )
-                        guard generation == summaryCacheGeneration,
-                              loadingAttempt == attempt,
+                        let state = await chatCache.summaryState(instanceId: context.instanceId)
+                        let admitted = state.snapshot
+
+                        guard loadingAttempt == attempt,
                               coordinator.isCurrent(context) else { return }
-                        acceptInitialChatSummaryPage(loadedPage)
+                        chats = admitted?.summaries ?? []
+                        nextChatCursor = admitted?.nextCursor
+                        paginationState = .idle
+                        for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration && edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) {
+                            if edit.activityOnly {
+                                if let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary { chats[index].activity = row.activity }
+                            } else {
+                                chats.removeAll { $0.id == id }
+                                if let row = edit.summary { chats.append(row) }
+                            }
+                        }
+                        chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
                         chatListLoadState = .loaded
                     } catch {
                         failures.append(error)
@@ -370,7 +412,8 @@ final class AidenHomeModel {
               let cursor = nextChatCursor,
               let context = contentContext,
               coordinator.isCurrent(context) else { return }
-        let writeToken = chatCache.reserveChatWrite()
+        let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
+        latestSummaryRequestToken = writeToken
         paginationState = .loading
         do {
             let page = try await coordinator.remoteClient(for: context).chatSummaries(cursor: cursor)
@@ -381,7 +424,7 @@ final class AidenHomeModel {
                 instanceId: context.instanceId,
                 writeToken: writeToken,
                 isCurrent: {
-                    coordinator.isCurrent(context) && self.contentContext == context
+                    coordinator.isCurrent(context) && self.contentContext == context && self.latestSummaryRequestToken == writeToken
                 }
             )
         } catch let error where aidenIsCancellation(error) {
