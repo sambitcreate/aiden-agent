@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  activityPresentationDelay,
   resolveAgentActivity,
   resolveVisibleAgentActivity,
   type ToolActivity,
@@ -161,6 +162,17 @@ test("transcript-owned reasoning and visualization replace the generic activity 
     }),
     visualizing,
   );
+  const reading = resolveAgentActivity({
+    ...idle,
+    toolActivity: { state: "running", label: "Read file", toolName: "read_file" },
+  });
+  assert.equal(reading?.phase, "searching");
+  assert.equal(resolveVisibleAgentActivity(reading, {
+    reasoningVisible: false, visualizingVisible: false, toolVisible: true,
+  }), null);
+  assert.equal(resolveVisibleAgentActivity(reading, {
+    reasoningVisible: false, visualizingVisible: false, toolVisible: false,
+  }), reading);
 });
 
 test("stopping and approval take precedence over other live signals", () => {
@@ -199,4 +211,17 @@ test("terminal tool states do not keep the activity animation running", () => {
   };
 
   assert.equal(resolveAgentActivity({ ...idle, toolActivity: finished }), null);
+});
+
+test("phase smoothing keeps first feedback and approval immediate", () => {
+  const thinking = resolveAgentActivity({ ...idle, streamingText: "" })!;
+  const working = resolveAgentActivity({ ...idle, toolActivity: {
+    state: "running", label: "Reading", toolName: "read_file",
+  } })!;
+  const waiting = resolveAgentActivity({ ...idle, pendingApproval: true })!;
+  assert.equal(activityPresentationDelay(null, thinking), 0);
+  assert.equal(activityPresentationDelay(thinking, working), 120);
+  assert.equal(activityPresentationDelay(working, waiting), 0);
+  assert.equal(activityPresentationDelay(working, null), 0);
+  assert.equal(activityPresentationDelay(thinking, working, true), 0);
 });

@@ -189,6 +189,80 @@ test("failed work is counted for review and states why", () => {
   assert.match(markup, /Success not verified/u);
 });
 
+test("a compact-only trail is one line, not a second Compacted context disclosure", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "compact_context", "completed", {
+          detail: "LLM · 10.6s · ~37153 → 14440 tokens",
+        }),
+      ])}
+    />,
+  );
+  assert.doesNotMatch(markup, /<details/u);
+  assert.doesNotMatch(markup, /agent-activity-chevron/u);
+  assert.equal((markup.match(/Compacted context/gu) ?? []).length, 1);
+  assert.match(markup, /LLM · 10\.6s · ~37153 → 14440 tokens/u);
+  assert.doesNotMatch(markup, /role="listitem"/u);
+});
+
+test("compaction among other work still expands into the trail", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "read_file", "completed", { target: "package.json" }),
+        step(1, "compact_context", "completed", { detail: "LLM · 1.0s · ~100 → 40 tokens" }),
+      ])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.match(markup, /Explored 1 file, compacted context/u);
+  assert.match(markup, /Compacted context<\/span><span[^>]*> LLM · 1\.0s · ~100 → 40 tokens/u);
+});
+
+test("a failed compact-only trail stays expandable without repeating the summary line", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [step(0, "compact_context", "failed")])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.match(markup, /Compacted context/u);
+  assert.equal((markup.match(/compact_context failed/gu) ?? []).length, 1);
+});
+
+test("repeated compactions keep every run's metrics in the trail", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "compact_context", "completed", { detail: "LLM · 10.6s · ~37153 → 14440 tokens" }),
+        step(1, "compact_context", "completed", { detail: "pi-vcc · 0.4s · ~25900 → 6758 tokens" }),
+      ])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.equal((markup.match(/role="listitem"/gu) ?? []).length, 2);
+  assert.match(markup, /LLM · 10\.6s · ~37153 → 14440 tokens/u);
+  assert.match(markup, /pi-vcc · 0\.4s · ~25900 → 6758 tokens/u);
+});
+
+test("a claim check on a lone compaction keeps one Compacted context line", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline(
+        "completed",
+        [step(0, "compact_context", "completed", { detail: "LLM · 1.0s · ~100 → 40 tokens" })],
+        { claimCheck: { kind: "unverified_success", stepIds: ["tool-1"] } },
+      )}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.equal((markup.match(/Compacted context/gu) ?? []).length, 1);
+  assert.match(markup, /LLM · 1\.0s · ~100 → 40 tokens/u);
+  assert.doesNotMatch(markup, /role="listitem"/u);
+  assert.match(markup, /Success not verified/u);
+});
+
 test("an empty timeline renders nothing at all", () => {
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={timeline("running", [])} />), "");
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={null} />), "");
@@ -208,75 +282,12 @@ test("the ticker preserves rows and only fades new content", () => {
   assert.doesNotMatch(css, /aiden-agent-step-label-(?:in|out)/u);
 });
 
-function thinking(
-  order: number,
-  contentOffset: number,
-  reasoningStart: number,
-  reasoningEnd?: number,
-  extra: Record<string, unknown> = {},
-): AgentStep {
-  return {
-    id: `think-${order + 1}`,
-    order,
-    kind: "thinking",
-    startedAt: order,
-    updatedAt: order,
-    durationMs: 1_000,
-    contentOffset,
-    reasoningStart,
-    ...(reasoningEnd === undefined ? {} : { reasoningEnd }),
-    ...extra,
-  } as AgentStep;
-}
 
-test("a segmented turn collapses to one work-group summary, thoughts stay closed", () => {
-  const reasoning = "Inspecting the repo now.\n\nChecking the implementation next.";
-  const markup = renderToStaticMarkup(
-    <ActivityFeed
-      timeline={timeline("completed", [
-        thinking(0, 0, 0, 24),
-        step(1, "read_file", "completed", { contentOffset: 0, target: "a.ts" }),
-        thinking(2, 0, 26, reasoning.length),
-      ])}
-      reasoning={reasoning}
-    />,
-  );
-  assert.match(markup, />Worked briefly · 1 tool · 2 thoughts</u);
-  // Expanding the group does not expand the thoughts inside it.
-  assert.equal(markup.match(/aria-expanded="false"/gu)?.length, 2);
-  assert.equal(markup.match(/aria-label="Thought, collapsed"/gu)?.length, 2);
-  // Collapsed previews slice their own segment, not the whole buffer.
-  assert.match(markup, /Inspecting the repo now\./u);
-  assert.match(markup, /Checking the implementation next\./u);
-  // No full body leaks into the collapsed markup (preview is flat ≤80 chars).
-  assert.equal(markup.includes('role="region"'), false);
-});
-
-test("a live open thought previews the streamed tail in the ticker", () => {
-  const reasoning = "Still forming the answer…";
-  const markup = renderToStaticMarkup(
-    <ActivityFeed
-      timeline={timeline("running", [
-        step(0, "read_file", "completed", { contentOffset: 0, target: "a.ts" }),
-        thinking(1, 0, 0, undefined, { durationMs: 0 }),
-      ])}
-      reasoning={reasoning}
-      streaming
-    />,
-  );
-  assert.match(markup, />Thinking</u);
-  assert.match(markup, /Still forming the answer/u);
-  assert.match(markup, /aria-label="Thinking"/u);
-});
-
-test("legacy tool-only groups keep the prose summary", () => {
-  const markup = renderToStaticMarkup(
-    <ActivityFeed
-      timeline={timeline("completed", [
-        step(0, "read_file", "completed", { contentOffset: 0 }),
-        step(1, "edit_file", "completed", { contentOffset: 0 }),
-      ])}
-    />,
-  );
-  assert.match(markup, />Explored 1 file, edited 1 file</u);
+test("successful produced files render explicit host provenance", () => {
+  const markup = renderToStaticMarkup(<ActivityFeed timeline={timeline("completed", [
+    step(0, "write_file", "completed", { producedFile: { relativePath: "out/report.txt", operation: "written", bytes: 12 } }),
+  ])} />);
+  assert.match(markup, /File written/u);
+  assert.match(markup, /report.txt/u);
+  assert.match(markup, /title="out\/report.txt"/u);
 });

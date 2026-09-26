@@ -1,3 +1,4 @@
+import { parseProducedFile } from "./produced-file.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -13,6 +14,7 @@ export type AgentStepStatus =
   | "cancelled";
 
 export interface AgentToolStep {
+  producedFile?: import("./produced-file.js").ProducedFile;
   id: string;
   order: number;
   kind: "tool";
@@ -50,16 +52,11 @@ export interface AgentThinkingStep {
   finishedAt?: number;
   /** UTF-16 offset into the visible assistant text when this activity began. */
   contentOffset?: number;
+  /** UTF-16 offsets into the separately exposed, readable reasoning text. */
+  reasoningStartOffset?: number;
+  reasoningEndOffset?: number;
   /** Wall-clock reasoning time measured by the host; pi reports no duration. */
   durationMs?: number;
-  /**
-   * UTF-16 slice bounds into `ChatMessage.reasoning` locating this segment's
-   * text inside the canonical reasoning buffer. Both-or-neither; reasoning
-   * content is never duplicated onto steps. Absent on legacy timelines, which
-   * render the single `ReasoningBlock` fallback instead.
-   */
-  reasoningStart?: number;
-  reasoningEnd?: number;
 }
 
 export type AgentStep = AgentToolStep | AgentThinkingStep;
@@ -166,6 +163,7 @@ function parseToolStep(
   contentOffset?: number,
   allowLineChanges = false,
 ): AgentToolStep | undefined {
+  const producedFile = parseProducedFile(step.producedFile, String(step.toolName));
   const rawLineChanges = step.lineChanges;
   const lineChanges =
     rawLineChanges && typeof rawLineChanges === "object"
@@ -184,6 +182,7 @@ function parseToolStep(
     step.label.length > 120 ||
     typeof step.status !== "string" ||
     !STEP_STATUSES.has(step.status as AgentStepStatus) ||
+    (step.producedFile !== undefined && (!producedFile || step.status !== "completed")) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
     (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
     (rawLineChanges !== undefined &&
@@ -213,6 +212,7 @@ function parseToolStep(
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
+    ...(producedFile ? { producedFile } : {}),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
     ...(lineChanges === undefined
       ? {}
@@ -229,7 +229,6 @@ function parseThinkingStep(
   step: Record<string, unknown>,
   index: number,
   contentOffset?: number,
-  reasoningBounds?: { start: number; end?: number },
 ): AgentThinkingStep | undefined {
   if (
     typeof step.id !== "string" ||
@@ -246,61 +245,17 @@ function parseThinkingStep(
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
-    ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
-    ...(reasoningBounds === undefined
+    ...(step.reasoningStartOffset === undefined
       ? {}
-      : {
-          reasoningStart: reasoningBounds.start,
-          ...(reasoningBounds.end === undefined
-            ? {}
-            : { reasoningEnd: reasoningBounds.end }),
-        }),
+      : { reasoningStartOffset: step.reasoningStartOffset as number }),
+    ...(step.reasoningEndOffset === undefined
+      ? {}
+      : { reasoningEndOffset: step.reasoningEndOffset as number }),
+    ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
   };
 }
 
-/**
- * A segment is only renderable as a pair of sane bounds into the reasoning
- * buffer. Anything partial or inverted is dropped — never a slice guess. A
- * still-open thinking step may carry `reasoningStart` alone (live streams);
- * a settled step missing either bound keeps neither.
- */
-function parseReasoningBounds(
-  step: Record<string, unknown>,
-  previousReasoningEnd: number,
-  reasoningLength?: number,
-): { start: number; end?: number } | undefined {
-  const start = step.reasoningStart;
-  const end = step.reasoningEnd;
-  if (start === undefined && end === undefined) return undefined;
-  if (
-    !Number.isSafeInteger(start) ||
-    (start as number) < 0 ||
-    (start as number) < previousReasoningEnd ||
-    (reasoningLength !== undefined && (start as number) > reasoningLength)
-  ) {
-    return undefined;
-  }
-  if (end === undefined) {
-    // Open segment: only valid while the step is unfinished.
-    return step.finishedAt === undefined ? { start: start as number } : undefined;
-  }
-  if (
-    !Number.isSafeInteger(end) ||
-    (end as number) < (start as number) ||
-    (reasoningLength !== undefined && (end as number) > reasoningLength)
-  ) {
-    return undefined;
-  }
-  return { start: start as number, end: end as number };
-}
-
-/**
- * Validate the renderer-safe subset before replaying a timeline from local
- * chat storage. `reasoningLength` bounds thinking segment offsets against the
- * persisted `ChatMessage.reasoning` buffer; invalid offsets are stripped per
- * step so a corrupt segment degrades to legacy rendering without losing the
- * rest of the timeline.
- */
+/** Validate the renderer-safe subset before replaying a timeline from local chat storage. */
 export function parseGenerationTimeline(
   value: unknown,
   contentLength?: number,
@@ -335,7 +290,7 @@ export function parseGenerationTimeline(
 
   const steps: AgentStep[] = [];
   let previousContentOffset = 0;
-  let previousReasoningEnd = 0;
+  let previousReasoningEndOffset = 0;
   for (const [index, rawStep] of candidate.steps.entries()) {
     if (!rawStep || typeof rawStep !== "object") return undefined;
     const step = rawStep as Record<string, unknown>;
@@ -358,13 +313,25 @@ export function parseGenerationTimeline(
       return undefined;
     }
     if (contentOffset !== undefined) previousContentOffset = contentOffset as number;
-    const reasoningBounds =
-      candidate.version === GENERATION_TIMELINE_VERSION && step.kind === "thinking"
-        ? parseReasoningBounds(step, previousReasoningEnd, reasoningLength)
-        : undefined;
-    if (reasoningBounds !== undefined) {
-      // An open segment still bounds everything before its recorded start.
-      previousReasoningEnd = reasoningBounds.end ?? reasoningBounds.start;
+    if (step.kind === "thinking" && candidate.version === GENERATION_TIMELINE_VERSION) {
+      const start = step.reasoningStartOffset;
+      const end = step.reasoningEndOffset;
+      if (
+        (start !== undefined &&
+          (!Number.isSafeInteger(start) ||
+            (start as number) < previousReasoningEndOffset ||
+            (reasoningLength !== undefined && (start as number) > reasoningLength))) ||
+        (end !== undefined &&
+          (start === undefined ||
+            !Number.isSafeInteger(end) ||
+            (end as number) < (start as number) ||
+            (reasoningLength !== undefined && (end as number) > reasoningLength))) ||
+        (end === undefined && start !== undefined && step.finishedAt !== undefined)
+      ) return undefined;
+      if (end !== undefined) previousReasoningEndOffset = end as number;
+    } else if (candidate.version !== GENERATION_TIMELINE_VERSION &&
+      (step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined)) {
+      return undefined;
     }
     // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =
@@ -376,12 +343,7 @@ export function parseGenerationTimeline(
             candidate.version === GENERATION_TIMELINE_VERSION,
           )
         : step.kind === "thinking" && candidate.version !== 1
-          ? parseThinkingStep(
-              step,
-              index,
-              contentOffset as number | undefined,
-              reasoningBounds,
-            )
+          ? parseThinkingStep(step, index, contentOffset as number | undefined)
           : undefined;
     if (!parsed) return undefined;
     steps.push(parsed);

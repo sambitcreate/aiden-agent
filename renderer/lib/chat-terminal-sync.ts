@@ -8,6 +8,10 @@ import {
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 
 const MAX_DETACHED_STREAMS = 64;
 const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
@@ -283,9 +287,8 @@ export function rememberDetachedLifecycleStream(
   detachedLifecycleStreams.delete(owner.streamId);
   detachedLifecycleStreams.set(owner.streamId, owner);
   const content = (seed?.content ?? "").slice(0, MAX_DETACHED_CONTENT_CHARS);
-  const reasoning = (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS);
   const timeline = seed?.timeline
-    ? parseGenerationTimeline(seed.timeline, content.length, reasoning.length)
+    ? parseGenerationTimeline(seed.timeline, content.length)
     : undefined;
   detachedLifecycleProjections.set(owner.streamId, {
     ...owner,
@@ -294,7 +297,7 @@ export function rememberDetachedLifecycleStream(
       typeof seed?.lastTextDeltaAt === "number" && Number.isFinite(seed.lastTextDeltaAt)
         ? seed.lastTextDeltaAt
         : null,
-    reasoning,
+    reasoning: (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS),
     timeline: timeline?.generationId === owner.streamId ? timeline : null,
     artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
     subagents: mergeSubagentSnapshots([], seed?.subagents ?? [], owner),
@@ -603,6 +606,7 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      reasoning: reset ? "" : current.reasoning,
       lastTextDeltaAt:
         reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
     }));
@@ -671,6 +675,8 @@ export function subscribeDetachedTerminalChats(
     }
     const owner = detachedLifecycleStreams.get(terminal.streamId);
     if (!owner || terminalSettlementInFlight.has(terminal.streamId)) return;
+    // Accepted Steer text that never reached the chat returns to its draft.
+    restoreUndeliveredGuidance(owner.chatId, undeliveredGuidanceFromTerminal(payload));
     if (
       !terminal.chat ||
       terminal.chat.id !== owner.chatId ||

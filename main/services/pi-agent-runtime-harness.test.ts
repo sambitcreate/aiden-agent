@@ -1,7 +1,7 @@
 import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
@@ -75,8 +75,10 @@ async function managedTestHarness(
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
+    beforeQueuedUser?: PiRuntimeSessionBinding["beforeQueuedUser"];
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
+    initialSystemPrompt?: string;
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
@@ -84,6 +86,7 @@ async function managedTestHarness(
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
+    onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -136,7 +139,7 @@ async function managedTestHarness(
       ? {
           transformContext: createGenerationContextTransform({
             contextWindow: model.contextWindow,
-            systemPrompt: "Managed prompt",
+            systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
             tools: options.tools ?? [],
             supportsImages: model.input.includes("image"),
             providerId: model.provider,
@@ -145,7 +148,7 @@ async function managedTestHarness(
         }
       : {}),
     initialState: {
-      systemPrompt: "Managed prompt",
+      systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
       thinkingLevel: "off",
       tools: options.tools ?? [],
       messages: [],
@@ -153,10 +156,12 @@ async function managedTestHarness(
     },
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
+    ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
     durability: {
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
       appendInput: options.appendInput,
+      beforeQueuedUser: options.beforeQueuedUser,
       compaction: {
         models: compactionModels,
         model,
@@ -2135,6 +2140,7 @@ test("custom entry projectors are snapshotted while Aiden's namespace stays priv
 });
 
 test("managed steering is accepted only while active and queued input is durable", async () => {
+  const projected: string[] = [];
   let toolStarted!: () => void;
   const atTool = new Promise<void>((resolve) => {
     toolStarted = resolve;
@@ -2159,7 +2165,16 @@ test("managed steering is accepted only while active and queued input is durable
       fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
       fauxAssistantMessage("steered"),
     ],
-    { tools: [tool] },
+    {
+      tools: [tool],
+      beforeQueuedUser: async (message) => {
+        if (message.role !== "user" || typeof message.content !== "string") {
+          throw new Error("Unexpected queued message.");
+        }
+        projected.push(message.content);
+        return "visible-steer-message";
+      },
+    },
   );
   assert.deepEqual(
     harness.queueSteer({ role: "user", content: "too early", timestamp: Date.now() }),
@@ -2183,6 +2198,255 @@ test("managed steering is accepted only while active and queued input is durable
     users.map((message) => message.content),
     ["start", "new instruction"],
   );
+  assert.deepEqual(projected, ["new instruction"]);
+  assert.equal(
+    (await session.getBranch()).some((entry) =>
+      entry.type === "custom" && entry.customType === "aiden.chat-message.v1" &&
+      (entry.data as { chatMessageId?: string }).chatMessageId === "visible-steer-message"),
+    true,
+  );
+  assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+function steerWaitTool(): { tool: AgentTool; atTool: Promise<void>; release: () => void } {
+  let started!: () => void;
+  const atTool = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tool: AgentTool = {
+    name: "wait_for_steer",
+    label: "Wait",
+    description: "Wait for steering input.",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _args, signal) => {
+      started();
+      await Promise.race([
+        released,
+        new Promise<void>((resolve) => {
+          if (signal?.aborted) resolve();
+          else signal?.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      ]);
+      return { content: [{ type: "text", text: "ready" }], details: null };
+    },
+  };
+  return { tool, atTool, release };
+}
+
+test("Stop before Pi emits accepted steering reports it as undelivered", async () => {
+  const projected: string[] = [];
+  const { tool, atTool } = steerWaitTool();
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("never reached"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: async (message) => {
+        projected.push(String(message.role === "user" ? message.content : ""));
+        return "visible";
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "keep this guidance", timestamp: 2 }).accepted,
+    true,
+  );
+  await harness.cancelAndSettle();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.deepEqual(projected, []);
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.equal(undelivered.late, undefined);
+  assert.deepEqual(
+    undelivered.messages.map((message) => (message.role === "user" ? message.content : undefined)),
+    ["keep this guidance"],
+  );
+  // Taking is one-shot, and nothing reached the journal.
+  assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "keep this guidance",
+    ),
+    false,
+  );
+});
+
+test("a failed visible projection of queued input is a managed session failure with recovery", async () => {
+  const faults: string[] = [];
+  const { tool, atTool, release } = steerWaitTool();
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not run"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: async () => {
+        faults.push("projection");
+        throw new Error("chat store unavailable");
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "failed guidance", timestamp: 2 }).accepted,
+    true,
+  );
+  release();
+  const outcome = await running;
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
+  assert.deepEqual(faults, ["projection"]);
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.equal(undelivered.late, undefined);
+  assert.deepEqual(
+    undelivered.messages.map((message) => (message.role === "user" ? message.content : undefined)),
+    ["failed guidance"],
+  );
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "failed guidance",
+    ),
+    false,
+  );
+});
+
+for (const lateResult of ["saved", "failed"] as const) {
+  test(`cancellation does not wait on a stalled queued projection (${lateResult} later)`, async () => {
+    const { tool, atTool, release } = steerWaitTool();
+    let projectionStarted!: () => void;
+    const atProjection = new Promise<void>((resolve) => {
+      projectionStarted = resolve;
+    });
+    let finishProjection!: (id: string) => void;
+    let failProjection!: (error: Error) => void;
+    let projectionSignal: AbortSignal | undefined;
+    const { harness } = await managedTestHarness(
+      [
+        fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+        fauxAssistantMessage("must not run"),
+      ],
+      {
+        tools: [tool],
+        beforeQueuedUser: (_message, signal) => {
+          projectionSignal = signal;
+          projectionStarted();
+          return new Promise<string>((resolve, reject) => {
+            finishProjection = resolve;
+            failProjection = reject;
+          });
+        },
+      },
+    );
+    const running = harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "start", timestamp: 1 },
+    });
+    await atTool;
+    assert.equal(
+      harness.queueSteer({ role: "user", content: "in flight", timestamp: 2 }).accepted,
+      true,
+    );
+    release();
+    await atProjection;
+    // The stalled, non-abortable write must not block Stop from settling.
+    await harness.cancelAndSettle();
+    assert.equal((await running).kind, "app_cancelled");
+    assert.equal(projectionSignal?.aborted, true);
+    const quarantine = harness.pendingDurabilitySettlement();
+    assert.ok(quarantine, "the in-flight projection is quarantined as detached durability");
+    // Collection returns at once while the write is still unresolved, so
+    // the host can deliver Stop's terminal without waiting on storage.
+    const undelivered = harness.takeUndeliveredQueuedMessages();
+    assert.deepEqual(undelivered.messages, []);
+    assert.ok(undelivered.late, "the unresolved projection is reported separately");
+    let lateSettled = false;
+    void undelivered.late.then(() => {
+      lateSettled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lateSettled, false);
+    assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
+    if (lateResult === "saved") finishProjection("late-visible-id");
+    else failProjection(new Error("late failure"));
+    await quarantine;
+    assert.deepEqual(
+      (await undelivered.late).map((message) =>
+        message.role === "user" ? message.content : undefined,
+      ),
+      lateResult === "saved" ? [] : ["in flight"],
+    );
+  });
+}
+
+test("a queued projection saved just after cancellation still forces transaction recovery", async () => {
+  const { tool, atTool, release } = steerWaitTool();
+  let projectionStarted!: () => void;
+  const atProjection = new Promise<void>((resolve) => {
+    projectionStarted = resolve;
+  });
+  let finishProjection!: (id: string) => void;
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not run"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: () => {
+        projectionStarted();
+        return new Promise<string>((resolve) => {
+          finishProjection = resolve;
+        });
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "saved late", timestamp: 2 }).accepted,
+    true,
+  );
+  release();
+  await atProjection;
+  // Cancellation wins, then the visible save lands before the run returns.
+  const cancelling = harness.cancelAndSettle();
+  finishProjection("late-visible-id");
+  await cancelling;
+  assert.equal((await running).kind, "app_cancelled");
+  // Let every detached write settle before the host takes its snapshot.
+  await new Promise((resolve) => setImmediate(resolve));
+  const settlement = harness.pendingDurabilitySettlement();
+  assert.ok(settlement, "the settled late save must still require transaction recovery");
+  await settlement;
+  // The saved guidance is not in Pi's journal, so committing the turn as-is
+  // would let the next sync append it after the assistant.
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "saved late",
+    ),
+    false,
+  );
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.deepEqual(undelivered.messages, []);
+  assert.deepEqual(await undelivered.late, []);
 });
 
 test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {
@@ -2214,6 +2478,45 @@ test("terminal responses skip between-turn pressure and settle through the termi
   } finally {
     PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
     PiCompactionCoordinator.prototype.check = originalCheck;
+  }
+});
+
+test("context projection observers see the coordinator's projection and cannot fault the run", async () => {
+  const checked: Array<Parameters<PiCompactionCoordinator["checkContextPressure"]>[0]> = [];
+  const observed: Array<{ contextTokens: number; contextWindow: number }> = [];
+  const originalCheckContextPressure = PiCompactionCoordinator.prototype.checkContextPressure;
+  PiCompactionCoordinator.prototype.checkContextPressure = function (projection) {
+    checked.push(projection);
+    return originalCheckContextPressure.call(this, projection);
+  };
+  try {
+    const { harness } = await managedTestHarness([fauxAssistantMessage("done")], {
+      contextWindow: 8_192,
+      generationContextTransform: true,
+      onContextProjection: (projection, options) => {
+        observed.push({
+          contextTokens: projection.contextTokens,
+          contextWindow: options.contextWindow,
+        });
+        throw new Error("meter observer failed");
+      },
+    });
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "measure the next request", timestamp: 1 },
+    });
+
+    assert.equal(outcome.kind, "completed");
+    assert.ok(checked.length >= 1);
+    // Every projection the compaction rule consults reaches the meter first;
+    // a post-preflight message swap may add one refreshed reading.
+    assert.equal(observed[0]?.contextTokens, checked[0]?.contextTokens);
+    for (const projection of checked) {
+      assert.ok(observed.some((entry) => entry.contextTokens === projection?.contextTokens));
+    }
+    assert.ok(observed.every((entry) => entry.contextWindow === 8_192));
+  } finally {
+    PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
   }
 });
 
@@ -2765,4 +3068,48 @@ test("provider diagnostics classify before outcome redaction without exporting t
   assert.equal(failures[0].fields.providerCategory, "model_unavailable");
   assert.equal(failures[0].fields.failurePhase, "provider-request");
   assert.doesNotMatch(bytes, /PRIVATE_MODEL_CANARY|PRIVATE_PROMPT_CANARY|errorMessage/u);
+});
+
+test("AGENTS edits enter only the next logical model request and preserve the tool snapshot", async (t) => {
+  const { createAgentsInstructionRefresher } = await import("./agents-instructions.js");
+  const root = await mkdtemp(join(tmpdir(), "aiden-agents-harness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "AGENTS.md");
+  await writeFile(file, "INITIAL_GUIDANCE");
+  const instructions = await createAgentsInstructionRefresher({
+    globalRoot: root,
+    revalidate: async () => {},
+    read: async () => readFile(file, "utf8"),
+  });
+  const initial = await instructions.apply({ systemPrompt: "HOST" });
+  const tool = declarePiRuntimeReplay({
+    name: "update_guidance", label: "Update guidance", description: "Fixture edit", parameters: Type.Object({}),
+    execute: async () => {
+      await writeFile(file, "NEXT_GUIDANCE");
+      return { content: [{ type: "text" as const, text: "edited" }], details: null };
+    },
+  }, "safe");
+  const prompts: string[] = [];
+  const toolSets: string[][] = [];
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const { core, harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    initialSystemPrompt: initial.systemPrompt,
+    tools: [tool],
+    streamFn: (model, context, options) => {
+      prompts.push(context.systemPrompt ?? "");
+      toolSets.push((context.tools ?? []).map(({ name }) => name));
+      return providerCore.streamSimple(model, context, options);
+    },
+    prepareNextTurnWithContext: async ({ context }, signal) => ({ context: await instructions.apply(context, signal) }),
+  });
+  providerCore = core;
+  const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run the edit", timestamp: 1 } });
+  assert.equal(result.kind, "completed");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
+  assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
+  assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
 });

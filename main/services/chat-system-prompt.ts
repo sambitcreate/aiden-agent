@@ -1,8 +1,9 @@
 // System prompt assembly for chat generations and for ambient context
-// estimates (context meter). Kept dependency-free of llm-client so services
-// that only need the static prompt do not import the generation pipeline.
+// estimates (context meter). Kept free of llm-client so services that only
+// need the static prompt do not import the generation pipeline.
 
 import { BROWSER_AGENT_GUIDANCE } from "./browser-tools.js";
+import { DEVICE_AGENT_GUIDANCE } from "./devices/device-tools.js";
 import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
 import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./subagents/role-catalog.js";
@@ -28,8 +29,9 @@ export async function buildSystemPrompt(
   const browserSuffix = availableToolNames?.has("browser_open")
     ? `\n\n${BROWSER_AGENT_GUIDANCE}`
     : "";
+  const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -55,6 +57,7 @@ export async function buildSystemPrompt(
         : "") +
     delegation +
     skillsSuffix +
-    browserSuffix
+    browserSuffix +
+    deviceSuffix
   );
 }

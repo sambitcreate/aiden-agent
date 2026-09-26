@@ -5,6 +5,7 @@ import {
   safeToolDescriptor,
   safeToolIssueDetails,
 } from "./generation-timeline.js";
+import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -336,6 +337,69 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   assert.equal(typeof trailing?.finishedAt, "number");
 });
 
+test("readable reasoning spans remain ordered across tools and reconcile to terminal content", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => snapshots.push(value));
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.toolStarted("call-a", "read_file", {});
+  projector.toolFinished("call-a", "completed");
+  projector.thinkingStarted();
+  projector.reasoningDelta(7, 13);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(firstStep, [
+    { start: 0, end: 5 },
+    { start: 7, end: 14 },
+  ], 14);
+  const final = projector.finish("completed");
+  const thoughts = final.steps.filter((step) => step.kind === "thinking");
+  assert.deepEqual(thoughts.map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]), [
+    [0, 5], [7, 14],
+  ]);
+  assert.deepEqual(parseGenerationTimeline(final, 0, 14), final);
+  assert.equal(parseGenerationTimeline(final, 0, 13), undefined);
+  assert.ok(snapshots.some((snapshot) => snapshot.steps[2]?.kind === "thinking" &&
+    snapshot.steps[2].reasoningEndOffset === 14));
+});
+
+test("redacted Pi thinking between readable blocks keeps one chronological span", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 13);
+  projector.thinkingEnded();
+  projector.thinkingStarted();
+  projector.reasoningDelta(15, 29);
+  projector.thinkingEnded();
+  const segments = terminalAssistantThinkingSegments({ role: "assistant", content: [
+    { type: "thinking", thinking: "visible first" },
+    { type: "thinking", thinking: "private", redacted: true },
+    { type: "thinking", thinking: "visible second" },
+  ] });
+  assert.ok(segments);
+  projector.reconcileReasoningSegments(firstStep, segments, 29);
+  const thought = projector.finish("completed").steps[0];
+  assert.equal(thought?.kind === "thinking" && thought.reasoningStartOffset, 0);
+  assert.equal(thought?.kind === "thinking" && thought.reasoningEndOffset, 29);
+});
+
+test("ambiguous terminal thinking and retry remove stale public spans", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(0, [], 0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 3);
+  projector.rewindReasoningOffset(0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+});
+
 test("a reopened merged thinking step reads open again on the live timeline", () => {
   let now = 1_000;
   const snapshots: GenerationTimeline[] = [];
@@ -456,7 +520,7 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
   projector.setContentOffset(20);
   projector.thinkingStarted();
   projector.thinkingEnded();
-  projector.reconcileContentOffset(10, 15);
+  projector.reconcileContentOffset(10, "0123456789", "01234");
   projector.toolStarted("after-terminal", "read_file", {});
   projector.setContentOffset(30);
   projector.toolStarted("failed-attempt", "grep", {});
@@ -468,6 +532,21 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
     [15, 15, 15, 15],
   );
   assert.ok(snapshots.length > 0);
+});
+
+test("terminal Pi block order reanchors tools after rewritten text", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.setContentOffset(3);
+  projector.toolStarted("call-a", "read_file", {});
+  projector.setContentOffset(6);
+  projector.thinkingStarted();
+  projector.reconcileContentOffset(0, "abcXYZ", "aXYZ", {
+    stepStart: 0,
+    textStart: 0,
+    thinkingOffsets: [4],
+    toolOffsets: new Map([["call-a", 1]]),
+  });
+  assert.deepEqual(projector.snapshot().steps.map((step) => step.contentOffset), [1, 4]);
 });
 
 test("version 1 timelines replay without pretending to have presentation offsets", () => {
@@ -522,6 +601,10 @@ test("version 2 reasoning timelines replay without presentation offsets", () => 
   const parsed = parseGenerationTimeline(legacy);
   assert.equal(parsed?.version, 2);
   assert.equal(parsed?.steps[0]?.contentOffset, undefined);
+  assert.equal(parseGenerationTimeline({
+    ...legacy,
+    steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
+  }), undefined);
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {
@@ -679,224 +762,30 @@ test("automatic compaction publishes bounded engine metrics without summary cont
   assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });
 
-function thinkingBounds(timeline: GenerationTimeline) {
-  return timeline.steps
-    .filter((step) => !isToolStep(step))
-    .map((step) => ({
-      id: step.id,
-      start: (step as { reasoningStart?: number }).reasoningStart,
-      end: (step as { reasoningEnd?: number }).reasoningEnd,
-    }));
-}
 
-test("thinking steps record reasoning-buffer bounds and tools settle open segments", () => {
-  let now = 1_000;
-  const projector = new GenerationTimelineProjector(
-    "generation-1",
-    () => {},
-    () => (now += 100),
-  );
-
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(18);
-  projector.toolStarted("call-a", "read_file", { path: "a.ts" }, 18);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(18);
-  projector.thinkingEnded(44);
-
-  const final = projector.finish("completed", undefined, 44);
-  assert.deepEqual(thinkingBounds(final), [
-    { id: "think-1", start: 0, end: 18 },
-    { id: "think-2", start: 18, end: 44 },
-  ]);
-  assert.deepEqual(
-    parseGenerationTimeline(JSON.parse(JSON.stringify(final)), undefined, 44),
-    final,
-  );
+test("produced files require completed host mutation provenance and survive timeline replay", () => {
+  const file = { relativePath: "out/report.txt", operation: "written" as const, bytes: 12 };
+  const details = { kind: "file_line_changes", version: 1, additions: 1, deletions: 0, producedFile: file };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status] of [["good", "write_file", "completed"], ["mcp", "mcp_write", "completed"], ["failed", "write_file", "failed"]] as const) {
+    projector.toolStarted(id, tool, { path: "out/report.txt" });
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.snapshot();
+  assert.deepEqual(toolSteps(snapshot).map((step) => step.producedFile), [file, undefined, undefined]);
+  assert.deepEqual(toolSteps(parseGenerationTimeline(snapshot)!)[0]?.producedFile, file);
+  for (const relativePath of ["/Users/private.txt", "../secret", "out/../secret", "a\\b", "bad\nname", "a//b"]) {
+    const invalid = structuredClone(snapshot);
+    (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
+    assert.equal(parseGenerationTimeline(invalid), undefined);
+  }
 });
 
-test("toolStarted settles a live thinking segment at the current reasoning length", () => {
+test("form fill activity persists counts without source or field values", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  // A tool call interrupts an unfinished thinking block: the segment ends at
-  // the reasoning-buffer length the runtime reported.
-  projector.toolStarted("call-a", "read_file", { path: "a.ts" }, 25);
-  projector.toolFinished("call-a", "completed");
-
-  const final = projector.finish("completed", undefined, 25);
-  assert.deepEqual(thinkingBounds(final), [{ id: "think-1", start: 0, end: 25 }]);
-});
-
-test("adjacent reasoning blocks merge into one segment covering the whole stretch", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(18);
-  // Reopened before any tool/text boundary: still perceived as one stretch.
-  projector.thinkingStarted(18);
-  projector.thinkingEnded(44);
-
-  const final = projector.finish("completed", undefined, 44);
-  assert.equal(final.steps.length, 1);
-  assert.deepEqual(thinkingBounds(final), [{ id: "think-1", start: 0, end: 44 }]);
-});
-
-test("settle drops a reasoning segment whose end precedes its start", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(30);
-  // A lower offset than the recorded start can only come from a corrupted
-  // runtime path — the segment must not keep its anchor.
-  projector.thinkingEnded(10);
-
-  const final = projector.finish("completed", undefined, 30);
-  assert.deepEqual(thinkingBounds(final), [{ id: "think-1", start: undefined, end: undefined }]);
-});
-
-test("reconcile re-anchors segments verbatim to terminal canonical reasoning", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(16);
-  projector.toolStarted("call-a", "read_file", { path: "a.ts" }, 16);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(16);
-  projector.thinkingEnded(40);
-
-  const partA = "Streamed order one.";
-  const partB = "Streamed order two.";
-  // Pi's canonical buffer reordered the blocks: verbatim containment moves the
-  // offsets to where the parts actually landed, keeping chronological slots.
-  const reasoning = `${partB}\n\n${partA}`;
-  projector.reconcileReasoningOffsets(0, [partB, partA], reasoning);
-
-  const final = projector.finish("completed", undefined, reasoning.length);
-  assert.deepEqual(thinkingBounds(final), [
-    { id: "think-1", start: 0, end: 19 },
-    { id: "think-2", start: 21, end: 40 },
-  ]);
-});
-
-test("reconcile fails closed when terminal reasoning does not contain the parts", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(10);
-  projector.toolStarted("call-a", "read_file", {}, 10);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(10);
-  projector.thinkingEnded(20);
-
-  projector.reconcileReasoningOffsets(0, ["alpha", "beta"], "unrelated reasoning text");
-  const final = projector.finish("completed", undefined, 20);
-  assert.deepEqual(thinkingBounds(final), [
-    { id: "think-1", start: undefined, end: undefined },
-    { id: "think-2", start: undefined, end: undefined },
-  ]);
-});
-
-test("merged perceived stretch reconciles to the whole terminal span", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(60);
-
-  // The provider sent two adjacent blocks; the timeline merged them into one
-  // step, so the step owns the joined terminal span.
-  const partA = "First block.";
-  const partB = "Second block.";
-  const reasoning = `Prefix.\n\n${partA}\n\n${partB}`;
-  projector.reconcileReasoningOffsets(0, [partA, partB], reasoning);
-
-  const final = projector.finish("completed", undefined, reasoning.length);
-  assert.deepEqual(thinkingBounds(final), [{ id: "think-1", start: 9, end: reasoning.length }]);
-});
-
-test("rewind drops segments past the truncation point and clamps a retained open one", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(10);
-  projector.toolStarted("call-a", "read_file", {}, 10);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(10);
-  projector.thinkingEnded(30);
-
-  projector.rewindReasoningOffset(20);
-  const final = projector.finish("completed", undefined, 20);
-  assert.deepEqual(thinkingBounds(final), [
-    { id: "think-1", start: 0, end: 10 },
-    { id: "think-2", start: 10, end: 20 },
-  ]);
-});
-
-test("finish settles a still-open segment at the final reasoning length", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  const final = projector.finish("cancelled", undefined, 33);
-  assert.deepEqual(thinkingBounds(final), [{ id: "think-1", start: 0, end: 33 }]);
-});
-
-test("reasoning bounds replay: open steps allow start-only, settled steps need both", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(12);
-  projector.toolStarted("call-a", "read_file", {}, 12);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(12);
-
-  const live = projector.snapshot();
-  const liveStep = live.steps[2] as { reasoningStart?: number; reasoningEnd?: number };
-  assert.equal(liveStep.reasoningStart, 12);
-  assert.equal(liveStep.reasoningEnd, undefined);
-  const parsedLive = parseGenerationTimeline(
-    JSON.parse(JSON.stringify(live)),
-    undefined,
-    undefined,
-  );
-  const parsedLiveStep = parsedLive?.steps[2] as
-    | { reasoningStart?: number; reasoningEnd?: number }
-    | undefined;
-  assert.equal(parsedLiveStep?.reasoningStart, 12);
-  assert.equal(parsedLiveStep?.reasoningEnd, undefined);
-
-  const final = projector.finish("completed", undefined, 40);
-  const stored = JSON.parse(JSON.stringify(final)) as Record<string, unknown>;
-  assert.deepEqual(parseGenerationTimeline(stored, undefined, 40), final);
-  // A settled step carrying only a start is malformed and loses its bounds.
-  const malformed = JSON.parse(JSON.stringify(final)) as Record<string, unknown>;
-  const firstStep = (malformed.steps as Record<string, unknown>[])[0]!;
-  delete firstStep.reasoningEnd;
-  const parsed = parseGenerationTimeline(malformed, undefined, 40);
-  const parsedStep = parsed?.steps[0] as
-    | { reasoningStart?: number; reasoningEnd?: number }
-    | undefined;
-  assert.equal(parsedStep?.reasoningStart, undefined);
-});
-
-test("reasoning bounds fail closed against out-of-range and out-of-order offsets", () => {
-  const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.thinkingStarted(0);
-  projector.thinkingEnded(12);
-  projector.toolStarted("call-a", "read_file", {}, 12);
-  projector.toolFinished("call-a", "completed");
-  projector.thinkingStarted(12);
-  projector.thinkingEnded(30);
-  const final = projector.finish("completed", undefined, 30);
-
-  const stored = JSON.parse(JSON.stringify(final)) as Record<string, unknown>;
-  // End beyond the persisted reasoning buffer: that step's bounds are stripped,
-  // the step and the rest of the timeline survive.
-  const overflow = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>;
-  (overflow.steps as Record<string, unknown>[])[2]!.reasoningEnd = 31;
-  const parsedOverflow = parseGenerationTimeline(overflow, undefined, 30);
-  const overflowStep = parsedOverflow?.steps[2] as
-    | { reasoningStart?: number; reasoningEnd?: number }
-    | undefined;
-  assert.equal(parsedOverflow?.steps.length, 3);
-  assert.equal(overflowStep?.reasoningStart, undefined);
-
-  // A second segment rewound before the first one's start is dropped.
-  const reordered = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>;
-  (reordered.steps as Record<string, unknown>[])[2]!.reasoningStart = 4;
-  (reordered.steps as Record<string, unknown>[])[2]!.reasoningEnd = 8;
-  const parsedReordered = parseGenerationTimeline(reordered, undefined, 30);
-  const reorderedStep = parsedReordered?.steps[2] as
-    | { reasoningStart?: number; reasoningEnd?: number }
-    | undefined;
-  assert.equal(reorderedStep?.reasoningStart, undefined);
+  projector.toolStarted("call-a", "form_fill", { attachment_id: "private-document", pid: 42, window_id: 7 });
+  projector.toolFinished("call-a", "completed", { filled: 1, notAttempted: 1, stoppedEarly: true, sourceDocument: "private-document", rows: [{ label: "Secret field", value: "secret-value" }] });
+  const timeline = projector.finish("completed");
+  assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
+  assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
 });

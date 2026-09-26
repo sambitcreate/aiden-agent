@@ -60,10 +60,30 @@ test("two no-capability scouts need no model-supplied resource budget", () => {
 
   assert.equal(validate(noCapabilityRhymes), true);
   assert.equal(validate({ ...noCapabilityRhymes, deadlineMs: 60_000 }), false);
-  assert.match(delegated.description, /resource limits, and run IDs are host-owned/u);
-  assert.match(delegated.description, /never send execution, limits, deadline, or budget fields/u);
+  assert.match(delegated.description, /read-only task may request maxTurns/u);
+  assert.match(delegated.description, /Never send execution, deadline, or other budget fields/u);
+  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 128 }] }), true);
+  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 129 }] }), false);
   assert.match(delegated.description, /infers only their exact union/u);
-  assert.match(delegated.description, /capability-less siblings workspace-read-only/u);
+  assert.match(delegated.description, /read-only role defaults/u);
+});
+
+test("implementer role is advertised only when a write or shell lane is requestable", () => {
+  const implementerTask = {
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  };
+  // Flags off, read-only turn, or V1 rollback: both lanes are unavailable, so
+  // a coding child could only receive read tools. Do not offer the role.
+  const readOnly = tool();
+  assert.equal(new Ajv().compile(readOnly.parameters as object)(implementerTask), false);
+  assert.doesNotMatch(JSON.stringify(readOnly.parameters), /implementer/u);
+  assert.doesNotMatch(readOnly.description, /implementer requests workspace writes/u);
+  assert.match(readOnly.description, /implementer role is unavailable/u);
+  for (const enabled of [tool(true), tool(false, false, true), tool(true, false, true)]) {
+    assert.equal(new Ajv().compile(enabled.parameters as object)(implementerTask), true);
+    assert.match(enabled.description, /scout\/planner\/reviewer read-only/u);
+    assert.match(enabled.description, /implementer requests workspace writes and shell/u);
+  }
 });
 
 test("Phase 5E exposes shell only after the complete positive production gate", async () => {
@@ -211,9 +231,9 @@ test("workspace-write schema exposure is positive, rollbackable, and truthful ab
   assert.match(enabled.description, /positive foreground authority request/u);
   assert.match(
     enabled.description,
-    /only exact write_file\/edit_file calls are exposed/u,
+    /Only write_file\/edit_file calls are exposed/u,
   );
-  assert.match(JSON.stringify(enabled.parameters), /one-shot owner approval/u);
+  assert.match(JSON.stringify(enabled.parameters), /run-scoped grant/u);
 });
 
 test("read-only parent schema omits write requests over a full stored workspace", () => {

@@ -16,6 +16,8 @@ import {
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
 
+import { parseProducedFile } from "../../renderer/shared/produced-file.js";
+
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
 const MAX_DETAIL_LENGTH = 120;
@@ -78,6 +80,26 @@ function safeToolIssue(value: unknown): string | undefined {
   return typeof code === "string" && code in SAFE_TOOL_ISSUE_DETAILS
     ? SAFE_TOOL_ISSUE_DETAILS[code as SafeToolIssueCode]
     : undefined;
+}
+
+/** Count-only summary of a form_fill result — labels and values never persisted. */
+function safeFormFillOutcome(value: unknown): string | undefined {
+  const details = record(value);
+  const count = (key: string): number | undefined =>
+    Number.isSafeInteger(details[key]) ? (details[key] as number) : undefined;
+  const filled = count("filled");
+  if (filled === undefined) return undefined;
+  const parts = [`${filled} filled`];
+  const satisfied = count("alreadySatisfied");
+  if (satisfied) parts.push(`${satisfied} already satisfied`);
+  const review = count("needsReview");
+  if (review) parts.push(`${review} need${review === 1 ? "s" : ""} review`);
+  const failed = count("failed");
+  if (failed) parts.push(`${failed} failed`);
+  const notAttempted = count("notAttempted");
+  if (notAttempted) parts.push(`${notAttempted} not attempted`);
+  if (details.stoppedEarly === true) parts.push("stopped early");
+  return parts.join(" · ");
 }
 
 function firstToolResultText(result: unknown): string | undefined {
@@ -229,6 +251,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use Mac", detail: safeDetail(values.action) };
+    case "form_fill":
+      return { label: "Fill form fields" };
     case "vcc_recall":
       return { label: "Recall chat history" };
     case "compact_context":
@@ -242,42 +266,15 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
   }
 }
 
-/**
- * Locate the terminal thinking parts verbatim in the final reasoning buffer.
- * The parts are appended as one `parts.join("\n\n")` tail after the prior
- * turns' prefix, so a single containment check anchors every part at a
- * deterministic offset. Returns null when the terminal projection does not
- * appear verbatim — offsets are then dropped rather than guessed.
- */
-function terminalReasoningSpans(
-  parts: readonly string[],
-  reasoning: string,
-  turnStart: number,
-): Array<readonly [number, number]> | null {
-  if (parts.length === 0) return null;
-  const joined = parts.join("\n\n");
-  if (!joined) return null;
-  const tailStart = reasoning.endsWith(joined)
-    ? reasoning.length - joined.length
-    : reasoning.lastIndexOf(joined);
-  if (tailStart < turnStart) return null;
-  const spans: Array<readonly [number, number]> = [];
-  let cursor = tailStart;
-  for (const [index, part] of parts.entries()) {
-    if (!part || !reasoning.startsWith(part, cursor)) return null;
-    spans.push([cursor, cursor + part.length]);
-    cursor += part.length + (index === parts.length - 1 ? 0 : 2);
-  }
-  return spans;
-}
-
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
   private toolSequence = 0;
   private thinkingSequence = 0;
+  private thinkingMergeFloor = 0;
   private compactionSequence = 0;
   private contentOffset = 0;
+  private reasoningOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -294,16 +291,8 @@ export class GenerationTimelineProjector {
     };
   }
 
-  toolStarted(
-    toolCallId: string,
-    toolName: string,
-    args: unknown,
-    reasoningOffset?: number,
-  ): void {
+  toolStarted(toolCallId: string, toolName: string, args: unknown): void {
     if (this.timeline.status !== "running") return;
-    // A tool boundary ends any open reasoning stretch even if thinking_end
-    // never arrived, so a stale open step cannot swallow later segments.
-    this.settleThinking(this.now(), reasoningOffset);
     const existingIndex = this.stepIndex.get(toolCallId);
     if (existingIndex !== undefined) {
       // An early pending step (opened at toolcall_start, before arguments
@@ -350,16 +339,16 @@ export class GenerationTimelineProjector {
    * merged into the single stretch of thinking the user actually perceives and
    * timed against the host clock.
    */
-  thinkingStarted(reasoningOffset?: number): void {
+  thinkingStarted(): void {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
-    if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
+    if (last && !isToolStep(last) && last.order >= this.thinkingMergeFloor &&
+      last.contentOffset === this.contentOffset) {
       // The stretch reopened on the merged thinking step: mark it open again so
-      // the live timeline reflects reasoning in progress. Its reasoningStart
-      // still anchors the merged segment; the end re-opens with it.
+      // the live timeline reflects reasoning in progress.
       delete last.finishedAt;
-      delete last.reasoningEnd;
+      delete last.reasoningEndOffset;
       last.updatedAt = timestamp;
       this.openThinking = {
         index: this.timeline.steps.length - 1,
@@ -377,9 +366,6 @@ export class GenerationTimelineProjector {
       updatedAt: timestamp,
       durationMs: 0,
       contentOffset: this.contentOffset,
-      ...(Number.isSafeInteger(reasoningOffset) && (reasoningOffset as number) >= 0
-        ? { reasoningStart: reasoningOffset }
-        : {}),
     };
     this.openThinking = {
       index: this.timeline.steps.length,
@@ -389,99 +375,78 @@ export class GenerationTimelineProjector {
     this.emit();
   }
 
-  thinkingEnded(reasoningOffset?: number): void {
+  thinkingEnded(): void {
     if (this.timeline.status !== "running" || !this.openThinking) return;
-    this.settleThinking(this.now(), reasoningOffset);
+    this.settleThinking(this.now());
     this.emit();
   }
 
-  /**
-   * Terminal assistant content can rewrite the reasoning buffer (canonical Pi
-   * block order beats streamed delta order). Re-anchor this turn's thinking
-   * segments by locating the terminal thinking parts verbatim in the final
-   * buffer; any disagreement drops the turn's offsets so the message fails
-   * closed to the single ReasoningBlock instead of mis-slicing.
-   */
-  reconcileReasoningOffsets(
-    turnStart: number,
-    parts: readonly string[],
-    reasoning: string,
+  stepCount(): number {
+    return this.timeline.steps.length;
+  }
+
+  beginAssistantMessage(): number {
+    this.thinkingMergeFloor = this.timeline.steps.length;
+    return this.thinkingMergeFloor;
+  }
+
+  /** Only readable reasoning deltas can open a public reasoning span. */
+  reasoningDelta(start: number, end: number): void {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) return;
+    this.reasoningOffset = end;
+    const open = this.openThinking;
+    const step = open && this.timeline.steps[open.index];
+    if (!step || isToolStep(step) || start === end) return;
+    if (step.reasoningStartOffset === undefined) {
+      step.reasoningStartOffset = start;
+      this.emit();
+    }
+  }
+
+  /** Rebase the current assistant message against canonical, public Pi blocks. */
+  reconcileReasoningSegments(
+    firstStepIndex: number,
+    segments: readonly { start: number; end: number }[],
+    reasoningLength: number,
   ): void {
-    if (
-      !Number.isSafeInteger(turnStart) ||
-      turnStart < 0 ||
-      turnStart > reasoning.length
-    ) {
-      return;
-    }
-    const affected: AgentThinkingStep[] = [];
-    for (const step of this.timeline.steps) {
-      if (
-        !isToolStep(step) &&
-        step.reasoningStart !== undefined &&
-        step.reasoningStart >= turnStart
-      ) {
-        affected.push(step);
-      }
-    }
-    if (affected.length === 0) return;
-    const spans = terminalReasoningSpans(parts, reasoning, turnStart);
-    // A reasoning-free milestone (provider opened and closed thinking without
-    // exposed text) keeps its own zero-width offsets and needs no part.
-    const nonEmpty = affected.filter(
-      (step) =>
-        step.reasoningEnd !== undefined && step.reasoningEnd > step.reasoningStart!,
+    const steps = this.timeline.steps.slice(firstStepIndex).filter(
+      (step): step is AgentThinkingStep => !isToolStep(step),
     );
-    const open = affected.filter((step) => step.reasoningEnd === undefined);
-    if (spans) {
-      if (nonEmpty.length === spans.length) {
-        for (const [index, step] of nonEmpty.entries()) {
-          step.reasoningStart = spans[index]![0];
-          step.reasoningEnd = spans[index]![1];
-        }
-        for (const step of open) step.reasoningEnd = step.reasoningStart!;
-        this.emit();
-        return;
-      }
-      if (nonEmpty.length <= 1) {
-        // Adjacent provider blocks merged into one perceived stretch: the step
-        // owns the whole contiguous terminal span.
-        if (nonEmpty.length === 1) {
-          nonEmpty[0]!.reasoningStart = spans[0]![0];
-          nonEmpty[0]!.reasoningEnd = spans[spans.length - 1]![1];
-        }
-        for (const step of open) step.reasoningEnd = step.reasoningStart!;
-        this.emit();
-        return;
-      }
+    const safe = steps.length === segments.length && segments.every(
+      (span, index) => Number.isSafeInteger(span.start) && Number.isSafeInteger(span.end) &&
+        span.start >= 0 && span.end >= span.start && span.end <= reasoningLength &&
+        (index === 0 || span.start >= segments[index - 1]!.end),
+    );
+    let changed = false;
+    for (const [index, step] of steps.entries()) {
+      const span = safe ? segments[index] : undefined;
+      const start = span && span.end > span.start ? span.start : undefined;
+      const end = start === undefined ? undefined : span!.end;
+      if (step.reasoningStartOffset !== start || step.reasoningEndOffset !== end) changed = true;
+      if (start === undefined) delete step.reasoningStartOffset;
+      else step.reasoningStartOffset = start;
+      if (end === undefined) delete step.reasoningEndOffset;
+      else step.reasoningEndOffset = end;
     }
-    for (const step of affected) {
-      delete step.reasoningStart;
-      delete step.reasoningEnd;
-    }
-    this.emit();
+    this.reasoningOffset = reasoningLength;
+    if (changed) this.emit();
   }
 
-  /**
-   * Reasoning is truncated on retry alongside visible text. Segments beyond
-   * the rewind point lose their bounds; a partially retained open stretch
-   * ends at the boundary.
-   */
   rewindReasoningOffset(offset: number): void {
     if (!Number.isSafeInteger(offset) || offset < 0) return;
-    this.settleThinking(this.now(), offset);
     let changed = false;
     for (const step of this.timeline.steps) {
-      if (isToolStep(step) || step.reasoningStart === undefined) continue;
-      if (step.reasoningStart >= offset) {
-        delete step.reasoningStart;
-        delete step.reasoningEnd;
+      if (isToolStep(step)) continue;
+      if (step.reasoningStartOffset !== undefined && step.reasoningStartOffset >= offset) {
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
         changed = true;
-      } else if (step.reasoningEnd !== undefined && step.reasoningEnd > offset) {
-        step.reasoningEnd = offset;
+      } else if (step.reasoningEndOffset !== undefined && step.reasoningEndOffset > offset) {
+        step.reasoningEndOffset = offset;
         changed = true;
       }
     }
+    this.reasoningOffset = offset;
     if (changed) this.emit();
   }
 
@@ -531,27 +496,59 @@ export class GenerationTimelineProjector {
     this.contentOffset = offset;
   }
 
-  /**
-   * Terminal Pi content can replace a streamed assistant turn. Clamp activity
-   * that was observed beyond the canonical turn end before anchoring later work.
-   */
-  reconcileContentOffset(turnStart: number, turnEnd: number): void {
+  /** Re-anchor streamed activity after Pi replaces this turn's visible text. */
+  reconcileContentOffset(
+    turnStart: number,
+    streamedTurn: string,
+    canonicalTurn: string,
+    anchors?: { stepStart: number; textStart: number; thinkingOffsets: number[]; toolOffsets: Map<string, number> },
+  ): void {
     if (
       !Number.isSafeInteger(turnStart) ||
-      turnStart < 0 ||
-      !Number.isSafeInteger(turnEnd) ||
-      turnEnd < turnStart
+      turnStart < 0
     ) {
       return;
     }
+    const turnEnd = turnStart + canonicalTurn.length;
+    let prefix = 0;
+    while (prefix < streamedTurn.length && prefix < canonicalTurn.length &&
+      streamedTurn[prefix] === canonicalTurn[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < streamedTurn.length - prefix && suffix < canonicalTurn.length - prefix &&
+      streamedTurn[streamedTurn.length - suffix - 1] === canonicalTurn[canonicalTurn.length - suffix - 1]) {
+      suffix += 1;
+    }
     let changed = false;
-    for (const step of this.timeline.steps) {
-      if (
-        step.contentOffset !== undefined &&
-        step.contentOffset >= turnStart &&
-        step.contentOffset > turnEnd
-      ) {
-        step.contentOffset = turnEnd;
+    const toolAnchors = new Map<number, number>();
+    if (anchors) {
+      for (const [rawId, offset] of anchors.toolOffsets) {
+        const index = this.stepIndex.get(rawId);
+        if (index !== undefined && index >= anchors.stepStart) toolAnchors.set(index, offset);
+      }
+    }
+    let thinkingOrdinal = 0;
+    for (const [index, step] of this.timeline.steps.entries()) {
+      if (step.contentOffset === undefined || step.contentOffset < turnStart) continue;
+      const streamedOffset = Math.min(step.contentOffset - turnStart, streamedTurn.length);
+      const fallbackOffset = streamedOffset <= prefix
+        ? turnStart + streamedOffset
+        : streamedOffset >= streamedTurn.length - suffix
+          ? turnEnd - (streamedTurn.length - streamedOffset)
+          : turnStart + prefix;
+      let canonicalAnchor: number | undefined;
+      if (anchors && index >= anchors.stepStart) {
+        if (step.kind === "thinking") {
+          canonicalAnchor = anchors.thinkingOffsets[thinkingOrdinal];
+          thinkingOrdinal += 1;
+        } else if (step.kind === "tool") {
+          canonicalAnchor = toolAnchors.get(index);
+        }
+      }
+      const nextOffset = canonicalAnchor === undefined
+        ? fallbackOffset
+        : Math.min(turnEnd, turnStart + anchors!.textStart + canonicalAnchor);
+      if (step.contentOffset !== nextOffset) {
+        step.contentOffset = nextOffset;
         changed = true;
       }
     }
@@ -588,6 +585,18 @@ export class GenerationTimelineProjector {
     this.updateTool(toolCallId, "running");
   }
 
+  /** Bounded non-terminal detail update for a running tool step (counts only). */
+  toolDetail(toolCallId: string, detail: string): void {
+    if (this.timeline.status !== "running") return;
+    const index = this.stepIndex.get(toolCallId);
+    if (index === undefined) return;
+    const step = this.timeline.steps[index];
+    if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
+    step.detail = detail;
+    step.updatedAt = this.now();
+    this.emit();
+  }
+
   toolFinished(
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
@@ -599,11 +608,10 @@ export class GenerationTimelineProjector {
   finish(
     status: Exclude<GenerationTimelineStatus, "running">,
     cancellationOrigin?: GenerationCancellationOrigin,
-    reasoningLength?: number,
   ): GenerationTimeline {
     if (this.timeline.status === "running") {
       const timestamp = this.now();
-      this.settleThinking(timestamp, reasoningLength);
+      this.settleThinking(timestamp);
       this.timeline.status = status;
       if (status === "cancelled" && cancellationOrigin) {
         this.timeline.cancellationOrigin = cancellationOrigin;
@@ -633,7 +641,7 @@ export class GenerationTimelineProjector {
     };
   }
 
-  private settleThinking(timestamp: number, reasoningEnd?: number): void {
+  private settleThinking(timestamp: number): void {
     const open = this.openThinking;
     if (!open) return;
     this.openThinking = null;
@@ -642,16 +650,8 @@ export class GenerationTimelineProjector {
     step.durationMs = (step.durationMs ?? 0) + Math.max(0, timestamp - open.startedAt);
     step.updatedAt = timestamp;
     step.finishedAt = timestamp;
-    if (step.reasoningStart !== undefined) {
-      if (
-        Number.isSafeInteger(reasoningEnd) &&
-        (reasoningEnd as number) >= step.reasoningStart
-      ) {
-        step.reasoningEnd = reasoningEnd;
-      } else {
-        // A segment with no trustworthy end must not absorb later reasoning.
-        delete step.reasoningStart;
-      }
+    if (step.reasoningStartOffset !== undefined) {
+      step.reasoningEndOffset = this.reasoningOffset;
     }
   }
 
@@ -679,6 +679,12 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
+        const producedFile = lineChanges && parseProducedFile(record(resultDetails).producedFile, step.toolName);
+        if (producedFile) step.producedFile = producedFile;
+        if (step.toolName === "form_fill") {
+          const outcome = safeFormFillOutcome(resultDetails);
+          if (outcome) step.detail = outcome;
+        }
       } else {
         const issue = safeToolIssue(resultDetails);
         if (issue) step.detail = issue;

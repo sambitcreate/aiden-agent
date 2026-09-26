@@ -319,6 +319,31 @@ export function terminalAssistantText(message: {
     .join("");
 }
 
+/** Canonical visible-text positions of Pi thinking and tool blocks. */
+export function terminalAssistantActivityAnchors(message: {
+  role?: string;
+  content?: unknown;
+}): { thinkingOffsets: number[]; toolOffsets: Map<string, number> } | null {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return null;
+  let offset = 0;
+  let previousThinking = false;
+  const thinkingOffsets: number[] = [];
+  const toolOffsets = new Map<string, number>();
+  for (const part of message.content) {
+    if (typeof part !== "object" || part === null) continue;
+    const block = part as { type?: unknown; text?: unknown; id?: unknown };
+    if (block.type === "text" && typeof block.text === "string") {
+      offset += block.text.length;
+    } else if (block.type === "thinking" && !previousThinking) {
+      thinkingOffsets.push(offset);
+    } else if (block.type === "toolCall" && typeof block.id === "string" && block.id) {
+      toolOffsets.set(block.id, offset);
+    }
+    previousThinking = block.type === "thinking";
+  }
+  return { thinkingOffsets, toolOffsets };
+}
+
 /** Add terminal text only when this assistant turn did not already stream it. */
 export function terminalAssistantTextFallback(
   message: { role?: string; content?: unknown },
@@ -344,12 +369,13 @@ export function assistantTurnTextSeparator(
   );
 }
 
-/** Non-redacted thinking parts of a terminal assistant message, in Pi's canonical order. */
-export function terminalAssistantReasoningParts(message: {
+/** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
+export function terminalAssistantReasoning(message: {
   role?: string;
   content?: unknown;
-}): string[] {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+}): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return "";
   return message.content
     .filter(
       (
@@ -361,14 +387,41 @@ export function terminalAssistantReasoningParts(message: {
         typeof (part as { thinking?: unknown }).thinking === "string" &&
         (part as { redacted?: unknown }).redacted !== true,
     )
-    .map((part) => part.thinking);
+    .map((part) => part.thinking)
+    .join("\n\n");
 }
 
-export function terminalAssistantReasoning(message: {
+/** Offsets within terminalAssistantReasoning, grouped by uninterrupted Pi blocks. */
+export function terminalAssistantThinkingSegments(message: {
   role?: string;
   content?: unknown;
-}): string {
-  return terminalAssistantReasoningParts(message).join("\n\n");
+}): { start: number; end: number }[] | null {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return null;
+  let offset = 0;
+  let visibleCount = 0;
+  let previousThinking = false;
+  const segments: { start: number; end: number }[] = [];
+  for (const part of message.content) {
+    const block = typeof part === "object" && part !== null
+      ? part as { type?: unknown; thinking?: unknown; redacted?: unknown }
+      : null;
+    const thinking = block?.type === "thinking";
+    if (thinking && !previousThinking) {
+      segments.push({ start: offset, end: offset });
+    }
+    if (thinking && block?.redacted !== true && typeof block?.thinking === "string") {
+      if (visibleCount > 0) offset += 2; // terminalAssistantReasoning joins visible blocks with two newlines.
+      if (block.thinking.length > 0) {
+        const segment = segments[segments.length - 1]!;
+        if (segment.start === segment.end) segment.start = offset;
+        segment.end = offset + block.thinking.length;
+      }
+      offset += block.thinking.length;
+      visibleCount += 1;
+    }
+    previousThinking = thinking;
+  }
+  return segments;
 }
 
 /** Add terminal reasoning only when this assistant turn did not already stream it. */

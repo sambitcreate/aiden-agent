@@ -1,11 +1,14 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
 import type { chatStore } from "./chat-store.js";
+import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import type { ToolOutputStore } from "./tool-output-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
@@ -35,6 +38,7 @@ export interface ChatApplicationMutationOptions {
 }
 
 export interface ChatApplicationDependencies {
+  toolOutputStore?: Pick<ToolOutputStore, "deleteByChat">;
   chatStore: Pick<
     typeof chatStore,
     "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
@@ -68,7 +72,9 @@ export interface ChatApplicationDependencies {
   >;
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
+  chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
+  attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
   logError(area: string, message: string, error: unknown): void;
@@ -233,14 +239,17 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       options: ChatApplicationMutationOptions = {},
     ): Promise<void> {
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
+      let finishAttachmentDeletion: (() => void) | undefined;
       let releaseAdmission = false;
       let rollForwardPublished = false;
       const publishRollForward = () => {
         if (rollForwardPublished) return;
         rollForwardPublished = true;
+        deps.attachments?.revokeChat(chatId);
         options.onDeletionRollForward?.();
       };
       try {
+        finishAttachmentDeletion = deps.attachments?.beginChatDeletion(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         await options.assertCurrent?.(current);
@@ -266,6 +275,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           throw new Error("Aiden could not delete this chat's subagent history.");
         }
         publishRollForward();
+        await deps.toolOutputStore?.deleteByChat(chatId);
         try {
           await deps.displayImageArtifactStore.deleteChat(chatId);
         } catch (error) {
@@ -296,6 +306,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("memory", "Could not delete facts sourced from this chat.", error);
           throw new Error("Aiden could not delete this chat's sourced memory.");
         }
+        try {
+          await deps.chatPullRequestStore?.deleteChat(chatId);
+        } catch (error) {
+          deps.logError("git", "Could not delete the chat's pull request links.", error);
+          throw new Error("Aiden could not delete this chat's pull request links.");
+        }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);
           await options.assertCurrent?.(chat);
@@ -315,7 +331,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         }
         deps.releaseChatContext?.(chatId);
-        if (releaseAdmission) finishDeletion();
+        if (releaseAdmission) {
+          finishAttachmentDeletion?.();
+          finishDeletion();
+        }
       }
     },
   };

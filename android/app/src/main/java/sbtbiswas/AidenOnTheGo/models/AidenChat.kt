@@ -188,6 +188,18 @@ enum class AidenAgentStepStatus {
 }
 
 @Serializable
+data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
+    fun isValid(toolName: String?): Boolean {
+        val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
+        return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
+            !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
+            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
+            relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
+    }
+}
+
+@Serializable
 data class AidenAgentLineChanges(
     val additions: Int,
     val deletions: Int
@@ -206,12 +218,13 @@ data class AidenAgentStep(
     val updatedAt: Double,
     val finishedAt: Double? = null,
     val contentOffset: Int? = null,
-    val reasoningStart: Int? = null,
-    val reasoningEnd: Int? = null,
+    val reasoningStartOffset: Int? = null,
+    val reasoningEndOffset: Int? = null,
     val durationMs: Double? = null,
     val target: String? = null,
     val detail: String? = null,
-    val lineChanges: AidenAgentLineChanges? = null
+    val lineChanges: AidenAgentLineChanges? = null,
+    val producedFile: AidenProducedFile? = null
 ) {
     @Serializable
     enum class Kind {
@@ -221,20 +234,63 @@ data class AidenAgentStep(
 
     val isActive: Boolean
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
+}
 
-    /**
-     * UTF-16-bounded slice of the streamed reasoning buffer for this thinking
-     * segment. Fails closed — null for missing, inverted, or out-of-range
-     * bounds — so a malformed segment can never mis-attribute reasoning text.
-     * An open segment (start only, step still active) covers the buffer tail.
-     */
-    fun reasoningText(reasoning: String): String? {
-        if (kind != Kind.THINKING) return null
-        val start = reasoningStart ?: return null
-        if (start < 0 || start > reasoning.length) return null
-        val end = reasoningEnd ?: if (finishedAt == null) reasoning.length else return null
-        if (end < start || end > reasoning.length) return null
-        return reasoning.substring(start, end)
+data class AidenChronologicalRow(
+    val id: String,
+    val kind: Kind,
+    val text: String = "",
+    val steps: List<AidenAgentStep> = emptyList()
+) {
+    enum class Kind { TEXT, REASONING, TOOL }
+}
+
+object AidenChronologicalProjection {
+    fun rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?): List<AidenChronologicalRow>? {
+        if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
+        var reasoningCursor = 0
+        var hasSpan = false
+        for (step in timeline.steps.filter { it.kind == AidenAgentStep.Kind.THINKING }) {
+            val start = step.reasoningStartOffset ?: continue
+            val end = step.reasoningEndOffset ?: if (step.finishedAt == null) reasoning.length else return null
+            if (start < reasoningCursor || end < start || reasoning.substring(reasoningCursor, start).isNotBlank()) return null
+            reasoningCursor = end
+            hasSpan = true
+        }
+        if ((reasoning.isNotEmpty() && !hasSpan) || reasoning.substring(reasoningCursor).isNotBlank()) return null
+        val steps = timeline.steps
+        val result = mutableListOf<AidenChronologicalRow>()
+        var cursor = 0
+        var index = 0
+        while (index < steps.size) {
+            val step = steps[index]
+            val offset = step.contentOffset ?: return null
+            if (offset > cursor) {
+                val slice = text.substring(cursor, offset)
+                if (slice.isNotBlank()) result += AidenChronologicalRow("text-$cursor", AidenChronologicalRow.Kind.TEXT, slice)
+            }
+            if (step.kind == AidenAgentStep.Kind.THINKING) {
+                val start = step.reasoningStartOffset
+                val end = step.reasoningEndOffset ?: reasoning.length
+                val slice = if (start == null) "" else reasoning.substring(start, end)
+                result += AidenChronologicalRow(
+                    "reasoning-${step.id}", AidenChronologicalRow.Kind.REASONING, slice, listOf(step)
+                )
+                index++
+            } else {
+                val group = mutableListOf<AidenAgentStep>()
+                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL && steps[index].contentOffset == offset) {
+                    group += steps[index++]
+                }
+                result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+            }
+            cursor = offset
+        }
+        if (cursor < text.length) {
+            val slice = text.substring(cursor)
+            if (slice.isNotBlank()) result += AidenChronologicalRow("text-$cursor", AidenChronologicalRow.Kind.TEXT, slice)
+        }
+        return result
     }
 }
 
@@ -281,7 +337,7 @@ data class AidenGenerationTimeline(
     val issueCount: Int
         get() = steps.count { it.kind == AidenAgentStep.Kind.TOOL && it.status?.isIssue == true }
 
-    fun isRendererSafe(contentLength: Int? = null): Boolean {
+    fun isRendererSafe(contentLength: Int? = null, reasoningLength: Int? = null): Boolean {
         if (version !in 1..3 || generationId.isEmpty() || generationId.length > 128 ||
             !isSafeIdentifier(generationId) || steps.size > 200 ||
             !startedAt.isFinite() || startedAt < 0 ||
@@ -290,6 +346,7 @@ data class AidenGenerationTimeline(
         ) return false
 
         var previousOffset = 0
+        var previousReasoningEndOffset = 0
         for ((index, step) in steps.withIndex()) {
             if (step.order != index || step.order !in 0..199 ||
                 !step.startedAt.isFinite() || !step.updatedAt.isFinite() ||
@@ -301,6 +358,7 @@ data class AidenGenerationTimeline(
                 (step.toolName != null && (step.toolName.isEmpty() || step.toolName.length > 80)) ||
                 (step.detail != null && (step.detail.isEmpty() || step.detail.length > 120 || step.detail.any { it.code < 32 || it.code == 127 })) ||
                 (step.target != null && !isValidTarget(step.target)) ||
+                (step.producedFile != null && (step.kind != AidenAgentStep.Kind.TOOL || step.status != AidenAgentStepStatus.COMPLETED || !step.producedFile.isValid(step.toolName))) ||
                 (step.lineChanges != null && (
                     version != 3 ||
                     step.kind != AidenAgentStep.Kind.TOOL ||
@@ -315,6 +373,22 @@ data class AidenGenerationTimeline(
                 val offset = step.contentOffset ?: return false
                 if (offset < previousOffset || (contentLength != null && offset > contentLength)) return false
                 previousOffset = offset
+                if (step.kind == AidenAgentStep.Kind.THINKING) {
+                    val start = step.reasoningStartOffset
+                    val end = step.reasoningEndOffset
+                    if (start != null) {
+                        if (start < previousReasoningEndOffset || start > AidenRemoteProtocol.MAX_SAFE_INTEGER ||
+                            (reasoningLength != null && start > reasoningLength) ||
+                            (end == null && step.finishedAt != null)) return false
+                        if (end != null) {
+                            if (end < start || end > AidenRemoteProtocol.MAX_SAFE_INTEGER ||
+                                (reasoningLength != null && end > reasoningLength)) return false
+                            previousReasoningEndOffset = end
+                        }
+                    } else if (end != null) return false
+                }
+            } else if (step.reasoningStartOffset != null || step.reasoningEndOffset != null) {
+                return false
             }
 
             when (step.kind) {
@@ -391,6 +465,13 @@ object AidenAgentActivityPresentation {
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
+
+    /** Exactly one compaction: its line carries every metric. Repeated compactions
+     *  keep the trail so each run's metrics stay reachable. */
+    fun isCompactContextOnly(steps: List<AidenAgentStep>): Boolean {
+        val only = steps.singleOrNull() ?: return false
+        return only.kind == AidenAgentStep.Kind.TOOL && only.toolName == "compact_context"
+    }
 
     fun duration(milliseconds: Double?): String {
         if (milliseconds == null || milliseconds < 2_000.0) return "briefly"
@@ -507,6 +588,7 @@ data class AidenChatMessage(
     val id: String,
     val role: AidenChatRole,
     val text: String,
+    val reasoning: String? = null,
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
     val outcome: AidenMessageOutcome? = null,
@@ -517,12 +599,13 @@ data class AidenChatMessage(
         get() = id.isNotEmpty() &&
                 id.length <= AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH &&
                 text.codePointCount(0, text.length) <= AidenRemoteProtocol.MAX_TEXT_LENGTH &&
+                (reasoning == null || (role == AidenChatRole.ASSISTANT && reasoning.isNotEmpty() && reasoning.length <= 100_000)) &&
                 (attachments?.size ?: 0) <= 20 &&
                 (attachments?.all { it.isWireSafe } ?: true) &&
                 (htmlArtifacts?.size ?: 0) <= 40 &&
                 (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
-                (timeline?.isRendererSafe(text.length) ?: true)
+                (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
 }
 
 @Serializable

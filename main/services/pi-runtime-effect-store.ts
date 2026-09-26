@@ -129,6 +129,7 @@ export class PiRuntimeEffectStore {
   private readonly data: DataStore<DurablePiRuntimeEffectDatabase>;
   private readonly localUnknown = new Map<string, DurablePiRuntimeEffect>();
   private initialized = false;
+  private initialization?: Promise<void>;
 
   constructor(options: PiRuntimeEffectStoreOptions) {
     this.now = options.now ?? Date.now;
@@ -147,6 +148,18 @@ export class PiRuntimeEffectStore {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    // Every caller must cross the same startup boundary. A second recovery
+    // sweep must never interrupt work admitted by the first caller.
+    this.initialization ??= this.initializeOnce().catch((error) => {
+      // Transient recovery-write failures may retry. Corrupt/unsafe snapshots
+      // stay quarantined in DataStore's cache; repair requires a fresh store.
+      this.initialization = undefined;
+      throw error;
+    });
+    await this.initialization;
+  }
+
+  private async initializeOnce(): Promise<void> {
     await this.data.load();
     if (await this.data.loadedFromCorruptFile()) {
       throw new Error("Pi runtime effect storage is unreadable and was preserved.");

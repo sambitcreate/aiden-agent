@@ -144,6 +144,16 @@ function countTools(steps: AgentStep[], names: string[]): number {
   return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
 }
 
+/**
+ * A trail that is exactly one compaction: its own line already carries every
+ * metric, so expanding it would only repeat the "Compacted context" label.
+ * Repeated compactions keep the trail so each run's metrics stay reachable.
+ */
+export function isCompactContextOnly(steps: readonly AgentStep[]): boolean {
+  const [only] = steps;
+  return steps.length === 1 && isToolStep(only) && only.toolName === "compact_context";
+}
+
 const TALLIED_TOOLS = [
   "read_file",
   "grep",
@@ -156,40 +166,6 @@ const TALLIED_TOOLS = [
   "computer_use",
   "compact_context",
 ];
-
-/**
- * Compact work-group summary for activity fragments that contain thinking
- * segments: "Worked for 23s · 4 tools · 3 thoughts", or "Working · 3 tools ·
- * thinking" while live. Duration is wall-clock span the host timeline already
- * records — never a per-thought timer.
- */
-export function workGroupSummary(timeline: GenerationTimeline): string {
-  const { steps } = timeline;
-  const tools = steps.filter(isToolStep).length;
-  const thoughts = steps.length - tools;
-  const activeThought = steps.some((step) => !isToolStep(step) && step.finishedAt === undefined);
-  // Fragments settle themselves: a "running" timeline here implies its group
-  // is the live one.
-  const live = timeline.status === "running";
-
-  const counts: string[] = [];
-  if (tools) counts.push(plural(tools, "tool"));
-  if (!live && thoughts) counts.push(plural(thoughts, "thought"));
-
-  if (live) {
-    if (activeThought) counts.push("thinking");
-    else if (thoughts) counts.push(plural(thoughts, "thought"));
-    return ["Working", ...counts].join(" · ");
-  }
-
-  const first = steps[0];
-  const last = steps[steps.length - 1];
-  const end = timeline.finishedAt ?? last?.finishedAt ?? last?.updatedAt ?? first?.startedAt ?? 0;
-  const durationMs = first === undefined ? undefined : Math.max(0, end - first.startedAt);
-  const duration = formatThinkingDuration(durationMs);
-  if (!tools && thoughts === 1) return `Thought ${duration}`;
-  return [`Worked ${duration}`, ...counts].join(" · ");
-}
 
 /**
  * A deterministic account of the turn, derived only from recorded steps — no

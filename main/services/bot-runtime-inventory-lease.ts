@@ -101,6 +101,11 @@ export class BotRuntimeInventoryLeaseRegistry {
   activeCount(): number {
     return this.active.size;
   }
+
+  /** Read-only publication fence for other main-owned credential consumers. */
+  revision(): number {
+    return this.generation;
+  }
 }
 
 export const botRuntimeInventoryLeases = new BotRuntimeInventoryLeaseRegistry();

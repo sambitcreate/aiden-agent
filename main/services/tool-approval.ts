@@ -12,16 +12,18 @@ export interface ToolApprovalPrompt {
 
 interface PendingApproval {
   streamId: string;
+  toolCallId: string;
   ownerDocumentId?: string;
   settle(outcome: ToolApprovalOutcome): void;
 }
 
-export type ToolApprovalOutcome =
-  | "allowed"
-  | "denied"
-  | "cancelled"
-  | "detached"
-  | "unavailable";
+/** Optional structured payload an approval card may return with a decision. */
+export interface ToolApprovalDecisionPayload {
+  /** Form Fill Specialist: orders the user deselected on the review card. */
+  formFillExcludedOrders?: number[];
+}
+
+export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached" | "unavailable";
 
 /**
  * Owns approval promises and their abort listeners. A decision is one-shot;
@@ -30,7 +32,13 @@ export type ToolApprovalOutcome =
 export class ToolApprovalCoordinator {
   private readonly pending = new Map<string, PendingApproval>();
   private readonly closedStreams = new Map<string, "cancelled" | "detached">();
+  /** Payloads from settled approvals, consumed once by the tool caller. */
+  private readonly decisionPayloads = new Map<string, ToolApprovalDecisionPayload>();
   private stopped = false;
+
+  private payloadKey(streamId: string, toolCallId: string): string {
+    return `${streamId}\u0000${toolCallId}`;
+  }
 
   constructor(
     private readonly publish: (prompt: ToolApprovalPrompt) => void,
@@ -71,6 +79,7 @@ export class ToolApprovalCoordinator {
       };
       this.pending.set(approvalId, {
         streamId: descriptor.streamId,
+        toolCallId: descriptor.toolCallId,
         ownerDocumentId,
         settle: finish,
       });
@@ -93,11 +102,30 @@ export class ToolApprovalCoordinator {
     });
   }
 
-  decide(approvalId: string, allowed: boolean, ownerDocumentId?: string): boolean {
+  decide(
+    approvalId: string,
+    allowed: boolean,
+    ownerDocumentId?: string,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
+    if (payload) {
+      this.decisionPayloads.set(this.payloadKey(entry.streamId, entry.toolCallId), payload);
+    }
     entry.settle(allowed ? "allowed" : "denied");
     return true;
+  }
+
+  /** Consume the decision payload recorded for a settled tool call, if any. */
+  takeDecisionPayload(
+    streamId: string,
+    toolCallId: string,
+  ): ToolApprovalDecisionPayload | undefined {
+    const key = this.payloadKey(streamId, toolCallId);
+    const payload = this.decisionPayloads.get(key);
+    this.decisionPayloads.delete(key);
+    return payload;
   }
 
   cancelStream(streamId: string, outcome: "cancelled" | "detached" = "cancelled"): void {
@@ -107,6 +135,9 @@ export class ToolApprovalCoordinator {
     this.closedStreams.set(streamId, closedOutcome);
     for (const entry of [...this.pending.values()]) {
       if (entry.streamId === streamId) entry.settle(closedOutcome);
+    }
+    for (const key of [...this.decisionPayloads.keys()]) {
+      if (key.startsWith(`${streamId}\u0000`)) this.decisionPayloads.delete(key);
     }
   }
 

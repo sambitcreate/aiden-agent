@@ -1,6 +1,11 @@
+import { piResourcesForSkillSnapshot } from "./skill-tools.js";
+import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
+import { createAgentsInstructionRefresher } from "./agents-instructions.js";
+import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
+import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
@@ -14,7 +19,6 @@ import { createVccRecallTool } from "./pi-vcc/recall.js";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
-  type AgentHarnessResources,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -29,10 +33,22 @@ import {
   canUseBrowserTools,
   isBrowserToolName,
 } from "./browser-tools.js";
-import { prepareBrowserToolApproval, assertBrowserToolApproval, type BrowserToolApproval } from "./browser/approval.js";
+import {
+  prepareBrowserToolApproval,
+  assertBrowserToolApproval,
+  type BrowserToolApproval,
+} from "./browser/approval.js";
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import {
+  DEVICE_APPROVAL_TOOL_NAMES,
+  canUseDeviceTools,
+  createDeviceAgentTools,
+  deviceToolApprovalSummary,
+  isDeviceToolName,
+} from "./devices/device-tools.js";
+import { devicesEnabled } from "./devices/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -80,6 +96,7 @@ import {
   filterExactBotSubagentMcpInventory,
   filterBotSkillSnapshot,
   protectAdmittedBotTool,
+  isComputerUseCapabilityTool,
 } from "./bot-tool-authority.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
@@ -90,11 +107,14 @@ import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
   reconcileTerminalAssistantProjection,
+  terminalAssistantActivityAnchors,
+  terminalAssistantReasoning,
+  terminalAssistantThinkingSegments,
+  terminalAssistantText,
   resolveGenerationThinkingLevel,
   runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeReasoning,
-  terminalAssistantReasoningParts,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
@@ -132,6 +152,14 @@ import type {
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
+  FORM_FILL_TOOL_NAME,
+  currentFormFillAttachments,
+  FormFillService,
+  type FormFillApprovalDescriptor,
+} from "./form-fill/service.js";
+import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
+import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
+import {
   EDIT_AUTOMATION_TOOL_NAME,
   SCHEDULE_TOOL_NAME,
   attachAssistantScheduleMcpApproval,
@@ -144,7 +172,7 @@ import {
   summarizeEditAutomationToolCall,
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
-import { ToolApprovalCoordinator } from "./tool-approval.js";
+import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
 import { chatMessageToPiMessage, chatUserTextWithAttachments } from "./generation-messages.js";
 import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
 import {
@@ -189,6 +217,7 @@ import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
+  cancelComputerUseAndSettle,
   ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
@@ -345,24 +374,6 @@ function uniqueResponseImages(
   return images;
 }
 
-function piResourcesForSkillSnapshot(
-  snapshot: SkillRegistrySnapshot | undefined,
-): AgentHarnessResources {
-  if (!snapshot) return {};
-  return {
-    // Pi resources promise a truthful filePath. Configured database skills
-    // keep their existing leased invocation path until Pi supports in-memory
-    // resource locations.
-    skills: snapshot.available
-      .filter((skill) => Boolean(skill.path))
-      .map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        content: skill.instructions,
-        filePath: skill.path!,
-      })),
-  };
-}
 
 export interface GenerationExecutionOptions {
   /** Main-owned Telegram queue provenance, resolved freshly at generation. */
@@ -415,6 +426,7 @@ interface ActiveGeneration {
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
   computerUse?: ComputerUseController;
+  formFill?: FormFillService;
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
@@ -436,6 +448,7 @@ const initializing = new Map<
     rendererDetached: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
+    formFill?: FormFillService;
     loadMonitor?: LoadMonitorState;
     releaseSkillReservation: () => void;
     releaseBotAuthority: () => void;
@@ -533,6 +546,38 @@ function broadcastChatSettled(
   });
 }
 
+function queuedGuidanceText(messages: readonly { role: string; content?: unknown }[]): string[] {
+  return messages.flatMap((message) =>
+    message.role === "user" && typeof message.content === "string" && message.content.trim()
+      ? [message.content]
+      : [],
+  );
+}
+
+/**
+ * Guidance whose visible save Stop stopped waiting for, and which then did not
+ * land. The stream's terminal has already been sent, so it goes to the window
+ * that owned the stream on its own channel.
+ */
+export function returnLateGuidance(
+  owner: Pick<ChatGenerationOwner, "kind" | "isDestroyed" | "send"> | undefined,
+  chatId: string,
+  streamId: string,
+  guidance: string[],
+): void {
+  if (guidance.length === 0) return;
+  // Steer is desktop-only; a paired-device owner has no draft to restore into.
+  if (!owner || owner.kind === "remote" || owner.isDestroyed()) {
+    logger.warn("pi", `Late guidance for stream ${streamId} had no window to return to.`);
+    return;
+  }
+  try {
+    owner.send("chat:guidance-returned", { chatId, streamId, undeliveredGuidance: guidance });
+  } catch (error) {
+    logger.warn("pi", `Could not return late guidance for stream ${streamId}.`, error);
+  }
+}
+
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
@@ -540,7 +585,9 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
   if (chatId && channel === "chat:todo") {
-    const snapshot = (payload as { snapshot?: import("../../renderer/shared/todo.js").TodoSnapshotViewV1 })?.snapshot;
+    const snapshot = (
+      payload as { snapshot?: import("../../renderer/shared/todo.js").TodoSnapshotViewV1 }
+    )?.snapshot;
     if (snapshot) chatProgressEvents.durableTodo(chatId, streamId, snapshot);
   } else if (chatId && channel === "chat:subagents") {
     chatProgressEvents.changed(chatId);
@@ -678,6 +725,34 @@ async function prepareGeneration(
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  // Bot and Assistant prompts retain their exact, separately granted sources.
+  const agentsInstructions = !botBound && !assistantMode
+    ? await createAgentsInstructionRefresher({
+        globalRoot: aidenConfigDir(),
+        workspaceRoot: permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
+        revalidate: async (requestSignal) => {
+          signal.throwIfAborted();
+          requestSignal?.throwIfAborted();
+          if (!workspace) return;
+          const current = await configStore.getWorkspace(workspace.id);
+          if (!current || current.folderPath !== workspace.folderPath || current.permission !== workspace.permission) {
+            throw new Error("Workspace instruction access changed. Start a new response.");
+          }
+          await assertManagedWorktreeAdmission(current);
+          signal.throwIfAborted();
+          requestSignal?.throwIfAborted();
+        },
+      })
+    : undefined;
+  if (agentsInstructions) {
+    generationExtensions.push({
+      id: "aiden.agents-instruction-scope",
+      beforeProviderRequest: async (_context, requestSignal) => {
+        await agentsInstructions.assertCurrent(requestSignal);
+        return undefined;
+      },
+    });
+  }
   const git =
     folderPath && (!botContext || botContext.admission.authority.files.botHome)
       ? await gitInfo(folderPath)
@@ -685,8 +760,10 @@ async function prepareGeneration(
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
-  assertCustomModelImageLimit(runtime.provider.modelMetadata?.[model.id]?.overrides,
-    runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1));
+  assertCustomModelImageLimit(
+    runtime.provider.modelMetadata?.[model.id]?.overrides,
+    runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1),
+  );
   if (assistantAutomationMode || params.mode === "assistant-unattended") {
     assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
   }
@@ -731,6 +808,22 @@ async function prepareGeneration(
     if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
       computerUse = createComputerUseController(streamId, supportsImages);
       activatedComputerUse(computerUse);
+    }
+  }
+  // The Form Fill Specialist is layered on Computer Use: it exists only when
+  // CU itself is live for this generation, the user enabled the specialist,
+  // and the verified model package is already on disk (status is offline).
+  let formFill: FormFillService | undefined;
+  const sourceAttachments = currentFormFillAttachments(chat.messages);
+  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
+    const artifact = await formFillArtifacts.refresh();
+    if (artifact.state === "ready") {
+      formFill = new FormFillService({
+        controller: computerUse,
+        scorer: formFillRuntime,
+        attachmentResolver: () => sourceAttachments,
+        owner: { chatId: chat.id, generationId: streamId, documentId: ownerDocumentId },
+      });
     }
   }
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
@@ -788,7 +881,7 @@ async function prepareGeneration(
     childShellRollout &&
     subagentRunStore.selection === "v2" &&
     workspace?.permission !== "none" &&
-    permission !== "none" &&
+    (permission === "ask" || permission === "full") &&
     (!botContext || botContext.admission.authority.shell.enabled) &&
     (await access(subagentShellBinary).then(
       () => true,
@@ -817,6 +910,7 @@ async function prepareGeneration(
           thinkingLevel,
           ownerDocumentId,
           permission: workspace.permission,
+          generationPermission: permission,
           writeEnabled: subagentWriteEnabled,
           webEnabled: subagentWebEnabled,
           mcpInventory: subagentMcpInventory,
@@ -956,11 +1050,20 @@ async function prepareGeneration(
         )
       : new Set<string>();
   const browserFileApprovals = new Map<string, PreparedBrowserFile>();
-  const browserActionApprovals = new Map<string, { approval: BrowserToolApproval; args: Record<string, unknown> }>();
+  const browserActionApprovals = new Map<
+    string,
+    { approval: BrowserToolApproval; args: Record<string, unknown> }
+  >();
   const browserSelection: { initialized: boolean; tabId?: string } = { initialized: false };
-  const browserEligible = workspace && canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
-  const browserState = browserEligible ? await (await import("./browser/service.js")).browserService.getState(workspace.id) : undefined;
-  const browserEnabled = browserState && resolveBrowserAgentAccess(browserState.defaults.agentAccess, browserState.agentAccessOverride);
+  const browserEligible =
+    workspace &&
+    canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
+  const browserState = browserEligible
+    ? await (await import("./browser/service.js")).browserService.getState(workspace.id)
+    : undefined;
+  const browserEnabled =
+    browserState &&
+    resolveBrowserAgentAccess(browserState.defaults.agentAccess, browserState.agentAccessOverride);
   const browserTools =
     workspace && browserEnabled
       ? createBrowserAgentTools({
@@ -971,25 +1074,45 @@ async function prepareGeneration(
           supportsImages,
           selection: browserSelection,
           revalidate: async () => {
-            if (signal.aborted || !active.has(streamId)) throw new Error("This browser generation is no longer active.");
+            if (signal.aborted || !active.has(streamId))
+              throw new Error("This browser generation is no longer active.");
             const currentWorkspace = await configStore.getWorkspace(workspace.id);
-            if (!currentWorkspace || currentWorkspace.permission === "none" || currentWorkspace.permission !== workspace.permission || currentWorkspace.folderPath !== workspace.folderPath) {
+            if (
+              !currentWorkspace ||
+              currentWorkspace.permission === "none" ||
+              currentWorkspace.permission !== workspace.permission ||
+              currentWorkspace.folderPath !== workspace.folderPath
+            ) {
               throw new Error("Browser workspace access changed. Start a new response.");
             }
           },
           port: {
-            getState: async () => (await import("./browser/service.js")).browserService.getState(workspace.id),
+            getState: async () =>
+              (await import("./browser/service.js")).browserService.getState(workspace.id),
             command: async (command, browserSignal, callId) => {
               const { browserService } = await import("./browser/service.js");
               const approvedAction = callId ? browserActionApprovals.get(callId) : undefined;
-              const beforeEffect = approvedAction ? () => assertBrowserToolApproval(
-                approvedAction.approval, approvedAction.approval.toolName, approvedAction.args,
-                browserService.getApprovalTarget(workspace.id, approvedAction.approval.target.tabId),
-              ) : undefined;
+              const beforeEffect = approvedAction
+                ? () =>
+                    assertBrowserToolApproval(
+                      approvedAction.approval,
+                      approvedAction.approval.toolName,
+                      approvedAction.args,
+                      browserService.getApprovalTarget(
+                        workspace.id,
+                        approvedAction.approval.target.tabId,
+                      ),
+                    )
+                : undefined;
               beforeEffect?.();
               return browserService.command(workspace.id, command, {
-                source: "agent", signal: browserSignal, supportsImages, beforeEffect,
-                ...(callId && browserFileApprovals.has(callId) ? { preparedFile: browserFileApprovals.get(callId)! } : {}),
+                source: "agent",
+                signal: browserSignal,
+                supportsImages,
+                beforeEffect,
+                ...(callId && browserFileApprovals.has(callId)
+                  ? { preparedFile: browserFileApprovals.get(callId)! }
+                  : {}),
                 ...(browserOwner.id !== 0 ? { owner: browserOwner } : {}),
               });
             },
@@ -1008,14 +1131,62 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  // Simulator tools: the flag, agent access, and an interactive desktop owner must all hold now.
+  const deviceStaticGate = canUseDeviceTools({
+    enabled: devicesEnabled(),
+    agentAccess: true,
+    permission,
+    rendererOwner,
+    assistantMode,
+    bot: Boolean(botContext),
+  });
+  const deviceService = deviceStaticGate && params.chatId
+    ? await (await import("../handlers/devices.js")).deviceServiceForAgents()
+    : null;
+  const deviceGate = Boolean(deviceService?.state().consent.agentAccess);
+  const deviceTools =
+    deviceService && deviceGate
+      ? createDeviceAgentTools({
+          chatId: params.chatId,
+          signal,
+          supportsImages,
+          port: deviceService,
+          revalidate: async () => {
+            if (signal.aborted || !active.has(streamId))
+              throw new Error("This simulator generation is no longer active.");
+            if (!devicesEnabled()) throw new Error("Simulator support is off.");
+            if (workspace) {
+              const currentWorkspace = await configStore.getWorkspace(workspace.id);
+              if (
+                !currentWorkspace ||
+                currentWorkspace.permission === "none" ||
+                currentWorkspace.permission !== workspace.permission ||
+                currentWorkspace.folderPath !== workspace.folderPath
+              ) {
+                throw new Error("Workspace access changed. Start a new response to use simulators.");
+              }
+            }
+          },
+          screenshotDir: () => deviceService.screenshotDir(params.chatId!),
+        }).filter(({ name }) => !options.excludeToolNames?.has(name))
+      : [];
+  // PATH gets the pinned agent-device only when the gate held at generation start, and
+  // loses it on the next command once agent access is revoked.
+  const deviceShimDir =
+    deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
+  const mcpInstructionCollector = createMcpInstructionCollector();
   let tools = (
     await buildAgentTools({
+      onMcpServerInstructions: mcpInstructionCollector.capture,
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
       permission: toolPermission,
       computerUse,
+      formFill,
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
+      deviceTools,
+      ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -1143,7 +1314,7 @@ async function prepareGeneration(
             ? true
             : tool.name === "web_search"
               ? webAllowed
-              : tool.name === COMPUTER_USE_TOOL_NAME
+              : isComputerUseCapabilityTool(tool.name)
                 ? computerAllowed
                 : tool.name === "subagent"
                   ? subagentsAllowed
@@ -1296,6 +1467,10 @@ async function prepareGeneration(
     });
     generationExtensions.push(generativeUiRuntime.extension);
   }
+  if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
+    tools = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
+      () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -1320,17 +1495,23 @@ async function prepareGeneration(
   }
   return {
     runtime: { ...runtime, model },
-    browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
+    agentsInstructions,
+    browserDiscovery,
+    browserSelection,
+    browserFileApprovals,
+    browserActionApprovals,
     permission,
     folderPath,
     git,
     tools,
     generationExtensions,
+    mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
     supportsImages,
     thinkingLevel,
     computerUse,
+    formFill,
     googleWorkspaceSnapshot,
     skillSnapshot,
     workspaceId: workspace?.id,
@@ -1550,12 +1731,26 @@ export const llmClient = {
       }
       if (options.telegramSkillInvocation) {
         const selection = options.telegramSkillInvocation;
-        const currentUser = [...authoritativeChat.messages].reverse().find((message) => message.role === "user");
-        if (options.interactionSurface !== "telegram" || selection.workspaceId !== authoritativeWorkspaceId || !currentUser) {
+        const currentUser = [...authoritativeChat.messages]
+          .reverse()
+          .find((message) => message.role === "user");
+        if (
+          options.interactionSurface !== "telegram" ||
+          selection.workspaceId !== authoritativeWorkspaceId ||
+          !currentUser
+        ) {
           throw new Error("The queued Telegram skill no longer matches this conversation.");
         }
-        const skill = await skillRegistry.resolveFresh(selection.workspaceId, selection.invocationId);
-        const prepared = formatPreparedSkillInvocation(skill, currentUser.content, selection.workspaceId, currentUser.id);
+        const skill = await skillRegistry.resolveFresh(
+          selection.workspaceId,
+          selection.invocationId,
+        );
+        const prepared = formatPreparedSkillInvocation(
+          skill,
+          currentUser.content,
+          selection.workspaceId,
+          currentUser.id,
+        );
         initialization.skillInvocation = prepared;
         initialization.skillPrompt = prepared.formattedPrompt;
       }
@@ -1623,17 +1818,23 @@ export const llmClient = {
     }
     const {
       runtime,
-      browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
+      agentsInstructions,
+      browserDiscovery,
+      browserSelection,
+      browserFileApprovals,
+      browserActionApprovals,
       permission,
       folderPath,
       git,
       tools,
       generationExtensions,
+      mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
       supportsImages,
       thinkingLevel,
       computerUse,
+      formFill,
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
@@ -1692,6 +1893,10 @@ export const llmClient = {
         timeline: snapshot,
       });
     });
+    if (formFill) {
+      formFill.progressSink = (toolCallId, completed, total) =>
+        timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
+    }
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -1785,7 +1990,7 @@ export const llmClient = {
     let lastAssistantMessage: AssistantMessage | undefined;
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
-    let currentAssistantTurnStart = { full: 0, reasoning: 0 };
+    let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
@@ -1861,7 +2066,9 @@ export const llmClient = {
           botBound: preparedBotContext !== undefined,
           rendererOwner: owner.id !== 0,
           remoteOwner: owner.kind === "remote",
-          botTaskTrackingAllowed: preparedBotContext !== undefined && botHasOrdinaryCapability(preparedBotContext, "tasks"),
+          botTaskTrackingAllowed:
+            preparedBotContext !== undefined &&
+            botHasOrdinaryCapability(preparedBotContext, "tasks"),
           excluded: options.excludeToolNames?.has(TODO_TOOL_NAME) ?? false,
         })
       ) {
@@ -1881,7 +2088,8 @@ export const llmClient = {
           if (preparedBotContext) {
             const authority = preparedBotContext.admission;
             todoRuntimeExtension.beforeToolCall = async (context) => {
-              if (context.toolCall.name === TODO_TOOL_NAME) await authority.revalidateBeforeEffect();
+              if (context.toolCall.name === TODO_TOOL_NAME)
+                await authority.revalidateBeforeEffect();
               return undefined;
             };
           }
@@ -1999,7 +2207,9 @@ export const llmClient = {
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: SETTINGS_SECTIONS,
+              settingsSections: devicesEnabled()
+                ? SETTINGS_SECTIONS
+                : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
@@ -2046,13 +2256,23 @@ export const llmClient = {
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
-      const runtimeContributions = applyCustomModelToolPolicy(
-        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+      const modelContributions = withMcpServerInstructions(
+        applyCustomModelToolPolicy(
+          resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+        ),
+        mcpServerInstructions,
       );
+      const runtimeContributions = agentsInstructions
+        ? await agentsInstructions.apply(modelContributions, initialization.controller.signal)
+        : modelContributions;
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
-        contextWindow: model.contextWindow, systemPrompt, tools: runtimeTools,
-        supportsImages, providerId: model.provider, modelId: model.id,
+        contextWindow: model.contextWindow,
+        systemPrompt,
+        tools: runtimeTools,
+        supportsImages,
+        providerId: model.provider,
+        modelId: model.id,
       };
       rememberChatContextProfile(params.chatId, generationContextOptions);
       assertGenerationContextCapacity({
@@ -2112,7 +2332,6 @@ export const llmClient = {
         onEvent: onCompactionEvent,
       };
 
-
       const currentUser = [...generationChat.messages]
         .reverse()
         .find((message) => message.role === "user");
@@ -2121,7 +2340,11 @@ export const llmClient = {
         : generationChat.messages;
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       if (!skillsEnabledForTurn) {
-        piSession = await projectVisibleHistoryWithoutSkills(piSession, priorVisibleMessages, model);
+        piSession = await projectVisibleHistoryWithoutSkills(
+          piSession,
+          priorVisibleMessages,
+          model,
+        );
       }
       const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
@@ -2206,6 +2429,9 @@ export const llmClient = {
           );
         },
         onContextProjection: (projection, projectionOptions) => {
+          // The harness keeps these options current with host-disclosed tool
+          // and prompt updates, so ambient reads reuse the live profile.
+          rememberChatContextProfile(params.chatId, projectionOptions);
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,
@@ -2226,27 +2452,45 @@ export const llmClient = {
               }),
             }
           : {}),
-        transformContext: createGenerationContextTransform(
-          generationContextOptions,
-          (result) => {
-            logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-              model: model.id,
-              estimatedTokensBefore: result.estimatedTokensBefore,
-              estimatedTokensAfter: result.estimatedTokensAfter,
-              inputBudgetTokens: result.inputBudgetTokens,
-              truncatedToolResults: result.truncatedToolResults,
-              compactedToolResults: result.compactedToolResults,
-              removedHistoryMessages: result.removedHistoryMessages,
-              removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-              usedContextFallback: result.usedContextFallback,
-            });
-          },
-        ),
+        transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
+          logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+            model: model.id,
+            estimatedTokensBefore: result.estimatedTokensBefore,
+            estimatedTokensAfter: result.estimatedTokensAfter,
+            inputBudgetTokens: result.inputBudgetTokens,
+            truncatedToolResults: result.truncatedToolResults,
+            compactedToolResults: result.compactedToolResults,
+            removedHistoryMessages: result.removedHistoryMessages,
+            removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+            usedContextFallback: result.usedContextFallback,
+          });
+        }),
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          beforeQueuedUser: async (message, signal) => {
+            if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
+              throw new Error("Queued guidance must contain text.");
+            }
+            // ChatStore writes are not abortable; never start one after Stop.
+            if (signal.aborted) throw new Error("The response stopped before guidance was saved.");
+            const chat = await chatStore.appendMessage(
+              params.chatId,
+              { role: "user", content: message.content, model: params.model },
+              {
+                providerId: params.providerId,
+                model: params.model,
+                expectedWorkspaceId: initialization.workspaceId,
+              },
+            );
+            const visible = chat.messages[chat.messages.length - 1];
+            if (!visible || visible.role !== "user") {
+              throw new Error("Queued guidance was not saved in the visible chat.");
+            }
+            return visible.id;
+          },
           ...(currentUser
             ? {
                 appendInput: async () => {
@@ -2276,11 +2520,20 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = await prepareCustomModelToolContext(context, browserDiscovery?.prepare.bind(browserDiscovery), runtime.provider.modelMetadata?.[model.id]?.overrides);
+        prepareNextTurnWithContext: async ({ toolResults, context }, requestSignal) => {
+          let nextContext = await prepareCustomModelToolContext(
+            context,
+            browserDiscovery?.prepare.bind(browserDiscovery),
+            runtime.provider.modelMetadata?.[model.id]?.overrides,
+          );
+          if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
-            assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });
+            assertGenerationContextCapacity({
+              ...generationContextOptions,
+              systemPrompt: nextContext.systemPrompt,
+              tools: nextContext.tools ?? [],
+            });
             generationContextOptions.tools = nextContext.tools ?? [];
             generationContextOptions.systemPrompt = nextContext.systemPrompt;
           }
@@ -2303,25 +2556,39 @@ export const llmClient = {
         },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
-          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args, reasoning.length);
+          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
+          let formFillApproval: FormFillApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
-          if (context.toolCall.name === "browser_open" || context.toolCall.name === "browser_navigate") {
+          if (
+            context.toolCall.name === "browser_open" ||
+            context.toolCall.name === "browser_navigate"
+          ) {
             try {
-              const file = browserLocalFileRequest(context.toolCall.name, context.args as Record<string, unknown>);
+              const file = browserLocalFileRequest(
+                context.toolCall.name,
+                context.args as Record<string, unknown>,
+              );
               if (file && workspaceId) {
                 const { browserFileService } = await import("./browser/files.js");
-                browserFileApproval = await browserFileService.prepare(workspaceId, file.path, { assetPaths: file.assetPaths, signal });
-                if (!browserFileApproval.requiresApproval) browserFileApprovals.set(context.toolCall.id, browserFileApproval);
+                browserFileApproval = await browserFileService.prepare(workspaceId, file.path, {
+                  assetPaths: file.assetPaths,
+                  signal,
+                });
+                if (!browserFileApproval.requiresApproval)
+                  browserFileApprovals.set(context.toolCall.id, browserFileApproval);
               }
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: error instanceof Error ? error.message : "Local preview access failed." };
+              return {
+                block: true,
+                reason: error instanceof Error ? error.message : "Local preview access failed.",
+              };
             }
           }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
@@ -2354,6 +2621,29 @@ export const llmClient = {
                   error instanceof Error ? error.message : "Computer Use rejected this action.",
               };
             }
+          } else if (context.toolCall.name === FORM_FILL_TOOL_NAME) {
+            if (!formFill) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return {
+                block: true,
+                reason: "The Form Fill Specialist is not enabled or its model is not ready.",
+              };
+            }
+            try {
+              const descriptor = await formFill.approvalFor(context.args, signal);
+              formFillApproval = descriptor;
+              summary = descriptor.summary;
+              approvalDetails = descriptor.details;
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return {
+                block: true,
+                reason:
+                  error instanceof Error ? error.message : "Form fill could not prepare a plan.",
+              };
+            }
           } else {
             const createScheduleApproval =
               context.toolCall.name === SCHEDULE_TOOL_NAME &&
@@ -2361,7 +2651,10 @@ export const llmClient = {
             const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
-              permission === "ask" && (APPROVAL_TOOL_NAMES.has(context.toolCall.name) || BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name));
+              permission === "ask" &&
+              (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
+                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
+                DEVICE_APPROVAL_TOOL_NAMES.has(context.toolCall.name));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -2501,7 +2794,12 @@ export const llmClient = {
                     ? summarizeScheduleToolCall(context.args)
                     : isBrowserToolName(context.toolCall.name)
                       ? browserToolApprovalSummary(context.toolCall.name)
-                      : summarizeToolCall(context.toolCall.name, context.args);
+                      : isDeviceToolName(context.toolCall.name)
+                        ? deviceToolApprovalSummary(
+                            context.toolCall.name,
+                            context.args as Record<string, unknown>,
+                          )
+                        : summarizeToolCall(context.toolCall.name, context.args);
           }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
@@ -2516,14 +2814,25 @@ export const llmClient = {
               }
               const args = context.args as Record<string, unknown>;
               const tabId = typeof args.tabId === "string" ? args.tabId : browserSelection.tabId;
-              if (!tabId) throw new Error("No current browser tab is available. Call browser_open first.");
-              browserActionApproval = prepareBrowserToolApproval(context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, tabId));
+              if (!tabId)
+                throw new Error("No current browser tab is available. Call browser_open first.");
+              browserActionApproval = prepareBrowserToolApproval(
+                context.toolCall.name,
+                args,
+                browserService.getApprovalTarget(workspaceId, tabId),
+              );
               args.tabId = browserActionApproval.target.tabId;
               summary = browserActionApproval.summary;
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: error instanceof Error ? error.message : "Browser approval target is unavailable." };
+              return {
+                block: true,
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : "Browser approval target is unavailable.",
+              };
             }
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
@@ -2548,19 +2857,32 @@ export const llmClient = {
             try {
               signal?.throwIfAborted();
               if (browserFileApproval) {
-                (await import("./browser/files.js")).browserFileService.approve(browserFileApproval);
+                (await import("./browser/files.js")).browserFileService.approve(
+                  browserFileApproval,
+                );
                 browserFileApprovals.set(context.toolCall.id, browserFileApproval);
               }
               if (browserActionApproval && workspaceId) {
                 const { browserService } = await import("./browser/service.js");
                 const args = context.args as Record<string, unknown>;
-                assertBrowserToolApproval(browserActionApproval, context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId));
-                browserActionApprovals.set(context.toolCall.id, { approval: browserActionApproval, args });
+                assertBrowserToolApproval(
+                  browserActionApproval,
+                  context.toolCall.name,
+                  args,
+                  browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId),
+                );
+                browserActionApprovals.set(context.toolCall.id, {
+                  approval: browserActionApproval,
+                  args,
+                });
               }
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: error instanceof Error ? error.message : "Browser approval expired." };
+              return {
+                block: true,
+                reason: error instanceof Error ? error.message : "Browser approval expired.",
+              };
             }
           }
           if (allowed && attendedScheduleApproval) {
@@ -2568,6 +2890,28 @@ export const llmClient = {
           }
           if (allowed) timeline.toolRunning(context.toolCall.id);
           else if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
+          if (allowed && formFill && context.toolCall.name === FORM_FILL_TOOL_NAME) {
+            try {
+              if (!formFillApproval) throw new Error("The form-fill approval was not prepared.");
+              const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+              const payload = toolCallId
+                ? approvals.takeDecisionPayload(streamId, toolCallId)
+                : undefined;
+              formFill.authorize(
+                context.toolCall.id,
+                formFillApproval.planId,
+                formFillApproval.digest,
+                payload?.formFillExcludedOrders ?? [],
+              );
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return {
+                block: true,
+                reason: error instanceof Error ? error.message : "Form-fill approval expired.",
+              };
+            }
+          }
           if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             try {
               if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
@@ -2613,6 +2957,7 @@ export const llmClient = {
               currentAssistantTurnStart = {
                 full: full.length,
                 reasoning: reasoning.length,
+                steps: timeline.beginAssistantMessage(),
               };
             }
             break;
@@ -2623,9 +2968,9 @@ export const llmClient = {
             // provider's reasoning text stays hidden, since only the elapsed
             // time is shown.
             if (e.type === "thinking_start") {
-              timeline.thinkingStarted(reasoning.length);
+              timeline.thinkingStarted();
               noteModelBecameReady();
-            } else if (e.type === "thinking_end") timeline.thinkingEnded(reasoning.length);
+            } else if (e.type === "thinking_end") timeline.thinkingEnded();
             if (e.type === "toolcall_start") {
               // Tool-call arguments can stream for a long while (a full HTML
               // artifact for render_artifact) before execution begins. Open the
@@ -2640,7 +2985,7 @@ export const llmClient = {
                 block.id &&
                 typeof block.name === "string"
               ) {
-                timeline.toolStarted(block.id, block.name, {}, reasoning.length);
+                timeline.toolStarted(block.id, block.name, {});
               }
             }
             if (e.type === "text_delta") {
@@ -2657,13 +3002,11 @@ export const llmClient = {
                 delta,
               });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
-              // Exposed reasoning must always belong to a thinking segment, so
-              // a provider that skips thinking_start still gets bounded offsets.
-              timeline.thinkingStarted(reasoning.length);
               const separator =
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
+              timeline.reasoningDelta(reasoning.length - e.delta.length, reasoning.length);
               currentAssistantTurnHadReasoningDelta = true;
               noteModelBecameReady();
               sendGeneration(streamId, "chat:reasoning-delta", {
@@ -2674,6 +3017,7 @@ export const llmClient = {
             break;
           }
           case "message_end": {
+            if (event.message.role === "user") return;
             if (event.message.role === "assistant") {
               requestUsage.ended();
               lastAssistantMessage = event.message;
@@ -2694,6 +3038,7 @@ export const llmClient = {
                 );
               }
             }
+            const streamedTurn = full.slice(currentAssistantTurnStart.full);
             const projection = reconcileTerminalAssistantProjection(
               { full, reasoning },
               currentAssistantTurnStart,
@@ -2723,18 +3068,34 @@ export const llmClient = {
                 });
               }
             }
-            timeline.reconcileContentOffset(currentAssistantTurnStart.full, full.length);
-            if (event.message.role === "assistant") {
-              timeline.reconcileReasoningOffsets(
-                currentAssistantTurnStart.reasoning,
-                terminalAssistantReasoningParts(event.message),
-                reasoning,
-              );
+            const canonicalTurn = full.slice(currentAssistantTurnStart.full);
+            const anchors = terminalAssistantActivityAnchors(event.message);
+            timeline.reconcileContentOffset(
+              currentAssistantTurnStart.full,
+              streamedTurn,
+              canonicalTurn,
+              anchors ? {
+                stepStart: currentAssistantTurnStart.steps,
+                textStart: canonicalTurn.length - terminalAssistantText(event.message).length,
+                ...anchors,
+              } : undefined,
+            );
+            if (exposeReasoning) {
+              const segments = terminalAssistantThinkingSegments(event.message);
+              if (segments !== null) {
+                const terminalReasoning = terminalAssistantReasoning(event.message);
+                const base = reasoning.length - terminalReasoning.length;
+                timeline.reconcileReasoningSegments(
+                  currentAssistantTurnStart.steps,
+                  segments.map((span) => ({ start: base + span.start, end: base + span.end })),
+                  reasoning.length,
+                );
+              }
             }
             break;
           }
           case "tool_execution_start":
-            timeline.toolStarted(event.toolCallId, event.toolName, event.args, reasoning.length);
+            timeline.toolStarted(event.toolCallId, event.toolName, event.args);
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: "call",
@@ -2789,6 +3150,7 @@ export const llmClient = {
     } catch (error) {
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
+      formFill?.revoke();
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
         await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
@@ -2996,6 +3358,7 @@ export const llmClient = {
       cancellationOrigin: initialization.cancellationOrigin,
       rendererDetached: initialization.rendererDetached,
       computerUse,
+      formFill,
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -3020,6 +3383,7 @@ export const llmClient = {
       });
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
+      formFill?.revoke();
       await computerUse?.close().catch(() => {});
       sendGeneration(streamId, "chat:done", {
         streamId,
@@ -3042,6 +3406,35 @@ export const llmClient = {
       return false;
     }
 
+    // Accepted steer input that Pi never emitted into the visible chat (Stop,
+    // a terminal before the next step, or a failed projection). It rides on
+    // the terminal event so the renderer can restore it instead of losing it.
+    // Collection never waits on host storage: a projection that Stop stopped
+    // waiting for is returned later, only if its visible save did not land.
+    let undeliveredGuidance: string[] = [];
+    let undeliveredGuidanceCollected = false;
+    const collectUndeliveredGuidance = () => {
+      if (undeliveredGuidanceCollected) return;
+      undeliveredGuidanceCollected = true;
+      try {
+        const taken = agent.takeUndeliveredQueuedMessages();
+        undeliveredGuidance = queuedGuidanceText(taken.messages);
+        if (taken.late) {
+          const owner = ownerForStream(streamId);
+          void taken.late.then(
+            (messages) =>
+              returnLateGuidance(owner, params.chatId, streamId, queuedGuidanceText(messages)),
+            (error: unknown) => {
+              logger.warn("pi", `Could not settle late guidance for stream ${streamId}.`, error);
+            },
+          );
+        }
+      } catch (error) {
+        logger.warn("pi", `Could not collect undelivered guidance for stream ${streamId}.`, error);
+      }
+    };
+    const withUndeliveredGuidance = <T extends object>(payload: T) =>
+      undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3083,6 +3476,7 @@ export const llmClient = {
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         reconcileAbandonedVisibleAssistant = runtimeOutcome.finalMessageWasAbandoned === true;
         quarantineSessionFailureWithoutLease =
           runtimeOutcome.kind === "host_failed" && runtimeOutcome.faultKind === "session";
@@ -3126,7 +3520,7 @@ export const llmClient = {
               ? "The local agent runtime could not complete this response safely."
               : null);
         if (finalError) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(
             full,
             reasoning,
@@ -3134,7 +3528,7 @@ export const llmClient = {
             runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `${finalError} The partial response could not be saved: ${persisted.error}`
@@ -3143,7 +3537,7 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else if (
           !generationHasVisibleOutput(
             full,
@@ -3152,10 +3546,10 @@ export const llmClient = {
           ) &&
           !wasCancelled
         ) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
@@ -3163,44 +3557,44 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
             timeline.finish(
               wasCancelled ? "cancelled" : "completed",
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
-              reasoning.length,
             ),
             full,
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           if (persisted.error) {
-            sendGeneration(streamId, "chat:error", {
+            sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
               message: `The response completed but could not be saved: ${persisted.error}`,
               content: full || undefined,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
-            });
+            }));
           } else {
-            sendGeneration(streamId, "chat:done", {
+            sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
               streamId,
               content: full,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
               chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-            });
+            }));
           }
         }
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
-        const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
+        const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
-        sendGeneration(streamId, "chat:error", {
+        sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
           streamId,
           message: persisted.error
             ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
@@ -3209,11 +3603,12 @@ export const llmClient = {
           reasoning: reasoning || undefined,
           timeline: finalTimeline,
           chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-        });
+        }));
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
           resetGenerationAgent(agent, streamId);
+          formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
           invalidateChatContextJournal(params.chatId);
@@ -3238,12 +3633,25 @@ export const llmClient = {
   },
 
   /** Resolve a pending tool-approval request from the UI. */
-  approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
-    return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
+  approve(
+    approvalId: string,
+    decision: ApprovalDecision,
+    ownerDocumentId?: string,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
+    return approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload);
   },
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
     return questionnaires.respond(promptId, response, ownerDocumentId);
+  },
+
+  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
+    const generation = active.get(streamId);
+    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
+      return false;
+    }
+    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
   },
 
   /**
@@ -3266,6 +3674,7 @@ export const llmClient = {
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
     endLoadMonitor(runtimeOwner, streamId, false);
+    runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
     approvals.detachStream(streamId);
     questionnaires.detachStream(streamId);
@@ -3290,6 +3699,7 @@ export const llmClient = {
       initialization.cancellationOrigin = origin;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
+      initialization.formFill?.revoke();
       void initialization.computerUse?.close();
     }
     if (generation) {
@@ -3297,6 +3707,7 @@ export const llmClient = {
       generation.cancellationOrigin = origin;
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
+      generation.formFill?.revoke();
       void generation.computerUse?.close();
     }
     subagentRuntimeRegistry.abortGeneration(streamId);
@@ -3451,6 +3862,16 @@ export const llmClient = {
     for (const streamId of activated) {
       this.cancel(streamId, "computer_use_disabled");
     }
+  },
+
+  async cancelComputerUseGenerationsAndSettle(): Promise<void> {
+    await cancelComputerUseAndSettle({
+      gate: computerUseGenerationGate,
+      initializations: () => initializing,
+      active: () => active,
+      cancel: (streamId) => { this.cancel(streamId, "computer_use_disabled"); },
+      timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
+    });
   },
 
   /** Stop and drain generations before a workspace authority boundary changes. */

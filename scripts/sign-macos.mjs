@@ -31,6 +31,7 @@ const MINIMAL_ENTITLEMENT_HELPERS = Object.freeze([
   "aiden-subagent-shell-runner",
   "aiden-subagent-run-store",
   "aiden-worktree-remover",
+  "aiden-worktree-file-io",
 ]);
 
 function minimalEntitlementHelperPaths(app) {

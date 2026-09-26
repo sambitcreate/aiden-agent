@@ -81,6 +81,8 @@ export interface AidenRemoteMessageProjection {
   id: string;
   role: "user" | "assistant";
   text: string;
+  /** Already displayable parent reasoning; never Pi's private journal. */
+  reasoning?: string;
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
   htmlArtifacts?: AidenRemoteHtmlArtifactProjection[];
@@ -269,11 +271,7 @@ function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeP
       retryExhausted: failure.retryExhausted,
     };
   }
-  const timeline = parseGenerationTimeline(
-    message.timeline,
-    message.content.length,
-    message.reasoning?.length ?? 0,
-  );
+  const timeline = parseGenerationTimeline(message.timeline, message.content.length);
   if (timeline?.status === "failed" || timeline?.status === "cancelled") {
     return { status: timeline.status };
   }
@@ -282,11 +280,7 @@ function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeP
 
 function projectMessageTimeline(message: ChatMessage): GenerationTimeline | undefined {
   if (message.role !== "assistant") return undefined;
-  return parseGenerationTimeline(
-    message.timeline,
-    message.content.length,
-    message.reasoning?.length ?? 0,
-  );
+  return parseGenerationTimeline(message.timeline, message.content.length);
 }
 
 function chatRevision(chat: Chat): string {
@@ -306,6 +300,8 @@ function chatRevision(chat: Chat): string {
         id: message.id,
         role: message.role,
         content: message.content,
+        reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
+          ? message.reasoning : null,
         createdAt: message.createdAt,
         attachments: projectMessageAttachments(message.attachments),
         htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
@@ -374,17 +370,27 @@ export function projectAidenRemoteChat(
         const attachments = projectMessageAttachments(message.attachments);
         const outcome = projectMessageOutcome(message);
         const text = boundedUnicodeScalarPrefix(message.content, 200_000);
+        const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
+          message.reasoning.length <= 100_000 ? message.reasoning : undefined;
         const storedTimeline = projectMessageTimeline(message);
         // A stored timeline can be valid for the full assistant message while
         // pointing beyond the prefix exposed to Remote. Omit it as a unit in
         // that case instead of clamping or fabricating offsets.
-        const timeline = storedTimeline
-          ? parseGenerationTimeline(storedTimeline, text.length) ?? undefined
+        const publicTimeline = storedTimeline && !reasoning
+          ? { ...storedTimeline, steps: storedTimeline.steps.map((step) => {
+              if (step.kind !== "thinking") return step;
+              const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
+              return safeStep;
+            }) }
+          : storedTimeline;
+        const timeline = publicTimeline
+          ? parseGenerationTimeline(publicTimeline, text.length, reasoning?.length ?? 0) ?? undefined
           : undefined;
         return {
           id: message.id,
           role: message.role,
           text,
+          ...(reasoning ? { reasoning } : {}),
           createdAt: new Date(message.createdAt).toISOString(),
           ...(attachments.length > 0 ? { attachments } : {}),
           ...(message.htmlArtifacts && message.htmlArtifacts.length > 0
@@ -404,8 +410,26 @@ export function projectAidenRemoteChat(
       revision: chatRevision(chat),
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
     };
-    const serialized = JSON.stringify(projection);
-    if (Buffer.byteLength(serialized, "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
+    // Reasoning is optional presentation data. Keep the existing chat available
+    // when several otherwise valid assistant messages exceed the response cap.
+    let responseBytes = Buffer.byteLength(JSON.stringify(projection), "utf8");
+    for (let index = projection.messages.length - 1;
+      index >= 0 && responseBytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES;
+      index -= 1) {
+      const message = projection.messages[index]!;
+      if (!message.reasoning) continue;
+      const previousBytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+      delete message.reasoning;
+      if (message.timeline) {
+        message.timeline.steps = message.timeline.steps.map((step) => {
+          if (step.kind !== "thinking") return step;
+          const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
+          return safeStep;
+        });
+      }
+      responseBytes -= previousBytes - Buffer.byteLength(JSON.stringify(message), "utf8");
+    }
+    if (responseBytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
       throw new AidenRemoteServiceError(
         "payload_too_large",
         "This response exceeds the Aiden Remote JSON limit.",
@@ -998,8 +1022,15 @@ export class AidenRemoteChatService {
     chatId: string,
     input: unknown,
   ): Promise<AidenRemoteAttachmentProjection> {
-    await this.chat(chatId);
-    return this.attachments.upload(deviceId, safeId(chatId, "chat"), input);
+    const id = safeId(chatId, "chat");
+    const lease = this.attachments.beginUpload(deviceId, id);
+    try {
+      await this.chat(id);
+      lease.assertCurrent();
+      return this.attachments.upload(deviceId, id, input);
+    } finally {
+      lease.release();
+    }
   }
 
   async removeAttachment(deviceId: string, chatId: string, attachmentId: string): Promise<void> {

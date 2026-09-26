@@ -14,6 +14,8 @@ import type {
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
+  FormFillArtifactStatus,
+  FormFillSettingsView,
   EngineStatus,
   ExternalEditor,
   GitBranches,
@@ -144,6 +146,10 @@ import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemotePairingBootstrapView,
@@ -157,12 +163,35 @@ import {
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import type {
+  ChatPullRequestCandidatesResult,
+  ChatPullRequestCreateResult,
+  ChatPullRequestDetectResult,
+  ChatPullRequestLinkResult,
+  ChatPullRequestListResult,
+  ChatPullRequestPendingCreate,
+  ChatPullRequestRef,
+  ChatPullRequestView,
+} from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import {
   parseChatContextPressure,
   parseChatContextPressureNotification,
   type ChatContextPressureV1,
 } from "../shared/context-pressure";
+import {
+  parseDeviceServiceState,
+  parseDeviceSettings,
+  parseDeviceStreamGrant,
+  parseDeviceToolchainState,
+  type DeviceActionInput,
+  type DeviceConsentKind,
+  type DeviceServiceState,
+  type DeviceSession,
+  type DeviceSettings,
+  type DeviceStreamGrant,
+  type DeviceToolchainState,
+} from "../shared/devices";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
@@ -315,8 +344,7 @@ export const assistantApi = {
 
 export const assistantLiveApi = {
   status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
-  authorizeComputerUse: () =>
-    invoke<string | null>("assistant-live:authorize-computer-use", {}),
+  authorizeComputerUse: () => invoke<string | null>("assistant-live:authorize-computer-use", {}),
   start: (intent: AssistantLiveStartIntent) =>
     invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
@@ -342,6 +370,16 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+};
+
+export const formFillApi = {
+  status: () => invoke<FormFillSettingsView>("formFill:status"),
+  setEnabled: (enabled: boolean) => invoke<FormFillSettingsView>("formFill:setEnabled", enabled),
+  download: () => invoke<FormFillArtifactStatus>("formFill:download"),
+  cancel: () => invoke<FormFillArtifactStatus>("formFill:cancel"),
+  remove: () => invoke<FormFillArtifactStatus>("formFill:remove"),
+  onProgress: (handler: (status: FormFillArtifactStatus) => void) =>
+    onNotification<FormFillArtifactStatus>("formFill:progress", handler),
 };
 
 export const titleProvidersApi = {
@@ -728,6 +766,70 @@ export const browserApi = {
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
+async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
+  const toolchain = parseDeviceToolchainState(await invoke<unknown>(channel));
+  if (!toolchain) throw new Error("The simulator tool versions were invalid.");
+  return toolchain;
+}
+
+async function invokeDeviceState(channel: string, ...args: unknown[]): Promise<DeviceServiceState> {
+  const state = parseDeviceServiceState(await invoke<unknown>(channel, ...args));
+  if (!state) throw new Error("The simulator state response was invalid.");
+  return state;
+}
+
+async function invokeDeviceSettings(channel: string, ...args: unknown[]): Promise<DeviceSettings> {
+  const settings = parseDeviceSettings(await invoke<unknown>(channel, ...args));
+  if (!settings) throw new Error("The simulator settings response was invalid.");
+  return settings;
+}
+
+export const devicesApi = {
+  getState: () => invokeDeviceState("devices:get-state"),
+  setConsent: (kind: DeviceConsentKind, granted: boolean) =>
+    invokeDeviceState("devices:consent", kind, granted),
+  /** Refreshes this Mac and paired Macs; `"local"` never contacts paired Macs. */
+  refresh: (scope?: "local") =>
+    scope ? invokeDeviceState("devices:refresh", scope) : invokeDeviceState("devices:refresh"),
+  /** Contacts paired Macs only when the user asks. */
+  refreshPeers: () => invokeDeviceState("devices:refresh-peers"),
+  open: (input: { chatId: string; deviceId: string; hostId?: string }) =>
+    invoke<DeviceSession>("devices:open", input),
+  close: (input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }) =>
+    invoke<void>("devices:close", input),
+  action: (input: DeviceActionInput) => invokeDeviceSettings("devices:action", input),
+  settings: (input: { hostId: string; deviceId: string }) =>
+    invokeDeviceSettings("devices:settings", input),
+  screenshot: async (input: { hostId: string; deviceId: string }): Promise<Uint8Array> => {
+    const png = await invoke<unknown>("devices:screenshot", input);
+    if (!(png instanceof Uint8Array) || png.byteLength === 0) {
+      throw new Error("The simulator screenshot was invalid.");
+    }
+    return png;
+  },
+  streamGrant: async (): Promise<DeviceStreamGrant> => {
+    const grant = parseDeviceStreamGrant(await invoke<unknown>("devices:stream-grant"));
+    if (!grant) throw new Error("The simulator stream grant was invalid.");
+    return grant;
+  },
+  /** Installed helper versions, read from disk only. */
+  toolchain: () => invokeDeviceToolchain("devices:toolchain"),
+  pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
+  /** Turns every simulator permission off and deletes the installed helpers. */
+  removeTools: () => invokeDeviceState("devices:remove-tools"),
+  onState: (handler: (state: DeviceServiceState) => void) =>
+    onNotification<unknown>("devices:state", (payload) => {
+      const state = parseDeviceServiceState(payload);
+      if (state) handler(state);
+    }),
+  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
+  onReveal: (handler: (chatId: string) => void) =>
+    onNotification<unknown>("devices:reveal", (payload) => {
+      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
+      if (typeof chatId === "string" && chatId) handler(chatId);
+    }),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
@@ -761,8 +863,55 @@ export const gitApi = {
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
+};
+
+// ── Chat ↔ pull requests ──────────────────────────────────────────────
+// A chat durably links many PRs; the relationship is keyed by the canonical
+// (host, repository, number) — never by the workspace's current branch.
+export const pullRequestsApi = {
+  list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
+  current: (chatId: string) =>
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+      "pullRequests:current",
+      chatId,
+    ),
+  candidates: (chatId: string, workspaceId?: string) =>
+    invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
+  link: (chatId: string, input: { url: string }) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:link", chatId, input),
+  linkRef: (chatId: string, ref: ChatPullRequestRef, source?: "manual" | "branch-discovered") =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, { ...ref, source }),
+  unlink: (chatId: string, ref: ChatPullRequestRef) =>
+    invoke<{ ok: boolean }>("pullRequests:unlink", chatId, ref),
+  refresh: (chatId: string, ref?: ChatPullRequestRef) =>
+    invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
+  detectAfterPush: (
+    chatId: string,
+    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
+  ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
+  create: (
+    chatId: string,
+    input: {
+      workspaceId: string;
+      title: string;
+      body?: string;
+      baseBranch: string;
+      headBranch: string;
+      expectedHeadSha?: string;
+      repository?: string;
+      draft?: boolean;
+    },
+  ) => invoke<ChatPullRequestCreateResult>("pullRequests:create", chatId, input),
+  dismissPending: (chatId: string, operationId: string) =>
+    invoke<void>("pullRequests:dismissPending", chatId, operationId),
+  pending: (chatId: string) =>
+    invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
+  adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
@@ -940,8 +1089,11 @@ export const chatsApi = {
       skillInvocation?: SkillInvocationV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
-  approve: (approvalId: string, decision: ApprovalDecision) =>
-    invoke<void>("chat:approve", approvalId, decision),
+  approve: (
+    approvalId: string,
+    decision: ApprovalDecision,
+    options?: { formFillExcludedOrders?: number[] },
+  ) => invoke<void>("chat:approve", approvalId, decision, options),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
@@ -1062,6 +1214,7 @@ interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 interface ChatError {
   streamId: string;
@@ -1070,6 +1223,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1117,6 +1271,16 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
+}
+
+export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
+  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
+  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
@@ -1215,6 +1379,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
@@ -1225,6 +1390,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),

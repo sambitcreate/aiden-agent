@@ -3,11 +3,13 @@ import * as React from "react";
 export interface AppCapabilities {
   subagents: boolean;
   geminiLive: boolean;
+  devices: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   subagents: false,
   geminiLive: false,
+  devices: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
@@ -15,6 +17,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
   return {
     subagents: "subagents" in value && value.subagents === true,
     geminiLive: "geminiLive" in value && value.geminiLive === true,
+    devices: "devices" in value && value.devices === true,
   };
 }
 

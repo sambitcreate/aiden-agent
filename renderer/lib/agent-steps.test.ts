@@ -16,9 +16,9 @@ import {
   activityTrailNeedsAttention,
   formatThinkingDuration,
   isActiveStep,
+  isCompactContextOnly,
   reasoningActivityLabel,
   summarizeActivity,
-  workGroupSummary,
 } from "./agent-steps.js";
 import {
   activityTimelineFragment,
@@ -118,7 +118,6 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
   const content = "Before.Between.After.";
   const rows = assistantPresentationRows(
     content,
-    undefined,
     timeline("completed", [
       positionedTool(0, 7),
       positionedTool(1, 15, "grep"),
@@ -130,7 +129,9 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
     rows?.map((row) =>
       row.kind === "text"
         ? [row.kind, row.content]
-        : [row.kind, row.steps.map((entry) => entry.id)],
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : [row.kind, row.content],
     ),
     [
       ["text", "Before."],
@@ -142,12 +143,12 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
   );
 });
 
-test("reasoning milestones stay in the dedicated disclosure instead of activity rows", () => {
+test("unreadable thinking remains a chronological status row", () => {
   const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
-  const rows = assistantPresentationRows("Before.After.", undefined, timeline("completed", [thought]));
+  const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
   assert.deepEqual(
     rows?.map((row) => (row.kind === "text" ? [row.kind, row.content] : [row.kind])),
-    [["text", "Before.After."]],
+    [["text", "Before."], ["reasoning"], ["text", "After."]],
   );
   assert.equal(
     reasoningActivityLabel(timeline("running", [thinking("think-2", 0)]), true),
@@ -156,24 +157,41 @@ test("reasoning milestones stay in the dedicated disclosure instead of activity 
   assert.equal(reasoningActivityLabel(timeline("completed", [thought]), false), "Thought briefly");
 });
 
+test("reasoning rows follow prose and tools in event order", () => {
+  const steps: AgentStep[] = [
+    { ...thinking("think-1", 0, 500), contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+    positionedTool(1, 0),
+    { ...thinking("think-2", 2, 600), contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+  ];
+  const rows = assistantPresentationRows("Before.After.", timeline("completed", steps), "First\n\nSecond");
+  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : row.content]), [
+    ["reasoning", "First"],
+    ["activity", "tool-2"],
+    ["text", "Before."],
+    ["reasoning", "Second"],
+    ["text", "After."],
+  ]);
+  assert.equal(assistantPresentationRows("", timeline("completed", steps), "First\n\nSecond"), null);
+});
+
 test("assistant presentation fails closed for legacy or invalid offsets", () => {
   const current = timeline("completed", [positionedTool(0, 2), positionedTool(1, 3)]);
   assert.equal(
-    assistantPresentationRows("text", undefined, {
+    assistantPresentationRows("text", {
       ...current,
       steps: current.steps.map(({ contentOffset: _offset, ...entry }) => entry),
     }),
     null,
   );
   assert.equal(
-    assistantPresentationRows("text", undefined, {
+    assistantPresentationRows("text", {
       ...current,
       steps: [positionedTool(0, 3), positionedTool(1, 2)],
     }),
     null,
   );
   assert.equal(
-    assistantPresentationRows("text", undefined, {
+    assistantPresentationRows("text", {
       ...current,
       steps: [positionedTool(0, 5)],
     }),
@@ -183,8 +201,8 @@ test("assistant presentation fails closed for legacy or invalid offsets", () => 
 
 test("the active prose segment keeps a stable key while streaming grows", () => {
   const positioned = timeline("running", [positionedTool(0, 7)]);
-  const first = assistantPresentationRows("Before.A", undefined, positioned);
-  const second = assistantPresentationRows("Before.A longer tail", undefined, positioned);
+  const first = assistantPresentationRows("Before.A", positioned);
+  const second = assistantPresentationRows("Before.A longer tail", positioned);
   assert.ok(first && second);
   assert.equal(first[first.length - 1]?.key, second[second.length - 1]?.key);
 });
@@ -283,6 +301,15 @@ test("summary leads with the work when nothing was explored", () => {
     summarizeActivity(timeline("completed", tools({ compact_context: 1 }))),
     "Compacted context",
   );
+  assert.equal(isCompactContextOnly(tools({ compact_context: 1 })), true);
+  assert.equal(isCompactContextOnly(tools({ compact_context: 1, read_file: 1 })), false);
+  // Each repeated compaction carries its own metrics, so the trail must stay.
+  assert.equal(isCompactContextOnly(tools({ compact_context: 2 })), false);
+  assert.equal(isCompactContextOnly([]), false);
+  assert.equal(
+    isCompactContextOnly([thinking("think-1", 0, 1_000), step("compact", 1, "compact_context")]),
+    false,
+  );
 });
 
 test("uncounted tools fall back to a neutral tool-call tally", () => {
@@ -340,140 +367,4 @@ test("active thinking and named tool helpers match live timeline steps", () => {
   assert.equal(hasActiveToolStep(rendering, "render_artifact"), true);
   assert.equal(hasActiveToolStep(rendering, "read_file"), false);
   assert.equal(isToolStep(rendering.steps[0]!), true);
-});
-
-function thinkingWithSegment(
-  id: string,
-  order: number,
-  contentOffset: number,
-  reasoningStart: number,
-  reasoningEnd?: number,
-  durationMs = 1_000,
-): AgentThinkingStep {
-  return {
-    ...thinking(id, order, durationMs),
-    contentOffset,
-    reasoningStart,
-    ...(reasoningEnd === undefined ? {} : { reasoningEnd }),
-  };
-}
-
-test("segmented reasoning restores think-tool chronology inside work groups", () => {
-  const reasoning = "Inspecting repo...Checking implementation...Found the issue...";
-  const steps: AgentStep[] = [
-    thinkingWithSegment("think-1", 0, 0, 0, 18),
-    positionedTool(1, 0, "read_file"),
-    thinkingWithSegment("think-2", 2, 0, 18, 44),
-    positionedTool(3, 0, "edit_file"),
-    thinkingWithSegment("think-3", 4, 0, 44, reasoning.length),
-  ];
-  const rows = assistantPresentationRows("Fixed it.", reasoning, timeline("completed", steps));
-  assert.ok(rows);
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0]?.kind, "activity");
-  if (rows[0]?.kind !== "activity") return;
-  assert.deepEqual(
-    rows[0].steps.map((entry) => entry.id),
-    ["think-1", "tool-2", "think-2", "tool-4", "think-3"],
-  );
-  assert.deepEqual(
-    rows.map((row) => (row.kind === "text" ? [row.kind, row.content] : [row.kind])),
-    [["activity"], ["text", "Fixed it."]],
-  );
-});
-
-test("segmented reasoning interleaves around assistant text boundaries", () => {
-  const reasoning = "First thought.Second thought.";
-  const steps: AgentStep[] = [
-    thinkingWithSegment("think-1", 0, 0, 0, 13),
-    positionedTool(1, 0, "grep"),
-    positionedTool(2, 7, "run_command"),
-    thinkingWithSegment("think-2", 3, 7, 13, reasoning.length),
-  ];
-  const rows = assistantPresentationRows("Before.After.", reasoning, timeline("completed", steps));
-  assert.deepEqual(
-    rows?.map((row) =>
-      row.kind === "text"
-        ? [row.kind, row.content]
-        : [row.kind, row.steps.map((entry) => entry.id)],
-    ),
-    [
-      ["activity", ["think-1", "tool-2"]],
-      ["text", "Before."],
-      ["activity", ["tool-3", "think-2"]],
-      ["text", "After."],
-    ],
-  );
-});
-
-test("reasoning outside every segment falls back to the legacy reasoning block", () => {
-  // think-1 covers only the first sentence; the trailing sentences were never
-  // attributed, so segmentation fails closed rather than hiding reasoning.
-  const reasoning = "First thought. Orphaned tail never segmented.";
-  const steps: AgentStep[] = [thinkingWithSegment("think-1", 0, 0, 0, 14)];
-  const rows = assistantPresentationRows("Answer.", reasoning, timeline("completed", steps));
-  assert.deepEqual(
-    rows?.map((row) =>
-      row.kind === "text"
-        ? [row.kind, row.content]
-        : [row.kind, row.steps.map((entry) => entry.id)],
-    ),
-    [["text", "Answer."]],
-  );
-});
-
-test("missing, overlapping, or out-of-range bounds render as legacy reasoning", () => {
-  const reasoning = "alpha beta gamma";
-  const legacy = [
-    thinkingWithSegment("think-1", 0, 0, 0, 5),
-    { ...thinking("think-2", 1, 1_000), contentOffset: 0 },
-  ];
-  const rows = assistantPresentationRows("x", reasoning, timeline("completed", legacy));
-  // No tools and no valid segments: only the text row remains; the reasoning
-  // buffer renders through the legacy ReasoningBlock the caller keeps.
-  assert.deepEqual(rows?.map((row) => row.kind), ["text"]);
-});
-
-test("work-group summaries read as one compact line live and settled", () => {
-  assert.equal(
-    workGroupSummary(
-      timeline("completed", [
-        thinkingWithSegment("think-1", 0, 0, 0, 5, 2_000),
-        positionedTool(1, 0, "read_file"),
-        thinkingWithSegment("think-2", 2, 0, 5, 9, 1_000),
-      ]),
-    ),
-    "Worked briefly · 1 tool · 2 thoughts",
-  );
-  assert.equal(
-    workGroupSummary(
-      timeline("running", [
-        positionedTool(0, 0, "read_file"),
-        { ...thinking("think-1", 1), contentOffset: 0, reasoningStart: 0 },
-      ]),
-    ),
-    "Working · 1 tool · thinking",
-  );
-  assert.equal(
-    workGroupSummary(
-      timeline("running", [
-        positionedTool(0, 0, "read_file"),
-        thinkingWithSegment("think-1", 1, 0, 0, 5),
-      ]),
-    ),
-    "Working · 1 tool · 1 thought",
-  );
-  assert.equal(
-    workGroupSummary({
-      ...timeline("completed", [
-        {
-          ...thinkingWithSegment("think-1", 0, 0, 0, 5, 4_200),
-          startedAt: 0,
-          finishedAt: 4_200,
-        },
-      ]),
-      finishedAt: 4_200,
-    }),
-    "Thought for 4s",
-  );
 });

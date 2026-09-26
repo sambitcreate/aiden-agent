@@ -1,3 +1,4 @@
+import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -84,6 +85,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     updatedAt: 4,
   };
   let createWorktreeCount = 0;
+  let createFailure: Error | undefined;
   let deleteWorktreeCount = 0;
   const service = new AidenRemoteGitService({
     application,
@@ -106,6 +108,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
         assert.equal(sourceId, workspace.id);
         assert.equal(branch, "feature/worktree");
         assert.equal(name, "Mobile Worktree");
+        if (createFailure) throw createFailure;
         createWorktreeCount += 1;
         return managedWorkspace;
       },
@@ -239,6 +242,15 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       name: "Mobile Worktree",
       confirmedForeground: true,
     };
+    for (const [index, failure] of [
+      new WorktreeCapacityUnavailableError(),
+      new InsufficientDiskSpaceError({ availableBytes: 1, requiredBytes: 100, reserveBytes: 10, estimatedBytes: 90 }),
+    ].entries()) {
+      createFailure = failure;
+      await assert.rejects(service.createWorktree("device-1", workspace.id, `capacity-denied-000${index}`, createInput),
+        (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "git_capability_denied" && /disk/i.test(error.message));
+    }
+    createFailure = undefined;
     const worktreeCreated = await service.createWorktree(
       "device-1",
       workspace.id,
