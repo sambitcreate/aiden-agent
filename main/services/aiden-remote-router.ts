@@ -156,7 +156,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemoteStreamService,
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   >;
-  files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+  files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
@@ -1836,12 +1836,21 @@ export function createAidenRemoteRequestHandler(
       }
       const workspaceFilesMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files$/u.exec(path);
       if (workspaceFilesMatch && request.method === "GET") {
-        requireNoQuery(query);
+        const params = new URLSearchParams(query);
+        if (query && (params.get("tree") !== "1" || [...params.keys()].some(key =>
+          !["tree", "directory", "cursor"].includes(key) || params.getAll(key).length !== 1) ||
+          (params.has("directory") && !/^file_[A-Za-z0-9_-]{43}$/u.test(params.get("directory")!)) ||
+          (params.has("cursor") && !/^cur_[A-Za-z0-9_-]{43}$/u.test(params.get("cursor")!)))) {
+          throw new AidenRemoteServiceError("invalid_request", "The file page request is invalid.", 400);
+        }
         route = "workspaceFiles";
         const device = await authenticate(request, dependencies.devices, "files:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
+        if (query && !dependencies.files.children) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, query
+          ? await dependencies.files.children!(device.id, workspaceFilesMatch[1]!, params.get("directory") ?? undefined, params.get("cursor") ?? undefined)
+          : await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
         return;
       }
       const workspaceFileMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
