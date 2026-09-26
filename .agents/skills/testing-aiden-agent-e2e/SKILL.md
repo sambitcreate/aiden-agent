@@ -27,7 +27,7 @@ The Electron suite only runs on macOS. CI runs it on `macos-26` (the `e2e` job i
 - Full suite: `npm run test:e2e` (type-checks, runs `npm run build`, then `playwright test --fail-on-flaky-tests`).
 - One spec after a build: `npx playwright test tests/e2e/<spec>.spec.ts --config=playwright.config.ts`.
 - The fixture refuses to launch unless `build/main/index.js` and `build/renderer/main-window.html` exist.
-- When a spec fails, check the `aiden-dev-log` attachment first (`<rootDir>/user-data/logs/aiden-dev.log`), then `electron-process-state`.
+- When a spec fails, check the `aiden-dev-log` attachment first, then `electron-process-state`. The attachment holds `<rootDir>/user-data/logs/aiden-dev.log` for normal runs and `<rootDir>/user-data/logs/aiden.log` when `AIDEN_E2E_RUNTIME_PROFILE=production` (the `test:e2e:diagnostics:production` scripts).
 
 ## Fixture options and onboarding
 - `portableConfigSeed` (default `"lmstudio"`) writes a keyless `LM Studio (local)` provider pointing at the mock into the isolated config dir. `"empty"` writes no providers.
