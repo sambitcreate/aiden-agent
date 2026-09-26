@@ -1125,3 +1125,4 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
   c17 on glibc) applied to both trees — fixed with the shared feature-test
   macro block.
 - 2026-09-25: Linux x64 E2E on ubuntu-24.04 aborts because AppArmor restricts unprivileged user namespaces. Do not setuid `node_modules/electron/dist/chrome-sandbox` (PR-controlled checkout after `npm ci`); `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` on the ephemeral runner restores the namespace sandbox instead.
+- 2026-09-26: A timed-out `execFile(electron, …)` resolves with exit 0 because Chromium turns SIGTERM into a clean shutdown, so a hung fixture surfaces only as a missing result file. Use `killSignal: "SIGKILL"` so the rejection carries stderr.

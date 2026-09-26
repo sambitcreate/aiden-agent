@@ -23,6 +23,10 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
 
   await expect(drawer.locator(".ghostty-screen")).toBeVisible();
   await expect(drawer.locator(".ghostty-input")).toBeFocused();
+  // Wait for the shell's first prompt. On Linux, Control+C is a real SIGINT;
+  // sent while the shell is still starting, it races the typed command and
+  // can drop its first characters ("cho: command not found").
+  await expect(drawer.getByRole("log", { name: "Terminal output" })).toHaveText(/\S/u);
   // With no selection, Cmd+C still belongs to macOS; it must not prefix the
   // next shell command with a literal "c" through Ghostty's key encoder.
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+C`);
