@@ -8,6 +8,20 @@ import * as path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
+/** Match the complete destination basename plus the fixed recovery suffix. */
+export function isDataStoreRecoveryFile(
+  name: string,
+  destination: string,
+): boolean {
+  const prefix = `.${path.basename(destination)}.`;
+  return (
+    name.startsWith(prefix) &&
+    /^(?:absent|[a-f0-9]{64})\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:held|previous)$/u.test(
+      name.slice(prefix.length),
+    )
+  );
+}
+
 export interface DataStoreOptions<T> {
   /** Refuse descriptor reads larger than this byte ceiling, including files that grow mid-read. */
   maxBytes?: number;
@@ -52,6 +66,11 @@ export interface DataStoreOptions<T> {
   beforeWritePublish?: (previous: T | null, next: T) => void;
   /** Synchronous authority fence immediately after a successful app publication. */
   afterWritePublish?: (previous: T | null, next: T) => void;
+}
+
+/** Fresh per-update receipt; callers must treat an entered filesystem publication as uncertain on rejection. */
+export interface DataStorePublicationReceipt {
+  state: "not-published" | "uncertain" | "published";
 }
 
 export class DataStoreExternalChangeError extends Error {
@@ -274,7 +293,7 @@ export class DataStore<T> {
     let names: string[];
     try {
       names = (await fs.readdir(directory)).filter(
-        (name) => name.startsWith(prefix) && (name.endsWith(".held") || name.endsWith(".previous")),
+        (name) => isDataStoreRecoveryFile(name, destination),
       );
     } catch {
       return;
@@ -331,6 +350,7 @@ export class DataStore<T> {
     staged: string,
     destination: string,
     isCurrent: () => boolean,
+    receipt?: DataStorePublicationReceipt,
   ): Promise<void> {
     if (this.diskSnapshot === undefined) {
       throw new Error("Cannot overwrite a JSON file before loading its current contents.");
@@ -384,7 +404,9 @@ export class DataStore<T> {
       // concurrent editor that creates it wins: hard-link publication is the
       // no-overwrite primitive that rename lacks.
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (receipt) receipt.state = "uncertain";
       await fs.link(staged, destination);
+      if (receipt) receipt.state = "published";
       destinationPublished = true;
       await this.syncDirectory(path.dirname(destination));
       // A writer that already held the old inode can still modify it after the
@@ -434,7 +456,7 @@ export class DataStore<T> {
    * dies or the disk fills mid-write, which would destroy a config the user
    * maintains by hand rather than merely losing a regenerable cache.
    */
-  private async writeNow(data: T, isCurrent: () => boolean): Promise<void> {
+  private async writeNow(data: T, isCurrent: () => boolean, receipt?: DataStorePublicationReceipt): Promise<void> {
     if (!isCurrent()) throw new Error("The renderer document is no longer active.");
     if (this.options.isSafe && !this.options.isSafe(data)) {
       throw new DataStoreUnsafeWriteError();
@@ -473,10 +495,12 @@ export class DataStore<T> {
       const previous = this.cache === null ? null : structuredClone(this.cache);
       this.options.beforeWritePublish?.(previous, data);
       if (this.options.rejectExternalChanges) {
-        await this.publishProtected(staged, destination, isCurrent);
+        await this.publishProtected(staged, destination, isCurrent, receipt);
       } else {
         if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        if (receipt) receipt.state = "uncertain";
         await fs.rename(staged, destination);
+        if (receipt) receipt.state = "published";
         await this.syncDirectory(path.dirname(destination));
       }
       // Publish the in-memory view in the same synchronous turn as the durable
@@ -518,7 +542,9 @@ export class DataStore<T> {
   async update<R>(
     mutation: (draft: T) => R | Promise<R>,
     isCurrent: () => boolean = () => true,
+    receipt?: DataStorePublicationReceipt,
   ): Promise<R> {
+    if (receipt) receipt.state = "not-published";
     return this.serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       if (this.options.reloadBeforeWrite) await this.reloadNow();
@@ -530,7 +556,7 @@ export class DataStore<T> {
       }
       const draft = structuredClone(await this.load());
       const result = await mutation(draft);
-      await this.writeNow(draft, isCurrent);
+      await this.writeNow(draft, isCurrent, receipt);
       return result;
     });
   }

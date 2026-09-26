@@ -4881,6 +4881,84 @@
           },
           "lineChanges": {
             "$ref": "#/components/schemas/GenerationLineChanges"
+          },
+          "producedFile": {
+            "$ref": "#/components/schemas/ProducedFile"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "producedFile"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "toolName": {
+                      "const": "write_file"
+                    },
+                    "producedFile": {
+                      "properties": {
+                        "operation": {
+                          "const": "written"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "toolName": {
+                      "const": "edit_file"
+                    },
+                    "producedFile": {
+                      "properties": {
+                        "operation": {
+                          "const": "edited"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "ProducedFile": {
+        "type": "object",
+        "description": "Host-confirmed successful write_file/edit_file provenance. Only on completed tool steps. Never an authorization to open a Mac path.",
+        "required": [
+          "relativePath",
+          "operation",
+          "bytes"
+        ],
+        "properties": {
+          "relativePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^(?![/~])(?![A-Za-z]:/)(?![\\s\\S]*(?:^|/)\\.{1,2}(?:/|$))(?![\\s\\S]*//)(?![\\s\\S]*/$)[^\\\\\\u0000-\\u001F\\u007F]+$"
+          },
+          "operation": {
+            "enum": [
+              "written",
+              "edited"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000
           }
         },
         "additionalProperties": false
@@ -4925,6 +5003,14 @@
           },
           "durationMs": {
             "type": "number",
+            "minimum": 0
+          },
+          "reasoningStartOffset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reasoningEndOffset": {
+            "type": "integer",
             "minimum": 0
           }
         },
@@ -5041,6 +5127,10 @@
           "text": {
             "type": "string",
             "maxLength": 200000
+          },
+          "reasoning": {
+            "type": "string",
+            "maxLength": 100000
           },
           "attachments": {
             "type": "array",

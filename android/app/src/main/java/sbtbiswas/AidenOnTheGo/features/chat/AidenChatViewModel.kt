@@ -22,6 +22,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
@@ -84,6 +85,10 @@ class AidenChatViewModel(
 
     private val _pendingApproval = MutableStateFlow<AidenPendingApproval?>(null)
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
+    private val _isStopping = MutableStateFlow(false)
+    val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+    private val _isRespondingToApproval = MutableStateFlow(false)
+    val isRespondingToApproval: StateFlow<Boolean> = _isRespondingToApproval.asStateFlow()
 
     private val _pendingAttachments = MutableStateFlow<List<AidenAttachmentReference>>(emptyList())
     val pendingAttachments: StateFlow<List<AidenAttachmentReference>> = _pendingAttachments.asStateFlow()
@@ -784,7 +789,7 @@ class AidenChatViewModel(
                 if (e !is CancellationException) {
                     val fallbackMessages = _chat.value?.messages?.filter { it.id != optimisticId } ?: emptyList()
                     _chat.value = _chat.value?.copy(messages = fallbackMessages, updatedAt = previousUpdatedAt)
-                    _draft.value = AidenDraftSendReconciliation.failedDraft(text, _draft.value)
+                    updateDraft(AidenDraftSendReconciliation.failedDraft(text, _draft.value))
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
                     _presentedError.value = e.localizedMessage
@@ -1059,11 +1064,27 @@ class AidenChatViewModel(
         _streamState.value = status.state
     }
 
-    private suspend fun restorePendingApproval(streamId: String) {
+    private var approvalSnapshotGeneration = 0L
+    private data class ApprovalSnapshotRead(
+        val streamId: String, val client: AidenRemoteClient,
+        val approval: AidenPendingApproval?, val state: AidenStreamState?
+    )
+    private var approvalSnapshotInFlight: ApprovalSnapshotRead? = null
+
+    internal suspend fun restorePendingApproval(streamId: String, isFallback: Boolean = false) {
         val client = activeClient() ?: return
+        if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        if (isFallback && approvalSnapshotInFlight?.let { it.streamId == streamId && it.client === client &&
+                it.approval == _pendingApproval.value && it.state == _streamState.value } == true) return
+        val snapshotGeneration = ++approvalSnapshotGeneration
+        approvalSnapshotInFlight = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
+        val expectedApproval = _pendingApproval.value
+        val expectedState = _streamState.value
         try {
             val snapshot = client.streamApproval(streamId)
-            if (activeStreamId != streamId) return
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != approvalSnapshotGeneration ||
+                _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             val approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId = streamId,
@@ -1078,18 +1099,51 @@ class AidenChatViewModel(
                 _streamState.value = AidenStreamState.RECONCILING
             }
         } catch (_: Exception) {
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != approvalSnapshotGeneration ||
+                _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             _pendingApproval.value = null
             _streamState.value = AidenStreamState.RECONCILING
+        } finally {
+            if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
         }
     }
 
+    val canControlCurrentRun: Boolean
+        get() {
+            val installation = installationForProgress() ?: return false
+            val currentChat = _chat.value ?: return false
+            return coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+                activeStreamId != null && _streamState.value?.isTerminal == false &&
+                installation.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) &&
+                (currentChat.botId == null ||
+                    (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+                     installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)))
+        }
+
     fun cancelTurn() {
+        if (!canControlCurrentRun || _isStopping.value) return
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
+        _isStopping.value = true
         viewModelScope.launch {
             try {
-                client.cancelTurn(chatId, streamId)
-            } catch (_: Exception) {}
+                val status = client.cancelStream(streamId)
+                if (activeClient() !== client || activeStreamId != streamId ||
+                    _streamState.value?.isTerminal == true) return@launch
+                if (status.streamId != streamId || status.chatId != chatId) {
+                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+                    return@launch
+                }
+                apply(status, streamId)
+            } catch (e: Exception) {
+                if (activeClient() === client && activeStreamId == streamId &&
+                    _streamState.value?.isTerminal != true) {
+                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+                }
+            } finally {
+                _isStopping.value = false
+            }
         }
     }
 
@@ -1097,16 +1151,19 @@ class AidenChatViewModel(
         cancelTurn()
     }
 
-    fun respondToApproval(decision: AidenApprovalDecision) {
-        if (isReadOnlyPresentation) return
-        val approval = _pendingApproval.value
-        if (approval == null || !approval.expiresAt.isAfter(Instant.now())) {
+    fun respondToApproval(decision: AidenApprovalDecision, approvalId: String) {
+        if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
+            _isRespondingToApproval.value || _isStopping.value) return
+        val approval = _pendingApproval.value ?: return
+        if (approval.id != approvalId) return
+        if (!approval.expiresAt.isAfter(Instant.now())) {
             _pendingApproval.value = null
             return
         }
         val capabilities = approvalCapabilities()
         if (!capabilities.canRespond) {
             _presentedError.value = "This paired device can review approvals but cannot respond."
+            refreshApprovalAccess()
             return
         }
         val canCurrentlyAllow = approval.hostCanAllow &&
@@ -1121,37 +1178,60 @@ class AidenChatViewModel(
             } else {
                 "This action must be confirmed in Aiden on your Mac."
             }
+            refreshApprovalAccess()
             return
         }
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
-        val previousState = _streamState.value
-
+        _isRespondingToApproval.value = true
         _pendingApproval.value = null
         _streamState.value = AidenStreamState.RUNNING
 
         viewModelScope.launch {
             try {
-                client.respondToApproval(chatId, approval.id, decision, UUID.randomUUID())
-            } catch (e: Exception) {
-                if (e !is CancellationException && activeStreamId == streamId) {
-                    _pendingApproval.value = approval
-                    _streamState.value = previousState
-                    _presentedError.value = e.localizedMessage
+                val response = client.respondToApproval(approval.id, decision)
+                if (activeClient() !== client || activeStreamId != streamId ||
+                    _streamState.value?.isTerminal == true) return@launch
+                if (response.approvalId != approval.id || response.decision != decision) {
+                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
+                    if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
+            } catch (e: Exception) {
+                if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
+                    _streamState.value?.isTerminal != true) {
+                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
+                    // An ambiguous write may have succeeded; only the Mac can restore a card.
+                    if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
+                }
+            } finally {
+                _isRespondingToApproval.value = false
             }
+        }
+    }
+
+    private fun refreshApprovalAccess() {
+        val streamId = activeStreamId ?: return
+        _isRespondingToApproval.value = true
+        _pendingApproval.value = null
+        _streamState.value = AidenStreamState.RECONCILING
+        viewModelScope.launch {
+            try { restorePendingApproval(streamId) }
+            finally { _isRespondingToApproval.value = false }
         }
     }
 
     private fun approvalCapabilities(): AidenApprovalCapabilities {
         val installation = coordinator.installationStore.activeInstallation
-        if (coordinator.activeInstanceId != instanceId ||
+        if (_chat.value == null || coordinator.activeInstanceId != instanceId ||
             installation?.instanceId != instanceId || installation.deviceId != deviceId
         ) {
             return AidenApprovalCapabilities(canRespond = false, canWriteSchedules = false)
         }
         return AidenApprovalCapabilities(
-            canRespond = installation.hasNegotiatedAccess(AidenRemoteCapability.APPROVAL_RESPOND),
+            canRespond = installation.hasNegotiatedAccess(AidenRemoteCapability.APPROVAL_RESPOND) &&
+                (_chat.value?.botId == null ||
+                    (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+                     installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE))),
             canWriteSchedules = installation.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_WRITE)
         )
     }

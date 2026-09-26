@@ -482,9 +482,9 @@ test("DataStore recovery preserves special held-file candidates as conflicts", a
   const dir = await tmpDir(t, "aiden-ds-special-held-");
   const canonical = path.join(dir, "config.json");
   await fs.writeFile(canonical, JSON.stringify({ count: 2 }), "utf-8");
-  const symlink = path.join(dir, ".config.json.symlink.held");
+  const symlink = path.join(dir, ".config.json.absent.00000000-0000-4000-8000-000000000006.held");
   await fs.symlink(canonical, symlink);
-  const fifo = path.join(dir, ".config.json.fifo.held");
+  const fifo = path.join(dir, ".config.json.absent.00000000-0000-4000-8000-000000000007.held");
   execFileSync("/usr/bin/mkfifo", [fifo]);
 
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
@@ -548,7 +548,7 @@ test("DataStore refuses a canonical FIFO or symlink without blocking startup", a
 
 test("DataStore recovers a crash-orphaned held file before loading defaults", async (t) => {
   const dir = await tmpDir(t, "aiden-ds-held-recovery-");
-  const held = path.join(dir, ".config.json.crash.held");
+  const held = path.join(dir, ".config.json.absent.00000000-0000-4000-8000-000000000008.held");
   await fs.writeFile(held, JSON.stringify({ count: 7 }), "utf-8");
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
 
@@ -567,7 +567,7 @@ test("DataStore recovers a crash-orphaned held file before loading defaults", as
 test("DataStore restores crash-held symlinks, FIFOs, and directories without following them", async (t) => {
   for (const kind of ["symlink", "fifo", "directory"] as const) {
     const dir = await tmpDir(t, `aiden-ds-held-${kind}-`);
-    const held = path.join(dir, `.config.json.absent.${kind}.held`);
+    const held = path.join(dir, `.config.json.absent.00000000-0000-4000-8000-000000000009.held`);
     const canonical = path.join(dir, "config.json");
     if (kind === "symlink") {
       const target = path.join(dir, "external.json");
@@ -659,7 +659,7 @@ test("DataStore removes an unchanged crash-held predecessor when canonical data 
   const dir = await tmpDir(t, "aiden-ds-held-cleanup-");
   const oldContents = JSON.stringify({ count: 1 });
   const oldHash = createHash("sha256").update(oldContents).digest("hex");
-  const held = path.join(dir, `.config.json.${oldHash}.crash.held`);
+  const held = path.join(dir, `.config.json.${oldHash}.00000000-0000-4000-8000-000000000008.held`);
   await fs.writeFile(held, oldContents, "utf-8");
   await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: 2 }), "utf-8");
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
@@ -673,7 +673,7 @@ test("DataStore preserves a changed crash-held predecessor as a conflict", async
   const expected = JSON.stringify({ count: 1 });
   const edited = JSON.stringify({ count: 9, external: true });
   const expectedHash = createHash("sha256").update(expected).digest("hex");
-  await fs.writeFile(path.join(dir, `.config.json.${expectedHash}.crash.held`), edited, "utf-8");
+  await fs.writeFile(path.join(dir, `.config.json.${expectedHash}.00000000-0000-4000-8000-000000000008.held`), edited, "utf-8");
   await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: 2 }), "utf-8");
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
 
@@ -960,4 +960,20 @@ test("chat store: a chat message missing optional fields loads with safe default
   // message has reasoning stripped to undefined per readChat sanitization.
   assert.equal(reloaded?.messages[0].reasoning, undefined);
   assert.equal(reloaded?.messages[1].reasoning, undefined);
+});
+
+test("DataStore recovery leaves dotted sibling held and previous files untouched", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-dotted-recovery-");
+  const names = ["held", "previous"].map(
+    (suffix) => `.config.json.json.absent.00000000-0000-4000-8000-000000000004.${suffix}`,
+  );
+  const payload = JSON.stringify({ count: 7 });
+  for (const name of names) await fs.writeFile(path.join(dir, name), payload);
+  const store = new DataStore("config.json", { count: 0 }, () => dir, {
+    rejectUnsafeWrite: true,
+  });
+  assert.deepEqual(await store.load(), { count: 0 });
+  assert.deepEqual((await fs.readdir(dir)).sort(), names.sort());
+  for (const name of names)
+    assert.equal(await fs.readFile(path.join(dir, name), "utf8"), payload);
 });

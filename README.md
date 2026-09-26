@@ -116,6 +116,8 @@ npm run package:verify
 
 Distribution builds use `npm run dist` and require Developer ID signing plus notarization. The release pipeline fails closed, verifies the app, DMG, and ZIP, checks the deployed Homebrew and website consumers, and publishes updater metadata only with the matching verified artifacts. Read [macOS releases and automatic updates](docs/releasing.md) before enabling publication.
 
+See [continuous integration](docs/ci.md) for change selection, test lanes, Electron shards, and the `CI required` gate.
+
 The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path. Artificial Analysis credentials and data are never bundled. Direct Artificial Analysis suggestions require an explicit user fetch. OpenRouter benchmark insights use a separate encrypted Model Pad key only after an explicit Connect & fetch or Fetch latest action, then read normalized public scores from a device-local offline cache. That key never configures an inference provider or imports OpenRouter's model catalog.
 
 ## Project status

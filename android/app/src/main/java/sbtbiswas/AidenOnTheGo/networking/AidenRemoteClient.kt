@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.networking
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
@@ -378,6 +381,7 @@ class AidenRemoteClient(
         botScope: AidenBotPrivateResponseScope? = null,
         requestTimeoutSeconds: Long? = null,
         maximumResponseBytes: Int? = null,
+        retryConnectionFailure: Boolean = true,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -414,26 +418,17 @@ class AidenRemoteClient(
             "DELETE" -> if (requestBody != null) requestBuilder.delete(requestBody) else requestBuilder.delete()
         }
 
-        val callClient = requestTimeoutSeconds?.let {
-            httpClient.newBuilder()
-                .readTimeout(it, TimeUnit.SECONDS)
-                .callTimeout(it, TimeUnit.SECONDS)
-                .build()
-        } ?: httpClient
+        val callClient = if (requestTimeoutSeconds != null || !retryConnectionFailure) {
+            httpClient.newBuilder().apply {
+                if (requestTimeoutSeconds != null) {
+                    readTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                    callTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                }
+                if (!retryConnectionFailure) retryOnConnectionFailure(false)
+            }.build()
+        } else httpClient
         val response = try {
-            callClient.newCall(requestBuilder.build()).await()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
-            throw error
-        }
-        val bytes = try {
-            if (maximumResponseBytes != null) {
-                response.body.readBounded(maximumResponseBytes)
-            } else {
-                response.body?.bytes() ?: ByteArray(0)
-            }
+            callClient.newCall(requestBuilder.build()).awaitBody(maximumResponseBytes)
         } catch (error: CancellationException) {
             throw error
         } catch (_: ResponseBodyLimitExceededException) {
@@ -443,6 +438,8 @@ class AidenRemoteClient(
             AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
             throw error
         }
+
+        val bytes = response.bytes
 
         if (!acceptedStatus.contains(response.code)) {
             val errorBody = parseError(response.code, bytes)
@@ -893,6 +890,7 @@ class AidenRemoteClient(
     ): AidenStreamStatus = executeRequest(
         "/streams/$id/cancel",
         method = "POST",
+        retryConnectionFailure = false,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
@@ -910,6 +908,7 @@ class AidenRemoteClient(
     ): AidenApprovalResponse = executeRequest(
         "/approvals/$id/respond",
         method = "POST",
+        retryConnectionFailure = false,
         bodyJson = json.encodeToString(ApprovalRequest(decision = decision)),
         idempotencyKey = idempotencyKey
     ) { bytes ->
@@ -1881,6 +1880,47 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
             continuation.resumeWithException(e)
         }
     })
+}
+
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray)
+
+/** Keep cancellation connected to the socket until the body is consumed and closed. */
+@OptIn(DelicateCoroutinesApi::class)
+private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = coroutineScope {
+    val readerScope = this
+    suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { this@awaitBody.cancel() }
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                // Return the OkHttp per-host slot at headers, not after a slow
+                // body. ATOMIC guarantees use/close even if cancellation wins
+                // before the IO worker starts; the scope owns its completion.
+                readerScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+                    val result = try {
+                        response.use {
+                            if (!continuation.isActive) return@launch
+                            val bytes = if (maximumBytes != null) {
+                                it.body.readBounded(maximumBytes)
+                            } else {
+                                it.body?.bytes() ?: ByteArray(0)
+                            }
+                            BufferedHttpResponse(it.code, bytes)
+                        }
+                    } catch (error: Exception) {
+                        continuation.resumeWithException(error)
+                        return@launch
+                    }
+                    // Only plain data crosses the dispatch boundary: cancellation
+                    // cannot discard an open response before the caller receives it.
+                    continuation.resume(result)
+                }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWithException(e)
+            }
+        })
+    }
 }
 
 private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")

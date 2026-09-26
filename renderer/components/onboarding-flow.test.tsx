@@ -319,7 +319,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+    /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,
@@ -428,4 +428,21 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /models.length === 0/u);
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
+});
+
+
+test("MCP onboarding discloses service-supplied tool guidance", () => {
+  assert.match(source, /Connected services may also provide guidance for using those tools\./u);
+});
+
+test("MCP tour explains connected-service resource reads", () => {
+  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+});
+
+test("blocked form filling is not advertised as a shipped tour feature", () => {
+  assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
+});
+
+test("workspace tour discloses AGENTS instruction loading and refresh", () => {
+  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
 });

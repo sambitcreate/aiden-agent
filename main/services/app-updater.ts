@@ -96,6 +96,7 @@ export class AppUpdateService {
     );
   };
   private started = false;
+  private disposed = false;
 
   snapshot(): AppUpdateSnapshot {
     return this.controller.snapshot();
@@ -126,7 +127,7 @@ export class AppUpdateService {
   }
 
   start(): void {
-    if (this.started || !updaterEnabled()) return;
+    if (this.disposed || this.started || !updaterEnabled()) return;
     this.started = true;
     autoUpdater.logger = updaterLogger();
     configureAppUpdater(autoUpdater);
@@ -140,6 +141,7 @@ export class AppUpdateService {
   }
 
   async checkNow(manual: boolean): Promise<AppUpdateCheckResult> {
+    if (this.disposed) return { outcome: "unavailable" };
     if (!updaterEnabled()) {
       if (manual) {
         await dialog.showMessageBox({
@@ -158,8 +160,9 @@ export class AppUpdateService {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
 
-    this.checkPromise = (async () => {
+    this.checkPromise = (async (): Promise<AppUpdateCheckResult> => {
       const result = await this.controller.checkNow();
+      if (this.disposed) return { outcome: "unavailable" };
       if (result.outcome !== "failed" && result.outcome !== "unavailable") {
         this.retryAttempt = 0;
       }
@@ -170,6 +173,7 @@ export class AppUpdateService {
           logger.warn("updater", "Could not show manual update result", safeUpdaterError(error));
         }
       }
+      if (this.disposed) return { outcome: "unavailable" };
       if (result.outcome === "failed") this.scheduleRetry();
       return result;
     })();
@@ -272,6 +276,9 @@ export class AppUpdateService {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.controller.dispose();
     if (this.initialTimer) clearTimeout(this.initialTimer);
     if (this.intervalTimer) clearInterval(this.intervalTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);

@@ -89,6 +89,7 @@ import {
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
+import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import {
   registerGenerativeUiProtocol,
@@ -1057,6 +1058,7 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
@@ -1808,7 +1810,17 @@ if (!ownsSingleInstanceLock) {
         );
       }
       await subagentRunStore.initialize();
+      await toolOutputStore.pruneExpired().catch(() => {
+        logger.warn("pi", "Expired tool output cleanup could not complete.");
+      });
+      const toolOutputCleanup = setInterval(() => {
+        void toolOutputStore.pruneExpired().catch(() => {
+          logger.warn("pi", "Expired tool output cleanup could not complete.");
+        });
+      }, 60 * 60 * 1_000);
+      toolOutputCleanup.unref();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
           await displayImageArtifactStore.deleteChat(chatId);
         }
