@@ -32,6 +32,7 @@ import {
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
@@ -294,6 +295,40 @@ export class PiCompactionCoordinator {
     );
   }
 
+  /**
+   * Pi's anchored estimate prices system messages at zero. A model that keeps
+   * later system messages is sent each one after the usage anchor in full.
+   */
+  private anchoredEstimateTokens(
+    messages: readonly AgentMessage[],
+    estimate: ReturnType<typeof estimateContextTokens>,
+  ): number {
+    if (estimate.lastUsageIndex === null) return estimate.tokens;
+    return estimate.tokens + this.retainedSystemTokensAfter(messages, estimate.lastUsageIndex);
+  }
+
+  /**
+   * Whole-transcript heuristic for a transcript without a current-model usage
+   * anchor. A model that keeps later system messages is sent each one after
+   * the leading head, which Pi's per-message estimate prices at zero.
+   */
+  private transcriptEstimateTokens(messages: readonly AgentMessage[]): number {
+    const laterMessages = messages[0]?.role === "system" ? messages.slice(1) : messages;
+    return (
+      estimatedMessageTokens(messages) +
+      retainedTailSystemTokens(laterMessages, {
+        retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+      })
+    );
+  }
+
+  /** Tokens sent after a known usage anchor that the anchor's usage cannot include. */
+  private retainedSystemTokensAfter(messages: readonly AgentMessage[], anchorIndex: number): number {
+    return retainedTailSystemTokens(messages.slice(anchorIndex + 1), {
+      retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+    });
+  }
+
   /** Pi resets overflow recovery when a new user prompt enters the agent. */
   beginPrompt(): void {
     this.overflowRecoveryAttempted = false;
@@ -359,7 +394,7 @@ export class PiCompactionCoordinator {
     }
     if (!previousAssistant) return { compacted: false, shouldRetry: false };
     if (!this.isCurrentModel(previousAssistant)) {
-      return shouldCompact(estimatedMessageTokens(context.messages), this.options.model.contextWindow, this.settings)
+      return shouldCompact(this.transcriptEstimateTokens(context.messages), this.options.model.contextWindow, this.settings)
         ? this.run("threshold", false)
         : { compacted: false, shouldRetry: false };
     }
@@ -372,7 +407,9 @@ export class PiCompactionCoordinator {
     const directContextTokens = previousAssistant.usage
       ? calculateContextTokens(previousAssistant.usage)
       : 0;
-    let contextTokens = directContextTokens;
+    let contextTokens =
+      directContextTokens +
+      this.retainedSystemTokensAfter(context.messages, context.messages.lastIndexOf(previousAssistant));
     if (previousAssistant.stopReason === "error" || directContextTokens === 0) {
       const estimate = estimateContextTokens(context.messages);
       if (estimate.lastUsageIndex === null) {
@@ -388,8 +425,8 @@ export class PiCompactionCoordinator {
         return { compacted: false, shouldRetry: false };
       }
       contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
-        ? estimatedMessageTokens(context.messages)
-        : estimate.tokens;
+        ? this.transcriptEstimateTokens(context.messages)
+        : this.anchoredEstimateTokens(context.messages, estimate);
     }
     if (!shouldCompact(contextTokens, this.options.model.contextWindow, this.settings)) {
       return { compacted: false, shouldRetry: false };
@@ -511,7 +548,7 @@ export class PiCompactionCoordinator {
     if (!sameModel) {
       try {
         const context = await sessionOperation(() => this.options.session.buildContext());
-        return shouldCompact(estimatedMessageTokens(context.messages), contextWindow, this.settings)
+        return shouldCompact(this.transcriptEstimateTokens(context.messages), contextWindow, this.settings)
           ? this.run("threshold", false)
           : { compacted: false, shouldRetry: false };
       } catch (error) {
@@ -553,8 +590,8 @@ export class PiCompactionCoordinator {
           return { compacted: false, shouldRetry: false };
         }
         contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
-          ? estimatedMessageTokens(context.messages)
-          : estimate.tokens;
+          ? this.transcriptEstimateTokens(context.messages)
+          : this.anchoredEstimateTokens(context.messages, estimate);
       }
     }
 
@@ -748,7 +785,7 @@ export class PiCompactionCoordinator {
         summary: result.summary,
         retainedTail: result.retainedTail,
         tokensBefore: result.tokensBefore,
-        estimatedTokensAfter: estimatedMessageTokens(context.messages),
+        estimatedTokensAfter: this.transcriptEstimateTokens(context.messages),
         ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.details ? { details: result.details as unknown as PiCompactionDetails } : {}),
       };

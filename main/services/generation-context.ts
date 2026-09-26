@@ -137,6 +137,31 @@ function retainedSystemUpdateTokens(messages: readonly AgentMessage[]): number {
   return Math.max(0, Math.ceil((sentChars - replayedChars) / 4));
 }
 
+/**
+ * Provider usage covers everything up to its anchor. For a model that keeps
+ * later system messages, each one after the anchor is sent in full, so an
+ * anchored tail must price it (Pi's own estimate and messageTokens price
+ * system messages at zero).
+ */
+export function retainedTailSystemTokens(
+  messages: readonly AgentMessage[],
+  options: Pick<GenerationContextOptions, "retainsSystemUpdates">,
+): number {
+  if (!options.retainsSystemUpdates) return 0;
+  let tokens = 0;
+  for (const message of messages) {
+    if (message.role === "system") {
+      tokens += Math.ceil(renderSystemMessageUpdate(message as SystemMessage).length / 4);
+    }
+  }
+  return tokens;
+}
+
+/** Message tokens for the part of a transcript after a provider usage anchor. */
+function tailMessageTokens(messages: AgentMessage[], options: GenerationContextOptions): number {
+  return messageTokens(messages) + retainedTailSystemTokens(messages, options);
+}
+
 /** Message tokens for a whole outbound transcript under the model's system-message handling. */
 function transcriptMessageTokens(
   messages: AgentMessage[],
@@ -327,12 +352,19 @@ export function projectNextContextUsage(
       ? candidateAnchorIndex
       : null;
   const trailing =
-    anchorIndex === null ? estimatedMessages : messageTokens(projected.slice(anchorIndex + 1));
+    anchorIndex === null
+      ? estimatedMessages
+      : tailMessageTokens(projected.slice(anchorIndex + 1), options);
+  const providerAnchoredTokens =
+    anchorIndex === null
+      ? 0
+      : providerEstimate.tokens +
+        retainedTailSystemTokens(projected.slice(anchorIndex + 1), options);
   const providerUsageTokens = anchorIndex === null ? 0 : providerEstimate.usageTokens;
   const contextTokens = Math.ceil(
     Math.max(
       staticTokens + estimatedMessages,
-      anchorIndex === null ? 0 : providerEstimate.tokens,
+      providerAnchoredTokens,
       providerUsageTokens > 0 ? providerUsageTokens + staticTokens + trailing : 0,
     ),
   );
@@ -563,7 +595,11 @@ export function compactGenerationContext(
     options.modelId !== undefined &&
     candidateUsageAnchor.provider === options.providerId &&
     candidateUsageAnchor.model === options.modelId;
-  const providerAwareTokens = usageAnchorIsCurrent ? providerEstimate.tokens : 0;
+  const providerAwareTokens =
+    usageAnchorIsCurrent && providerEstimate.lastUsageIndex !== null
+      ? providerEstimate.tokens +
+        retainedTailSystemTokens(retained.slice(providerEstimate.lastUsageIndex + 1), options)
+      : 0;
   const estimatedTokensBefore = Math.max(
     providerAwareTokens,
     estimatedMessageTokensBefore + staticTokens,
@@ -594,7 +630,7 @@ export function compactGenerationContext(
     const retainedPrefixTokens = messageTokens(
       candidate.slice(0, anchorIndex + 1),
     );
-    const trailingTokens = messageTokens(candidate.slice(anchorIndex + 1));
+    const trailingTokens = tailMessageTokens(candidate.slice(anchorIndex + 1), options);
     return Math.ceil(
       Math.max(
         heuristicTotal,

@@ -811,3 +811,92 @@ test("retained AGENTS.md revisions count toward pressure and compaction for mid-
   assert.equal(compacted.messages.filter((message) => message.role === "system").length, 1);
   assert.ok(compacted.estimatedTokensAfter <= compacted.inputBudgetTokens);
 });
+
+function usageAssistant(input: number, text = "done"): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-5.3-codex-spark",
+    usage: {
+      input,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: input,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function agentsRemoval(): AgentMessage {
+  return {
+    role: "system",
+    content: "",
+    sections: { "agents-instructions-test": null },
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+test("retained AGENTS.md revisions after a stale usage anchor count toward anchored pressure and compaction", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  // A valid 95k anchor, then revisions the provider has not reported on yet: a
+  // zero-usage response leaves the anchor where it was.
+  const messages: AgentMessage[] = [
+    head,
+    user("first"),
+    agentsPatch("P".repeat(16_384)),
+    usageAssistant(95_000),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsPatch("B".repeat(8_192)),
+    agentsRemoval(),
+    user("next"),
+  ];
+  const base = {
+    ...options,
+    contextWindow: 120_000,
+    systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  const folded = projectNextContextUsage(messages, base);
+  const retained = projectNextContextUsage(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(folded.usageAnchorIndex, 3);
+  assert.equal(retained.usageAnchorIndex, 3);
+  assert.ok(folded.contextTokens < 96_000, `folded=${folded.contextTokens}`);
+  assert.equal(folded.shouldCompact, false);
+  // Both post-anchor revisions (16 KiB + 8 KiB) and the removal are sent; the
+  // revision before the anchor is already inside the provider's 95k.
+  const extra = retained.contextTokens - folded.contextTokens;
+  assert.ok(extra >= 6_144 && extra < 6_300, `extra=${extra}`);
+  assert.equal(retained.shouldCompact, true);
+
+  // The compaction decision uses the same anchored tail.
+  const foldedCompaction = compactGenerationContext(messages, base);
+  const retainedCompaction = compactGenerationContext(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(foldedCompaction.compacted, false);
+  assert.ok(
+    retainedCompaction.estimatedTokensBefore - foldedCompaction.estimatedTokensBefore >= 6_144,
+    `before=${retainedCompaction.estimatedTokensBefore} folded=${foldedCompaction.estimatedTokensBefore}`,
+  );
+  assert.ok(retainedCompaction.estimatedTokensBefore > retainedCompaction.inputBudgetTokens);
+
+  // A single post-anchor revision (Pullfrog's case) is enough to cross 97.5k.
+  const single: AgentMessage[] = [
+    head,
+    user("first"),
+    usageAssistant(95_000),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsRemoval(),
+    user("next"),
+  ];
+  const singleBase = {
+    ...base,
+    systemPrompt: getCurrentSystemPrompt(single as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  assert.equal(projectNextContextUsage(single, singleBase).shouldCompact, false);
+  assert.equal(projectNextContextUsage(single, { ...singleBase, retainsSystemUpdates: true }).shouldCompact, true);
+});
