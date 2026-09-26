@@ -95,6 +95,18 @@ test("unknown cyclic and accessor errors stay bounded and content-free", () => {
     assert.equal(normalizeDiagnosticFields({ httpStatus }), undefined);
   }
   assert.equal(normalizeDiagnosticFields({ causeCode: "secret", failurePhase: "secret", providerCategory: "secret" }), undefined);
+  assert.deepEqual(normalizeDiagnosticFields({
+    compactionReason: "threshold", compactionFailure: "summary-budget",
+    inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
+    contextWindowTokens: 272_000, overBudgetTokens: 6_701,
+    transportCause: "connection-error", privatePrompt: "secret",
+  }), {
+    compactionReason: "threshold", compactionFailure: "summary-budget",
+    inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
+    contextWindowTokens: 272_000, overBudgetTokens: 6_701,
+    transportCause: "connection-error",
+  });
+  assert.equal(normalizeDiagnosticFields({ compactionFailure: "secret", transportCause: "private-host" }), undefined);
 });
 
 test("diagnostic events normalize names and allowlisted scalar fields", () => {
@@ -133,6 +145,23 @@ test("diagnostic events normalize names and allowlisted scalar fields", () => {
     ).operationId,
     undefined,
   );
+});
+
+test("compaction budget events keep aggregate counts without private content", () => {
+  for (const name of ["compaction-budget-exceeded", "compaction-budget-recovered", "compaction-failed"] as const) {
+    const event = createDiagnosticEvent({
+      level: "warn", area: "generation", event: name, outcome: "degraded",
+      fields: {
+        compactionReason: "threshold", compactionFailure: "summary-budget",
+        inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
+        contextWindowTokens: 272_000, overBudgetTokens: 6_701,
+        privatePrompt: "PRIVATE_PROMPT_CANARY",
+      },
+    }, sessionId);
+    assert.equal(event.event, name);
+    assert.equal(event.fields?.overBudgetTokens, 6_701);
+    assert.doesNotMatch(diagnosticEventLine(event), /PRIVATE_PROMPT_CANARY/u);
+  }
 });
 
 test("diagnostic text removes credentials URLs paths identifiers and controls", () => {

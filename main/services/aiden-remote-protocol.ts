@@ -53,10 +53,32 @@ export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
 export type AidenRemoteProgressCapability =
   (typeof AIDEN_REMOTE_PROGRESS_CAPABILITIES)[number];
 
+/**
+ * Desktop-only opt-in: watching and controlling the serving Mac's iOS
+ * Simulators. Only `mac` and `linux` device records may hold it, and the
+ * serving owner's "Share with paired Macs" consent must also be on.
+ */
+export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
+  "simulators:control",
+] as const;
+
+export type AidenRemoteSimulatorCapability =
+  (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
+
+/** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
+export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
+  ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+] as const;
+
+export type AidenRemoteNegotiableCapability =
+  (typeof AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES)[number];
+
 export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -352,11 +374,11 @@ export type AidenRemoteChatAgentRoster = AidenRemoteChatAgentRosterBase & (
 
 /**
  * Additive post-pairing capability negotiation. `accepts` may only name
- * members of `AIDEN_REMOTE_PROGRESS_CAPABILITIES`; the response returns the
+ * members of `AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES`; the response returns the
  * device's complete updated grant list.
  */
 export interface AidenRemoteDeviceCapabilitiesUpdateRequest {
-  accepts: AidenRemoteProgressCapability[];
+  accepts: AidenRemoteNegotiableCapability[];
 }
 
 export interface AidenRemoteDeviceCapabilitiesUpdateResponse {
@@ -3367,19 +3389,19 @@ export function parseAidenRemoteDeviceCapabilitiesUpdateRequest(
   if (
     !Array.isArray(entries) ||
     entries.length < 1 ||
-    entries.length > AIDEN_REMOTE_PROGRESS_CAPABILITIES.length ||
+    entries.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
     new Set(entries).size !== entries.length ||
     entries.some(
       (entry) =>
         typeof entry !== "string" ||
-        !(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(entry),
+        !(AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES as readonly string[]).includes(entry),
     )
   ) {
     throw new Error(
       "Device capabilities update accepts must list known negotiable capabilities.",
     );
   }
-  return { accepts: entries as AidenRemoteProgressCapability[] };
+  return { accepts: entries as AidenRemoteNegotiableCapability[] };
 }
 
 function parseLegacyNonNegotiatingFixture(

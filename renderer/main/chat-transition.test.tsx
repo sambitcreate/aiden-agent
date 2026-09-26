@@ -268,7 +268,8 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   // including a one-time seed owned by that exact renderer draft.
   const composerSource = source("../components/composer.tsx");
   assert.match(composerSource, /const \[draft, dispatchDraft\] = React\.useReducer/u);
-  assert.match(composerSource, /text: initialText/u);
+  assert.match(composerSource, /text: restoredText/u);
+  assert.match(composerSource, /loadComposerDraft\(chatId\)\.text/u);
   assert.match(
     composerSource,
     /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u,
@@ -297,10 +298,10 @@ test("scroll area still pads the viewport for its overlaid chrome", () => {
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height or the composer overlaps the transcript.
+  // their measured height plus any clearance for chrome floating above the footer.
   assert.match(
     scrollArea,
-    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: footerHeight \+ Math\.max\(0, scrollContentBottomOffset\),\s*\}\}/u,
   );
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
@@ -328,7 +329,7 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
-test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
+test("revisited generations expose Stop and queue/redirect without admitting a second turn early", () => {
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
@@ -336,8 +337,17 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
-  assert.match(pane, /canSteer=\{ready && \(\(isGenerating && canStopGeneration\) \|\| Boolean\(visibleDetachedProjection\)\)/u);
-  assert.match(pane, /if \(!\(canStopGeneration \|\| visibleDetachedProjection\) \|\| isStoppingGeneration\) return/u);
+  assert.match(pane, /onRedirect=\{draft \? undefined : redirectMessage\}/u);
+  assert.match(
+    pane,
+    /!\(canStopGeneration \|\| visibleDetachedProjection\) \|\|\s*isStoppingGeneration \|\|\s*stopRequestedRef\.current/u,
+  );
+  // Stop closes busy admission synchronously, before React re-renders.
+  assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
+  assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);
+  const queueAdmission = between(pane, "const queueMessage = React.useCallback(", "const steerMessage = React.useCallback(");
+  assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
+  assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
   assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
   assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);

@@ -1,5 +1,5 @@
 import https from "node:https";
-import { checkServerIdentity } from "node:tls";
+import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { createHash, X509Certificate } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
@@ -21,11 +21,47 @@ export interface PeerRequest {
   idempotencyKey?: string;
   revision?: string;
   signal?: AbortSignal;
+  /** Overrides the 30 s JSON deadline, e.g. for a simulator boot. Capped at `MAX_PEER_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
 
 const MAX_JSON_BYTES = 1_048_576;
 const MAX_FRAME_BYTES = 1_048_576;
 const DEADLINE_MS = 30_000;
+export const MAX_PEER_TIMEOUT_MS = 240_000;
+
+/** Pinned TLS for one paired installation: the CA when given, and always the SPKI fingerprint. */
+export function peerTlsOptions(trust: PeerTrust): {
+  rejectUnauthorized: true;
+  ca?: string;
+  checkServerIdentity(hostname: string, certificate: PeerCertificate): Error | undefined;
+} {
+  return {
+    rejectUnauthorized: true,
+    ...(trust.caCertificateDerBase64
+      ? {
+          ca: new X509Certificate(
+            Buffer.from(trust.caCertificateDerBase64, "base64"),
+          ).toString(),
+        }
+      : {}),
+    checkServerIdentity: (hostname, certificate) => {
+      const invalid = checkServerIdentity(hostname, certificate);
+      if (invalid) return invalid;
+      try {
+        const key = new X509Certificate(certificate.raw).publicKey.export(
+          { type: "spki", format: "der" },
+        );
+        const fingerprint = `sha256/${createHash("sha256").update(key).digest("base64")}`;
+        if (fingerprint !== trust.serverSpkiSha256)
+          return new Error("Server identity changed.");
+      } catch {
+        return new Error("Invalid server identity.");
+      }
+      return undefined;
+    },
+  };
+}
 
 /** Linear byte scanner; each input byte is visited once, including one-byte trickles. */
 export class PeerEventFrames {
@@ -190,6 +226,10 @@ export class PeerTransport {
       requestHeaders["Content-Length"] = String(body.length);
     }
     if (input.signal?.aborted) throw new PeerTransportError("unavailable");
+    const deadlineMs =
+      !onFrame && input.timeoutMs !== undefined
+        ? Math.min(Math.max(1, Math.floor(input.timeoutMs)), MAX_PEER_TIMEOUT_MS)
+        : DEADLINE_MS;
     return new Promise((resolve, reject) => {
       let settled = false;
       let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -209,29 +249,7 @@ export class PeerTransport {
           method: input.method ?? "GET",
           headers: requestHeaders,
           agent: false,
-          rejectUnauthorized: true,
-          ...(this.trust.caCertificateDerBase64
-            ? {
-                ca: new X509Certificate(
-                  Buffer.from(this.trust.caCertificateDerBase64, "base64"),
-                ).toString(),
-              }
-            : {}),
-          checkServerIdentity: (hostname, certificate) => {
-            const invalid = checkServerIdentity(hostname, certificate);
-            if (invalid) return invalid;
-            try {
-              const key = new X509Certificate(certificate.raw).publicKey.export(
-                { type: "spki", format: "der" },
-              );
-              const fingerprint = `sha256/${createHash("sha256").update(key).digest("base64")}`;
-              if (fingerprint !== this.trust.serverSpkiSha256)
-                return new Error("Server identity changed.");
-            } catch {
-              return new Error("Invalid server identity.");
-            }
-            return undefined;
-          },
+          ...peerTlsOptions(this.trust),
         },
         (response) => {
           const status = response.statusCode ?? 0;
@@ -314,8 +332,8 @@ export class PeerTransport {
       };
       input.signal?.addEventListener("abort", abort, { once: true });
       request.on("error", () => finish(new PeerTransportError("unavailable")));
-      request.setTimeout(onFrame ? 60_000 : DEADLINE_MS, abort);
-      deadline = setTimeout(abort, DEADLINE_MS);
+      request.setTimeout(onFrame ? 60_000 : deadlineMs, abort);
+      deadline = setTimeout(abort, deadlineMs);
       if (onFrame) sessionDeadline = setTimeout(abort, 300_000);
       request.end(body);
     });

@@ -51,6 +51,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  steerGeneration,
   stopDetachedGeneration,
   gitApi,
   workspacesApi,
@@ -419,6 +420,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  // Closes busy admission in the same tick as Stop, before React re-renders.
+  const stopRequestedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    stopRequestedRef.current = isStoppingGeneration;
+  }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
@@ -1357,12 +1363,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
         }
       });
-      return;
+      return true;
     }
-    if (!generationRef.current || !canStopGeneration) return;
+    if (!generationRef.current || !canStopGeneration) return false;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
+    return true;
   }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
@@ -1418,6 +1425,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (stopRequestedRef.current) {
+        throw new Error("Aiden is stopping this response. Send your message after it stops.");
+      }
       messageQueue.add({
         id: createChatTurnId(),
         text,
@@ -1427,6 +1437,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     },
     [messageQueue],
+  );
+
+  const steerMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Steer requires text without attachments or a skill.");
+      }
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      await steerGeneration(streamId, text);
+    },
+    [isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const redirectMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Redirect requires text without attachments or a skill.");
+      }
+      if (
+        !(canStopGeneration || visibleDetachedProjection) ||
+        isStoppingGeneration ||
+        stopRequestedRef.current
+      ) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      const replacement = {
+        id: createChatTurnId(), text, attachments: [] as Attachment[],
+      };
+      messageQueue.replaceWith(replacement, () => {
+        const stopping = handleStop();
+        if (stopping) stopRequestedRef.current = true;
+        return stopping;
+      });
+    },
+    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -1996,6 +2044,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+
   return (
     <>
       <ScrollArea
@@ -2062,7 +2112,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
-        scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
+        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
+        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
           <>
             <EventPresence
@@ -2268,27 +2319,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
+                onSteer={draft ? undefined : steerMessage}
+                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
-                    canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                     returnFocus={() => composerRef.current}
-                    onSteer={(id) => {
-                      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
-                      messageQueue.move(id, 0);
-                      messageQueue.resume();
-                      handleStop();
-                    }}
                   />
                 }
                 onStop={() => {
-                  messageQueue.pause();
-                  handleStop();
+                  messageQueue.discard();
+                  if (handleStop()) stopRequestedRef.current = true;
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
                 canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
                 workspace={effectiveWorkspace}

@@ -39,6 +39,7 @@ import { providersApi, settingsApi } from "../lib/ipc";
 import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   createDefaultAppearanceConfig,
   normalizeAppearanceConfig,
@@ -119,6 +120,7 @@ export function AppCommandPalette({
   navigationBlockedReason: string | null;
 }) {
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const queryClient = useQueryClient();
   const { activeId } = useActiveWorkspace();
   const chats = useChats(activeId);
@@ -229,7 +231,9 @@ export function AppCommandPalette({
     ...item,
     result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
   }));
-  const settingsResults = SETTINGS_DESTINATIONS.map((destination) => ({
+  const settingsResults = SETTINGS_DESTINATIONS.filter(
+    (destination) => destination.id !== "simulator" || capabilities.devices,
+  ).map((destination) => ({
     destination,
     result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")}`),
   }));
