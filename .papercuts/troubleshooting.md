@@ -1139,6 +1139,23 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
 
+- 2026-09-23 durable-job research: ranking notes mention Design/Comfy as current runners, but tip `7a4d9d0b` has no built-in Comfy adapter and Designer Mode is still planned. Treat provider/MCP workflows as integration work, not a migration of an existing job queue. Aiden already has Pi unknown-effect/no-replay recovery; preserve it.
+- 2026-09-23 durable Bot/chat research: Pi continueFromDurableTail is a legacy path that rejects durable runtimes; planned continuation must use runManaged. SQL ownership cannot alone fence live Pi JSONL/effect writes; require predecessor settlement and existing turn admission before takeover. Scope narrowed by user to Bots/chats only.
+- 2026-09-23 durable-run implementation: rolling back a rejected expired-lease write also rolled back the clock watermark, potentially reviving that owner after a wall-clock rollback. A savepoint now rolls back the mutation while retaining observed time; a reopen regression covers it. Runtime settlement failure must retain ownership and must not trigger repeated close callbacks.
+- 2026-09-23 hosted TypeScript check: dynamic import destructuring of node:events.once passed the local graph but was absent from the Linux runner's inferred CommonJS namespace. Use the static named import in crash/concurrency tests; no runtime cast or compiler-setting relaxation.
+- 2026-09-23 PR #243 review: reproduced three failures before fixes—shutdown erased resumable evidence, checkpoint property order changed its digest, and lifetime terminal history exhausted active quotas. Canonicalized checkpoints, preserved shutdown recovery, and scoped quotas to unresolved work while retaining receipts. All three new regressions now pass.
+
+- PR #243 review: lease release and attempt settlement are distinct; recording an outcome on controls rewrote completed attempts and prematurely finished live ones. Added separate settlement flag plus resume/retry/pause regressions. Wrong-input checkpoints now report integrity failure rather than lease loss.
+
+- PR #243 Pullfrog review: asynchronous input preparation needs an explicit pre-commit lease guard plus retained chat reservation through IO settlement. Failed-safe evidence must include the checkpoint required by retry admission; added regressions for both.
+
+- PR #243 follow-up: reconciliation can occur after an attempt already finished; finalize only attempts with null finished_at to preserve historical outcome/time. Covered cancel-after-settlement without a new execution.
+
+- PR #243 recovery review: an authoritative input checkpoint may exist before SQL dispatch (including a lost admission receipt). Recover this as start without re-appending; reject a changed stored head. Added restart, explicit-resume, lost-receipt, and mismatched-head regressions.
+
+- PR #243 correction: a missing SQL input checkpoint cannot prove the original session/head. Removed wildcard recovery; null-checkpoint evidence fails closed, with changed-session/head regressions. Exact stored checkpoints still recover before dispatch.
+
+- PR #243 recovery authority: a reconciliation lease does not authorize dispatch. Gate first-start on admitting/queued state in service and SQL admission/dispatch methods; recovered blocked runs settle observationally and require explicit Resume. Added checkpoint/not-started and direct-store regressions.
 - 2026-09-25 PR #250 review fix: Pullfrog can drop an inline finding whose line misses a diff hunk; the review body only names the file and line. The full comment text is in the Pullfrog workflow log (`gh run view <run> --log`, search the posted `"line":` payloads). Also, a fresh agent worktree without its own `node_modules` resolves the parent checkout's packages and reports false `tsc` errors; run `npm ci --ignore-scripts` first.
 - 2026-09-25 PR #222 fixer: fresh worktrees lack `build/native/aiden-worktree-file-io{,-test}`, so lazy remote-file and native tests fail with ENOENT/"cannot currently be listed" until `npm run build:worktree-file-io` and `node scripts/build-worktree-file-io.mjs --test` run. Android Gradle needs `JAVA_HOME` (Android Studio jbr) and `ANDROID_HOME=~/Library/Android/sdk` on this host.
 # Pi 0.87.1 pin migration
@@ -1198,6 +1215,29 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-26: A timed-out `execFile(electron, …)` resolves with exit 0 because Chromium turns SIGTERM into a clean shutdown, so a hung fixture surfaces only as a missing result file. Use `killSignal: "SIGKILL"` so the rejection carries stderr.
 - 2026-09-26: Under Chromium's user-namespace sandbox, renderers are dumpable (`/proc/<pid>/mem` owned by the user); under the setuid sandbox they were not (owned by root). On Ubuntu runners an intentional `forcefullyCrashRenderer()` then pipes a full core to apport and `render-process-gone` stalls until it drains. The E2E step sets `kernel.core_pattern=core` and `ulimit -c 0`.
 
+
+## 2026-09-24 — Gemini TTS review hardening
+
+- AbortSignal alone is not a terminal transition: the deliberately noncooperative provider test kept the job generating until the timeout callback itself marked failure. Test late resolutions as well as rejected aborts.
+- A bounded read is not full consumption. Marking a segment read after its first 64 KiB allowed eviction during continuation reads; retention now tracks contiguous bytes and rejects unread overflow atomically.
+- Generation completion precedes audible completion; wiring Settings preview directly to synthesis produced no audio. Use the same gesture-primed, job-owned controller and fence pending start/read/decode across Stop and navigation.
+- One authority child completed. UI child reached its turn limit without a reliable report; parent covered that gap. Final follow-up batch was refused at admission by the tree deadline, so fresh independent final sign-off remains open rather than retrying it.
+- Android chat/progress initially ran 56/57: failedSendRestoresDurableDraftAfterRestart raced Dispatchers.Main reset. No Android changes; chronology/progress isolation passed 20/20, then the same full selection passed 57/57 on confirmation. Preserve the flake evidence rather than treating the first run as green.
+- Physical iOS AidenChatTests ran on the available paired iPhone and passed 114/114; no simulator test run was used. Vite build passes with its chunk-size and Ghostty mixed-import warnings; release/package/live-Google gates were not run.
+
+- 2026-09-24 TTS dev launch: several C-helper build scripts replace the environment and discard DEVELOPER_DIR, selecting the malformed CLT SDK. Built those same helper sources/flags with an explicit full-Xcode xcrun environment, then ran build:electron and the renderer/Electron dev commands directly; no global xcode-select change.
+- This checkout had the Electron npm package but no app binary. Running its existing install.js restored Electron 43.1.1. Aiden Agent Dev now launches; startup separately reports unavailable Generative UI artifact recovery and blocked chat mutations. Do not reset or delete dev-profile data to hide that warning.
+- 2026-09-24 TTS dev profile diagnosis: the shared development artifact store contains newer designOwnership/designPublication record fields. This branch correctly rejects that schema; removing the fields could destroy ownership/publication semantics. With explicit user approval, launched a clean per-test --user-data-dir plus separate AIDEN_CONFIG_DIR instead. Existing profiles were not modified; fresh startup has no artifact-recovery warning. Ordinary npm run dev still uses the shared profile.
+- 2026-09-24 TTS saved-key lookup: built-in Google uses piCredentialStore, not secrets.getKeyStrict("google") (legacy/custom-provider map). A configured provider plus enabled Read Aloud still redirected to setup until that runtime binding was corrected. Added managed-store regression; 109 TTS tests and type/lint checks pass.
+- 2026-09-24 replay: retrieved-segment eviction destroys replay prefixes. Retain whole soundbites and evict only inactive jobs; keep attempt tombstones after byte eviction. Reusing job IDs also requires inactive renderer surfaces to ignore later events and replacement to emit playback cancellation without cancelling the retained synthesis record. Existing native /speech routes are STT, not TTS. Follow-up replay reviewer was not admitted due to tree deadline.
+
+
+- 2026-09-24 native TTS: Android mirrors `protocol/aiden-remote/v1/fixtures/contract.json` in test resources; update it byte-for-byte or the native contract gate fails. iOS uses the shared fixture directly. OpenAPI route allowlists also need the additive paths.
+- 2026-09-24 native TTS: the available physical Smbt16ProMax was locked, so xcodebuild compiled/signed but waited before XCTest launch. Terminated the wait; unsigned `build-for-testing` passed, but it is not physical playback/test acceptance. Unlock the phone before rerunning.
+- 2026-09-24 native TTS review: fresh backend/native reviewer batch was rejected before admission by the subagent tree deadline. No completed independent review/sign-off exists for these changes.
+
+- 2026-09-25 PR245: shared `contract.json` has no usage entry; usage-label tests must construct typed usage totals, not assume a fixture exists. Initial tests exposed this incorrect assumption and were corrected.
+- 2026-09-25 PR245 simulator: the reused iOS26.4 simulator launched the app but did not inject/connect XCTest on a second run (sample showed idle app, no XCTest). Terminated only that test runner/app; an isolated iPhone17 simulator completed 232 tests (5 skipped). Do not reset unrelated simulators or count the stalled run as a pass.
 ## 2026-09-25 — rich link previews
 
 - Fresh worktrees have no `node_modules`, so focused `tsx` tests fail immediately. Run `npm ci --ignore-scripts` from the lockfile before renderer verification.

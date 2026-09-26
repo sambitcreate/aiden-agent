@@ -1,3 +1,4 @@
+import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -162,6 +163,7 @@ export interface AidenRemoteRouterDependencies {
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+  readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
   speech?: Pick<
     AidenRemoteSpeechService,
     "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe"
@@ -247,6 +249,7 @@ export type AidenRemoteRouteLabel =
   | "scheduledTasks"
   | "memorySettings"
   | "usage"
+  | "readAloud"
   | "speech"
   | "chats"
   | "chatSummaries"
@@ -305,6 +308,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
+  readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
   speech: ["/speech", "/speech/transcriptions", "/speech/models/:modelId/download", "/speech/models/:modelId"],
   chats: ["/chats"],
   chatSummaries: ["/chat-summaries"],
@@ -1239,6 +1243,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
               : []),
@@ -2183,6 +2188,37 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.usage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.usage.summary(usageQuery(query)));
+        return;
+      }
+      const readAloudChatMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud$/u.exec(path);
+      const readAloudStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/stop$/u.exec(path);
+      const readAloudAudioMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/audio\/([A-Za-z0-9-]{1,128})\/(\d{1,5})\/(\d{1,9})$/u.exec(path);
+      const readAloudMatch = readAloudChatMatch ?? readAloudStopMatch ?? readAloudAudioMatch;
+      if ((path === "/read-aloud" && request.method === "GET") || readAloudMatch) {
+        requireNoQuery(query);
+        route = "readAloud";
+        const method = request.method;
+        const device = await authenticate(request, dependencies.devices, method === "GET" ? "chat:read" : "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const service = dependencies.readAloud;
+        if (!service || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Read Aloud requires an updated desktop app.", 404);
+        if (!readAloudMatch) { writeJson(response, 200, await service.status()); return; }
+        const chatId = readAloudMatch[1]!;
+        await requireChatAccess(dependencies.chats, device, chatId, method === "GET" ? "read" : "write");
+        const chats = dependencies.chats;
+        const authority = {
+          deviceId: device.id, chatId,
+          current: () => { try { dependencies.devices.acquireDeviceAuthorization(device.id, false)(); return true; } catch { return false; } },
+          authorize: async () => { await requireChatAccess(chats, device, chatId, "write"); },
+        };
+        if (method === "GET" && readAloudAudioMatch) {
+          writeJson(response, 200, await service.read(authority, readAloudAudioMatch[2]!, Number(readAloudAudioMatch[3]), Number(readAloudAudioMatch[4])));
+        } else if (method === "GET" && readAloudChatMatch) {
+          writeJson(response, 200, await service.status(authority));
+        } else if (method === "POST" && !readAloudAudioMatch) {
+          const body = await readJsonBody(request, 4096);
+          writeJson(response, 200, readAloudStopMatch ? service.stop(authority, body) : await service.start(authority, body));
+        } else throw new AidenRemoteServiceError("not_found", "Read Aloud configuration is available only on the desktop.", 404);
         return;
       }
       if (path === "/speech" && request.method === "GET") {

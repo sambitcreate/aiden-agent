@@ -24,6 +24,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
@@ -120,6 +121,7 @@ async function fixture(options: {
     }
   };
   const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
+    readAloud: options.readAloud,
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
@@ -2895,6 +2897,9 @@ function concreteRequestPath(template: string): string {
           return `att_${"a".repeat(43)}`;
         case ":avatarRevision":
           return `avatar_revision_${"a".repeat(32)}`;
+        case ":segment":
+        case ":offset":
+          return "0";
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
@@ -3017,6 +3022,42 @@ test("every matcher path pattern in the router source is declared as a route tem
     [],
     "every router matcher path must have a declared route template for routePath evidence",
   );
+});
+
+
+test("Read Aloud authenticates before parsing, checks Bot access and never exposes setup writes", async () => {
+  let called = 0;
+  const readAloud: NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"]> = {
+    status: async () => { called++; return { enabled: true, ready: true, settingsRevision: "revision", source: null, job: null }; },
+    start: async () => { called++; throw new Error("should not reach synthesis"); },
+    read: async () => { called++; throw new Error("should not read audio"); },
+    stop: () => { called++; return { ok: true }; },
+  };
+  const app = await fixture({ readAloud, capabilities: ["server:read", "chat:read", "chat:write"] });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+  try {
+    const unauthenticated = await fetch(`${app.base}/chats/chat-1/read-aloud`, { method: "POST", body: "bad-json" });
+    assert.equal(unauthenticated.status, 400); // Missing protocol header, before JSON parsing or adapter.
+    assert.equal(called, 0);
+    const status = await fetch(`${app.base}/read-aloud`, { headers });
+    assert.equal(status.status, 200);
+    const server = await (await fetch(`${app.base}/server`, { headers })).json() as { features: string[] };
+    assert.ok(server.features.includes("tts-v1"));
+    const before = called;
+    const patch = await fetch(`${app.base}/read-aloud`, { method: "PATCH", headers, body: JSON.stringify({ enabled: true }) });
+    assert.equal(patch.status, 404);
+    const chatPatch = await fetch(`${app.base}/chats/chat-1/read-aloud`, { method: "PATCH", headers, body: JSON.stringify({ enabled: true }) });
+    assert.equal(chatPatch.status, 404);
+    assert.equal(called, before);
+  } finally { await app.close(); }
+  const bot = await fixture({ readAloud, botChat: true, capabilities: ["chat:read", "chat:write"] });
+  try {
+    const before = called;
+    for (const path of ["/chats/chat-1/read-aloud", "/chats/chat-1/read-aloud/audio/job-1/0/0"]) {
+      assert.equal((await fetch(`${bot.base}${path}`, { headers })).status, 404);
+    }
+    assert.equal(called, before);
+  } finally { await bot.close(); }
 });
 
 test("workspace file pages keep authentication and reject path-shaped or ambiguous queries", async () => {

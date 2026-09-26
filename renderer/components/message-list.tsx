@@ -6,6 +6,7 @@ import { AidenOrb } from "./aiden-orb";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import type { ReadAloudActionProps } from "./read-aloud-button";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
@@ -58,6 +59,9 @@ interface MessageListProps {
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
   error: string | null;
+  /** Message id whose whole response may host the read-aloud action. */
+  readAloudMessageId?: string;
+  readAloud?: ReadAloudActionProps;
 }
 
 interface AssistantResponseProps {
@@ -69,6 +73,8 @@ interface AssistantResponseProps {
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
+  /** Read-aloud action for the latest eligible whole response. */
+  readAloud?: ReadAloudActionProps;
   richLinks?: boolean;
 }
 
@@ -81,6 +87,7 @@ function AssistantResponse({
   streaming = false,
   streamComplete,
   onStreamHandoffComplete,
+  readAloud,
   richLinks = true,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
@@ -112,6 +119,7 @@ function AssistantResponse({
             streaming={streaming}
             streamComplete={streamComplete}
             onStreamHandoffComplete={onStreamHandoffComplete}
+            readAloud={readAloud}
             richLinks={richLinks}
           />
         ) : null}
@@ -170,6 +178,7 @@ function AssistantResponse({
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}
+            readAloud={isLastText ? readAloud : undefined}
             richLinks={richLinks}
           />
         );
@@ -221,6 +230,8 @@ export function MessageList({
   onOpenSubagent,
   agentActivity,
   error,
+  readAloudMessageId,
+  readAloud,
 }: MessageListProps) {
   const transcriptRef = React.useRef<HTMLDivElement | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
@@ -349,6 +360,7 @@ export function MessageList({
               timeline={message.timeline}
               reasoning={message.reasoning}
               attachments={message.attachments}
+              readAloud={readAloudMessageId === message.id ? readAloud : undefined}
               richLinks={message.id !== richLinkHandoffDuplicateId}
               subagentChips={
                 subagentsEnabled && message.subagents ? (

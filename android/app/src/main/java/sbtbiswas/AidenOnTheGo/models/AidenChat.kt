@@ -595,6 +595,8 @@ data class AidenChatMessage(
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    val isReadAloudEligible: Boolean get() = role == AidenChatRole.ASSISTANT && outcome == null &&
+        (timeline == null || timeline.status == AidenGenerationTimelineStatus.COMPLETED) && text.isNotBlank()
     val isWireSafe: Boolean
         get() = id.isNotEmpty() &&
                 id.length <= AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH &&
@@ -989,7 +991,13 @@ data class AidenUsageTotals(
     val currentStreak: Int,
     val longestStreak: Int,
     val tokens: AidenUsageTokens
-)
+) {
+    val hostedCostSummary: String get() {
+        if (unpricedHostedRequests > 0 && costedRequests == 0) return "Cost unavailable"
+        val tracked = java.text.NumberFormat.getCurrencyInstance().apply { currency = java.util.Currency.getInstance("USD") }.format(hostedCostUsd)
+        return if (unpricedHostedRequests > 0) "$tracked tracked; $unpricedHostedRequests requests unpriced" else tracked
+    }
+}
 
 @Serializable
 data class AidenUsageDay(

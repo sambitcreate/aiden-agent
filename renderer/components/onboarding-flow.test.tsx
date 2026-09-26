@@ -455,6 +455,17 @@ test("workspace tour discloses AGENTS instruction loading and refresh", () => {
   assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
 });
 
+
+test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
+  const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
+  assert.match(disclosure, /off by default/u);
+  assert.match(disclosure, /Settings → Text to Speech/u);
+  assert.match(disclosure, /response text to Google/u);
+  assert.match(disclosure, /local-model replies/u);
+  assert.match(disclosure, /charges may apply/u);
+  assert.doesNotMatch(source, /ttsApi\.(start|preview)/u);
+});
+
 test("feature tour introduces native folder browsing and source previews", () => {
   assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
 });
