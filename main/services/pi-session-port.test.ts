@@ -1,6 +1,7 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
+
 import { createPiSessionPort } from "./pi-session-port.js";
 import { parsePiSessionMigrationReceipt } from "./pi-session-migration.js";
 

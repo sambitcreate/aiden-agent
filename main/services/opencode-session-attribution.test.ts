@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer, type Server } from "node:http";
@@ -163,7 +164,7 @@ test("withPinnedBotProviderAuth preserves the session header on the dispatched m
     },
   );
   try {
-    await pinned.streams.streamSimple(attributed, { systemPrompt: "", messages: [] }, {}).result();
+    await pinned.streams.streamSimple(attributed, normalizeContext({ systemPrompt: "", messages: [] }), {}).result();
   } catch {
     // The stub provider stream intentionally throws; only the model matters.
   }
@@ -207,7 +208,7 @@ test("the attributed model's header reaches the outgoing HTTP request", async ()
     const control = model({ provider: "concentrate", api: transport.api, baseUrl });
     for (const candidate of [attributed, control]) {
       try {
-        await transport.streamSimple(candidate, context, { apiKey: "test-key" }).result();
+        await transport.streamSimple(candidate, normalizeContext(context), { apiKey: "test-key" }).result();
       } catch {
         // The stub server rejects every request; only the headers matter.
       }

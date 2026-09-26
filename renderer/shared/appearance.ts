@@ -1,6 +1,15 @@
 export type AppearanceMode = "system" | "light" | "dark";
 export type AppearanceScheme = "light" | "dark";
-export type ThemePresetId = "aiden" | "slate" | "berry" | "moss";
+export type ThemePresetId =
+  | "aiden"
+  | "slate"
+  | "berry"
+  | "moss"
+  | "paper"
+  | "calm"
+  | "graphite"
+  | "dusk"
+  | "midnight";
 export type ThemeSelection = ThemePresetId | "custom";
 export type UiFontId = "system" | "rounded" | "humanist";
 export type CodeFontId = "sf-mono" | "menlo" | "monaco";
@@ -180,6 +189,136 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       danger: "#EB6B6B",
     },
   },
+  {
+    id: "paper",
+    label: "Paper",
+    light: {
+      canvas: "#F5F3EE",
+      sidebar: "#ECE8E0",
+      raised: "#FFFFFF",
+      foreground: "#3E3C38",
+      secondary: "#6F6A60",
+      accent: "#7E5E2A",
+      success: "#3DBF7D",
+      warning: "#D4A22A",
+      danger: "#E05353",
+    },
+    dark: {
+      canvas: "#1E1C19",
+      sidebar: "#262320",
+      raised: "#2E2A26",
+      foreground: "#D6D2CA",
+      secondary: "#A39E93",
+      accent: "#C9A97C",
+      success: "#47D18C",
+      warning: "#D9B43A",
+      danger: "#EB6B6B",
+    },
+  },
+  {
+    id: "calm",
+    label: "Calm",
+    light: {
+      canvas: "#F7F3EA",
+      sidebar: "#EFE9DD",
+      raised: "#FFFDF8",
+      foreground: "#44403A",
+      secondary: "#6E685C",
+      accent: "#7E5B2C",
+      success: "#3DBF7D",
+      warning: "#D4A22A",
+      danger: "#E05353",
+    },
+    dark: {
+      canvas: "#201D18",
+      sidebar: "#28241E",
+      raised: "#322C25",
+      foreground: "#D8D3C8",
+      secondary: "#A8A091",
+      accent: "#D9A86C",
+      success: "#47D18C",
+      warning: "#D9B43A",
+      danger: "#EB6B6B",
+    },
+  },
+  {
+    id: "graphite",
+    label: "Graphite",
+    light: {
+      canvas: "#F4F4F5",
+      sidebar: "#E9E9EB",
+      raised: "#FFFFFF",
+      foreground: "#38383B",
+      secondary: "#64646A",
+      accent: "#52525B",
+      success: "#30D158",
+      warning: "#FF9F0A",
+      danger: "#FF453A",
+    },
+    dark: {
+      canvas: "#151517",
+      sidebar: "#1D1D20",
+      raised: "#26262A",
+      foreground: "#D4D4D8",
+      secondary: "#9C9CA3",
+      accent: "#A1A1AA",
+      success: "#32D17A",
+      warning: "#FFB020",
+      danger: "#FF5E57",
+    },
+  },
+  {
+    id: "dusk",
+    label: "Dusk",
+    light: {
+      canvas: "#EEF4F3",
+      sidebar: "#E2EBEA",
+      raised: "#FFFFFF",
+      foreground: "#37423F",
+      secondary: "#5F6E6A",
+      accent: "#0F766E",
+      success: "#2DB67D",
+      warning: "#E0A72E",
+      danger: "#E24D5B",
+    },
+    dark: {
+      canvas: "#12201F",
+      sidebar: "#18292A",
+      raised: "#213335",
+      foreground: "#CFE0DD",
+      secondary: "#93ABA6",
+      accent: "#2DD4BF",
+      success: "#35C08A",
+      warning: "#D4A72C",
+      danger: "#F87171",
+    },
+  },
+  {
+    id: "midnight",
+    label: "Midnight",
+    light: {
+      canvas: "#EFF2F8",
+      sidebar: "#E3E8F2",
+      raised: "#FFFFFF",
+      foreground: "#38405A",
+      secondary: "#5F6880",
+      accent: "#3B5BA9",
+      success: "#30D158",
+      warning: "#FF9F0A",
+      danger: "#FF453A",
+    },
+    dark: {
+      canvas: "#141826",
+      sidebar: "#1B2133",
+      raised: "#262D42",
+      foreground: "#D2D8E6",
+      secondary: "#94A0BC",
+      accent: "#7FA0F0",
+      success: "#32D17A",
+      warning: "#FFB020",
+      danger: "#FF5E57",
+    },
+  },
 ];
 
 const PRESETS_BY_ID = Object.fromEntries(
@@ -238,7 +377,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isThemePresetId(value: unknown): value is ThemePresetId {
-  return value === "aiden" || value === "slate" || value === "berry" || value === "moss";
+  return THEME_PRESETS.some((preset) => preset.id === value);
 }
 
 function isUiFontId(value: unknown): value is UiFontId {

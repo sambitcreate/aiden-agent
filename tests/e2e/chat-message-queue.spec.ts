@@ -93,41 +93,82 @@ test("workspace bar auto-hides after sending and its appearance setting survives
       .getByRole("button", { name: /^Deterministic E2E response/u })
       .click();
   };
+  // The Appearance page no longer exposes these controls; drive the
+  // underlying settings fields through settings:set instead. Live
+  // application is only asserted after a relaunch, where bootstrapping
+  // runs the real useTheme -> applyAppearanceConfig path.
+  const readAppearance = () =>
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(channel: string): Promise<{
+                autoHideComposerContext: boolean;
+                reduceMotion: string;
+              }>;
+            };
+          };
+        }
+      ).aidenAPI;
+      return ipc.invoke("settings:getAppearance");
+    });
+  const patchAppearance = (patch: {
+    autoHideComposerContext?: boolean;
+    reduceMotion?: "system" | "on" | "off";
+  }) =>
+    page.evaluate(async (value) => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: { invoke(channel: string, patch?: unknown): Promise<unknown> };
+          };
+        }
+      ).aidenAPI;
+      const current = await ipc.invoke("settings:getAppearance");
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current as object), ...value },
+      });
+    }, patch);
+  const storedAppearance = async () => {
+    try {
+      return JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"))
+        .settings?.appearance;
+    } catch (error) {
+      // A fresh profile may not have written settings.json yet. Poll until
+      // the patched value is durable, but surface any other read failure.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
   await openAppearance();
-  const toggle = page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true });
-  await expect(toggle).toBeChecked();
-  await toggle.click();
+  // The file only gains the field once persisted; the normalized read shows
+  // the default until then.
+  await expect(readAppearance()).resolves.toMatchObject({
+    autoHideComposerContext: true,
+  });
+  await patchAppearance({ autoHideComposerContext: false });
   await expect
-    .poll(async () => {
-      try {
-        const stored = JSON.parse(
-          await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-        );
-        return stored.settings?.appearance?.autoHideComposerContext;
-      } catch (error) {
-        // A fresh profile may not have written settings.json yet. Poll until
-        // the toggled value is durable, but surface any other read failure.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-        throw error;
-      }
-    })
+    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
     .toBe(false);
-  await openSentChat();
-  await expect(bar()).toBeVisible();
-  await expect(bar()).toHaveAttribute("data-collapsed", "false");
 
   page = await aiden.relaunch();
   await openSentChat();
+  await expect(readAppearance()).resolves.toMatchObject({
+    autoHideComposerContext: false,
+  });
   await expect(bar()).toBeVisible();
-  await openAppearance();
-  await expect(
-    page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }),
-  ).not.toBeChecked();
-  await page
-    .getByRole("radiogroup", { name: "Reduce motion", exact: true })
-    .getByRole("radio", { name: "On", exact: true })
-    .click();
-  await page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }).click();
+  await expect(bar()).toHaveAttribute("data-collapsed", "false");
+
+  await patchAppearance({ reduceMotion: "on", autoHideComposerContext: true });
+  await expect
+    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
+    .toBe(true);
+  await expect
+    .poll(async () => (await storedAppearance())?.reduceMotion)
+    .toBe("on");
+
+  page = await aiden.relaunch();
   await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "true");
   await openSentChat();
   await expect(bar()).toBeHidden();

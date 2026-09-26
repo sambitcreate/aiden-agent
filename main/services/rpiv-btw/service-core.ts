@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai/compat";
 import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
@@ -209,7 +210,7 @@ export class BtwService {
         try {
           const stream = runtime.streams.streamSimple(
             runtime.model,
-            { systemPrompt: BTW_SYSTEM_PROMPT, messages: built.messages, tools: [] },
+            normalizeContext({ systemPrompt: BTW_SYSTEM_PROMPT, messages: built.messages, tools: [] }),
             {
               apiKey: runtime.apiKey,
               headers: runtime.headers,

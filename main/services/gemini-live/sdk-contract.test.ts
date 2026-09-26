@@ -181,7 +181,7 @@ test("uses the exact reviewed Google SDK without replacing Pi's own exact SDK", 
   );
 
   assert.equal(await packageVersion(directRoot), "2.24.0");
-  assert.equal(await packageVersion(piGoogleRoot), "1.52.0");
+  assert.equal(await packageVersion(piGoogleRoot), "2.21.0");
   assert.notEqual(directRoot, piGoogleRoot);
 });
 

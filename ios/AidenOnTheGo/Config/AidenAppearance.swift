@@ -162,6 +162,11 @@ enum AidenThemePresetID: String, CaseIterable, Identifiable, Codable, Sendable {
     case slate
     case berry
     case moss
+    case paper
+    case calm
+    case graphite
+    case dusk
+    case midnight
 
     var id: String { rawValue }
 
@@ -171,6 +176,11 @@ enum AidenThemePresetID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .slate: "Slate"
         case .berry: "Berry"
         case .moss: "Moss"
+        case .paper: "Paper"
+        case .calm: "Calm"
+        case .graphite: "Graphite"
+        case .dusk: "Dusk"
+        case .midnight: "Midnight"
         }
     }
 }
@@ -312,6 +322,26 @@ enum AidenThemeCatalog {
             .init(canvasHex: "#F3F6F4", sidebarHex: "#E7ECE8", raisedHex: "#FFFFFF", foregroundHex: "#3F4943", secondaryHex: "#65736B", accentHex: "#157862", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
             .init(canvasHex: "#18201C", sidebarHex: "#202A25", raisedHex: "#29342E", foregroundHex: "#D1D6D3", secondaryHex: "#95A39B", accentHex: "#42B596", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
         ],
+        .paper: [
+            .init(canvasHex: "#F5F3EE", sidebarHex: "#ECE8E0", raisedHex: "#FFFFFF", foregroundHex: "#3E3C38", secondaryHex: "#6F6A60", accentHex: "#7E5E2A", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
+            .init(canvasHex: "#1E1C19", sidebarHex: "#262320", raisedHex: "#2E2A26", foregroundHex: "#D6D2CA", secondaryHex: "#A39E93", accentHex: "#C9A97C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
+        ],
+        .calm: [
+            .init(canvasHex: "#F7F3EA", sidebarHex: "#EFE9DD", raisedHex: "#FFFDF8", foregroundHex: "#44403A", secondaryHex: "#6E685C", accentHex: "#7E5B2C", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
+            .init(canvasHex: "#201D18", sidebarHex: "#28241E", raisedHex: "#322C25", foregroundHex: "#D8D3C8", secondaryHex: "#A8A091", accentHex: "#D9A86C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
+        ],
+        .graphite: [
+            .init(canvasHex: "#F4F4F5", sidebarHex: "#E9E9EB", raisedHex: "#FFFFFF", foregroundHex: "#38383B", secondaryHex: "#64646A", accentHex: "#52525B", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
+            .init(canvasHex: "#151517", sidebarHex: "#1D1D20", raisedHex: "#26262A", foregroundHex: "#D4D4D8", secondaryHex: "#9C9CA3", accentHex: "#A1A1AA", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
+        ],
+        .dusk: [
+            .init(canvasHex: "#EEF4F3", sidebarHex: "#E2EBEA", raisedHex: "#FFFFFF", foregroundHex: "#37423F", secondaryHex: "#5F6E6A", accentHex: "#0F766E", successHex: "#2DB67D", warningHex: "#E0A72E", dangerHex: "#E24D5B"),
+            .init(canvasHex: "#12201F", sidebarHex: "#18292A", raisedHex: "#213335", foregroundHex: "#CFE0DD", secondaryHex: "#93ABA6", accentHex: "#2DD4BF", successHex: "#35C08A", warningHex: "#D4A72C", dangerHex: "#F87171"),
+        ],
+        .midnight: [
+            .init(canvasHex: "#EFF2F8", sidebarHex: "#E3E8F2", raisedHex: "#FFFFFF", foregroundHex: "#38405A", secondaryHex: "#5F6880", accentHex: "#3B5BA9", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
+            .init(canvasHex: "#141826", sidebarHex: "#1B2133", raisedHex: "#262D42", foregroundHex: "#D2D8E6", secondaryHex: "#94A0BC", accentHex: "#7FA0F0", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
+        ],
     ]
 }
 
@@ -394,6 +424,11 @@ final class AidenAppearanceStore {
         return AidenThemeCatalog
             .palette(preset: isDark ? darkPreset : lightPreset, scheme: scheme)
             .applyingContrast(Self.clamp(requested, to: 0...100), baseline: baseline)
+    }
+
+    func selectTheme(_ preset: AidenThemePresetID) {
+        lightPreset = preset
+        darkPreset = preset
     }
 
     func uiFont(for scheme: ColorScheme) -> AidenUIFontID { scheme == .dark ? darkUIFont : lightUIFont }
@@ -492,9 +527,14 @@ struct AidenAppearanceRoot<Content: View>: View {
 
 struct AidenAppearanceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @Bindable var appearance: AidenAppearanceStore
     @AppStorage(AidenRemoteLiveActivityManager.responseExcerptPreferenceKey)
     private var showsLiveActivityResponseExcerpts = false
+
+    private var selectedPreset: AidenThemePresetID? {
+        appearance.lightPreset == appearance.darkPreset ? appearance.lightPreset : nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -508,39 +548,21 @@ struct AidenAppearanceSettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section("Light Style") {
-                    presetPicker(selection: $appearance.lightPreset, scheme: .light)
-                    variantControls(
-                        uiFont: $appearance.lightUIFont,
-                        codeFont: $appearance.lightCodeFont,
-                        contrast: $appearance.lightContrast,
-                        translucentSidebar: $appearance.lightTranslucentSidebar
-                    )
-                }
-
-                Section("Dark Style") {
-                    presetPicker(selection: $appearance.darkPreset, scheme: .dark)
-                    variantControls(
-                        uiFont: $appearance.darkUIFont,
-                        codeFont: $appearance.darkCodeFont,
-                        contrast: $appearance.darkContrast,
-                        translucentSidebar: $appearance.darkTranslucentSidebar
-                    )
-                }
-
-                Section("Text and Motion") {
-                    Stepper("UI size: \(appearance.uiFontSize)", value: $appearance.uiFontSize, in: 12...18)
-                    Stepper("Code size: \(appearance.codeFontSize)", value: $appearance.codeFontSize, in: 10...18)
-                    Picker("Reduce Motion", selection: $appearance.reduceMotion) {
-                        ForEach(AidenReduceMotionPreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
+                Section {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 100), spacing: 10)],
+                        spacing: 16
+                    ) {
+                        ForEach(AidenThemePresetID.allCases) { preset in
+                            themeTile(for: preset)
                         }
                     }
-                    Picker("Diff markers", selection: $appearance.diffMarkers) {
-                        ForEach(AidenDiffMarkerPreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
-                        }
-                    }
+                    .padding(.vertical, 6)
+                    .listRowSeparator(.hidden)
+                } header: {
+                    Text("Themes")
+                } footer: {
+                    Text("Current theme: \(selectedPreset?.title ?? "Custom")")
                 }
 
                 Section {
@@ -561,56 +583,64 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private func variantControls(
-        uiFont: Binding<AidenUIFontID>,
-        codeFont: Binding<AidenCodeFontID>,
-        contrast: Binding<Int>,
-        translucentSidebar: Binding<Bool>
-    ) -> some View {
-        Picker("UI font", selection: uiFont) {
-            ForEach(AidenUIFontID.allCases) { font in Text(font.title).tag(font) }
-        }
-        Picker("Code font", selection: codeFont) {
-            ForEach(AidenCodeFontID.allCases) { font in Text(font.title).tag(font) }
-        }
-        VStack(alignment: .leading) {
-            HStack {
-                Text("Contrast")
-                Spacer()
-                Text("\(contrast.wrappedValue)").foregroundStyle(.secondary)
+    private func themeTile(for preset: AidenThemePresetID) -> some View {
+        let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
+        let selected = preset == selectedPreset
+        return Button {
+            appearance.selectTheme(preset)
+        } label: {
+            VStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(preview.canvas)
+                    .aspectRatio(1.52, contentMode: .fit)
+                    .overlay {
+                        Text("Aa")
+                            .font(.system(size: 30, weight: .medium))
+                            .foregroundStyle(preview.foreground)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(preview.accent)
+                            .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                            .frame(width: 11, height: 11)
+                            .padding(8)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(palette.accent)
+                                .frame(width: 21, height: 21)
+                                .background(palette.raised, in: Circle())
+                                .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
+                                .offset(x: 7, y: -7)
+                        }
+                    }
+                    .accessibilityHidden(true)
+                Text(preset.title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(selected ? palette.foreground : palette.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(
+                        selected ? palette.accent.opacity(0.12) : .clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
             }
-            Slider(
-                value: Binding(
-                    get: { Double(contrast.wrappedValue) },
-                    set: { contrast.wrappedValue = Int($0.rounded()) }
-                ),
-                in: 0...100,
-                step: 1
-            )
-            .accessibilityLabel("Contrast")
-            .accessibilityValue("\(contrast.wrappedValue) percent")
         }
-        Toggle("Translucent sidebar", isOn: translucentSidebar)
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.title)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     }
+}
 
-    private func presetPicker(
-        selection: Binding<AidenThemePresetID>,
-        scheme: ColorScheme
-    ) -> some View {
-        Picker("Style", selection: selection) {
-            ForEach(AidenThemePresetID.allCases) { preset in
-                let palette = AidenThemeCatalog.palette(preset: preset, scheme: scheme)
-                Label {
-                    Text(preset.title)
-                } icon: {
-                    Image(systemName: "circle.fill").foregroundStyle(palette.accent)
-                }
-                .tag(preset)
-            }
+private extension AidenThemePresetID {
+    /// The scheme that visually defines each preset on its tile.
+    var tileSignatureScheme: ColorScheme {
+        switch self {
+        case .graphite, .dusk, .midnight: .dark
+        default: .light
         }
-        .pickerStyle(.inline)
-        .labelsHidden()
     }
 }
 

@@ -18,7 +18,12 @@ enum class AidenThemePresetID(val title: String) {
     AIDEN("Aiden"),
     SLATE("Slate"),
     BERRY("Berry"),
-    MOSS("Moss")
+    MOSS("Moss"),
+    PAPER("Paper"),
+    CALM("Calm"),
+    GRAPHITE("Graphite"),
+    DUSK("Dusk"),
+    MIDNIGHT("Midnight")
 }
 
 @Serializable
@@ -115,6 +120,26 @@ object AidenThemeCatalog {
         AidenThemePresetID.MOSS to listOf(
             AidenPalette(canvasHex = "#F3F6F4", sidebarHex = "#E7ECE8", raisedHex = "#FFFFFF", foregroundHex = "#3F4943", secondaryHex = "#65736B", accentHex = "#157862", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
             AidenPalette(canvasHex = "#18201C", sidebarHex = "#202A25", raisedHex = "#29342E", foregroundHex = "#D1D6D3", secondaryHex = "#95A39B", accentHex = "#42B596", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+        ),
+        AidenThemePresetID.PAPER to listOf(
+            AidenPalette(canvasHex = "#F5F3EE", sidebarHex = "#ECE8E0", raisedHex = "#FFFFFF", foregroundHex = "#3E3C38", secondaryHex = "#6F6A60", accentHex = "#7E5E2A", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#1E1C19", sidebarHex = "#262320", raisedHex = "#2E2A26", foregroundHex = "#D6D2CA", secondaryHex = "#A39E93", accentHex = "#C9A97C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+        ),
+        AidenThemePresetID.CALM to listOf(
+            AidenPalette(canvasHex = "#F7F3EA", sidebarHex = "#EFE9DD", raisedHex = "#FFFDF8", foregroundHex = "#44403A", secondaryHex = "#6E685C", accentHex = "#7E5B2C", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#201D18", sidebarHex = "#28241E", raisedHex = "#322C25", foregroundHex = "#D8D3C8", secondaryHex = "#A8A091", accentHex = "#D9A86C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+        ),
+        AidenThemePresetID.GRAPHITE to listOf(
+            AidenPalette(canvasHex = "#F4F4F5", sidebarHex = "#E9E9EB", raisedHex = "#FFFFFF", foregroundHex = "#38383B", secondaryHex = "#64646A", accentHex = "#52525B", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
+            AidenPalette(canvasHex = "#151517", sidebarHex = "#1D1D20", raisedHex = "#26262A", foregroundHex = "#D4D4D8", secondaryHex = "#9C9CA3", accentHex = "#A1A1AA", successHex = "#32D17A", warningHex = "#FFB020", dangerHex = "#FF5E57")
+        ),
+        AidenThemePresetID.DUSK to listOf(
+            AidenPalette(canvasHex = "#EEF4F3", sidebarHex = "#E2EBEA", raisedHex = "#FFFFFF", foregroundHex = "#37423F", secondaryHex = "#5F6E6A", accentHex = "#0F766E", successHex = "#2DB67D", warningHex = "#E0A72E", dangerHex = "#E24D5B"),
+            AidenPalette(canvasHex = "#12201F", sidebarHex = "#18292A", raisedHex = "#213335", foregroundHex = "#CFE0DD", secondaryHex = "#93ABA6", accentHex = "#2DD4BF", successHex = "#35C08A", warningHex = "#D4A72C", dangerHex = "#F87171")
+        ),
+        AidenThemePresetID.MIDNIGHT to listOf(
+            AidenPalette(canvasHex = "#EFF2F8", sidebarHex = "#E3E8F2", raisedHex = "#FFFFFF", foregroundHex = "#38405A", secondaryHex = "#5F6880", accentHex = "#3B5BA9", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
+            AidenPalette(canvasHex = "#141826", sidebarHex = "#1B2133", raisedHex = "#262D42", foregroundHex = "#D2D8E6", secondaryHex = "#94A0BC", accentHex = "#7FA0F0", successHex = "#32D17A", warningHex = "#FFB020", dangerHex = "#FF5E57")
         )
     )
 
