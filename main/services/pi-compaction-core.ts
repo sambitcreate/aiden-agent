@@ -1,7 +1,10 @@
 import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
 import { compileVccInWorker } from "./pi-vcc/worker-client.js";
+import { VccError } from "./pi-vcc/errors.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import {
   DEFAULT_COMPACTION_SETTINGS,
+  CompactionError,
   calculateContextTokens,
   compact,
   estimateContextTokens,
@@ -11,6 +14,7 @@ import {
   uuidv7,
   type AgentMessage,
   type CompactionSettings,
+  type CompactionPreparation,
   type CompactResult,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
@@ -25,7 +29,7 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
-import type { PiSessionPort } from "./pi-session-port.js";
+import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
@@ -102,6 +106,112 @@ class PiCompactionSessionError extends Error {
     super("The Pi compaction journal operation failed.");
     this.name = "PiCompactionSessionError";
   }
+}
+
+export class CompactionSummaryBudgetError extends Error {
+  readonly name = "CompactionSummaryBudgetError";
+
+  constructor(
+    readonly inputTokens: number,
+    readonly outputTokens: number,
+    readonly safetyTokens: number,
+    readonly contextWindowTokens: number,
+  ) {
+    super("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+  }
+
+  get overBudgetTokens(): number {
+    return this.inputTokens + this.outputTokens + this.safetyTokens - this.contextWindowTokens;
+  }
+}
+
+function budgetDiagnosticFields(error: CompactionSummaryBudgetError) {
+  return {
+    inputTokens: error.inputTokens,
+    outputTokens: error.outputTokens,
+    safetyTokens: error.safetyTokens,
+    contextWindowTokens: error.contextWindowTokens,
+    overBudgetTokens: error.overBudgetTokens,
+  };
+}
+
+type CompactionRecoveryStage = "local-compiler" | "semantic-summary" | "checkpoint";
+
+/**
+ * Closed diagnostic fields for a failed compaction. The caught error's own
+ * cause wins; an attempted budget recovery is reported through the recovery
+ * stage and budget token counts, and is the top-level cause only when nothing
+ * more specific is known.
+ */
+export function compactionFailureDiagnosticFields(input: {
+  error: unknown;
+  reason: string;
+  sessionFailed: boolean;
+  hostFailure?: "inference" | "policy";
+  budgetFailure?: CompactionSummaryBudgetError;
+  recoveryStage?: CompactionRecoveryStage;
+}): Record<string, string | number> {
+  const { error, hostFailure, budgetFailure, recoveryStage } = input;
+  const budget = error instanceof CompactionSummaryBudgetError ? error : budgetFailure;
+  return {
+    compactionReason: input.reason,
+    compactionFailure: input.sessionFailed ? "journal" :
+      error instanceof CompactionSummaryBudgetError ? "summary-budget" :
+        error instanceof CompactionError && error.code === "summarization_failed" ? "summary-provider" :
+          error instanceof VccError ? "local-compiler" :
+            hostFailure === "inference" ? "host-inference" :
+              hostFailure === "policy" ? "host-policy" :
+                budgetFailure ? "budget-recovery" : "other",
+    ...(budget ? budgetDiagnosticFields(budget) : {}),
+    ...(recoveryStage ? { recoveryStage } : {}),
+    ...(error instanceof VccError ? { localCompilerCause: error.code } : {}),
+  };
+}
+
+type RecoveryChannel = "history" | "turn-prefix";
+const RECOVERY_REDUCTION_ATTEMPTS = 3;
+
+function recoveryMessage(content: string): AgentMessage {
+  return { role: "user", content, timestamp: Date.now() };
+}
+
+/** The Pi preparation whose single summary request covers only `channel`. */
+function recoveryChannelRequest(
+  channel: RecoveryChannel,
+  messages: AgentMessage[],
+  preparation: CompactionPreparation,
+): CompactionPreparation {
+  return channel === "history"
+    ? { ...preparation, messagesToSummarize: messages, turnPrefixMessages: [], isSplitTurn: false }
+    : { ...preparation, messagesToSummarize: [], turnPrefixMessages: messages, isSplitTurn: true };
+}
+
+/** One prepared compaction channel as a self-contained local-compiler input. */
+function recoveryChannelInput(
+  messages: readonly AgentMessage[],
+  preparation: CompactionPreparation,
+  contextWindow: number,
+) {
+  const branch: PiSessionEntry[] = messages.map((message, index) => ({
+    type: "message",
+    id: `budget-recovery:${index}`,
+    seq: index,
+    parentId: index === 0 ? null : `budget-recovery:${index - 1}`,
+    timestamp: message.timestamp,
+    message,
+  }));
+  return {
+    branch,
+    preparation: {
+      ...preparation,
+      messagesToSummarize: [...messages],
+      turnPrefixMessages: [],
+      isSplitTurn: false,
+      retainedTail: [],
+      previousSummary: undefined,
+    },
+    contextWindow,
+  };
 }
 
 async function sessionOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -458,6 +568,8 @@ export class PiCompactionCoordinator {
     const startedAt = performance.now();
     const engine = compactionEngineFrom(this.options.engine);
     let started = false;
+    let budgetFailure: CompactionSummaryBudgetError | undefined;
+    let recoveryStage: CompactionRecoveryStage | undefined;
     let removeParentAbort = () => {};
     try {
       const branch = await this.options.session.getBranch();
@@ -483,34 +595,91 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      const compactResult =
-        engine === "vcc"
-          ? {
-              ok: true as const,
-              value: await (this.options.compileVcc ?? compileVccInWorker)(
-                {
-                  branch,
-                  preparation,
-                  contextWindow: this.options.model.contextWindow,
-                },
-                abortController.signal,
-              ),
-            }
-          : await compact(
-              preparation,
-              boundedCompactionModels(this.options.models),
+      const compileLocal = () => (this.options.compileVcc ?? compileVccInWorker)(
+        { branch, preparation, contextWindow: this.options.model.contextWindow },
+        abortController.signal,
+      );
+      const summarize = async (input: CompactionPreparation): Promise<CompactResult> => {
+        const compactResult = await compact(
+          input,
+          boundedCompactionModels(this.options.models),
+          this.options.model,
+          undefined,
+          abortController.signal,
+          this.options.thinkingLevel,
+          this.options.summaryRetry ?? {
+            enabled: true,
+            maxRetries: 3,
+            baseDelayMs: 2_000,
+          },
+          this.options.summaryRetryCallbacks,
+        );
+        if (!compactResult.ok) throw compactResult.error;
+        return compactResult.value;
+      };
+      let result: CompactResult;
+      if (engine === "vcc") {
+        result = await compileLocal();
+      } else {
+        try {
+          result = await summarize(preparation);
+        } catch (error) {
+          if (!(error instanceof CompactionSummaryBudgetError)) throw error;
+          budgetFailure = error;
+          writeDiagnosticEvent({
+            level: "warn", area: "generation", event: "compaction-budget-exceeded",
+            outcome: "degraded", fields: {
+              compactionReason: reason,
+              compactionFailure: "summary-budget",
+              ...budgetDiagnosticFields(error),
+            },
+          });
+          // The local compiler reduces each prepared channel without publishing
+          // a checkpoint. Pi then writes the final semantic summary through its
+          // ordinary bounded path, so the prior checkpoint still reaches the
+          // update prompt and a split turn still gets its turn-prefix summary.
+          recoveryStage = "local-compiler";
+          const spareTokensFor = (channel: RecoveryChannel, messages: AgentMessage[]) =>
+            summaryRequestSpareTokens(
+              recoveryChannelRequest(channel, messages, preparation),
               this.options.model,
-              undefined,
-              abortController.signal,
               this.options.thinkingLevel,
-              this.options.summaryRetry ?? {
-                enabled: true,
-                maxRetries: 3,
-                baseDelayMs: 2_000,
-              },
-              this.options.summaryRetryCallbacks,
+              abortController.signal,
             );
-      if (!compactResult.ok) throw compactResult.error;
+          const reduceChannel = async (channel: RecoveryChannel, messages: AgentMessage[]): Promise<AgentMessage[]> => {
+            // A channel whose own Pi request already fits stays raw.
+            if (messages.length === 0 || await spareTokensFor(channel, messages) >= 0) return messages;
+            // Budget the reduction against the complete request Pi will send
+            // for this channel: its prompt, the preserved prior checkpoint,
+            // output allowance and safety reserve all come out of the window.
+            let contentBudget = await spareTokensFor(channel, [recoveryMessage("")]);
+            for (let attempt = 0; attempt < RECOVERY_REDUCTION_ATTEMPTS && contentBudget > 0; attempt += 1) {
+              const local = await (this.options.compileVcc ?? compileVccInWorker)(
+                recoveryChannelInput(
+                  messages,
+                  preparation,
+                  contentBudget + preparation.settings.reserveTokens,
+                ),
+                abortController.signal,
+              );
+              const reduced = [recoveryMessage(local.summary)];
+              const spare = await spareTokensFor(channel, reduced);
+              if (spare >= 0) return reduced;
+              // The local estimate differs from the request guard (for
+              // example on dense Unicode); tighten by the measured overshoot.
+              contentBudget += spare;
+            }
+            throw new VccError("insufficient_reduction");
+          };
+          const messagesToSummarize = await reduceChannel("history", preparation.messagesToSummarize);
+          const turnPrefixMessages = preparation.isSplitTurn
+            ? await reduceChannel("turn-prefix", preparation.turnPrefixMessages)
+            : preparation.turnPrefixMessages;
+          recoveryStage = "semantic-summary";
+          result = await summarize({ ...preparation, messagesToSummarize, turnPrefixMessages });
+          recoveryStage = "checkpoint";
+        }
+      }
       if (abortController.signal.aborted) {
         this.options.onEvent?.({
           type: "end",
@@ -521,7 +690,6 @@ export class PiCompactionCoordinator {
         return { compacted: false, shouldRetry: false };
       }
 
-      const result: CompactResult = compactResult.value;
       result.details = { ...(result.details as Record<string, unknown>), engine, version: 1 };
       const priorLeafId = await sessionOperation(() => this.options.session.getLeafId());
       if (priorLeafId !== (branch[branch.length - 1]?.id ?? null)) {
@@ -581,6 +749,16 @@ export class PiCompactionCoordinator {
         ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
       };
+      if (budgetFailure) {
+        writeDiagnosticEvent({
+          level: "info", area: "generation", event: "compaction-budget-recovered",
+          outcome: "recovered", fields: {
+            compactionReason: reason,
+            compactionFailure: "summary-budget",
+            ...budgetDiagnosticFields(budgetFailure),
+          },
+        });
+      }
       this.options.onEvent?.({
         type: "end",
         reason,
@@ -596,6 +774,15 @@ export class PiCompactionCoordinator {
     } catch (error) {
       const hostFailure = this.options.consumeHostFailure?.();
       const sessionFailed = error instanceof PiCompactionSessionError;
+      const aborted = this.activeAbortController?.signal.aborted === true;
+      if (!aborted) {
+        writeDiagnosticEvent({
+          level: "warn", area: "generation", event: "compaction-failed",
+          outcome: "failed", fields: compactionFailureDiagnosticFields({
+            error, reason, sessionFailed, hostFailure, budgetFailure, recoveryStage,
+          }),
+        });
+      }
       const errorMessage = hostFailure
         ? hostFailure === "policy"
           ? "The main-owned provider hook failed during compaction."
@@ -606,7 +793,6 @@ export class PiCompactionCoordinator {
             ? error.message
             : "compaction failed";
       if (started) {
-        const aborted = this.activeAbortController?.signal.aborted === true;
         this.options.onEvent?.({
           type: "end",
           reason,
@@ -681,26 +867,73 @@ export function createPiCompactionModels(
   }) as Models;
 }
 
-/** Fail closed on estimated summary overflow before provider I/O; this is not a provider tokenizer. */
+/** Estimated size of one summary request; this is not a provider tokenizer. */
+function summaryRequestTokens(...[model, context, options]: Parameters<Models["completeSimple"]>) {
+  // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
+  // for non-ASCII text; keep the existing content estimate for the remainder.
+  const unicodeAllowance = (text: string) => {
+    const nonAscii = text.replace(/\p{ASCII}/gu, "");
+    return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
+  };
+  const systemPrompt = context.systemPrompt ?? "";
+  const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
+    context.messages.reduce((total, message) => {
+      const text = typeof message.content === "string" ? message.content : message.content
+        .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+      return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
+    }, 0);
+  const outputTokens = options?.maxTokens ?? model.maxTokens;
+  const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
+  return { inputTokens, outputTokens, safetyTokens, contextWindow: model.contextWindow };
+}
+
+class SummaryRequestProbe extends Error {
+  readonly name = "SummaryRequestProbe";
+
+  constructor(readonly spareTokens: number) {
+    super("summary request probe");
+  }
+}
+
+/**
+ * Window tokens left over by the one summary request Pi would send for `input`
+ * (negative when it would be rejected). Pi builds the real prompt; the probe
+ * measures it and stops before any provider I/O.
+ */
+async function summaryRequestSpareTokens(
+  input: CompactionPreparation,
+  model: ResolvedModelRuntime["model"],
+  thinkingLevel: ThinkingLevel,
+  signal: AbortSignal,
+): Promise<number> {
+  const probe = {
+    completeSimple: (...args: Parameters<Models["completeSimple"]>) => {
+      const size = summaryRequestTokens(...args);
+      throw new SummaryRequestProbe(
+        size.contextWindow - size.inputTokens - size.outputTokens - size.safetyTokens,
+      );
+    },
+  } as unknown as Models;
+  try {
+    await compact(input, probe, model, undefined, signal, thinkingLevel, {
+      enabled: false,
+      maxRetries: 0,
+      baseDelayMs: 0,
+    });
+  } catch (error) {
+    if (error instanceof SummaryRequestProbe) return error.spareTokens;
+    throw error;
+  }
+  signal.throwIfAborted();
+  throw new Error("Compaction summary request could not be measured.");
+}
+
+/** Fail closed on estimated summary overflow before provider I/O. */
 function boundedCompactionModels(models: Models): Models {
-  const assertFits = (...[model, context, options]: Parameters<Models["completeSimple"]>) => {
-    // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
-    // for non-ASCII text; keep the existing content estimate for the remainder.
-    const unicodeAllowance = (text: string) => {
-      const nonAscii = text.replace(/\p{ASCII}/gu, "");
-      return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
-    };
-    const systemPrompt = context.systemPrompt ?? "";
-    const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
-      context.messages.reduce((total, message) => {
-        const text = typeof message.content === "string" ? message.content : message.content
-          .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
-        return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
-      }, 0);
-    const outputTokens = options?.maxTokens ?? model.maxTokens;
-    const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
-    if (inputTokens + outputTokens + safetyTokens > model.contextWindow) {
-      throw new Error("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+  const assertFits = (...args: Parameters<Models["completeSimple"]>) => {
+    const { inputTokens, outputTokens, safetyTokens, contextWindow } = summaryRequestTokens(...args);
+    if (inputTokens + outputTokens + safetyTokens > contextWindow) {
+      throw new CompactionSummaryBudgetError(inputTokens, outputTokens, safetyTokens, contextWindow);
     }
   };
   return new Proxy(models, {
