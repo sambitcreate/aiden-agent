@@ -1116,3 +1116,4 @@ because their native file-mutator test binary had not been built. Run
 - The CLI's vendored advisor copies silently drift when main edits the desktop originals. Only `test:cli` catches it. Re-vendor by rewriting `./x.js` specifiers.
 - Changing any `native/*` C source (even a test fixture like setsid-fixture.c) invalidates the prebuilt manifest hashes. Linux prebuilts need Docker.
 - Main and the PR both bumped the remote contract revision to 11 independently. Watch for revision collisions on long-lived branches.
+- Shell flags differ by platform: zsh -f skips rc files, but POSIX sh -f is noglob. Guard shell flags per platform and cover them with a behavioral glob test (Hermes P1 on #121).
