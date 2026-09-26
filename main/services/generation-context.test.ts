@@ -5,6 +5,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
@@ -581,6 +582,46 @@ test("replaces an oversized active request with a bounded fail-safe notice", () 
     /fewer\/lower-size attachments/u,
   );
   assert.equal((messages[0] as UserMessage).content.length, 100_000);
+});
+
+test("emergency projection retains the transcript prompt and tool declarations", () => {
+  const system = createInitialSystemMessage("Keep the host policy", [{
+    name: "safe_read", description: "Read a fixture", parameters: Type.Object({}),
+  }]);
+  assert.ok(system);
+  const messages = [system, user("x".repeat(100_000))] as AgentMessage[];
+  const result = compactGenerationContext(messages, { ...options, contextWindow: 8_000 });
+  assert.equal(result.usedContextFallback, true);
+  assert.equal(result.messages[0]?.role, "system");
+  assert.equal(getCurrentSystemPrompt(result.messages), "Keep the host policy");
+  assert.deepEqual(getCurrentTools(result.messages).map((tool) => tool.name), ["safe_read"]);
+  assert.equal(result.messages[1]?.role, "user");
+  assert.deepEqual(messages[0], system);
+});
+
+test("history pruning and emergency fallback replay all system patches", () => {
+  const base = createInitialSystemMessage("Keep host policy", [{
+    name: "safe_read", description: "Read a fixture", parameters: Type.Object({}),
+  }]);
+  assert.ok(base);
+  const patch = { role: "system" as const, content: "", timestamp: 2,
+    sections: { "agents-instructions": "Follow workspace guidance" } };
+  const history = compactGenerationContext(
+    [base, user("x".repeat(100_000)), patch, user("Continue")],
+    { ...options, contextWindow: 8_000 },
+  );
+  assert.equal(history.removedHistoryMessages, 1);
+  assert.equal(history.messages[0]?.role, "system");
+  assert.equal(history.messages[1]?.role, "user");
+  assert.match(getCurrentSystemPrompt(history.messages), /Follow workspace guidance/u);
+  const emergency = compactGenerationContext(
+    [base, patch, user("x".repeat(100_000))],
+    { ...options, contextWindow: 8_000 },
+  );
+  assert.equal(emergency.usedContextFallback, true);
+  assert.deepEqual(emergency.messages.slice(0, 2).map((message) => message.role), ["system", "user"]);
+  assert.match(getCurrentSystemPrompt(emergency.messages), /Follow workspace guidance/u);
+  assert.deepEqual(getCurrentTools(emergency.messages).map((tool) => tool.name), ["safe_read"]);
 });
 
 test("rejects a model whose static prompt and tools cannot fit even the fail-safe notice", () => {

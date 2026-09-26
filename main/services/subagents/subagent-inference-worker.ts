@@ -1,5 +1,6 @@
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
 import { providerFailureFromTerminalOutcome } from "../provider-failure.js";
 import {
@@ -116,7 +117,7 @@ parentPort.on("message", (messageEvent) => {
         message.model.api === "anthropic-messages"
           ? anthropicMessagesApi()
           : openAICompletionsApi();
-      const stream = (builtIn ?? compatibility).streamSimple(message.model, message.context, {
+      const stream = (builtIn ?? compatibility).streamSimple(message.model, normalizeContext(message.context), {
         ...message.options,
         signal: cancellation.signal,
         onPayload: (payload) => invokeHook("payload", payload),

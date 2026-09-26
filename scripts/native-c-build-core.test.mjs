@@ -21,6 +21,34 @@ test("native helper builds retain the universal macOS contract", async () => {
   assert.ok(invocation.args.includes("-mmacosx-version-min=14.4"));
 });
 
+test("native macOS helper builds keep a fixed environment plus the selected Xcode and SDK", async () => {
+  const invocation = await nativeCCompileInvocation({
+    platform: "darwin",
+    source: "/repo/native/helper.c",
+    output: "/repo/build/helper",
+    environment: {
+      DEVELOPER_DIR: "/Applications/Xcode-beta.app/Contents/Developer",
+      SDKROOT: "/sdk/MacOSX.sdk",
+      HOME: "/Users/someone",
+      PATH: "/opt/homebrew/bin:/usr/bin",
+    },
+  });
+  assert.deepEqual(invocation.env, {
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    LANG: "C",
+    LC_ALL: "C",
+    DEVELOPER_DIR: "/Applications/Xcode-beta.app/Contents/Developer",
+    SDKROOT: "/sdk/MacOSX.sdk",
+  });
+  const unselected = await nativeCCompileInvocation({
+    platform: "darwin",
+    source: "/repo/native/helper.c",
+    output: "/repo/build/helper",
+    environment: { HOME: "/Users/someone" },
+  });
+  assert.deepEqual(unselected.env, { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" });
+});
+
 test("native helper Linux builds use a host compiler without redefining source feature macros", async (context) => {
   if (globalThis.process.platform !== "linux") {
     context.skip("Linux compiler discovery is verified in Linux CI.");
