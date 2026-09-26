@@ -72,6 +72,7 @@ import {
   createSidebarChatShortcutAssignments,
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
+import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
 import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
@@ -746,9 +747,6 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
   const [deletingWorktreeBusy, setDeletingWorktreeBusy] = React.useState(false);
-  const [chatShortcutsVisible, setChatShortcutsVisible] = React.useState(false);
-  const shortcutRevealTimerRef = React.useRef<number | null>(null);
-  const heldCommandKeysRef = React.useRef(new Set<string>());
 
   const projection = React.useMemo(
     () => projectSidebarWorkspaces(workspaces, chats.data ?? [], search),
@@ -781,9 +779,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const chatJumpBindings = Array.from({ length: 9 }, (_, index) =>
     commandBinding(`chat.jump.${index + 1}` as CommandId),
   );
-  const revealModifierSignature = chatShortcutRevealModifierSets(chatJumpBindings)
-    .map((modifiers) => modifiers.join("+"))
-    .join("|");
+  const revealModifierSets = chatShortcutRevealModifierSets(chatJumpBindings);
+  const chatShortcutsVisible = useHeldModifierReveal(
+    revealModifierSets,
+    COMMAND_CHAT_SHORTCUT_REVEAL_MS,
+  );
   const shortcutNumberByChatId = React.useMemo(
     () => new Map(shortcutAssignments.map(({ chat, number }) => [chat.id, number])),
     [shortcutAssignments],
@@ -876,76 +876,6 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     );
     localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify(preferences));
   }, [expandedWorkspaceIds, organization, workspaceRegistryReady, workspaces]);
-
-  React.useEffect(() => {
-    const clearRevealTimer = () => {
-      if (shortcutRevealTimerRef.current === null) return;
-      window.clearTimeout(shortcutRevealTimerRef.current);
-      shortcutRevealTimerRef.current = null;
-    };
-    const hideShortcuts = () => {
-      heldCommandKeysRef.current.clear();
-      clearRevealTimer();
-      setChatShortcutsVisible(false);
-    };
-    const revealModifierSets = revealModifierSignature
-      .split("|")
-      .filter(Boolean)
-      .map((signature) => signature.split("+"));
-    const revealModifiers = new Set(revealModifierSets.flat());
-    const hasCompleteModifierSet = () =>
-      revealModifierSets.some((required) =>
-        required.every((modifier) => heldCommandKeysRef.current.has(modifier)),
-      );
-    const eventModifier = (event: KeyboardEvent) =>
-      ["Meta", "Control", "Alt", "Shift"].includes(event.key) ? event.key : null;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const modifier = eventModifier(event);
-      if (modifier && revealModifiers.has(modifier)) {
-        const wasAlreadyHeld = heldCommandKeysRef.current.has(modifier);
-        heldCommandKeysRef.current.add(modifier);
-        if (
-          !wasAlreadyHeld &&
-          hasCompleteModifierSet() &&
-          shortcutRevealTimerRef.current === null
-        ) {
-          shortcutRevealTimerRef.current = window.setTimeout(() => {
-            shortcutRevealTimerRef.current = null;
-            if (hasCompleteModifierSet()) setChatShortcutsVisible(true);
-          }, COMMAND_CHAT_SHORTCUT_REVEAL_MS);
-        }
-        return;
-      }
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      const modifier = eventModifier(event);
-      if (!modifier || !revealModifiers.has(modifier)) return;
-      heldCommandKeysRef.current.delete(modifier);
-      if (heldCommandKeysRef.current.size === 0) {
-        hideShortcuts();
-      } else if (!hasCompleteModifierSet()) {
-        clearRevealTimer();
-        setChatShortcutsVisible(false);
-      }
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== "visible") hideShortcuts();
-    };
-
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("keyup", onKeyUp);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("blur", hideShortcuts);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("keyup", onKeyUp);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("blur", hideShortcuts);
-      heldCommandKeysRef.current.clear();
-      clearRevealTimer();
-    };
-  }, [revealModifierSignature]);
 
   React.useEffect(() => {
     const unregister = shortcutAssignments.map(({ chat, number }) =>
@@ -1248,6 +1178,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   {chatShortcutsVisible && shortcutBinding ? (
                     <kbd
                       aria-hidden="true"
+                      data-chat-shortcut-hint="true"
                       className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
                     >
                       {prettyAccelerator(shortcutBinding)}

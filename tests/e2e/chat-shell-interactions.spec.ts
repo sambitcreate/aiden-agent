@@ -575,6 +575,79 @@ async function seedPaletteChats({ app, page }: AidenE2e): Promise<void> {
   await expect(page.locator("textarea")).toBeVisible();
 }
 
+test("holding Command reveals chat shortcuts and typing outside a field lands in the composer", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+
+  const hints = page.locator('[data-chat-shortcut-hint="true"]');
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.down("Meta");
+  await expect(hints).toHaveCount(2);
+  await expect(hints.nth(0)).toHaveText("⌘1");
+  await expect(hints.nth(1)).toHaveText("⌘2");
+  await page.keyboard.up("Meta");
+  await expect(hints).toHaveCount(0);
+
+  // A quick chord must not flash the badges.
+  await page.keyboard.press("Meta+1");
+  await expect(page.getByText(/^Opened palette-chat-/u)).toBeVisible();
+  await expect(hints).toHaveCount(0);
+
+  const composer = page.locator("textarea");
+  await expect(composer).toBeVisible();
+  await composer.fill("");
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.type("hi there");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("hi there");
+
+  // A redirected "/" typed before existing draft text opens the slash palette
+  // at the restored caret, not at the end of the draft.
+  await composer.fill(" later");
+  await composer.evaluate((element: HTMLTextAreaElement) => {
+    element.setSelectionRange(0, 0);
+    element.blur();
+  });
+  await page.keyboard.press("/");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("/ later");
+  expect(await composer.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(1);
+  const slashCommands = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(slashCommands.getByRole("option", { name: /^Choose model/u })).toBeVisible();
+  await composer.press("Escape");
+  await composer.fill("hi there");
+
+  // Space activates a focused control instead of being redirected, and
+  // ordinary typing inside another text field stays in that field.
+  const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
+  await modelPicker.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("tablist", { name: "Model picker view" })).toBeVisible();
+  await page.getByRole("tab", { name: "List" }).click();
+  const modelFilter = page.getByRole("combobox", { name: "Chat model" });
+  await expect(modelFilter).toBeFocused();
+  await page.keyboard.type("zz");
+  await expect(modelFilter).toHaveValue("zz");
+  await expect(composer).toHaveValue("hi there");
+  await page.keyboard.press("Escape");
+  await expect(modelFilter).toBeHidden();
+
+  // Disclosure summaries (activity feed, subagent detail) toggle on Space too.
+  await page.evaluate(() => {
+    const details = document.createElement("details");
+    details.id = "type-focus-disclosure-fixture";
+    details.innerHTML = "<summary>Disclosure</summary><p>Body</p>";
+    details.style.cssText = "position:fixed;left:320px;top:80px;z-index:100";
+    document.body.append(details);
+  });
+  const disclosure = page.locator("#type-focus-disclosure-fixture");
+  await disclosure.locator("summary").focus();
+  await page.keyboard.press("Space");
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(composer).toHaveValue("hi there");
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {
