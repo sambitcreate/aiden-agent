@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   refresh:
+    # workflow_dispatch can target any branch; only main may refresh or publish.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -36,7 +38,10 @@ jobs:
           set -euo pipefail
           echo "base-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_EVENT_NAME" != "push" || "$GITHUB_ACTOR" != "github-actions[bot]" ]]; then
+          # The publish job pushes with a deploy key, so the triggering actor is
+          # not github-actions[bot]; recognise our own commit by its author.
+          author_email="$(git log -1 --pretty=%ae "$GITHUB_SHA")"
+          if [[ "$GITHUB_EVENT_NAME" != "push" || "$author_email" != "41898282+github-actions[bot]@users.noreply.github.com" ]]; then
             exit 0
           fi
           subject="$(git log -1 --pretty=%s "$GITHUB_SHA")"
@@ -108,11 +113,16 @@ jobs:
 
   publish:
     needs: refresh
-    if: needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
+    if: github.ref == 'refs/heads/main' && needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Pushes use the CATALOG_DEPLOY_KEY deploy key, which the main ruleset
+    # allows to bypass required checks; the job token stays read-only. The key
+    # is a model-catalog environment secret, and that environment only accepts
+    # deployments from main, so branch-edited workflow YAML cannot read it.
+    environment: model-catalog
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Check out verified base revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -155,5 +165,25 @@ jobs:
       - name: Push verified snapshot
         shell: bash
         env:
-          PUBLISH_TOKEN: ${{ github.token }}
-        run: git push "https://x-access-token:${PUBLISH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          BASE_SHA: ${{ needs.refresh.outputs.base-sha }}
+          CATALOG_DEPLOY_KEY: ${{ secrets.CATALOG_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          # The deploy key bypasses required checks, so it may only append the
+          # snapshot commit to history that is already on main.
+          git fetch --quiet "https://github.com/${GITHUB_REPOSITORY}.git" main
+          if ! git merge-base --is-ancestor "$BASE_SHA" FETCH_HEAD; then
+            echo "Base $BASE_SHA is not on main; refusing to publish the catalog." >&2
+            exit 1
+          fi
+          if [[ -z "$CATALOG_DEPLOY_KEY" ]]; then
+            echo "CATALOG_DEPLOY_KEY secret is missing; cannot publish the catalog." >&2
+            exit 1
+          fi
+          key_file="$RUNNER_TEMP/catalog-deploy-key"
+          known_hosts="$RUNNER_TEMP/github-known-hosts"
+          trap 'rm -f "$key_file"' EXIT
+          (umask 077 && printf '%s\n' "$CATALOG_DEPLOY_KEY" > "$key_file")
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts"
+          git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main
