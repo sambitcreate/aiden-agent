@@ -376,6 +376,9 @@ actor AidenChatCache {
         for (id, chat) in admittedChats[instanceId] ?? [:] {
             guard chat.workspaceId == workspaceId, !chat.isBotChat,
                   (chatWriteGenerations[instanceId]?[id] ?? 0) > writeToken,
+                  // A list reserved before this chat's removal cannot carry
+                  // its later detail-only re-admission into the list.
+                  isChatWriteRetained(writeToken, instanceId: instanceId, chatId: id),
                   !isChatHidden(instanceId: instanceId, chatId: id),
                   let current = admittedChat(instanceId: instanceId, chatId: id) else { continue }
             byID[id] = current
@@ -426,6 +429,30 @@ actor AidenChatCache {
             ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: retained),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
+        return true
+    }
+
+    /// Keeps a successfully created chat in the durable workspace list when a
+    /// list admitted while the create's detail write was suspended omitted it.
+    /// The POST response is newer than any list that could not have seen it,
+    /// so only the created row is added; the list token is not advanced, and
+    /// removal, purge, and newer detail owners still win.
+    @discardableResult
+    func admitCreatedWorkspaceChat(chatId: String, instanceId: String, workspaceId: String, writeToken: UInt64) async -> Bool {
+        await beforeMetadataWrite?()
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
+              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chatId),
+              !isChatHidden(instanceId: instanceId, chatId: chatId),
+              chatWriteGenerations[instanceId]?[chatId] == writeToken,
+              var current = admittedChat(instanceId: instanceId, chatId: chatId),
+              current.workspaceId == workspaceId, !current.isBotChat else { return false }
+        current.localTitleOverride = nil
+        var rows = admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId) ?? []
+        rows.removeAll { $0.id == chatId }
+        rows.append(current)
+        rows.sort { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
+        admittedWorkspaceLists[instanceId, default: [:]][workspaceId] = rows
+        try? save(ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: rows), to: fileURL(kind: "lists", instanceId, workspaceId))
         return true
     }
 
@@ -669,7 +696,15 @@ actor AidenChatCache {
         var nextCursor = preservingCursor ? (loadChatSummaries(instanceId: instanceId).map(\.nextCursor) ?? snapshot.nextCursor) : snapshot.nextCursor
         let partial = metadataWriteIsPartial(writeToken, instanceId: instanceId)
         if partial {
+            // A cleanup-era page only upserts rows it still owns onto the
+            // current snapshot, so it is admitted as row updates: a newer
+            // detail projection of another row neither loses to it nor
+            // rejects its unrelated rows.
             let cached = loadChatSummaries(instanceId: instanceId)
+            if updatedRows == nil {
+                retained = retained.filter { writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: $0.id) }
+                updatedRows = Dictionary(retained.map { ($0.id, writeToken) }, uniquingKeysWith: { first, _ in first })
+            }
             retained = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: retained)
             if let cached { nextCursor = cached.nextCursor }
         }
@@ -733,7 +768,12 @@ actor AidenChatCache {
     }
 
     func removeChatSummary(instanceId: String, chatId: String, writeToken: UInt64? = nil, beforeWrite: (@Sendable () -> Void)? = nil) throws {
-        let removalToken = reserveSummaryWrite(instanceId: instanceId)
+        // Chat removal keeps its deletion-origin authority: minting a later
+        // summary token would reject valid partial Home writes for unrelated
+        // rows reserved while cleanup was held. The removal itself persists
+        // regardless of newer reservations (isRemoval), and the removed row is
+        // already fenced from those writes by its per-chat removal floor.
+        let removalToken = writeToken ?? reserveSummaryWrite(instanceId: instanceId)
         guard let cached = loadChatSummaries(instanceId: instanceId, includingRemoved: true) else { return }
         let summaries = cached.summaries.filter { $0.id != chatId }
         guard summaries.count != cached.summaries.count else { return }

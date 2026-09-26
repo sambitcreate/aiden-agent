@@ -1250,7 +1250,8 @@ final class AidenChatTests: XCTestCase {
         var newer = receipt
         newer.title = "Later list title"
         newer.revision = "newer-list-revision"
-        newer.messages.append(AidenChatMessage(id: "newer-list-reply", role: .assistant, text: "Keep list winner", createdAt: Date()))
+        // Whole seconds: the wire and cache encode ISO 8601 without fractions.
+        newer.messages.append(AidenChatMessage(id: "newer-list-reply", role: .assistant, text: "Keep list winner", createdAt: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))))
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let receiptData = try encoder.encode(receipt)
@@ -1440,7 +1441,8 @@ final class AidenChatTests: XCTestCase {
         await waitForChatWrite(gate)
         var final = receipt
         final.revision = "settled-during-metadata-await"
-        final.messages.append(AidenChatMessage(id: "metadata-final", role: .assistant, text: "Retain this final reply", createdAt: Date()))
+        // Whole seconds: the cache persists ISO 8601 dates without fractions.
+        final.messages.append(AidenChatMessage(id: "metadata-final", role: .assistant, text: "Retain this final reply", createdAt: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))))
         try await cache.saveFetchedChat(final, instanceId: "companion", writeToken: heldGet)
         await gate.release()
         await writing.value
@@ -1669,6 +1671,9 @@ final class AidenChatTests: XCTestCase {
             let settled = try await client.chat(id: old.id)
             if mode == "disk" {
                 let chats = root.appending(path: "chats")
+                // Nothing has been persisted yet, so create the cache root
+                // before replacing its chats directory with a blocking file.
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(at: chats)
                 try Data("blocked directory".utf8).write(to: chats)
             }
@@ -4715,7 +4720,11 @@ final class AidenChatTests: XCTestCase {
                 let workspace = await reopened.loadChats(instanceId: instanceId, workspaceId: chat.workspaceId)
                 let home = await reopened.loadChatSummaries(instanceId: instanceId)
                 XCTAssertEqual(workspace?.map(\.id), existingRow ? [other.id] : nil)
-                XCTAssertEqual(home?.summaries.map(\.id), existingRow ? [other.id] : nil)
+                // The stale pre-deletion write stays fenced; the fresh detail
+                // re-admission owns its Home row under its newer token.
+                XCTAssertEqual(Set(home?.summaries.map(\.id) ?? []), Set(existingRow ? [other.id, chat.id] : [chat.id]))
+                XCTAssertEqual(home?.summaries.first(where: { $0.id == chat.id })?.title, fresh.title)
+                XCTAssertEqual(home?.summaries.first(where: { $0.id == other.id })?.title, existingRow ? other.title : nil)
                 // Fresh metadata admission and another installation remain usable.
                 try await cache.saveChats([fresh, other], instanceId: instanceId, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
                 try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh), AidenChatSummary(chat: other)], nextCursor: nil), instanceId: instanceId, writeToken: cache.reserveChatWrite())
@@ -4831,13 +4840,19 @@ final class AidenChatTests: XCTestCase {
                     let reopened = AidenChatCache(root: root)
                     if writer == "workspace" {
                         let rows = await reopened.loadChats(instanceId: instance, workspaceId: chat.workspaceId)
-                        XCTAssertEqual(Set(rows?.map(\.id) ?? []), Set(existing == "absent" ? [other.id] : [other.id, omitted.id]))
-                        XCTAssertEqual(rows?.first(where: { $0.id == other.id })?.title, "Updated unrelated")
+                        XCTAssertEqual(Set(rows?.map(\.id) ?? []), Set(existing == "absent" ? [other.id] : [other.id, omitted.id]), "\(existing)/\(writer)/\(delayed)")
+                        XCTAssertEqual(rows?.first(where: { $0.id == other.id })?.title, "Updated unrelated", "\(existing)/\(writer)/\(delayed)")
                     } else {
                         let rows = await reopened.loadChatSummaries(instanceId: instance)
-                        XCTAssertEqual(Set(rows?.summaries.map(\.id) ?? []), Set(existing == "absent" ? [other.id] : [other.id, omitted.id]))
-                        XCTAssertEqual(rows?.summaries.first(where: { $0.id == other.id })?.title, "Updated unrelated")
-                        XCTAssertEqual(rows?.nextCursor, existing == "absent" ? (writer == "home" ? incomingCursor : nil) : (existing == "cached-nil" ? nil : cachedCursor))
+                        // The fresh detail re-admission owns the removed chat's
+                        // Home row; the pending-era write cannot touch it.
+                        XCTAssertEqual(Set(rows?.summaries.map(\.id) ?? []), Set(existing == "absent" ? [other.id, chat.id] : [other.id, omitted.id, chat.id]), "\(existing)/\(writer)/\(delayed)")
+                        XCTAssertEqual(rows?.summaries.first(where: { $0.id == chat.id })?.title, fresh.title, "\(existing)/\(writer)/\(delayed)")
+                        XCTAssertEqual(rows?.summaries.first(where: { $0.id == other.id })?.title, "Updated unrelated", "\(existing)/\(writer)/\(delayed)")
+                        // With no cached page the incoming cursor is retained, unless
+                        // the delayed write lands after the fresh detail projection
+                        // already created a cached page (whose cursor it keeps).
+                        XCTAssertEqual(rows?.nextCursor, existing == "absent" ? (writer == "home" && !delayed ? incomingCursor : nil) : (existing == "cached-nil" ? nil : cachedCursor), "\(existing)/\(writer)/\(delayed)")
                     }
                     if writer == "home" {
                         try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh)], nextCursor: freshCursor), instanceId: instance, generation: 1, writeToken: cache.reserveChatWrite())

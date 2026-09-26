@@ -909,7 +909,12 @@ final class AidenWorkspaceChatsModel {
         upsert(chat)
         let publicationGeneration = presentationGenerations[chat.id] ?? 0
         do {
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
+            if try await !cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken) {
+                // A list admitted while this create's detail write was held
+                // omitted the accepted chat; keep that one row durable (as it
+                // is in memory) without adopting this snapshot's other rows.
+                await cache.admitCreatedWorkspaceChat(chatId: chat.id, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
+            }
             try await cache.reconcileChatSummary(chat, instanceId: instanceId, writeToken: writeToken)
         } catch {}
         if publicationGeneration == (presentationGenerations[chat.id] ?? 0) {
@@ -1282,6 +1287,15 @@ final class AidenChatViewModel {
         defer {
             isLoading = false
             isRestoringStream = false
+        }
+        if isRestoringStream {
+            // Resolve the local recovery reservation before the draft read: a
+            // durable stream keeps Send blocked until its probe settles, but
+            // with nothing to recover Send must stay available (and win) while
+            // draft restoration is suspended on disk.
+            let cachedStream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id)
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            if cachedStream == nil, activeStreamID == nil { isRestoringStream = false }
         }
         if draftSession == nil {
             let restorationGeneration = composerGeneration
