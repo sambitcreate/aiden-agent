@@ -18,7 +18,7 @@ import {
 const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 
-function fixture(options: { issueFails?: boolean } = {}) {
+function fixture(options: { issueFails?: boolean; botCapabilitiesSupported?: boolean } = {}) {
   let now = 1_000;
   let issued = 0;
   let issuedAcceptsBotCapabilities: boolean | undefined;
@@ -55,6 +55,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
       statusChanges += 1;
     },
     () => "Studio Mac",
+    () => options.botCapabilitiesSupported ?? true,
   );
   return {
     service,
@@ -281,6 +282,20 @@ test("pairing grants progress authority only to clients that explicitly accept i
     ),
   );
   assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);
+});
+
+test("Linux host policy narrows a Bot-aware pairing request to legacy authority", async () => {
+  const linux = fixture({ botCapabilitiesSupported: false });
+  const opened = linux.service.begin(endpoint, fingerprint);
+  const result = await linux.service.exchange(
+    exchange(opened.bootstrap.secret, true, true),
+    "linux-bot-aware-client",
+  );
+
+  assert.deepEqual(result.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
+  assert.equal(result.capabilities.includes("bot:read"), false);
+  assert.equal(result.capabilities.includes("bot:write"), false);
+  assert.equal(linux.issuedAcceptsBotCapabilities(), false);
 });
 
 test("an expired, closed, or invalid pairing window fails with stable safe codes", async () => {

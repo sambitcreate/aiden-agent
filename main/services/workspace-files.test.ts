@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
+  linuxRecoveryUse,
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
@@ -286,3 +287,16 @@ test("workspace editor still follows a stable symlink to a file inside the works
   assert.equal(document.path, "linked.txt");
   assert.equal(document.content, "linked content\n");
 });
+test(
+  "Linux recovery inspection detects current-user open descriptors",
+  { skip: process.platform !== "linux" || !process.getuid },
+  async (t) => {
+    const root = await workspace(t);
+    const file = path.join(root, "recovery.txt");
+    await fs.writeFile(file, "original");
+    const handle = await fs.open(file, "r");
+    assert.equal(await linuxRecoveryUse(file), "open");
+    await handle.close();
+    assert.equal(await linuxRecoveryUse(file), "clear");
+  },
+);

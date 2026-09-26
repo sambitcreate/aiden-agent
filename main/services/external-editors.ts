@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,8 +25,11 @@ export interface ApplicationCandidate {
 
 export interface ResolvedExternalEditor extends ExternalEditor {
   appPath: string;
-  bundleId: string;
-  executablePath?: string;
+  launch:
+    | { kind: "bundle"; bundleId: string }
+    | { kind: "executable"; executablePath: string }
+    | { kind: "flatpak"; executablePath: string; applicationId: string }
+    | { kind: "file-manager" };
 }
 
 export const EXTERNAL_EDITOR_DEFINITIONS = [
@@ -239,58 +243,14 @@ export const EXTERNAL_EDITOR_DEFINITIONS = [
     applicationNames: ["Finder"],
     priority: Number.MAX_SAFE_INTEGER,
   },
+  {
+    id: "file-manager",
+    label: "Files",
+    bundleIds: [],
+    applicationNames: [],
+    priority: Number.MAX_SAFE_INTEGER,
+  },
 ] as const satisfies readonly ExternalEditorDefinition[];
-
-// Only launchers for existing editor IDs are eligible; never interpret $EDITOR as shell code.
-// Cursor is intentionally excluded on Linux: its editor-window routing varies by
-// build and AppImage/CLI launcher, so neither bare cursor nor --classic is reliable.
-const LINUX_EDITOR_COMMANDS: Readonly<Record<string, readonly string[]>> = {
-  vscode: ["code"],
-  "vscode-insiders": ["code-insiders"],
-  vscodium: ["codium"],
-  zed: ["zed", "zeditor"],
-  "sublime-text": ["subl"],
-};
-
-async function findLinuxExecutable(commands: readonly string[]): Promise<string | undefined> {
-  // Ignore cwd/relative PATH entries: a workspace must not supply its own editor launcher.
-  const roots = [...new Set((process.env.PATH ?? "").split(":").filter(path.isAbsolute))];
-  for (const root of roots) {
-    // PATH directory order wins; alias order only breaks ties within a directory.
-    for (const command of commands) {
-      const executablePath = path.join(root, command);
-      try {
-        if (!(await fs.stat(executablePath)).isFile()) continue;
-        await fs.access(executablePath, fs.constants.X_OK);
-        return executablePath;
-      } catch {
-        // Missing or non-executable entries must not shadow a later installed launcher.
-      }
-    }
-  }
-  return undefined;
-}
-
-async function discoverLinuxEditors(): Promise<ResolvedExternalEditor[]> {
-  const editors: ResolvedExternalEditor[] = [];
-  for (const definition of EXTERNAL_EDITOR_DEFINITIONS) {
-    const commands = LINUX_EDITOR_COMMANDS[definition.id];
-    if (!commands) continue;
-    const executablePath = await findLinuxExecutable(commands);
-    if (!executablePath) continue;
-    editors.push({
-      id: definition.id,
-      label: definition.label,
-      appPath: executablePath,
-      bundleId: "",
-      executablePath,
-      iconDataUrl: "",
-    });
-  }
-  // Keep the established preference ID and folder icon; Electron selects the OS file manager.
-  editors.push({ id: "finder", label: "File Manager", appPath: "", bundleId: "", iconDataUrl: "" });
-  return editors;
-}
 
 const FINDER_APP_PATH = "/System/Library/CoreServices/Finder.app";
 const CACHE_TTL_MS = 15_000;
@@ -301,6 +261,52 @@ const APPLICATION_ROOTS = [
   path.join(os.homedir(), "Applications"),
 ] as const;
 
+const LINUX_EXECUTABLES: Readonly<Record<string, readonly string[]>> = {
+  vscode: ["code"],
+  "vscode-insiders": ["code-insiders"],
+  vscodium: ["codium"],
+  zed: ["zed", "zeditor"],
+  windsurf: ["windsurf"],
+  kiro: ["kiro"],
+  trae: ["trae"],
+  "android-studio": ["studio", "android-studio"],
+  "intellij-idea": ["idea", "idea.sh"],
+  clion: ["clion", "clion.sh"],
+  datagrip: ["datagrip", "datagrip.sh"],
+  dataspell: ["dataspell", "dataspell.sh"],
+  goland: ["goland", "goland.sh"],
+  phpstorm: ["phpstorm", "phpstorm.sh"],
+  pycharm: ["pycharm", "pycharm.sh"],
+  rider: ["rider", "rider.sh"],
+  rubymine: ["rubymine", "rubymine.sh"],
+  rustrover: ["rustrover", "rustrover.sh"],
+  webstorm: ["webstorm", "webstorm.sh"],
+  "sublime-text": ["subl", "sublime_text"],
+  opencode: ["opencode"],
+};
+
+const LINUX_FLATPAKS: Readonly<Record<string, readonly string[]>> = {
+  vscode: ["com.visualstudio.code"],
+  "vscode-insiders": ["com.visualstudio.code.insiders"],
+  vscodium: ["com.vscodium.codium"],
+  zed: ["dev.zed.Zed"],
+  "android-studio": ["com.google.AndroidStudio"],
+  "intellij-idea": ["com.jetbrains.IntelliJ-IDEA-Community", "com.jetbrains.IntelliJ-IDEA-Ultimate"],
+  clion: ["com.jetbrains.CLion"],
+  datagrip: ["com.jetbrains.DataGrip"],
+  phpstorm: ["com.jetbrains.PhpStorm"],
+  pycharm: ["com.jetbrains.PyCharm-Community", "com.jetbrains.PyCharm-Professional"],
+  rider: ["com.jetbrains.Rider"],
+  rubymine: ["com.jetbrains.RubyMine"],
+  webstorm: ["com.jetbrains.WebStorm"],
+  "sublime-text": ["com.sublimetext.three"],
+};
+
+export interface LinuxFlatpakInstallation {
+  executablePath: string;
+  applicationIds: ReadonlySet<string>;
+}
+
 let cachedEditors: { expiresAt: number; value: ResolvedExternalEditor[] } | null = null;
 let discoveryInFlight: Promise<ResolvedExternalEditor[]> | null = null;
 
@@ -309,6 +315,21 @@ function runFile(file: string, args: readonly string[]): Promise<string> {
     execFile(file, [...args], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
+    });
+  });
+}
+
+function launchDetached(file: string, args: readonly string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, [...args], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
     });
   });
 }
@@ -344,7 +365,7 @@ export function resolveInstalledEditorApplications(
   ];
 
   return definitions
-    .filter((definition) => definition.id !== "finder")
+    .filter((definition) => definition.id !== "finder" && definition.id !== "file-manager")
     .flatMap((definition) => {
       const matches = uniqueCandidates
         .map((candidate) => ({ candidate, rank: candidateRank(definition, candidate) }))
@@ -363,7 +384,7 @@ export function resolveInstalledEditorApplications(
           id: definition.id,
           label: definition.label,
           appPath: selected.appPath,
-          bundleId: selected.bundleId,
+          launch: { kind: "bundle" as const, bundleId: selected.bundleId },
         },
       ];
     })
@@ -384,7 +405,7 @@ export function buildExternalEditorSpotlightQuery(
   definitions: readonly ExternalEditorDefinition[] = EXTERNAL_EDITOR_DEFINITIONS,
 ): string {
   const clauses = definitions
-    .filter((definition) => definition.id !== "finder")
+    .filter((definition) => definition.id !== "finder" && definition.id !== "file-manager")
     .flatMap((definition) => [
       ...definition.bundleIds.map(
         (bundleId) => `kMDItemCFBundleIdentifier == "${escapeSpotlightValue(bundleId)}"cd`,
@@ -422,7 +443,7 @@ async function readBundleIdentifier(appPath: string): Promise<string | undefined
 
 async function locateApplicationCandidates(): Promise<ApplicationCandidate[]> {
   const definitions = EXTERNAL_EDITOR_DEFINITIONS.filter(
-    (definition) => definition.id !== "finder",
+    (definition) => definition.id !== "finder" && definition.id !== "file-manager",
   );
   const directPaths = definitions.flatMap((definition) =>
     definition.applicationNames.flatMap((name) =>
@@ -458,6 +479,96 @@ async function locateApplicationCandidates(): Promise<ApplicationCandidate[]> {
   );
 }
 
+export function linuxExecutableSearchPaths(
+  pathValue: string | undefined = process.env.PATH,
+  homeDirectory: string = os.homedir(),
+): string[] {
+  return [
+    ...(pathValue?.split(path.delimiter) ?? []),
+    "/usr/local/bin",
+    "/usr/bin",
+    "/snap/bin",
+    path.join(homeDirectory, ".local", "bin"),
+    path.join(homeDirectory, ".local", "share", "JetBrains", "Toolbox", "scripts"),
+  ].filter((entry, index, values) => Boolean(entry) && values.indexOf(entry) === index);
+}
+
+export async function resolveInstalledLinuxEditors(
+  definitions: readonly ExternalEditorDefinition[] = EXTERNAL_EDITOR_DEFINITIONS,
+  searchPaths: readonly string[] = linuxExecutableSearchPaths(),
+  flatpak?: LinuxFlatpakInstallation,
+): Promise<Array<Omit<ResolvedExternalEditor, "iconDataUrl">>> {
+  const resolved = await Promise.all(
+    definitions
+      .filter((definition) => LINUX_EXECUTABLES[definition.id])
+      .map(async (definition) => {
+        for (const root of searchPaths) {
+          // Ignore cwd/relative PATH entries: a workspace must not supply its own editor launcher.
+          if (!path.isAbsolute(root)) continue;
+          // PATH directory order wins; alias order only breaks ties within a directory.
+          for (const executable of LINUX_EXECUTABLES[definition.id] ?? []) {
+            const executablePath = path.join(root, executable);
+            try {
+              if (!(await fs.stat(executablePath)).isFile()) continue;
+              await fs.access(executablePath, fsConstants.X_OK);
+              return {
+                id: definition.id,
+                label: definition.label,
+                appPath: executablePath,
+                launch: { kind: "executable" as const, executablePath },
+              };
+            } catch {
+              // Missing or non-executable entries must not shadow a later installed launcher.
+            }
+          }
+        }
+        const applicationId = (LINUX_FLATPAKS[definition.id] ?? []).find((candidate) =>
+          flatpak?.applicationIds.has(candidate),
+        );
+        if (applicationId && flatpak) {
+          return {
+            id: definition.id,
+            label: definition.label,
+            appPath: flatpak.executablePath,
+            launch: {
+              kind: "flatpak" as const,
+              executablePath: flatpak.executablePath,
+              applicationId,
+            },
+          };
+        }
+        return null;
+      }),
+  );
+  return resolved.filter((editor): editor is NonNullable<typeof editor> => editor !== null);
+}
+
+async function locateLinuxFlatpak(
+  searchPaths: readonly string[],
+): Promise<LinuxFlatpakInstallation | undefined> {
+  for (const root of searchPaths) {
+    if (!path.isAbsolute(root)) continue;
+    const executablePath = path.join(root, "flatpak");
+    try {
+      if (!(await fs.stat(executablePath)).isFile()) continue;
+      await fs.access(executablePath, fsConstants.X_OK);
+      const output = await runFile(executablePath, ["list", "--app", "--columns=application"]);
+      return {
+        executablePath,
+        applicationIds: new Set(
+          output
+            .split("\n")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        ),
+      };
+    } catch {
+      // Continue to the next deterministic command location.
+    }
+  }
+  return undefined;
+}
+
 async function loadNativeIcon(appPath: string): Promise<string> {
   try {
     const { app, nativeImage } = await import("electron");
@@ -475,22 +586,40 @@ async function loadNativeIcon(appPath: string): Promise<string> {
 }
 
 async function discoverExternalEditors(): Promise<ResolvedExternalEditor[]> {
-  if (process.platform === "linux") return discoverLinuxEditors();
-  const resolved = resolveInstalledEditorApplications(await locateApplicationCandidates());
+  const resolved =
+    process.platform === "linux"
+      ? await (async () => {
+          const searchPaths = linuxExecutableSearchPaths();
+          return resolveInstalledLinuxEditors(
+            EXTERNAL_EDITOR_DEFINITIONS,
+            searchPaths,
+            await locateLinuxFlatpak(searchPaths),
+          );
+        })()
+      : resolveInstalledEditorApplications(await locateApplicationCandidates());
   const withIcons = await Promise.all(
     resolved.map(async (editor) => ({
       ...editor,
       iconDataUrl: await loadNativeIcon(editor.appPath),
     })),
   );
-  const finder: ResolvedExternalEditor = {
-    id: "finder",
-    label: "Finder",
-    appPath: FINDER_APP_PATH,
-    bundleId: "com.apple.finder",
-    iconDataUrl: await loadNativeIcon(FINDER_APP_PATH),
-  };
-  return [...withIcons, finder];
+  const fileManager: ResolvedExternalEditor =
+    process.platform === "linux"
+      ? {
+          id: "file-manager",
+          label: "Files",
+          appPath: "",
+          launch: { kind: "file-manager" },
+          iconDataUrl: "",
+        }
+      : {
+          id: "finder",
+          label: "Finder",
+          appPath: FINDER_APP_PATH,
+          launch: { kind: "file-manager" },
+          iconDataUrl: await loadNativeIcon(FINDER_APP_PATH),
+        };
+  return [...withIcons, fileManager];
 }
 
 async function resolvedExternalEditors(forceRefresh = false): Promise<ResolvedExternalEditor[]> {
@@ -563,8 +692,7 @@ export interface OpenFolderInEditorDependencies {
   stat: (folderPath: string) => Promise<{ isDirectory(): boolean }>;
   editors: (forceRefresh: boolean) => Promise<ResolvedExternalEditor[]>;
   openPath: (folderPath: string) => Promise<string>;
-  launchApplication: (bundleId: string, folderPath: string) => Promise<void>;
-  launchExecutable: (executablePath: string, folderPath: string) => Promise<void>;
+  launchApplication: (editor: ResolvedExternalEditor, folderPath: string) => Promise<void>;
 }
 
 const defaultOpenDependencies: OpenFolderInEditorDependencies = {
@@ -574,8 +702,25 @@ const defaultOpenDependencies: OpenFolderInEditorDependencies = {
     const { shell } = await import("electron");
     return shell.openPath(folderPath);
   },
-  launchApplication: launchApplicationBundle,
-  launchExecutable: launchEditorExecutable,
+  launchApplication: async (editor, folderPath) => {
+    if (editor.launch.kind === "bundle") {
+      await launchApplicationBundle(editor.launch.bundleId, folderPath);
+      return;
+    }
+    if (editor.launch.kind === "executable") {
+      await launchDetached(editor.launch.executablePath, [folderPath]);
+      return;
+    }
+    if (editor.launch.kind === "flatpak") {
+      await launchDetached(editor.launch.executablePath, [
+        "run",
+        editor.launch.applicationId,
+        folderPath,
+      ]);
+      return;
+    }
+    throw new Error("The selected application cannot be launched directly.");
+  },
 };
 
 export async function openFolderInExternalEditor(
@@ -598,24 +743,26 @@ export async function openFolderInExternalEditor(
 
   const editor = (await dependencies.editors(true)).find((candidate) => candidate.id === editorId);
   if (!editor) {
-    if (process.platform === "linux" && editorId !== "finder" && !LINUX_EDITOR_COMMANDS[editorId]) {
+    if (
+      process.platform === "linux" &&
+      editorId !== "finder" &&
+      editorId !== "file-manager" &&
+      !LINUX_EXECUTABLES[editorId] &&
+      !LINUX_FLATPAKS[editorId]
+    ) {
       throw new Error(`Opening ${definition.label} from Aiden is not supported on Linux.`);
     }
     throw new Error(`${definition.label} is no longer installed.`);
   }
 
-  if (editor.id === "finder") {
+  if (editor.launch.kind === "file-manager") {
     const error = await dependencies.openPath(folderPath);
     if (error) throw new Error(`Could not open workspace in ${editor.label}: ${error}`);
     return;
   }
 
   try {
-    if (editor.executablePath) {
-      await dependencies.launchExecutable(editor.executablePath, folderPath);
-    } else {
-      await dependencies.launchApplication(editor.bundleId, folderPath);
-    }
+    await dependencies.launchApplication(editor, folderPath);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not open workspace in ${editor.label}: ${detail}`);

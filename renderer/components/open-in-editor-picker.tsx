@@ -35,7 +35,7 @@ function EditorIcon({ editor, className }: { editor: ExternalEditor; className: 
       />
     );
   }
-  const Icon = editor.id === "finder" ? Folder : AppWindow;
+  const Icon = editor.id === "finder" || editor.id === "file-manager" ? Folder : AppWindow;
   return <Icon aria-hidden="true" className={className} />;
 }
 

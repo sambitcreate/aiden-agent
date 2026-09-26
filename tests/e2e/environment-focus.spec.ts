@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
+const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
+
 for (const reducedMotion of [false, true]) {
   test(`Quick View actions transfer focus after menu dismissal (reduced motion: ${reducedMotion})`, async ({
     aiden,
@@ -170,7 +172,7 @@ test("unmounting Quick View with its actions menu open does not reopen tools", a
   await finishLmStudioOnboarding(page);
   await page.locator("[data-quick-view-toggle]").click();
   await page.getByRole("button", { name: "Quick View actions" }).click();
-  await page.keyboard.press("Meta+,");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+,`);
   await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
   await expect(page.locator('[data-environment-surface="quick-view"]')).toHaveCount(0);
   await expect(page.getByRole("menu")).toBeHidden();
