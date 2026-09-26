@@ -438,6 +438,54 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testCoalescedFallbackRecoversApprovalWhenHeldReadFails() async throws {
+        try await exerciseCoalescedFallbackRecovery(cancelHeldRead: false)
+    }
+
+    @MainActor
+    func testCoalescedFallbackRecoversApprovalWhenHeldReadIsCanceled() async throws {
+        try await exerciseCoalescedFallbackRecovery(cancelHeldRead: true)
+    }
+
+    @MainActor
+    private func exerciseCoalescedFallbackRecovery(cancelHeldRead: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let responseArrived = expectation(description: "A response held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/respond") { responseArrived.fulfill() }
+        let response = Task { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        await fulfillment(of: [responseArrived], timeout: 5)
+        let releaseResponse = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let readArrived = expectation(description: "coalesced B read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval", failing: !cancelHeldRead) { readArrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        releaseResponse?()
+        // The ambiguous response coalesces with the held read and waits for its outcome.
+        let deadline = Date().addingTimeInterval(5)
+        while model.presentedError == nil, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertTrue(model.isRespondingToApproval)
+        // The held read fails or is canceled without publishing; the fallback must still recover B.
+        if cancelHeldRead {
+            read.cancel()
+        } else {
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        }
+        await read.value
+        await response.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
     func testLatestAdmittedApprovalSnapshotWinsOverOlderCompletion() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
@@ -3258,9 +3306,12 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var onHeldRequest: (@Sendable () -> Void)?
     nonisolated(unsafe) private static var heldCompletion: (@Sendable () -> Void)?
 
-    static func holdNextRequest(endingIn suffix: String, onRequest: @escaping @Sendable () -> Void) {
+    nonisolated(unsafe) private static var heldRequestFails = false
+
+    static func holdNextRequest(endingIn suffix: String, failing: Bool = false, onRequest: @escaping @Sendable () -> Void) {
         lock.withLock {
             heldPathSuffix = suffix
+            heldRequestFails = failing
             onHeldRequest = onRequest
         }
     }
@@ -3298,6 +3349,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _agentRequestCount = 0
         _turnRequestCount = 0
         heldPathSuffix = nil
+        heldRequestFails = false
         onHeldRequest = nil
         lock.unlock()
     }
@@ -3500,7 +3552,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             Self.heldPathSuffix = nil
             let onHold = Self.onHeldRequest
             Self.onHeldRequest = nil
-            Self.heldCompletion = { [self] in complete(result, shouldFinish: finishes) }
+            let fails = Self.heldRequestFails
+            Self.heldRequestFails = false
+            Self.heldCompletion = { [self] in
+                if fails {
+                    client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                } else {
+                    complete(result, shouldFinish: finishes)
+                }
+            }
             return onHold
         }
         if let onHold {

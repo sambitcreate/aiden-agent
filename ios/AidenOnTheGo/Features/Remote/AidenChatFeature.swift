@@ -843,6 +843,27 @@ enum AidenDraftSendReconciliation {
     }
 }
 
+/// Settles once per approval snapshot read: true only when that read published the
+/// Mac's authoritative snapshot, false when it failed, was canceled, or was superseded.
+@MainActor
+final class AidenApprovalSnapshotOutcome {
+    private var result: Bool?
+    private var waiters: [CheckedContinuation<Bool, Never>] = []
+
+    func complete(published: Bool) {
+        guard result == nil else { return }
+        result = published
+        let pending = waiters
+        waiters = []
+        pending.forEach { $0.resume(returning: published) }
+    }
+
+    func published() async -> Bool {
+        if let result { return result }
+        return await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 @MainActor
 @Observable
 final class AidenChatViewModel {
@@ -897,7 +918,7 @@ final class AidenChatViewModel {
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
     private var approvalSnapshotGeneration: UInt64 = 0
-    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
+    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?, outcome: AidenApprovalSnapshotOutcome)?
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
@@ -2418,13 +2439,24 @@ final class AidenChatViewModel {
               streamState?.isTerminal != true else { return }
         if isFallback, let read = approvalSnapshotInFlight,
            read.streamID == streamID, coordinator.isCurrent(read.context),
-           read.approval == pendingApproval, read.state == streamState { return }
+           read.approval == pendingApproval, read.state == streamState {
+            // Coalesce only while the matching read can still publish. If it fails, is
+            // canceled, or is superseded without publishing, re-evaluate and read again.
+            if await read.outcome.published() || pendingApproval != nil { return }
+            await restorePendingApproval(streamID: streamID, context: context, announce: announce, isFallback: true)
+            return
+        }
         approvalSnapshotGeneration &+= 1
         let snapshotGeneration = approvalSnapshotGeneration
-        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
-        defer {
+        let outcome = AidenApprovalSnapshotOutcome()
+        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState, outcome)
+        // Once published, the marker no longer describes a read that can still publish, so
+        // release it before awaiting unrelated side effects such as Live Activity updates.
+        func settle(published: Bool) {
             if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+            outcome.complete(published: published)
         }
+        defer { settle(published: false) }
         let expectedApproval = pendingApproval
         let expectedState = streamState
         do {
@@ -2440,6 +2472,7 @@ final class AidenChatViewModel {
             ) else {
                 pendingApproval = nil
                 streamState = .reconciling
+                settle(published: true)
                 await liveActivities.updateStatus(
                     instanceID: instanceId,
                     streamID: streamID,
@@ -2449,6 +2482,7 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
+            settle(published: true)
             if announce {
                 coordinator.haptics.play(
                     .warning,

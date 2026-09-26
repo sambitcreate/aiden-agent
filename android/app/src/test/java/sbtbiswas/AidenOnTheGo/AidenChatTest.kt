@@ -210,6 +210,12 @@ class AidenChatTest {
     fun ambiguousResponseCannotSupersedeHeldAuthoritativeApproval() = exerciseRunControl("approval-fallback-overlap")
 
     @Test
+    fun coalescedFallbackRecoversApprovalWhenHeldReadFails() = exerciseRunControl("approval-fallback-failed")
+
+    @Test
+    fun coalescedFallbackRecoversApprovalWhenHeldReadIsCanceled() = exerciseRunControl("approval-fallback-cancelled")
+
+    @Test
     fun latestAdmittedApprovalReadWinsWhenOlderCompletesFirst() = exerciseRunControl("approval-overlap")
 
     @Test
@@ -265,6 +271,8 @@ class AidenChatTest {
         val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val failApprovalReads = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failedHeldRead = java.util.concurrent.atomic.AtomicBoolean(false)
+        val approvalReads = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
         val oldRead = CountDownLatch(1)
         val newRead = CountDownLatch(1)
@@ -298,12 +306,17 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
                 request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
                 request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
+                    approvalReads.incrementAndGet()
                     if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
                     val id = snapshotId.get()
-                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                    if ((scenario.startsWith("approval-fallback-") && scenario != "approval-fallback-before" ||
+                            scenario == "approval-overlap") && id != "approval-current" ||
                         (scenario == "approval-fallback-before" && id == "approval-old")) {
                         (if (id == "approval-old") oldRead else newRead).countDown()
                         check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
+                        if (scenario == "approval-fallback-failed" && failedHeldRead.compareAndSet(false, true)) {
+                            return MockResponse().setResponseCode(503)
+                        }
                     }
                     MockResponse().setBody("""{"approval":{"approvalId":"${id}","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}""")
                 }
@@ -459,19 +472,29 @@ class AidenChatTest {
                     assertEquals("approval-new", model.pendingApproval.value?.id)
                     return@runBlocking
                 }
-                if (scenario == "approval-fallback-overlap") {
+                if (scenario.startsWith("approval-fallback-") && scenario != "approval-fallback-before") {
+                    approvalReads.set(0)
                     model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
                     withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
                     snapshotId.set("approval-new")
                     val read = async { model.restorePendingApproval("stream-control") }
                     withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
-                    failApprovalReads.set(true)
+                    // Any redundant fallback would fail, but must not supersede the held admitted read.
+                    if (scenario == "approval-fallback-overlap") failApprovalReads.set(true)
                     release.countDown()
-                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    // The ambiguous response coalesces with the held read and waits for its outcome.
+                    withTimeout(5_000) { model.presentedError.first { it != null } }
+                    yield()
+                    assertTrue(model.isRespondingToApproval.value)
+                    assertEquals(1, approvalReads.get())
+                    if (scenario == "approval-fallback-cancelled") read.cancel()
                     releaseNew.countDown()
-                    read.await()
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    runCatching { read.await() }
+                    // A failed or canceled coalesced read must leave the fallback able to recover the card.
                     assertEquals("approval-new", model.pendingApproval.value?.id)
                     assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                    assertEquals(if (scenario == "approval-fallback-overlap") 1 else 2, approvalReads.get())
                     return@runBlocking
                 }
                 if (scenario == "approval-overlap") {

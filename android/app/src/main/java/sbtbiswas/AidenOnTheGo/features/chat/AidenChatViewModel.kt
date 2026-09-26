@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -1083,18 +1084,33 @@ class AidenChatViewModel(
     private data class ApprovalSnapshotRead(
         val streamId: String, val client: AidenRemoteClient,
         val approval: AidenPendingApproval?, val state: AidenStreamState?
-    )
+    ) {
+        /** Completes true only when this read published the Mac's authoritative snapshot. */
+        val published = CompletableDeferred<Boolean>()
+    }
     private var approvalSnapshotInFlight: ApprovalSnapshotRead? = null
 
     internal suspend fun restorePendingApproval(streamId: String, isFallback: Boolean = false) {
         val client = activeClient() ?: return
         if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
-        if (isFallback && approvalSnapshotInFlight?.let { it.streamId == streamId && it.client === client &&
-                it.approval == _pendingApproval.value && it.state == _streamState.value } == true) return
+        if (isFallback) {
+            val inFlight = approvalSnapshotInFlight?.takeIf {
+                it.streamId == streamId && it.client === client &&
+                    it.approval == _pendingApproval.value && it.state == _streamState.value
+            }
+            if (inFlight != null) {
+                // Coalesce only while the matching read can still publish. If it fails, is
+                // canceled, or is superseded without publishing, re-evaluate and read again.
+                if (inFlight.published.await() || _pendingApproval.value != null) return
+                return restorePendingApproval(streamId, isFallback = true)
+            }
+        }
         val snapshotGeneration = ++approvalSnapshotGeneration
-        approvalSnapshotInFlight = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
+        val read = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
+        approvalSnapshotInFlight = read
         val expectedApproval = _pendingApproval.value
         val expectedState = _streamState.value
+        var didPublish = false
         try {
             val snapshot = client.streamApproval(streamId)
             if (activeClient() !== client || activeStreamId != streamId ||
@@ -1113,6 +1129,7 @@ class AidenChatViewModel(
                 _pendingApproval.value = null
                 _streamState.value = AidenStreamState.RECONCILING
             }
+            didPublish = true
         } catch (_: Exception) {
             if (activeClient() !== client || activeStreamId != streamId ||
                 snapshotGeneration != approvalSnapshotGeneration ||
@@ -1121,6 +1138,7 @@ class AidenChatViewModel(
             _streamState.value = AidenStreamState.RECONCILING
         } finally {
             if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
+            read.published.complete(didPublish)
         }
     }
 
