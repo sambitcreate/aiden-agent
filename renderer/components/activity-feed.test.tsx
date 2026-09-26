@@ -281,3 +281,13 @@ test("the ticker preserves rows and only fades new content", () => {
   assert.match(css, /:root\[data-reduce-motion="false"\] \.activity-feed-stack/u);
   assert.doesNotMatch(css, /aiden-agent-step-label-(?:in|out)/u);
 });
+
+
+test("successful produced files render explicit host provenance", () => {
+  const markup = renderToStaticMarkup(<ActivityFeed timeline={timeline("completed", [
+    step(0, "write_file", "completed", { producedFile: { relativePath: "out/report.txt", operation: "written", bytes: 12 } }),
+  ])} />);
+  assert.match(markup, /File written/u);
+  assert.match(markup, /report.txt/u);
+  assert.match(markup, /title="out\/report.txt"/u);
+});

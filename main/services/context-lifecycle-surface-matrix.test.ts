@@ -239,7 +239,7 @@ test("production Mac and bound-Telegram adapters share one canonical Bot journal
     providerId,
     model: modelId,
     messages: [
-      { id: "shared-u1", role: "user", content: `old ${"x".repeat(90_000)}`, createdAt: 1 },
+      { id: "shared-u1", role: "user", content: `old ${"x".repeat(10_000)}`, createdAt: 1 },
       { id: "shared-a1", role: "assistant", content: "old answer", createdAt: 2 },
       { id: "shared-u2", role: "user", content: `recent ${"y".repeat(10_000)}`, createdAt: 3 },
       { id: "shared-a2", role: "assistant", content: "recent answer", createdAt: 4 },
@@ -273,7 +273,7 @@ test("production Mac and bound-Telegram adapters share one canonical Bot journal
 
   const macResult = await compactDesktopChat(service, chatId, "renderer:bot-window");
   chat.messages.push(
-    { id: "shared-u3", role: "user", content: `later ${"z".repeat(90_000)}`, createdAt: 5 },
+    { id: "shared-u3", role: "user", content: `later ${"z".repeat(10_000)}`, createdAt: 5 },
     { id: "shared-a3", role: "assistant", content: "later answer", createdAt: 6 },
   );
   chat.updatedAt = 6;

@@ -95,7 +95,7 @@ export class DictationDeadline {
   }
 }
 
-function transcriptionTimeoutError(): Error {
+export function transcriptionTimeoutError(): Error {
   return new Error("Transcription took too long. Try again with a shorter recording.");
 }
 

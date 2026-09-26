@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   isAssistantAutomationApprovalDetails,
+  isFormFillBatchApprovalDetails,
   isScheduledTaskApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
@@ -312,5 +313,56 @@ test("MCP mutation details require exact canonical safe arguments and literal sa
     { ...mcpMutation, canonicalArguments: "[]" },
   ]) {
     assert.equal(isSubagentMcpMutationApprovalDetails(invalid), false);
+  }
+});
+
+const formFillBatch = {
+  kind: "form-fill-batch" as const,
+  planId: "plan_01",
+  sourceDocument: "patient.txt",
+  sourceHashPrefix: "4f43b442e79b",
+  targetApp: "Safari",
+  targetTitle: "Registration",
+  rows: [
+    {
+      order: 0,
+      elementIndex: 3,
+      label: "First name",
+      value: "Ada",
+      sourceLabel: "First name",
+      sourceLine: 1,
+    },
+  ],
+  skippedRows: [{ label: "Submit", reason: "Submit is never part of a fill batch." }],
+  fillCount: 1,
+  reviewCount: 1,
+  submitExcluded: true as const,
+};
+
+test("form-fill batch details require exact provenance, safe text, and no submit", () => {
+  assert.equal(isFormFillBatchApprovalDetails(formFillBatch), true);
+  for (const invalid of [
+    { ...formFillBatch, extra: true },
+    { ...formFillBatch, kind: "subagent-shell" },
+    { ...formFillBatch, submitExcluded: false },
+    { ...formFillBatch, sourceHashPrefix: "not-hex" },
+    { ...formFillBatch, fillCount: 5 },
+    { ...formFillBatch, rows: [] },
+    { ...formFillBatch, rows: [{ ...formFillBatch.rows[0], value: "  padded" }] },
+    { ...formFillBatch, rows: [{ ...formFillBatch.rows[0], value: "evil\u202evalue" }] },
+    { ...formFillBatch, rows: [{ ...formFillBatch.rows[0], order: -1 }] },
+    { ...formFillBatch, rows: [{ ...formFillBatch.rows[0], sourceLine: 0 }] },
+    { ...formFillBatch, skippedRows: [{ label: "x", reason: "y", extra: true }] },
+    { ...formFillBatch, skippedRows: [{ label: "x", reason: `bad\u202areason` }] },
+  ]) {
+    assert.equal(isFormFillBatchApprovalDetails(invalid), false);
+  }
+});
+
+test("form-fill values reject every tested Unicode format character", () => {
+  for (const invisible of ["\u200b", "\u200c", "\u200d", "\u2060", "\u00ad", "\ufeff", "\u{e0001}"]) {
+    assert.equal(isFormFillBatchApprovalDetails({ ...formFillBatch,
+      rows: [{ ...formFillBatch.rows[0], value: `Ada${invisible}Lovelace` }],
+    }), false);
   }
 });

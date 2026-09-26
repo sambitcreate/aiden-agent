@@ -13,8 +13,10 @@ export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const TELEGRAM_RICH_MESSAGE_LIMIT = 32_768;
 export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
 
-/** Safety margin so HTML entity expansion doesn't push past the limit. */
+/** Preserve the existing safety margin within the parsed-text budget. */
 const CHUNK_HEADROOM = 64;
+// Bot API Client::get_formatted_text rejects larger UTF-8 input before parsing.
+const TELEGRAM_HTML_BYTE_LIMIT = 32_768;
 
 const CODE_SPAN_SENTINEL = String.fromCharCode(0);
 const CODE_SPAN_PATTERN = new RegExp(`${CODE_SPAN_SENTINEL}CODESPAN(\\d+)${CODE_SPAN_SENTINEL}`, "g");
@@ -429,77 +431,148 @@ export function markdownToTelegramHtml(markdown: string): string {
   return output.join("\n").trim();
 }
 
+const telegramGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+interface TelegramHtmlTag {
+  name: string;
+  opening: string;
+  closingBytes: number;
+  parent?: TelegramHtmlTag;
+}
+
+interface TelegramHtmlBoundary {
+  offset: number;
+  tag?: TelegramHtmlTag;
+}
+
+function closeTelegramTags(tag: TelegramHtmlTag | undefined): string {
+  let closing = "";
+  for (; tag; tag = tag.parent) closing += `</${tag.name}>`;
+  return closing;
+}
+
+function reopenTelegramTags(tag: TelegramHtmlTag | undefined): string {
+  const openings: string[] = [];
+  for (; tag; tag = tag.parent) openings.push(tag.opening);
+  return openings.reverse().join("");
+}
+
+function decodeTelegramEntity(entity: string): string {
+  if (entity.startsWith("#")) {
+    const codePoint = entity.startsWith("#x") ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+    // Invalid numeric input must not throw while measuring; this is not a sanitizer.
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "�";
+  }
+  return { amp: "&", lt: "<", gt: ">", quot: '"' }[entity]!;
+}
+
+function decodeTelegramText(text: string): string {
+  return text.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);/g,
+    (_match, value: string) => decodeTelegramEntity(value));
+}
+
+/** Drop unsendable formatting while retaining visible labels and destinations. */
+function plainTelegramHtml(html: string): string {
+  const plain = html.replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g,
+    (_match, destination: string, label: string) => {
+      const renderedLabel = decodeTelegramText(label.replace(/<[^>]*>/g, ""));
+      return renderedLabel === decodeTelegramText(destination) ? label : `${label} (${destination})`;
+    },
+  ).replace(/<[^>]*>/g, "");
+  return escapeHtml(decodeTelegramText(plain));
+}
+
 /**
- * Split HTML text into chunks under the Telegram message limit.
- * Prefers splitting at double-newline boundaries (paragraph breaks);
- * falls back to hard splits if a single paragraph exceeds the limit.
- * Tracks <pre> state across chunk boundaries so tags stay balanced.
+ * Split the restricted HTML emitted by markdownToTelegramHtml. Telegram limits
+ * both text after entity parsing and serialized UTF-8 input before parsing.
+ * Count UTF-16 conservatively and keep graphemes whole when they fit the budget.
+ * Prefer paragraph/line boundaries and preserve whitespace (especially code).
+ * Buffer at most one text budget and its source boundaries; no DOM parser.
+ * An oversized single grapheme falls back to code-point boundaries for progress.
  */
 export function chunkForTelegram(html: string): string[] {
   const limit = TELEGRAM_MESSAGE_LIMIT - CHUNK_HEADROOM;
   if (html.length <= limit) return html.length > 0 ? [html] : [];
 
+  // Sticky matching scans only the next token. Attributes from the converter
+  // contain escaped angle brackets; supported entities and code points remain
+  // indivisible even when their serialized representation exceeds the budget.
+  const tokenPattern = /<(\/?)(b|i|s|u|a|pre|code|blockquote)(?:\s[^<>]*)?>|&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);|[\s\S]/uy;
   const chunks: string[] = [];
-  const paragraphs = html.split(/\n\n+/);
-  let current = "";
-
-  for (const para of paragraphs) {
-    if (para.length > limit) {
-      if (current) {
-        chunks.push(current.trim());
-        current = "";
-      }
-      for (const piece of hardSplit(para, limit)) chunks.push(piece);
-      continue;
-    }
-
-    if ((current + "\n\n" + para).length > limit) {
-      chunks.push(current.trim());
-      current = para;
-    } else {
-      current = current ? `${current}\n\n${para}` : para;
-    }
-  }
-
-  if (current.trim()) chunks.push(current.trim());
-  return chunks.map(balancePreTags);
-}
-
-/**
- * Ensure each chunk has balanced <pre> tags. If a chunk opens <pre>
- * without closing it, append </pre>; if it closes </pre> without
- * opening one, prepend <pre>.
- */
-function balancePreTags(chunk: string): string {
-  const opens = (chunk.match(/<pre[^>]*>/g) ?? []).length;
-  const closes = (chunk.match(/<\/pre>/g) ?? []).length;
-  if (opens === closes) return chunk;
-  if (opens > closes) return chunk + "\n</pre>".repeat(opens - closes);
-  return "<pre>".repeat(closes - opens) + chunk;
-}
-
-/** Hard-split a long block at newline boundaries, then by char count. */
-function hardSplit(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  const lines = text.split("\n");
-  let current = "";
-
-  for (const line of lines) {
-    if ((current + "\n" + line).length > limit) {
-      if (current) chunks.push(current.trim());
-      if (line.length > limit) {
-        for (let i = 0; i < line.length; i += limit) {
-          chunks.push(line.slice(i, i + limit));
+  let start = 0;
+  let tag: TelegramHtmlTag | undefined;
+  while (start < html.length) {
+    const prefix = reopenTelegramTags(tag);
+    let offset = start;
+    let length = 0;
+    let bytes = Buffer.byteLength(prefix);
+    let visible = "";
+    const boundaries: TelegramHtmlBoundary[] = [];
+    let grapheme: TelegramHtmlBoundary | undefined;
+    let line: TelegramHtmlBoundary | undefined;
+    let paragraph: TelegramHtmlBoundary | undefined;
+    let previousNewline = false;
+    while (offset < html.length) {
+      tokenPattern.lastIndex = offset;
+      const match = tokenPattern.exec(html)!;
+      const [token, closing, name, entity] = match;
+      let character = name ? "" : token;
+      if (entity) character = decodeTelegramEntity(entity);
+      const width = character.length;
+      const nextTag = name
+        ? closing
+          ? tag?.name === name ? tag.parent : tag
+          : { name, opening: token, closingBytes: (tag?.closingBytes ?? 0) + name.length + 3, parent: tag }
+        : tag;
+      const tokenBytes = Buffer.byteLength(token);
+      const exceedsByteLimit = bytes + tokenBytes + (nextTag?.closingBytes ?? 0) > TELEGRAM_HTML_BYTE_LIMIT;
+      if (length + width > limit || exceedsByteLimit) {
+        if (length === 0) {
+          // An indivisible wrapper cannot carry even one text token. Deliver a
+          // plain representation of this message, retaining link labels AND
+          // destinations rather than dropping an unsendable attribute silently.
+          return chunkForTelegram(plainTelegramHtml(html));
         }
-        current = "";
-      } else {
-        current = line;
+        // A byte boundary may fall before a tag. Look through tags for the next
+        // text token so a combining mark across a formatting seam stays attached.
+        if (name) {
+          let lookahead: RegExpExecArray | null;
+          while ((lookahead = tokenPattern.exec(html))?.[2]) { /* skip markup */ }
+          character = lookahead?.[3] ? decodeTelegramEntity(lookahead[3]) : lookahead?.[0] ?? "";
+        }
+        // One code point of lookahead determines whether the last grapheme
+        // continues across the tentative cut, including entities and tag seams.
+        // Segmentation is bounded to this chunk, never the whole remaining input.
+        for (const { index } of telegramGraphemeSegmenter.segment(visible + character)) {
+          if (index > 0 && index <= length) grapheme = boundaries[index];
+        }
+        // No boundary means this is still the first grapheme. A huge carried
+        // wrapper can prevent it fitting even though the plain grapheme fits;
+        // drop that formatting before resorting to code-point splitting.
+        if (exceedsByteLimit && !grapheme) return chunkForTelegram(plainTelegramHtml(html));
+        break;
       }
-    } else {
-      current = current ? `${current}\n${line}` : line;
+      offset = tokenPattern.lastIndex;
+      length += width;
+      visible += character;
+      bytes += tokenBytes;
+      tag = nextTag;
+      boundaries[length] = { offset, tag };
+      if (token === "\n") {
+        line = { offset, tag };
+        if (previousNewline) paragraph = line;
+      }
+      previousNewline = token === "\n";
     }
+    if (offset < html.length) {
+      const boundary = paragraph ?? line ?? grapheme;
+      if (boundary) {
+        offset = boundary.offset;
+        tag = boundary.tag;
+      }
+    }
+    chunks.push(prefix + html.slice(start, offset) + closeTelegramTags(tag));
+    start = offset;
   }
-
-  if (current.trim()) chunks.push(current.trim());
   return chunks;
 }

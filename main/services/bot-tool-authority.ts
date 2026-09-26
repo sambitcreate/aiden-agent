@@ -18,6 +18,11 @@ import type { BotRuntimeResolvedSkill } from "./bot-skill-inventory.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
 import { createHash } from "node:crypto";
 
+/** Both tools require the existing Computer Use grant; neither includes submission authority. */
+export function isComputerUseCapabilityTool(name: string): boolean {
+  return name === "computer_use" || name === "form_fill";
+}
+
 export type BotFileOperation = "read" | "write";
 
 export type BotToolAdmissionPort = Pick<

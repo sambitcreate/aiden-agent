@@ -14,6 +14,8 @@ import {
   parseComputerUseKeyChord,
   summarizeComputerUseApproval,
 } from "./safety.js";
+import type { FormFillBatchPlan, FormFillBatchResult, FormFillRowResult } from "../form-fill/batch-core.js";
+import { FORM_FILL_UNAVAILABLE_MESSAGE } from "../../../renderer/shared/form-fill-availability.js";
 
 const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
@@ -104,6 +106,10 @@ interface ElementRecord {
   role?: string;
   label?: string;
   value?: string;
+  /** Known toggle state for checkbox-like controls (absent = unknown). */
+  checked?: boolean;
+  /** Actions the control advertises (e.g. AXPress). */
+  actions?: string[];
   frame?: Bounds;
   parentIndex?: number;
   depth?: number;
@@ -385,12 +391,18 @@ function normalizeElements(result: ParsedDriverResult, maximum: number): Element
     if (!element) continue;
     const index = safeInteger(element.element_index ?? element.index, 0);
     if (index === undefined) continue;
+    const rawActions = Array.isArray(element.actions) ? element.actions : undefined;
     const normalized: ElementRecord = {
       index,
       token: safeString(element.element_token, 512),
       role: safeString(element.role, 256),
       label: safeString(element.label, 1_000),
       value: safeString(element.value, 1_000),
+      checked: typeof element.checked === "boolean" ? element.checked : undefined,
+      actions: rawActions
+        ?.map((action) => safeString(action, 128))
+        .filter((action): action is string => action !== undefined)
+        .slice(0, 32),
       frame: parseBounds(element.frame),
       parentIndex: safeInteger(element.parent_index, 0),
       depth: safeInteger(element.depth, 0),
@@ -428,6 +440,8 @@ function publicElement(element: ElementRecord): Record<string, unknown> {
     ...(element.role ? { role: element.role } : {}),
     ...(element.label ? { label: element.label } : {}),
     ...(element.value ? { value: element.value } : {}),
+    ...(typeof element.checked === "boolean" ? { checked: element.checked } : {}),
+    ...(element.actions?.length ? { actions: element.actions } : {}),
     ...(element.frame ? { frame: element.frame } : {}),
     ...(element.parentIndex !== undefined ? { parent_index: element.parentIndex } : {}),
     ...(element.depth !== undefined ? { depth: element.depth } : {}),
@@ -478,6 +492,8 @@ export class ComputerUseController {
   private session: CuaDriverSessionLike | null = null;
   private startup: Promise<CuaDriverSessionLike> | null = null;
   private closePromise: Promise<void> | null = null;
+  private closeFailed = false;
+  private readonly driverCalls = new Set<Promise<unknown>>();
   private readonly lifecycle = new AbortController();
   private target: ActiveTarget | null = null;
   private revision = 0;
@@ -579,6 +595,11 @@ export class ComputerUseController {
     return this.closePromise;
   }
 
+  async closeAndSettle(): Promise<void> {
+    await this.close();
+    if (this.closeFailed) throw new Error("Computer Use teardown failed.");
+  }
+
   private assertUsable(): void {
     if (this.state === "closed")
       throw new ComputerUseSafetyError("controller_closed", "Computer Use has closed.");
@@ -627,7 +648,14 @@ export class ComputerUseController {
   ): Promise<ParsedDriverResult> {
     try {
       const session = await this.getSession(signal);
-      return parseDriverResult(await session.callTool(name, args, { signal, timeoutMs }));
+      signal.throwIfAborted();
+      const call = session.callTool(name, args, { signal, timeoutMs });
+      this.driverCalls.add(call);
+      try {
+        return parseDriverResult(await call);
+      } finally {
+        this.driverCalls.delete(call);
+      }
     } catch (error) {
       if (error instanceof ComputerUseDriverActionError) {
         if (error.poisonsSession) this.poison();
@@ -1365,6 +1393,33 @@ export class ComputerUseController {
     });
   }
 
+  /**
+   * No capture may mint approval until the pinned driver supplies document
+   * lifetime identity AND atomically checks it when applying each write.
+   * Window metadata, AX structure and snapshot tokens are not such authority.
+   */
+  async formFillCapture(
+    _input: { pid: number; windowId: number },
+    _signal?: AbortSignal,
+  ): Promise<{
+    window: { pid: number; windowId: number; appName: string; title: string };
+    elements: readonly ElementRecord[];
+    revision: number;
+  }> {
+    throw new ComputerUseSafetyError("form_fill_unavailable", FORM_FILL_UNAVAILABLE_MESSAGE);
+  }
+
+  /** Reject stale/direct approvals too; tool omission alone is not a safety boundary. */
+  async executeFormFillBatch(
+    _plan: FormFillBatchPlan,
+    _options: {
+      signal?: AbortSignal;
+      onRow?: (row: FormFillRowResult, completed: number, total: number) => void;
+    } = {},
+  ): Promise<FormFillBatchResult> {
+    throw new ComputerUseSafetyError("form_fill_unavailable", FORM_FILL_UNAVAILABLE_MESSAGE);
+  }
+
   private async closeInternal(): Promise<void> {
     if (this.state === "closed") return;
     this.state = "closed";
@@ -1372,8 +1427,9 @@ export class ComputerUseController {
     this.grants.clear();
     this.clearTarget();
     await this.startup?.catch(() => {});
-    await this.session?.close().catch(() => {});
-    await this.host?.shutdown().catch(() => {});
+    await this.session?.close().catch(() => { this.closeFailed = true; });
+    await this.host?.shutdown().catch(() => { this.closeFailed = true; });
+    await Promise.allSettled([...this.driverCalls]);
     this.session = null;
     this.host = null;
   }

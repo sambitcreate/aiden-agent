@@ -20,6 +20,7 @@ import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 import { geminiLiveEnabled } from "../services/gemini-live/feature-flag.js";
+import { devicesEnabled } from "../services/devices/feature-flag.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -33,6 +34,7 @@ export const appHandlers = {
       capabilities: {
         subagents: subagentsEnabled(),
         geminiLive: geminiLiveEnabled(),
+        devices: devicesEnabled(),
       },
     };
   },

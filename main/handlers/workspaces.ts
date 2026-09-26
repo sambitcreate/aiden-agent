@@ -313,14 +313,40 @@ export function registerWorkspaceHandlers(): void {
     return workspaceWorktreeApplicationService.create(owner, sourceWorkspaceId, branch);
   });
 
-  ipcMain.handle("git:deleteManagedWorktree", async (event, workspaceId: unknown) => {
-    const id = asString(workspaceId, "workspaceId");
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Workspace access requires the active renderer document."),
-    );
-    return workspaceWorktreeApplicationService.remove(owner, id);
-  });
+  ipcMain.handle(
+    "git:deleteManagedWorktree",
+    async (event, workspaceId: unknown, options: unknown) => {
+      const id = asString(workspaceId, "workspaceId");
+      const force =
+        typeof options === "object" &&
+        options !== null &&
+        (options as { force?: unknown }).force === true;
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Workspace access requires the active renderer document."),
+      );
+      return workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
+    },
+  );
+
+  ipcMain.handle(
+    "git:restoreManagedWorktree",
+    async (event, workspaceId: unknown, snapshotId: unknown, name: unknown) => {
+      const id = asString(workspaceId, "workspaceId");
+      const snapshot = asString(snapshotId, "snapshotId");
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(snapshot)
+      ) {
+        throw new Error("The snapshot identifier is invalid.");
+      }
+      const requestedName = name === undefined ? undefined : asString(name, "name");
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Workspace access requires the active renderer document."),
+      );
+      return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
+    },
+  );
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
   ipcMain.handle("workspaces:openFolder", async (event, workspaceId: unknown) =>

@@ -129,7 +129,9 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
     rows?.map((row) =>
       row.kind === "text"
         ? [row.kind, row.content]
-        : [row.kind, row.steps.map((entry) => entry.id)],
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : [row.kind, row.content],
     ),
     [
       ["text", "Before."],
@@ -141,18 +143,35 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
   );
 });
 
-test("reasoning milestones stay in the dedicated disclosure instead of activity rows", () => {
+test("unreadable thinking remains a chronological status row", () => {
   const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
   const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
   assert.deepEqual(
     rows?.map((row) => (row.kind === "text" ? [row.kind, row.content] : [row.kind])),
-    [["text", "Before.After."]],
+    [["text", "Before."], ["reasoning"], ["text", "After."]],
   );
   assert.equal(
     reasoningActivityLabel(timeline("running", [thinking("think-2", 0)]), true),
     "Thinking",
   );
   assert.equal(reasoningActivityLabel(timeline("completed", [thought]), false), "Thought briefly");
+});
+
+test("reasoning rows follow prose and tools in event order", () => {
+  const steps: AgentStep[] = [
+    { ...thinking("think-1", 0, 500), contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+    positionedTool(1, 0),
+    { ...thinking("think-2", 2, 600), contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+  ];
+  const rows = assistantPresentationRows("Before.After.", timeline("completed", steps), "First\n\nSecond");
+  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : row.content]), [
+    ["reasoning", "First"],
+    ["activity", "tool-2"],
+    ["text", "Before."],
+    ["reasoning", "Second"],
+    ["text", "After."],
+  ]);
+  assert.equal(assistantPresentationRows("", timeline("completed", steps), "First\n\nSecond"), null);
 });
 
 test("assistant presentation fails closed for legacy or invalid offsets", () => {

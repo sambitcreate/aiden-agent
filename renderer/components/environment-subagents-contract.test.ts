@@ -37,20 +37,29 @@ function between(value: string, start: string, end: string): string {
 }
 
 test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, geminiLive: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, geminiLive: false });
+  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, geminiLive: false, devices: false });
+  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, geminiLive: false, devices: false });
   assert.deepEqual(parseAppCapabilities({ subagents: false }), {
     subagents: false,
     geminiLive: false,
+    devices: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
     subagents: false,
     geminiLive: false,
+    devices: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
     geminiLive: false,
+    devices: false,
   });
+  assert.deepEqual(parseAppCapabilities({ devices: true }), {
+    subagents: false,
+    geminiLive: false,
+    devices: true,
+  });
+  assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [
     "review",
@@ -237,7 +246,7 @@ test("archived subagent references remain stored but are invisible while disable
 test("the Environment work surface owns one mounted Subagents destination", () => {
   const environment = source("./environment-panel.tsx");
 
-  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled\)/u);
+  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
   assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
   assert.match(environment, /id="environment-subagents-panel"/u);
   assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
@@ -266,6 +275,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
 
   assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
   assert.match(appHandler, /geminiLive: geminiLiveEnabled\(\)/u);
+  assert.match(appHandler, /devices: devicesEnabled\(\)/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
@@ -274,8 +284,11 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
   assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
   assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
-  assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
-  assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
+  assert.match(environment, /surfaceState\.toolsTab,\s+subagentsEnabled,\s+devicesEnabled/u);
+  assert.match(
+    environment,
+    /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled, devicesEnabled\)/u,
+  );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
@@ -582,10 +595,10 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s+\? "Response continues in the background…"/u);
   assert.match(
     pane,
-    /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
+    /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
   );
   assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);

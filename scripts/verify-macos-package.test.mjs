@@ -15,6 +15,7 @@ import {
   assertDeveloperIdSignature,
   assertElectronEntitlements,
   assertElectronHelperEntitlements,
+  assertFormFillHelperEntitlements,
   assertExactUniversalArchitectures,
   assertMinimalComputerUseEntitlements,
   assertMacOSArchitectureMinimum,
@@ -605,6 +606,32 @@ test("package verifier requires the normal Electron runtime entitlements", () =>
         `<plist><dict>${expected}<key>com.apple.security.app-sandbox</key><true/></dict></plist>`,
       ),
     /pinned runtime set/,
+  );
+});
+
+test("package verifier requires the pinned inherit entitlements on the CUA-S1 forms helper", () => {
+  const expected = [
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.device.audio-input",
+  ]
+    .map((key) => `<key>${key}</key><true/>`)
+    .join("");
+  assert.doesNotThrow(() =>
+    assertFormFillHelperEntitlements(`<plist><dict>${expected}</dict></plist>`),
+  );
+  assert.throws(
+    () => assertFormFillHelperEntitlements("<plist><dict/></plist>"),
+    /pinned inherit set/u,
+  );
+  // No AX or automation entitlements may leak onto the scorer helper.
+  assert.throws(
+    () =>
+      assertFormFillHelperEntitlements(
+        `<plist><dict>${expected}<key>com.apple.security.automation.apple-events</key><true/></dict></plist>`,
+      ),
+    /pinned inherit set/u,
   );
 });
 

@@ -2744,11 +2744,16 @@ private enum AidenBotPrivateResponseValidator {
             try validate(value, root: root, path: [])
         case .botClassifiedChat:
             try validateChildProjectionFields(value)
-            if let object = value as? [String: Any], object["botId"] is String {
-                try validate(value, root: "chat", path: [])
+            if let object = value as? [String: Any] {
+                try validate(value, root: object["botId"] is String ? "chat" : "regularChat", path: [])
             }
         case .chatList:
             try validateChildProjectionFields(value)
+            if let object = value as? [String: Any], let chats = object["chats"] as? [[String: Any]] {
+                for chat in chats {
+                    try validate(chat, root: chat["botId"] is String ? "chat" : "regularChat", path: [])
+                }
+            }
         case .sharedFixture:
             guard let object = value as? [String: Any] else {
                 throw AidenRemoteContractError.invalidJSON
@@ -2839,6 +2844,9 @@ private enum AidenBotPrivateResponseValidator {
         root: String,
         parentPath: [String]
     ) -> Bool {
+        if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
+            return true
+        }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if ["botDetail", "botArchive", "botRestore"].contains(root) {
             return parentPath.isEmpty

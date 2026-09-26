@@ -106,7 +106,7 @@ test("composer routes Finder drops and raster paste through the fixed preload br
   assert.match(composer, /onDragOver=\{handleDragOver\}/u);
   assert.match(composer, /onDrop=\{handleDrop\}/u);
   assert.match(composer, /onPaste=\{handlePaste\}/u);
-  assert.match(composer, /attachmentOperationRef\.current \|\| attaching/u);
+  assert.match(composer, /attachmentOperationRef\.current\.isBusy \|\| attaching/u);
   assert.match(composer, /Wait for the current attachments to finish loading/u);
   assert.match(composer, /plannedBytes \+ file\.size > remainingInlineBytes/u);
   assert.match(ipc, /window\.aidenAPI\.attachments\.readDroppedFiles/u);
@@ -154,6 +154,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /event\.key === "PageDown"/u);
   assert.match(composer, /event\.key === "Home"/u);
   assert.match(palette, /role="listbox"/u);
+  assert.match(palette, /data-browser-occluder/u);
   assert.doesNotMatch(palette, /role="group"/u);
   assert.match(palette, /role="option"/u);
   assert.match(palette, /aria-live="polite"/u);
@@ -181,7 +182,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /slashSession\?\.kind === "skill" && skillCatalog\.isError/u);
   assert.match(
     composer,
-    /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => inputRef\?\.current\?\.focus/u,
+    /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => \{\s*if \(attachmentOperationRef\.current\.isCurrent\(token\)\)/u,
   );
   assert.match(palette, /data-presence=\{presenceState\}/u);
   assert.match(styles, /@keyframes aiden-slash-palette-in/u);
@@ -337,7 +338,7 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   const composer = source("./composer.tsx");
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
-  assert.match(composer, /if \(firstSendPendingRef\.current \|\| !available\(\)\) return false/u);
+  assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
   assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
   assert.match(composer, /role="status"[^\n]*Sending…/u);
 });
@@ -361,4 +362,23 @@ test("voice recovery preserves the draft and offers a direct settings action", (
   assert.match(composer, /voice.dismissError/u);
   assert.match(recorder, /setLastError\(message\)/u);
   assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
+});
+
+test("all asynchronous attachment entry points fence completion and current draft limits", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /return \(\) => operation\.cancel\(\)/u);
+  assert.match(composer, /attachmentVisionRef\.current = visionSupported/u);
+  assert.match(composer, /acceptComposerAttachments\(\s*attachmentsRef\.current,\s*added,\s*attachmentVisionRef\.current !== false/u);
+  for (const [start, end] of [
+    ["const handleAttach =", "const readDroppedAttachments ="],
+    ["const readDroppedAttachments =", "const readClipboardImages ="],
+    ["const readClipboardImages =", "const handleDrop ="],
+  ]) {
+    const handler = composer.slice(composer.indexOf(start), composer.indexOf(end));
+    assert.match(handler, /if \(token === null\) return/u);
+    assert.match(handler, /await attachmentsApi\.[\s\S]*?if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;[\s\S]*?acceptReadAttachments/u);
+    assert.match(handler, /catch \(error\) \{\s*if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return/u);
+    assert.match(handler, /finishAttachmentRead\(token\)/u);
+  }
+  assert.match(composer, /if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;\s*const added = await attachmentsApi\.readClipboardImages/u);
 });

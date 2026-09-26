@@ -257,6 +257,27 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
+    return onNotification("chats:pull-requests-changed", (payload: unknown) => {
+      const chatId =
+        payload && typeof payload === "object" && "chatId" in payload
+          ? (payload as { chatId?: unknown }).chatId
+          : undefined;
+      const scoped = typeof chatId === "string" && chatId;
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["chat-pull-requests", ...(scoped ? [chatId] : [])],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["chat-current-pull-request", ...(scoped ? [chatId] : [])],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["chat-pull-request-pending", ...(scoped ? [chatId] : [])],
+        }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
     return onNotification("bots:changed", () => {
       invalidateBotCanonicalPhotos();
       void Promise.all([

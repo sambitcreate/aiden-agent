@@ -1,11 +1,9 @@
 import Accessibility
-import CoreTransferable
 import CryptoKit
 import ImageIO
 import MarkdownUI
 import Observation
 import Photos
-import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -186,6 +184,17 @@ enum AidenAttachmentPreparation {
         }
     }
 
+    static func imageUploadAsync(data: Data, name: String) async throws -> AidenAttachmentUpload {
+        let worker = Task.detached(priority: .userInitiated) {
+            try imageUpload(data: data, name: name)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     private static func decodedUTF8Prefix(_ data: Data, allowTrailingPartialScalar: Bool) -> String? {
         if let exact = String(data: data, encoding: .utf8) { return exact }
         guard allowTrailingPartialScalar else { return nil }
@@ -212,7 +221,7 @@ enum AidenAttachmentPreparation {
         }
     }
 
-    private static func hasAlpha(_ image: UIImage) -> Bool {
+    static func hasAlpha(_ image: UIImage) -> Bool {
         guard let alphaInfo = image.cgImage?.alphaInfo else { return true }
         return [.first, .last, .premultipliedFirst, .premultipliedLast].contains(alphaInfo)
     }
@@ -249,30 +258,6 @@ enum AidenAttachmentPreparation {
         }
         let bounded = String(String.UnicodeScalarView(filtered.prefix(255))).trimmingCharacters(in: .whitespacesAndNewlines)
         return bounded.isEmpty ? "Attachment" : bounded
-    }
-}
-
-private struct AidenPickedImageFile: Transferable, Sendable {
-    let url: URL
-    let name: String
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(importedContentType: .image) { received in
-            let source = received.file
-            let values = try source.resourceValues(forKeys: [.fileSizeKey])
-            guard let size = values.fileSize,
-                  size > 0,
-                  size <= AidenAttachmentPreparation.maximumSourceImageBytes
-            else { throw AidenAttachmentPreparationError.imageTooLarge }
-            let originalName = source.lastPathComponent
-            let destinationBase = FileManager.default.temporaryDirectory
-                .appending(path: "AidenPickedImage-\(UUID().uuidString)")
-            let destination = source.pathExtension.isEmpty
-                ? destinationBase
-                : destinationBase.appendingPathExtension(source.pathExtension)
-            try FileManager.default.copyItem(at: source, to: destination)
-            return Self(url: destination, name: originalName)
-        }
     }
 }
 
@@ -890,6 +875,10 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
+    @ObservationIgnored private var composerGeneration: UInt64 = 0
+    @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
+    private var attachmentPreparationID: UUID?
+    var isPreparingAttachments: Bool { attachmentPreparationID != nil }
 
     private(set) var chat: AidenChat
     private(set) var catalog: AidenModelCatalog?
@@ -907,8 +896,16 @@ final class AidenChatViewModel {
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
+    private var approvalSnapshotGeneration: UInt64 = 0
+    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
-    private(set) var pendingAttachments: [AidenAttachmentReference] = []
+    private(set) var isRespondingToApproval = false
+    private(set) var isStopping = false
+    private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
+        didSet {
+            if pendingAttachments != oldValue { composerGeneration &+= 1 }
+        }
+    }
     private(set) var isUploadingAttachment = false
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
@@ -921,6 +918,7 @@ final class AidenChatViewModel {
         didSet {
             guard draft != oldValue else { return }
             draftGeneration &+= 1
+            composerGeneration &+= 1
             guard !suppressesDraftPersistence else { return }
             scheduleDraftPersistence()
         }
@@ -945,6 +943,7 @@ final class AidenChatViewModel {
         if !allowed {
             draftPersistenceTask?.cancel()
             draftPersistenceTask = nil
+            cancelAttachmentPreparation()
         }
     }
 
@@ -1023,6 +1022,7 @@ final class AidenChatViewModel {
         titleRefreshTask?.cancel()
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
+        attachmentPreparationTask?.cancel()
     }
 
     var isConnected: Bool {
@@ -1034,7 +1034,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
-            && !isStarting && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
+            && !isStarting && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
     }
 
     var selectedProvider: AidenProvider? {
@@ -1119,12 +1119,19 @@ final class AidenChatViewModel {
         isLoading = true
         defer { isLoading = false }
         if draftSession == nil {
+            let restorationGeneration = composerGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard coordinator.isCurrent(context) else { return }
             draftSession = session
-            if draft.isEmpty, let savedDraft = await draftStore.load(session: session) {
+            if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
+               let savedDraft = await draftStore.load(session: session) {
                 guard coordinator.isCurrent(context), draftSession == session else { return }
-                draft = savedDraft
+                // Disk access yields the main actor while the composer remains
+                // editable. Text edits, uploads, attachment removal and Send
+                // must all win over restoring the previous composer's text.
+                if composerGeneration == restorationGeneration, draft.isEmpty {
+                    draft = savedDraft
+                }
             }
         }
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
@@ -1608,6 +1615,7 @@ final class AidenChatViewModel {
             createdAt: now
         )
 
+        composerGeneration &+= 1
         isStarting = true
         defer { isStarting = false }
         presentedError = nil
@@ -1694,13 +1702,83 @@ final class AidenChatViewModel {
         }
     }
 
+    /// Both picker callbacks enter here synchronously, before transferring or
+    /// converting selected files. Selection already owns the composer even
+    /// though no upload reference exists yet.
+    @discardableResult
+    func prepareAttachments<Selection>(
+        _ selection: Result<[Selection], Error>,
+        prepare: @escaping @MainActor (Selection) async throws -> AidenAttachmentUpload
+    ) -> Task<Void, Never>? {
+        guard !isReadOnlyPresentation else { return nil }
+        let selections: [Selection]
+        do {
+            selections = try selection.get()
+        } catch let error where aidenIsCancellation(error) {
+            return nil
+        } catch let error as CocoaError where error.code == .userCancelled {
+            return nil
+        } catch {
+            presentedError = String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+            return nil
+        }
+        let capacity = max(0, 10 - pendingAttachments.count)
+        guard !selections.isEmpty, capacity > 0,
+              isConnected, !isPreparingAttachments, !isUploadingAttachment, !isStarting, !isStreaming,
+              let context = try? coordinator.requestContext(for: instanceId) else { return nil }
+        composerGeneration &+= 1
+        let preparationID = UUID()
+        attachmentPreparationID = preparationID
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if attachmentPreparationID == preparationID {
+                    attachmentPreparationID = nil
+                    attachmentPreparationTask = nil
+                }
+            }
+            var uploads: [AidenAttachmentUpload] = []
+            var failures = max(0, selections.count - capacity)
+            for selection in selections.prefix(capacity) {
+                guard !Task.isCancelled, coordinator.isCurrent(context) else { return }
+                do {
+                    uploads.append(try await prepare(selection))
+                } catch let error where aidenIsCancellation(error) {
+                    return
+                } catch {
+                    failures += 1
+                }
+            }
+            guard !Task.isCancelled, coordinator.isCurrent(context),
+                  attachmentPreparationID == preparationID else { return }
+            failures += await upload(uploads)
+            guard !Task.isCancelled, coordinator.isCurrent(context),
+                  attachmentPreparationID == preparationID else { return }
+            if failures > 0 {
+                presentedError = failures == 1
+                    ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+                    : String(localized: "\(failures) selected attachments could not be added. Other attachments are still ready to send.")
+            }
+        }
+        attachmentPreparationTask = task
+        return task
+    }
+
+    func cancelAttachmentPreparation() {
+        attachmentPreparationTask?.cancel()
+        attachmentPreparationTask = nil
+        attachmentPreparationID = nil
+    }
+
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
+        guard !uploads.isEmpty else { return 0 }
         guard !isReadOnlyPresentation else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
             return uploads.count
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return uploads.count }
+        composerGeneration &+= 1
         isUploadingAttachment = true
         presentedError = nil
         defer { isUploadingAttachment = false }
@@ -1853,70 +1931,71 @@ final class AidenChatViewModel {
         }
     }
 
+    func pendingAttachmentImageData(for attachment: AidenAttachmentReference) async -> Data? {
+        guard attachment.kind == .image else { return nil }
+        return await attachmentImageData(for: AidenMessageAttachment(
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            kind: attachment.kind,
+            size: attachment.size
+        ))
+    }
+
+    var canControlCurrentRun: Bool {
+        guard !isReadOnlyPresentation, isConnected, isStreaming,
+              activeStreamID != nil,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId,
+              installation.deviceCapabilities.contains(.chatWrite) else { return false }
+        return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+            && installation.hasNegotiatedAccess(to: .botWrite))
+    }
+
     func stop() async {
-        guard !isReadOnlyPresentation else { return }
-        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
-        let previousState = streamState
-        pendingApproval = nil
-        streamState = .cancelled
+        guard canControlCurrentRun, !isStopping,
+              let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isStopping = true
+        defer { isStopping = false }
         do {
-            let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
-            guard coordinator.isCurrent(context) else { return }
-            guard status.streamId == stream.streamId, status.chatId == chat.id else { return }
-            if activeStreamID == stream.streamId {
-                await apply(
-                    status,
-                    streamID: stream.streamId,
-                    context: context,
-                    feedbackPolicy: .restoredStream
-                )
+            let status = try await coordinator.remoteClient(for: context).cancelStream(id: streamID)
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard status.streamId == streamID, status.chatId == chat.id else {
+                presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
+                return
             }
-            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
-        } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
+            await apply(status, streamID: streamID, context: context, feedbackPolicy: .restoredStream)
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(streamID)")
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
-            presentedError = error.localizedDescription
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
-    func respondToApproval(_ decision: AidenApprovalDecision) async {
-        guard !isReadOnlyPresentation else { return }
-        guard let approval = pendingApproval, approval.expiresAt > Date() else {
+    func respondToApproval(_ decision: AidenApprovalDecision, approvalID: String) async {
+        guard !isReadOnlyPresentation, isConnected, !isRespondingToApproval, !isStopping,
+              let approval = pendingApproval, approval.id == approvalID else { return }
+        guard approval.expiresAt > Date() else {
             pendingApproval = nil
             return
         }
-        let previousState = streamState
-        guard let streamID = activeStreamID else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else {
-            streamState = .reconciling
-            presentedError = String(localized: "Approval access changed. Reopen this chat on the active Aiden Agent and review the request again.")
-            return
-        }
+        guard let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isRespondingToApproval = true
+        defer { isRespondingToApproval = false }
         let capabilities = approvalCapabilities(for: context)
         let authorization = AidenApprovalResponseAuthorization.resolve(
-            approval: approval,
-            decision: decision,
-            capabilities: capabilities
+            approval: approval, decision: decision, capabilities: capabilities
         )
         guard authorization == .allowed else {
-            presentedError = switch authorization {
-            case .allowed:
-                nil
-            case .approvalResponseRequired:
-                String(localized: "Approval response access was removed from this paired device. The request has been refreshed without sending a decision.")
-            case .scheduleWriteRequired:
-                String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
-            case .hostApprovalRequired:
-                String(localized: "This request can only be approved on your Mac.")
-            }
+            presentedError = String(localized: "Approval access changed. Review the current request on your Mac.")
+            pendingApproval = nil
             streamState = .reconciling
-            coordinator.haptics.play(.warning, scope: hapticScope)
             await restorePendingApproval(streamID: streamID, context: context)
             return
         }
@@ -1924,19 +2003,25 @@ final class AidenChatViewModel {
         streamState = .running
         do {
             let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            guard response.approvalId == approval.id, response.decision == decision else { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard response.approvalId == approval.id, response.decision == decision else {
+                presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
+                if pendingApproval == nil {
+                    await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+                }
+                return
+            }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
-        } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            pendingApproval = approval
-            streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            pendingApproval = approval
-            streamState = previousState
-            presentedError = error.localizedDescription
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
+            // Never resurrect the captured card or retry a possibly accepted decision.
+            if pendingApproval == nil {
+                await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+            }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -2241,14 +2326,30 @@ final class AidenChatViewModel {
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
     }
 
-    private func restorePendingApproval(
+    func restorePendingApproval(
         streamID: String,
         context: AidenRemoteRequestContext,
-        announce: Bool = false
+        announce: Bool = false,
+        isFallback: Bool = false
     ) async {
+        guard coordinator.isCurrent(context), activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        if isFallback, let read = approvalSnapshotInFlight,
+           read.streamID == streamID, coordinator.isCurrent(read.context),
+           read.approval == pendingApproval, read.state == streamState { return }
+        approvalSnapshotGeneration &+= 1
+        let snapshotGeneration = approvalSnapshotGeneration
+        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
+        defer {
+            if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+        }
+        let expectedApproval = pendingApproval
+        let expectedState = streamState
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
+                  pendingApproval == expectedApproval, streamState == expectedState else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
@@ -2276,7 +2377,9 @@ final class AidenChatViewModel {
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
+                  pendingApproval == expectedApproval, streamState == expectedState else { return }
             pendingApproval = nil
             streamState = .reconciling
             await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
@@ -2293,7 +2396,9 @@ final class AidenChatViewModel {
             return AidenApprovalCapabilities(canRespond: false, canWriteSchedules: false)
         }
         return AidenApprovalCapabilities(
-            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond),
+            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond)
+                && (chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+                    && installation.hasNegotiatedAccess(to: .botWrite))),
             canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
         )
     }
@@ -2631,6 +2736,18 @@ struct AidenWorkspaceChatsView: View {
     }
 }
 
+private enum AidenChatAttachmentCoordinateSpace {
+    static let name = "aiden-chat-attachment-coordinate-space"
+}
+
+private struct AidenAttachmentButtonCenterPreferenceKey: PreferenceKey {
+    static let defaultValue: CGPoint? = nil
+
+    static func reduce(value: inout CGPoint?, nextValue: () -> CGPoint?) {
+        value = nextValue() ?? value
+    }
+}
+
 struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
@@ -2641,7 +2758,11 @@ struct AidenChatDetailView: View {
     @State private var botSheet: AidenBotChatSheet?
     @State private var progressSheet: AidenProgressSheet?
     @State private var isScrolledAwayFromLatest = false
+    @State private var attachmentPicker = AidenAttachmentPickerState()
+    @State private var isFileImporterPresented = false
+    @State private var attachmentButtonCenter: CGPoint?
     @FocusState private var composerIsFocused: Bool
+    @Namespace private var attachmentMotionNamespace
     @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
     let allowsMutations: Bool
@@ -2722,6 +2843,10 @@ struct AidenChatDetailView: View {
         .onChange(of: botPrimarySupportsImages, initial: true) { _, supportsImages in
             model.setBotPrimarySupportsImages(supportsImages)
         }
+        .onChange(of: model.isStreaming) { _, isStreaming in
+            guard isStreaming else { return }
+            attachmentPicker.dismiss()
+        }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
@@ -2775,6 +2900,7 @@ struct AidenChatDetailView: View {
         .onDisappear {
             model.setHapticsActive(false)
             model.stopProgressObservation()
+            attachmentPicker.reset()
         }
     }
 
@@ -2782,6 +2908,42 @@ struct AidenChatDetailView: View {
         ZStack(alignment: .bottom) {
             transcript
             composer
+            AidenAttachmentPickerOverlay(
+                picker: attachmentPicker,
+                motionNamespace: attachmentMotionNamespace,
+                attachmentCapacity: attachmentCapacity,
+                canChoosePhotos: model.acceptsImageAttachments,
+                isBotChat: model.chat.isBotChat,
+                isBusy: attachmentControlsAreBusy,
+                attachmentButtonCenter: attachmentButtonCenter,
+                onUnavailableBotPhotos: { model.requestBotVisionSetup() },
+                onChooseFiles: { isFileImporterPresented = true },
+                onCaptureCameraPhoto: commitCapturedPhoto,
+                onCommitPhotos: commitSelectedPhotos
+            )
+            .allowsHitTesting(attachmentPicker.isPresented)
+            .accessibilityHidden(!attachmentPicker.isPresented)
+            .zIndex(20)
+        }
+        .coordinateSpace(name: AidenChatAttachmentCoordinateSpace.name)
+        .onPreferenceChange(AidenAttachmentButtonCenterPreferenceKey.self) { center in
+            attachmentButtonCenter = center
+        }
+        .animation(
+            AidenAttachmentPickerPresentationMotion.transition(
+                isPresented: attachmentPicker.isPresented,
+                reduceMotion: reduceMotion
+            ),
+            value: attachmentPicker.isPresented
+        )
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: allowedAttachmentContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            model.prepareAttachments(result) { url in
+                try await AidenAttachmentPreparation.fileUploadAsync(url: url)
+            }
         }
     }
 
@@ -2883,7 +3045,11 @@ struct AidenChatDetailView: View {
             AidenComposerView(
                 model: model,
                 autoStartVoice: autoStartVoice,
-                composerFocus: $composerIsFocused
+                composerFocus: $composerIsFocused,
+                attachmentPicker: attachmentPicker,
+                motionNamespace: attachmentMotionNamespace,
+                canToggleAttachments: canToggleAttachmentPicker,
+                onToggleAttachmentPicker: toggleAttachmentPicker
             )
         }
         .disabled(model.isReadOnlyPresentation)
@@ -2896,6 +3062,73 @@ struct AidenChatDetailView: View {
                     value: proxy.size.height
                 )
             }
+        }
+    }
+
+    private var attachmentCapacity: Int {
+        AidenAttachmentPickerPolicy.availableCapacity(pendingCount: model.pendingAttachments.count)
+    }
+
+    private var attachmentControlsAreBusy: Bool {
+        !model.isConnected || !canToggleAttachmentPicker
+    }
+
+    private var canToggleAttachmentPicker: Bool {
+        AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: model.isReadOnlyPresentation,
+            isStreaming: model.isStreaming,
+            isUploading: model.isUploadingAttachment,
+            isPreparing: model.isPreparingAttachments,
+            capacity: attachmentCapacity
+        )
+    }
+
+    private var allowedAttachmentContentTypes: [UTType] {
+        let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
+        return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
+    }
+
+    private func toggleAttachmentPicker() {
+        guard canToggleAttachmentPicker else { return }
+        composerIsFocused = false
+        if attachmentPicker.isPresented {
+            attachmentPicker.dismiss()
+        } else {
+            attachmentPicker.openMenu()
+        }
+    }
+
+    private func commitSelectedPhotos() {
+        guard !attachmentControlsAreBusy else { return }
+        let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
+        guard let commit else { return }
+
+        let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(commit.assets)) { asset in
+            let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
+            return try await AidenAttachmentPreparation.imageUploadAsync(
+                data: picked.data,
+                name: picked.name
+            )
+        }
+        guard let preparation else {
+            attachmentPicker.finishCommit(commit.id)
+            return
+        }
+        Task { @MainActor in
+            await preparation.value
+            attachmentPicker.finishCommit(commit.id)
+        }
+    }
+
+    private func commitCapturedPhoto(_ data: Data) {
+        guard !attachmentControlsAreBusy, attachmentCapacity > 0,
+              model.acceptsImageAttachments else { return }
+        attachmentPicker.dismiss()
+        model.prepareAttachments(.success([data])) { capturedData in
+            try await AidenAttachmentPreparation.imageUploadAsync(
+                data: capturedData,
+                name: "Camera Photo.jpg"
+            )
         }
     }
 
@@ -3220,6 +3453,18 @@ private struct AidenMessageView: View {
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
+            if message.role == .assistant,
+               presentationStyle != .botMessages,
+               let rows = AidenChronologicalProjection.rows(
+                   text: message.text,
+                   reasoning: message.reasoning ?? "",
+                   timeline: message.timeline
+               ) {
+                AidenChronologicalTranscript(rows: rows, active: false)
+            } else {
+            if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
+                AidenReasoningCard(text: reasoning, label: "Thought", active: false)
+            }
             if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
@@ -3230,6 +3475,7 @@ private struct AidenMessageView: View {
             }
             if !visibleText.isEmpty {
                 messageText
+            }
             }
             if let attachments = message.attachments, !attachments.isEmpty {
                 let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
@@ -3471,6 +3717,12 @@ private struct AidenActivityStepLine: View {
             Text(AidenAgentActivityPresentation.line(for: step))
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if let file = step.producedFile {
+                Text("File \(file.operation) · \(file.relativePath.components(separatedBy: "/").last ?? file.relativePath)")
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .accessibilityLabel("File \(file.operation): \(file.relativePath)")
+            }
             if let changes = step.lineChanges, changes.additions > 0 || changes.deletions > 0 {
                 Text("+\(changes.additions) −\(changes.deletions)")
                     .font(.caption2.monospaced().weight(.medium))
@@ -4406,6 +4658,15 @@ private struct AidenLiveResponseView: View {
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
+    private var chronologicalRows: [AidenChronologicalRow]? {
+        guard presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: model.liveText,
+            reasoning: model.reasoning,
+            timeline: model.activityTimeline
+        )
+    }
+
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
@@ -4427,7 +4688,7 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
+            if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
                     Text(activity.label)
@@ -4438,7 +4699,7 @@ private struct AidenLiveResponseView: View {
                 .transition(.opacity)
             }
 
-            if !model.reasoning.isEmpty {
+            if chronologicalRows == nil && !model.reasoning.isEmpty {
                 AidenReasoningCard(
                     text: model.reasoning,
                     label: AidenAgentActivityPresentation.reasoningLabel(
@@ -4450,7 +4711,7 @@ private struct AidenLiveResponseView: View {
                     .transition(.opacity)
             }
 
-            if let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
+            if chronologicalRows == nil, let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
                     active: model.isStreaming,
@@ -4459,11 +4720,34 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if !model.tools.isEmpty {
+            } else if chronologicalRows == nil && !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
             }
 
-            if let visualizingLabel {
+            if let chronologicalRows {
+                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isStreaming)
+                    .contextMenu {
+                        if !visibleText.isEmpty {
+                            Button {
+                                UIPasteboard.general.string = visibleText
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+                    .accessibilityActions {
+                        if !visibleText.isEmpty {
+                            Button("Copy response") {
+                                UIPasteboard.general.string = visibleText
+                            }
+                        }
+                    }
+            }
+
+            if let visualizingLabel,
+               !(chronologicalRows?.contains(where: { row in
+                   row.kind == .tool && row.steps.contains(where: { $0.toolName == "render_artifact" && $0.isActive })
+               }) ?? false) {
                 AidenActivityPhaseCard(label: visualizingLabel)
                     .transition(.opacity)
             }
@@ -4475,14 +4759,14 @@ private struct AidenLiveResponseView: View {
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
-                    onDeny: { Task { await model.respondToApproval(.deny) } },
-                    onAllow: { Task { await model.respondToApproval(.allow) } }
+                    onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
+                    onAllow: { Task { await model.respondToApproval(.allow, approvalID: approval.id) } }
                 )
-                .disabled(model.isReadOnlyPresentation)
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
             }
 
-            if !visibleText.isEmpty {
+            if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
@@ -4690,6 +4974,42 @@ private extension View {
     }
 }
 
+private struct AidenChronologicalTranscript: View {
+    @Environment(\.aidenPalette) private var palette
+    let rows: [AidenChronologicalRow]
+    let active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(rows) { row in
+                switch row.kind {
+                case .text:
+                    AidenMessageTextView(role: .assistant, content: row.text)
+                        .foregroundStyle(palette.foreground)
+                case .reasoning:
+                    if let step = row.steps.first {
+                        let label = step.finishedAt == nil ? "Thinking" : "Thought \(AidenAgentActivityPresentation.duration(step.durationMs))"
+                        if row.text.isEmpty {
+                            AidenActivityPhaseCard(label: label, active: active && step.finishedAt == nil)
+                        } else {
+                            AidenReasoningCard(text: row.text, label: label, active: active && step.finishedAt == nil)
+                        }
+                    }
+                case .tool:
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(row.steps) { step in
+                            AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -4755,12 +5075,13 @@ private struct AidenReasoningCard: View {
 private struct AidenActivityPhaseCard: View {
     @Environment(\.aidenPalette) private var palette
     let label: String
+    var active: Bool = true
 
     var body: some View {
         Text(label)
             .font(.caption.weight(.semibold))
             .foregroundStyle(palette.secondary)
-            .aidenActivityShimmer(true)
+            .aidenActivityShimmer(active)
             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             .padding(.horizontal, 12)
             .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -4853,39 +5174,42 @@ private struct AidenComposerView: View {
     @Bindable var model: AidenChatViewModel
     let autoStartVoice: Bool
     let composerFocus: FocusState<Bool>.Binding
+    @Bindable var attachmentPicker: AidenAttachmentPickerState
+    let motionNamespace: Namespace.ID
+    let canToggleAttachments: Bool
+    let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
-    @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var isPhotoPickerPresented = false
-    @State private var isFileImporterPresented = false
-    @State private var isPreparingAttachments = false
-    @State private var attachmentPreparationTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !model.pendingAttachments.isEmpty {
+            if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(model.pendingAttachments) { attachment in
-                            HStack(spacing: 6) {
-                                Label(attachment.name, systemImage: attachment.kind == .image ? "photo" : "doc.text")
-                                    .lineLimit(1)
-                                Button {
+                        ForEach(visiblePendingAttachments) { attachment in
+                            AidenPendingAttachmentCard(
+                                attachment: attachment,
+                                loadImageData: {
+                                    await model.pendingAttachmentImageData(for: attachment)
+                                },
+                                onRemove: {
                                     Task { await model.removeAttachment(attachment) }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(attachment.name)")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(palette.raised, in: Capsule())
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        }
+
+                        ForEach(attachmentPicker.committingAssets, id: \.localIdentifier) { asset in
+                            AidenCommittingPhotoCard(
+                                asset: asset,
+                                motionNamespace: motionNamespace
+                            )
                         }
                     }
+                    .padding(.horizontal, 1)
                 }
                 .accessibilityLabel("Attachments")
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             TextField("Message Aiden", text: $model.draft, axis: .vertical)
@@ -4902,31 +5226,38 @@ private struct AidenComposerView: View {
                     }
 
                 HStack(alignment: .center, spacing: 10) {
-                AidenUIKitMenuButton {
-                    if model.isUploadingAttachment || isPreparingAttachments {
-                        ProgressView().controlSize(.small).frame(width: 44, height: 44)
-                    } else {
-                        Image(systemName: "plus")
-                            .font(.title3.weight(.medium))
-                            .frame(width: 44, height: 44)
-                    }
-                } menu: {
-                    attachmentMenu()
+                Button(action: onToggleAttachmentPicker) {
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.medium))
+                        .frame(width: 44, height: 44)
+                        .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
+                        .opacity(model.isUploadingAttachment || model.isPreparingAttachments ? 0.48 : 1)
+                        .overlay(alignment: .bottomTrailing) {
+                            if model.isUploadingAttachment || model.isPreparingAttachments {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .padding(3)
+                                    .background(.regularMaterial, in: Circle())
+                            }
+                        }
                 }
-                .disabled(
-                    !model.isConnected || model.isStreaming || model.isUploadingAttachment
-                        || isPreparingAttachments || model.pendingAttachments.count >= 10
-                )
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .disabled(!canToggleAttachments)
                 .accessibilityLabel("Add attachment")
+                .accessibilityValue(attachmentPicker.isPresented ? "Open" : "Closed")
                 .accessibilityHint(model.acceptsImageAttachments
                     ? "Attach an image or bounded text file"
                     : "Attach a bounded text file. This model cannot read images")
-                .photosPicker(
-                    isPresented: $isPhotoPickerPresented,
-                    selection: $selectedPhotos,
-                    maxSelectionCount: max(1, attachmentCapacity),
-                    matching: .images
-                )
+                .background {
+                    GeometryReader { proxy in
+                        let frame = proxy.frame(in: .named(AidenChatAttachmentCoordinateSpace.name))
+                        Color.clear.preference(
+                            key: AidenAttachmentButtonCenterPreferenceKey.self,
+                            value: CGPoint(x: frame.midX, y: frame.midY)
+                        )
+                    }
+                }
 
                 if model.showsComposerModelControl, !model.visibleProviders.isEmpty {
                     Menu {
@@ -5059,8 +5390,8 @@ private struct AidenComposerView: View {
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.isReadOnlyPresentation)
-                    .accessibilityLabel("Stop response")
+                    .disabled(!model.canControlCurrentRun || model.isStopping)
+                    .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
                 } else {
                     Button {
                         voiceInput.stopBeforeSubmittingDraft()
@@ -5092,8 +5423,13 @@ private struct AidenComposerView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
+                .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.34),
+            value: visiblePendingAttachments.map(\.id) + attachmentPicker.committingAssets.map(\.localIdentifier)
+        )
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
@@ -5103,87 +5439,9 @@ private struct AidenComposerView: View {
                 macTranscriber: model.transcribeMacSpeech
             )
         }
-        .onChange(of: selectedPhotos) { _, items in
-            guard !model.isReadOnlyPresentation, !items.isEmpty, !isPreparingAttachments else { return }
-            let selected = Array(items.prefix(attachmentCapacity))
-            selectedPhotos = []
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
-                defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
-                }
-                var uploads: [AidenAttachmentUpload] = []
-                var preparationFailures = 0
-                for item in selected {
-                    guard !Task.isCancelled else { return }
-                    do {
-                        guard let picked = try await item.loadTransferable(type: AidenPickedImageFile.self) else {
-                            throw AidenAttachmentPreparationError.invalidImage
-                        }
-                        defer { try? FileManager.default.removeItem(at: picked.url) }
-                        let upload = try await AidenAttachmentPreparation.fileUploadAsync(
-                            url: picked.url,
-                            preferredName: picked.name,
-                            forceImage: true
-                        )
-                        uploads.append(upload)
-                    } catch let error where aidenIsCancellation(error) {
-                        return
-                    } catch {
-                        preparationFailures += 1
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                let uploadFailures = await model.upload(uploads)
-                guard !Task.isCancelled else { return }
-                presentAttachmentFailures(preparationFailures + uploadFailures)
-            }
-        }
-        .fileImporter(
-            isPresented: $isFileImporterPresented,
-            allowedContentTypes: allowedAttachmentContentTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            guard !model.isReadOnlyPresentation else { return }
-            let capacity = attachmentCapacity
-            guard capacity > 0, !isPreparingAttachments else { return }
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
-                defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
-                }
-                var uploads: [AidenAttachmentUpload] = []
-                var preparationFailures = 0
-                do {
-                    let urls = try result.get()
-                    preparationFailures += max(0, urls.count - capacity)
-                    for url in urls.prefix(capacity) {
-                        guard !Task.isCancelled else { return }
-                        do {
-                            let upload = try await AidenAttachmentPreparation.fileUploadAsync(url: url)
-                            uploads.append(upload)
-                        } catch let error where aidenIsCancellation(error) {
-                            return
-                        } catch {
-                            preparationFailures += 1
-                        }
-                    }
-                } catch {
-                    preparationFailures += 1
-                }
-                guard !Task.isCancelled else { return }
-                let uploadFailures = await model.upload(uploads)
-                guard !Task.isCancelled else { return }
-                presentAttachmentFailures(preparationFailures + uploadFailures)
-            }
-        }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
-            attachmentPreparationTask?.cancel()
-            attachmentPreparationTask = nil
-            isPreparingAttachments = false
+            model.cancelAttachmentPreparation()
         }
         .onChange(of: scenePhase) { _, phase in
             if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
@@ -5192,48 +5450,9 @@ private struct AidenComposerView: View {
         }
     }
 
-    private func attachmentMenu() -> UIMenu {
-        UIMenu(children: [
-            UIAction(
-                title: String(localized: "Photo Library"),
-                image: UIImage(systemName: "photo.on.rectangle"),
-                attributes: (!model.chat.isBotChat && !model.acceptsImageAttachments) ? [.disabled] : []
-            ) { _ in
-                Task { @MainActor in
-                    if model.chat.isBotChat && !model.acceptsImageAttachments {
-                        model.requestBotVisionSetup()
-                        return
-                    }
-                    composerFocus.wrappedValue = false
-                    isPhotoPickerPresented = true
-                }
-            },
-            UIAction(
-                title: String(localized: "Choose File"),
-                image: UIImage(systemName: "doc")
-            ) { _ in
-                Task { @MainActor in
-                    composerFocus.wrappedValue = false
-                    isFileImporterPresented = true
-                }
-            },
-        ])
-    }
-
-    private var attachmentCapacity: Int {
-        max(0, 10 - model.pendingAttachments.count)
-    }
-
-    private var allowedAttachmentContentTypes: [UTType] {
-        let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
-        return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
-    }
-
-    private func presentAttachmentFailures(_ count: Int) {
-        guard count > 0 else { return }
-        model.presentedError = count == 1
-            ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
-            : String(localized: "\(count) selected attachments could not be added. Other attachments are still ready to send.")
+    private var visiblePendingAttachments: [AidenAttachmentReference] {
+        guard !attachmentPicker.committingAssets.isEmpty else { return model.pendingAttachments }
+        return Array(model.pendingAttachments.prefix(attachmentPicker.committingPendingPrefixCount))
     }
 
     private var sendButtonBackground: Color {
@@ -5301,102 +5520,6 @@ private struct AidenListeningWaveform: View {
             .frame(width: 24, height: 22)
         }
         .accessibilityHidden(true)
-    }
-}
-
-private struct AidenUIKitMenuButton<Label: View>: View {
-    @Environment(\.isEnabled) private var isEnabled
-
-    private let menu: () -> UIMenu
-    private let label: Label
-
-    init(
-        @ViewBuilder label: () -> Label,
-        menu: @escaping () -> UIMenu
-    ) {
-        self.label = label()
-        self.menu = menu
-    }
-
-    var body: some View {
-        label
-            .opacity(isEnabled ? 1 : 0.62)
-            .overlay {
-                AidenUIKitMenuButtonBacker(menu: menu)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-    }
-}
-
-private struct AidenUIKitMenuButtonBacker: UIViewControllerRepresentable {
-    @Environment(\.isEnabled) private var isEnabled
-    let menu: () -> UIMenu
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(menu: menu)
-    }
-
-    func makeUIViewController(context: Context) -> AidenMenuButtonHostController {
-        let controller = AidenMenuButtonHostController()
-        let button = controller.button
-        button.menu = UIMenu(children: [
-            UIDeferredMenuElement.uncached { completion in
-                completion(context.coordinator.menu().children)
-            },
-        ])
-        button.isEnabled = isEnabled
-        button.isAccessibilityElement = false
-        return controller
-    }
-
-    func updateUIViewController(_ controller: AidenMenuButtonHostController, context: Context) {
-        context.coordinator.menu = menu
-        controller.button.isEnabled = isEnabled
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        uiViewController: AidenMenuButtonHostController,
-        context: Context
-    ) -> CGSize? {
-        CGSize(
-            width: proposal.width ?? UIView.noIntrinsicMetric,
-            height: proposal.height ?? UIView.noIntrinsicMetric
-        )
-    }
-
-    final class Coordinator {
-        var menu: () -> UIMenu
-
-        init(menu: @escaping () -> UIMenu) {
-            self.menu = menu
-        }
-    }
-}
-
-private final class AidenMenuButtonHostController: UIViewController {
-    let button = UIButton(type: .custom)
-
-    override func loadView() {
-        let container = UIView()
-        container.backgroundColor = .clear
-        container.isOpaque = false
-        view = container
-
-        button.showsMenuAsPrimaryAction = true
-        button.backgroundColor = .clear
-        button.setTitle(nil, for: .normal)
-        button.setImage(nil, for: .normal)
-        button.translatesAutoresizingMaskIntoConstraints = false
-
-        container.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            button.topAnchor.constraint(equalTo: container.topAnchor),
-            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
     }
 }
 

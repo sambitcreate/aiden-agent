@@ -285,7 +285,7 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
   const now = options.now ?? Date.now;
   const localGeneratedAt = options.localGeneratedAt ?? AIDEN_PI_CATALOG_GENERATED_AT;
   let dynamicModels: readonly Model<Api>[] = [];
-  let activeNetworkRefresh: Promise<void> | null = null;
+  let activeNetworkRefresh: { task: Promise<void>; signal: AbortSignal } | null = null;
 
   const restoredCatalog = (
     entry: ModelsStoreEntry | undefined,
@@ -328,7 +328,7 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
       dynamicModels = restored?.models ?? [];
       if (!context.allowNetwork || context.signal?.aborted) return;
       if (!context.force && cacheIsFresh(stored)) return;
-      if (activeNetworkRefresh) return activeNetworkRefresh;
+      if (activeNetworkRefresh && !activeNetworkRefresh.signal.aborted) return activeNetworkRefresh.task;
 
       const task = (async () => {
         const validator = restored ? stored?.etag : undefined;
@@ -407,8 +407,9 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
           },
         });
       })();
-      activeNetworkRefresh = task;
-      try { await task; } finally { if (activeNetworkRefresh === task) activeNetworkRefresh = null; }
+      const active = { task, signal: context.signal };
+      activeNetworkRefresh = active;
+      try { await task; } finally { if (activeNetworkRefresh === active) activeNetworkRefresh = null; }
     },
   };
   remoteCatalogFreshness.set(wrapped, cacheIsFresh);

@@ -123,3 +123,57 @@ export function restoredMainWindowBounds(
     height,
   };
 }
+
+export interface MainWindowStateSource {
+  getNormalBounds(): WindowBounds;
+  isMinimized(): boolean;
+  isMaximized(): boolean;
+  isFullScreen(): boolean;
+  on(event: string, listener: () => void): unknown;
+  once(event: string, listener: () => void): unknown;
+  removeListener(event: string, listener: () => void): unknown;
+}
+
+/** Track before showing the window: minimized native getters lose restore state. */
+export function trackMainWindowState(window: MainWindowStateSource): () => MainWindowState {
+  let state: MainWindowState;
+  const capture = () => {
+    if (window.isMinimized() && state) return state;
+    const maximized = window.isMaximized();
+    const fullScreen = window.isFullScreen();
+    // Preserve known normal bounds while a presentation mode remains active.
+    // macOS restores minimized maximized windows with presentation bounds.
+    const bounds =
+      (maximized && state?.maximized) || (fullScreen && state?.fullScreen)
+        ? state.bounds!
+        : window.getNormalBounds();
+    state = {
+      version: 1,
+      bounds: { ...bounds },
+      maximized,
+      fullScreen,
+    };
+    return state;
+  };
+  capture();
+  const onMaximize = () => {
+    // macOS resize events during the zoom animation report intermediate normal
+    // rectangles. The completed maximize event exposes the true restore bounds.
+    state = { ...capture(), bounds: { ...window.getNormalBounds() } };
+  };
+  const events = [
+    "resize",
+    "move",
+    "unmaximize",
+    "restore",
+    "enter-full-screen",
+    "leave-full-screen",
+  ];
+  for (const event of events) window.on(event, capture);
+  window.on("maximize", onMaximize);
+  window.once("closed", () => {
+    for (const event of events) window.removeListener(event, capture);
+    window.removeListener("maximize", onMaximize);
+  });
+  return capture;
+}

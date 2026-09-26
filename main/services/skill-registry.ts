@@ -79,6 +79,8 @@ function discoveredCandidate(
     name: skill.name,
     description: skill.description,
     instructions: skill.instructions,
+    modelInvocable: skill.modelInvocable ?? true,
+    userInvocable: skill.userInvocable ?? true,
     source: skill.source,
     enabled: true,
     path: skill.path,
@@ -105,6 +107,8 @@ function skillRegistryFingerprint(
     field(candidate.name);
     field(candidate.description);
     field(candidate.instructions);
+    field(candidate.modelInvocable ?? true);
+    field(candidate.userInvocable ?? true);
     field(candidate.source);
     field(candidate.enabled);
     field(candidate.path);
@@ -215,6 +219,9 @@ export class SkillRegistry {
     if (!skill) {
       throw new SkillInvocationError("invalid_reference", "Skill selection expired or changed.");
     }
+    if (skill.userInvocable === false) {
+      throw new SkillInvocationError("skill_unavailable", "This skill does not allow user invocation.");
+    }
     if (!skill.available) {
       throw new SkillInvocationError(
         "skill_unavailable",
@@ -274,7 +281,9 @@ export class SkillRegistry {
         if (invocationIds.has(invocationId)) continue;
         invocationIds.add(invocationId);
         skills.push({ ...candidate, invocationId, toolKey: skillToolKey(candidate) });
-        projected.push({ entry, available: candidate.available });
+        if (candidate.userInvocable !== false) {
+          projected.push({ entry, available: candidate.available });
+        }
       } catch {
         // Unsafe local metadata is excluded from every registry consumer.
       }
@@ -305,9 +314,9 @@ export function formatAvailableSkills(
   snapshot: SkillRegistrySnapshot,
   allowedToolNames?: ReadonlySet<string>,
 ): string | undefined {
-  const available = allowedToolNames
-    ? snapshot.available.filter((skill) => allowedToolNames.has(skill.toolKey))
-    : snapshot.available;
+  const available = snapshot.available.filter(
+    (skill) => skill.modelInvocable !== false && (!allowedToolNames || allowedToolNames.has(skill.toolKey)),
+  );
   if (available.length === 0) return undefined;
   return [
     "Skills provide specialized instructions and workflows for specific tasks.",
