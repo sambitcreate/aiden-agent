@@ -53,6 +53,10 @@ export interface ToolContext {
   formFill?: FormFillService;
   /** Main-created tools bound to this generation's workspace and browser host. */
   browserTools?: readonly AgentTool[];
+  /** Main-created simulator tools, present only when the device gate held at generation start. */
+  deviceTools?: readonly AgentTool[];
+  /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. A getter is read per command. */
+  shellPathPrefix?: string | (() => string | null | undefined);
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
@@ -170,6 +174,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   if (ctx.computerUse && ctx.formFill) tools.push(createFormFillAgentTool(ctx.formFill));
   if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
+  if (ctx.permission !== "none" && ctx.deviceTools) tools.push(...ctx.deviceTools);
   if (ctx.allowScheduling !== false) {
     tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
   }
@@ -181,7 +186,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.
   if (ctx.includeCodingTools !== false && ctx.workspaceRoot && ctx.permission !== "none") {
-    tools.push(...buildCodingTools(ctx.workspaceRoot));
+    tools.push(
+      ...buildCodingTools(ctx.workspaceRoot, undefined, ctx.shellPathPrefix ? { pathPrefix: ctx.shellPathPrefix } : {}),
+    );
     if (ctx.shareImage) {
       tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));
     }

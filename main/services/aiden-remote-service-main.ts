@@ -111,6 +111,7 @@ import {
   botManagedWorkspace,
 } from "./bot-capability-services-main.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { simulatorShareRelay } from "./devices/device-share.js";
 import {
   createBotInboxProjectionService,
   mergeBotInboxActivityPreviews,
@@ -403,6 +404,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    simulators: simulatorShareRelay,
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -748,12 +750,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     revokeDevice: async (deviceId) => {
       activeReadAloud?.revokeDevice(deviceId);
       activeProgress?.revokeDevice(deviceId);
+      simulatorShareRelay.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
         chats: activeChats,
         workspaceOwners,
       }, deviceId);
+      // A relay admitted between the first close and the revocation fence is closed here.
+      simulatorShareRelay.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       await botApplicationService.revokeNoticeAudience(deviceId);

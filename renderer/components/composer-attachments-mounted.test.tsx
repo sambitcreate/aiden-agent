@@ -67,6 +67,7 @@ async function loadComposer() {
 }
 
 function installDom() {
+  const stored = new Map<string, string>();
   const document = new DOMImplementation().createDocument(
     null,
     "html",
@@ -93,6 +94,11 @@ function installDom() {
   const values = {
     window,
     document,
+    localStorage: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => { stored.set(key, value); },
+      removeItem: (key: string) => { stored.delete(key); },
+    },
     requestAnimationFrame: window.requestAnimationFrame,
     cancelAnimationFrame: window.cancelAnimationFrame,
     IS_REACT_ACT_ENVIRONMENT: true,

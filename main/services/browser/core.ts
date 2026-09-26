@@ -86,6 +86,78 @@ export function browserPartition(profileId: string, incognito: boolean): string 
   return `${incognito ? "" : "persist:"}aiden-browser-${incognito ? "private-" : "profile-"}${digest}`;
 }
 
+/** Guest pages must look like Chromium, not Electron or Aiden, or Google rejects sign-in. */
+export function browserGuestUserAgent(raw: string): string {
+  const mozilla = raw.match(/^Mozilla\/[\d.]+/u)?.[0] ?? "Mozilla/5.0";
+  const platform = raw.match(/\([^)]*\)/u)?.[0] ?? "(Macintosh; Intel Mac OS X 10_15_7)";
+  const chrome = raw.match(/Chrome\/[\d.]+/u)?.[0] ?? "Chrome/142.0.0.0";
+  return `${mozilla} ${platform} AppleWebKit/537.36 (KHTML, like Gecko) ${chrome} Safari/537.36`;
+}
+
+const BROWSER_GREASE_CHARS = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
+const BROWSER_GREASE_VERSIONS = ["8", "99", "24"];
+
+/**
+ * The brand list Chromium itself exposes through `navigator.userAgentData` in
+ * an unbranded build such as Electron: one GREASE brand plus "Chromium",
+ * spelled and ordered from the major version as in Chromium's
+ * `GenerateBrandVersionList`. The guest renderer never claims "Google Chrome",
+ * so the wire headers must not either.
+ */
+export function browserGuestBrands(userAgent: string): Array<{ brand: string; version: string }> {
+  const major = Number(userAgent.match(/Chrome\/(\d+)/u)?.[1] ?? "0");
+  const chars = BROWSER_GREASE_CHARS;
+  const grease = {
+    brand: `Not${chars[major % chars.length]}A${chars[(major + 1) % chars.length]}Brand`,
+    version: BROWSER_GREASE_VERSIONS[major % BROWSER_GREASE_VERSIONS.length],
+  };
+  const chromium = { brand: "Chromium", version: String(major) };
+  return major % 2 === 0 ? [grease, chromium] : [chromium, grease];
+}
+
+/** Chromium sends UA Client Hints only to potentially trustworthy origins. */
+function browserTrustworthyRequestUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" || url.protocol === "wss:") return true;
+    if (url.protocol !== "http:" && url.protocol !== "ws:") return false;
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host.endsWith(".localhost") ||
+      /^127(?:\.\d+){3}$/u.test(host) || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Electron emits no UA Client Hint headers, while the guest renderer still
+ * exposes Chromium's `navigator.userAgentData`. Mirror only the default
+ * low-entropy hints from that same metadata so `User-Agent`, `sec-ch-ua*`, and
+ * page JavaScript describe one guest. High-entropy hints are never forged;
+ * pages read them from `navigator.userAgentData.getHighEntropyValues()`.
+ */
+export function applyBrowserGuestIdentityHeaders(
+  headers: Record<string, string>,
+  userAgent: string,
+  requestUrl: string,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (name !== "user-agent" && !name.startsWith("sec-ch-ua")) next[key] = value;
+  }
+  next["User-Agent"] = userAgent;
+  if (!browserTrustworthyRequestUrl(requestUrl)) return next;
+  next["sec-ch-ua"] = browserGuestBrands(userAgent)
+    .map(({ brand, version }) => `"${brand}";v="${version}"`)
+    .join(", ");
+  next["sec-ch-ua-mobile"] = "?0";
+  next["sec-ch-ua-platform"] =
+    platform === "darwin" ? '"macOS"' : platform === "win32" ? '"Windows"' : '"Linux"';
+  return next;
+}
+
 export function browserBoundedNumber(
   value: unknown,
   min: number,

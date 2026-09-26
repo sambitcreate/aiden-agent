@@ -33,6 +33,7 @@ import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerTtsHandlers } from "./tts.js";
+import { registerDeviceHandlers } from "./devices.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 
 import { ipcMain, logger } from "../platform.js";
@@ -76,6 +77,7 @@ export function registerHandlers(): void {
   registerBotHandlers();
   registerBtwHandlers();
   registerTtsHandlers();
+  registerDeviceHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

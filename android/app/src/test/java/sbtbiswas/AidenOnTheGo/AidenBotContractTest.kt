@@ -164,7 +164,7 @@ class AidenBotContractTest {
         val agentRoster = requireNotNull(fixture.agentRoster)
         assertEquals(AidenChatProgressAvailability.READY, taskProgress.availability)
         assertEquals(3, taskProgress.tasks.size)
-        assertEquals(AidenChatAgentRole.SCOUT, agentRoster.agents.first().role)
+        assertEquals(AidenChatAgentRole.IMPLEMENTER, agentRoster.agents.first().role)
         assertEquals(2, agentRoster.previousTurns.size)
         assertEquals(2, fixture.chatProgressEvents.size)
         assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
