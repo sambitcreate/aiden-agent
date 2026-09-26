@@ -198,3 +198,32 @@ test("a push outside a live turn re-reads with the live selection instead of pai
     "another chat's push never triggers a read",
   );
 });
+
+test("a workspace scope change clears the old reading even if the re-read fails", async () => {
+  const h = harness();
+  h.feed.showChat("a");
+  h.feed.setScope("ask:/repo");
+  void h.feed.refresh();
+  h.requests[0].reply.resolve(reading(70));
+  await settle();
+  assert.deepEqual(h.published, [null, 70]);
+  // Same scope (a re-render) keeps the reading.
+  h.feed.setScope("ask:/repo");
+  assert.deepEqual(h.published, [null, 70]);
+  // An in-flight read for the old scope must not repaint after the change.
+  void h.feed.refresh();
+  h.feed.setScope("full:/repo");
+  assert.deepEqual(h.published, [null, 70, null]);
+  h.requests[1].reply.resolve(reading(71));
+  await settle();
+  assert.deepEqual(h.published, [null, 70, null]);
+  // The replacement read fails: the meter stays cleared, not at 70%.
+  void h.feed.refresh();
+  h.requests[2].reply.resolve(Promise.reject(new Error("offline")) as never);
+  await settle();
+  assert.deepEqual(h.published, [null, 70, null]);
+  // A chat switch sets a fresh baseline instead of counting as a change.
+  h.feed.showChat("b");
+  h.feed.setScope("ask:/other");
+  assert.deepEqual(h.published, [null, 70, null, null]);
+});

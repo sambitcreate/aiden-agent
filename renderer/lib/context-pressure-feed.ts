@@ -31,6 +31,7 @@ export class ContextPressureFeed<Draft> {
   private live = false;
   private draftTimer: unknown = null;
   private draft: Draft | undefined;
+  private scope: string | undefined;
   private readonly draftDelayMs: number;
   private readonly schedule: (run: () => void, delayMs: number) => unknown;
   private readonly cancel: (handle: unknown) => void;
@@ -48,8 +49,24 @@ export class ContextPressureFeed<Draft> {
   showChat(chatId: string | null): void {
     if (chatId === this.chatId) return;
     this.chatId = chatId;
-    // The incoming chat's composer re-reports its own draft after mounting.
+    // The incoming chat's composer re-reports its own draft after mounting,
+    // and its workspace scope is a fresh baseline, not a change.
     this.draft = undefined;
+    this.scope = undefined;
+    this.invalidate();
+    this.options.publish(null);
+  }
+
+  /**
+   * The chat's workspace scope (permission + folder) shapes the next request's
+   * prompt and tools. On a change, clear the reading at once so the previous
+   * scope's pressure is never shown as current while the re-read is pending
+   * or if it fails.
+   */
+  setScope(scope: string): void {
+    const previous = this.scope;
+    this.scope = scope;
+    if (previous === undefined || previous === scope) return;
     this.invalidate();
     this.options.publish(null);
   }
