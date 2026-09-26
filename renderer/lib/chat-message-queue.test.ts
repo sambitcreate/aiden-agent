@@ -60,7 +60,7 @@ test("queue snapshots retain attachments, skills and visualization independently
   assert.notEqual(chatMessageQueue("chat-one"), chatMessageQueue("chat-two"));
 });
 
-test("FIFO, steering priority, deleting and keyboard reorder preserve stable identities", () => {
+test("FIFO, priority, deleting and keyboard reorder preserve stable identities", () => {
   const queue = new ChatMessageQueue();
   ["one", "two", "three"].forEach((id) => queue.add(message(id)));
   queue.move("three", 0);
@@ -79,6 +79,18 @@ test("FIFO, steering priority, deleting and keyboard reorder preserve stable ide
   assert.equal(queue.getSnapshot().sendingId, "three");
   queue.settle("three", "sent");
   assert.equal(queue.claim()?.id, "one");
+});
+
+test("redirect replacement is atomic and Stop clears queued work", () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("old"));
+  assert.throws(() => queue.replaceWith({ ...message("invalid"), text: "" }), /Add a message/u);
+  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["old"]);
+  queue.replaceWith(message("replacement"));
+  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["replacement"]);
+  queue.discard();
+  assert.equal(queue.getSnapshot().messages.length, 0);
+  assert.equal(queue.claim(), undefined);
 });
 
 test("editing pauses dispatch; cancel preserves the original and save preserves queue position", () => {

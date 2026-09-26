@@ -440,6 +440,7 @@ test("parseGitStatus handles NUL-delimited paths and rename pairs", () => {
     unborn: false,
     uncommitted: 3,
     ignored: 1,
+    ignoredPaths: ["ignored\nfile.txt"],
     upstream: "origin/main",
     ahead: 2,
     behind: 3,
@@ -1486,6 +1487,7 @@ test("GitService rechecks cancellation after post-push branch reads before setti
   const remote = path.join(root, "remote.git");
   const pushMarker = path.join(root, "push-finished-before-upstream");
   const readMarker = path.join(root, "post-push-read-started");
+  const releaseMarker = path.join(root, "post-push-read-release");
   const wrapper = path.join(root, "git-post-push-read-delay.mjs");
   await fs.mkdir(remote);
   await git(remote, ["init", "--bare", "--initial-branch=main"]);
@@ -1498,13 +1500,18 @@ test("GitService rechecks cancellation after post-push branch reads before setti
       "import { spawnSync } from 'node:child_process';",
       `const pushMarker = ${JSON.stringify(pushMarker)};`,
       `const readMarker = ${JSON.stringify(readMarker)};`,
+      `const releaseMarker = ${JSON.stringify(releaseMarker)};`,
       "const args = process.argv.slice(2);",
       "const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
       "if (result.error) throw result.error;",
       "if (args[0] === 'push' && result.status === 0) writeFileSync(pushMarker, 'pushed\\n');",
       "if (existsSync(pushMarker) && args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'HEAD') {",
       "  writeFileSync(readMarker, 'reading\\n');",
-      "  setTimeout(() => process.exit(result.status ?? 1), 1200);",
+      "  const deadline = Date.now() + 10000;",
+      "  const timer = setInterval(() => {",
+      "    if (existsSync(releaseMarker)) { clearInterval(timer); process.exit(result.status ?? 1); }",
+      "    if (Date.now() >= deadline) { clearInterval(timer); process.exit(124); }",
+      "  }, 10);",
       "} else process.exit(result.status ?? 1);",
       "",
     ].join("\n"),
@@ -1515,6 +1522,14 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     gitBinary: wrapper,
     pushTimeoutMs: 5_000,
   });
+  const run = service["run"].bind(service);
+  let upstreamMutationAttempts = 0;
+  service["run"] = (...args) => {
+    if (args[1][0] === "branch" && args[1].some((arg) => arg.startsWith("--set-upstream-to="))) {
+      upstreamMutationAttempts += 1;
+    }
+    return run(...args);
+  };
   const capability = await service.pushCapability(repository);
   const controller = new AbortController();
   const operation = service.push(
@@ -1530,25 +1545,27 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     controller.signal,
   );
 
-  let reading = false;
-  for (let attempt = 0; attempt < 150; attempt += 1) {
+  void operation.catch(() => {});
+  try {
+    await waitForFile(readMarker, 15_000);
+    controller.abort();
+    await fs.writeFile(releaseMarker, "released\n");
+    const result = await operation;
+    assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
+    assert.equal(result.upstreamSet, false);
+    assert.equal(upstreamMutationAttempts, 0, "post-read cancellation must skip the upstream mutation");
+    assert.equal(
+      await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
+      "",
+    );
+  } finally {
+    controller.abort();
     try {
-      await fs.access(readMarker);
-      reading = true;
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await fs.writeFile(releaseMarker, "released\n");
+    } finally {
+      await operation.catch(() => {});
     }
   }
-  assert.equal(reading, true);
-  controller.abort();
-  const result = await operation;
-  assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
-  assert.equal(result.upstreamSet, false);
-  assert.equal(
-    await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
-    "",
-  );
 });
 
 test("GitService preserves an unknown push outcome when remote verification fails", async (t) => {
@@ -4435,13 +4452,49 @@ test("GitService preserves an unregistered target directory when worktree creati
   );
 });
 
-test("GitService rollback preserves files created by a post-checkout hook", async (t) => {
+test("GitService managed creation suppresses post-checkout hooks and still preserves rollback dirt", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
-  const nested = path.join(repository, "nested-not-in-head");
   const hooks = path.join(root, "hooks");
   const targetRecord = path.join(root, "hook-target.txt");
-  await fs.mkdir(nested);
+  const lateTargetRecord = path.join(root, "late-target.txt");
+  // Simulates what a post-checkout hook would have done before managed
+  // creation suppressed hooks: drop a file into the new checkout, then make
+  // the post-add verification fail so rollback must inspect the worktree.
+  const wrapper = path.join(root, "git-hook-dirt.mjs");
+  await fs.writeFile(
+    wrapper,
+    `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const state = ${JSON.stringify(path.join(root, "fail-next-rev-parse"))};
+if (existsSync(state) && args[0] === "rev-parse" && args.includes("--git-dir")) {
+  unlinkSync(state);
+  process.stderr.write("simulated post-add setup failure\\n");
+  process.exit(1);
+}
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) process.exit(1);
+if (args[0] === "worktree" && args[1] === "add" && result.status === 0) {
+  const separator = args.indexOf("--");
+  const target = args[separator + 1];
+  writeFileSync(${JSON.stringify(lateTargetRecord)}, target);
+  writeFileSync(join(target, "late-sentinel.txt"), "late data must survive\\n");
+  writeFileSync(state, "fail next worktree rev-parse\\n");
+}
+process.exit(result.status ?? 1);
+`,
+    { encoding: "utf8", mode: 0o700 },
+  );
   await fs.mkdir(hooks);
   await fs.writeFile(
     path.join(hooks, "post-checkout"),
@@ -4453,20 +4506,24 @@ printf 'hook data must survive\\n' > "$checkout/hook-sentinel.txt"
     { encoding: "utf8", mode: 0o700 },
   );
   await git(repository, ["config", "core.hooksPath", hooks]);
-  const service = new GitService({ cacheTtlMs: 0 });
+  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
 
   await assert.rejects(
-    service.createWorktree(nested, root, "codex/hook-sentinel"),
+    service.createWorktree(repository, root, "codex/hook-sentinel"),
     (error) =>
       error instanceof GitServiceError &&
       error.code === "command_failed" &&
       /could not fully roll it back/u.test(error.message),
   );
 
-  const target = await fs.readFile(targetRecord, "utf8");
+  // The repository hook never ran during managed creation.
+  await assert.rejects(fs.lstat(targetRecord), { code: "ENOENT" });
+  // A file dropped into the new checkout still trips the rollback dirty gate,
+  // so the worktree and its branch are preserved for review.
+  const target = await fs.readFile(lateTargetRecord, "utf8");
   assert.equal(
-    await fs.readFile(path.join(target, "hook-sentinel.txt"), "utf8"),
-    "hook data must survive\n",
+    await fs.readFile(path.join(target, "late-sentinel.txt"), "utf8"),
+    "late data must survive\n",
   );
   assert.equal((await service.worktrees(repository)).length, 2);
   await git(repository, ["show-ref", "--verify", "refs/heads/codex/hook-sentinel"]);

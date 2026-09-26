@@ -8,6 +8,10 @@ import {
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 
 const MAX_DETACHED_STREAMS = 64;
 const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
@@ -602,6 +606,7 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      reasoning: reset ? "" : current.reasoning,
       lastTextDeltaAt:
         reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
     }));
@@ -670,6 +675,8 @@ export function subscribeDetachedTerminalChats(
     }
     const owner = detachedLifecycleStreams.get(terminal.streamId);
     if (!owner || terminalSettlementInFlight.has(terminal.streamId)) return;
+    // Accepted Steer text that never reached the chat returns to its draft.
+    restoreUndeliveredGuidance(owner.chatId, undeliveredGuidanceFromTerminal(payload));
     if (
       !terminal.chat ||
       terminal.chat.id !== owner.chatId ||

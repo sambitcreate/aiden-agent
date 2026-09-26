@@ -283,7 +283,7 @@ test("failed turn-limit notes retain truncation provenance and failed status", (
     status: "failed",
     summary: "Incomplete observation.",
     summaryTruncated: true,
-    warning: "The child reached its turn limit. The notes are incomplete and unverified.",
+    warning: "The child reached its turn limit. These are incomplete, unverified partial findings.",
   });
   const snapshot = projector.snapshot()[0]!;
   assert.equal(snapshot.state, "failed");

@@ -1,5 +1,14 @@
 # Troubleshooting
 
+- 2026-09-21 Subagents layout: this fresh worktree had no `node_modules`; focused `tsx`, TypeScript, and ESLint commands failed on missing packages until `npm ci`. Check dependency installation before interpreting those failures as code regressions.
+
+- 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
+
+- 2026-09-21 PR #207 follow-up: fully redacting after the ninth settled report preserved secrecy but erased useful long-task findings. Keep all settled text under the existing output budget, sanitize cross-report boundary fragments before final truncation, and bound comparisons with a fail-closed ceiling.
+- 2026-09-21 PR #207 follow-up: a sliding window of assistant partials can discard a credential-key prefix while retaining its value. Mark any eviction and fail closed on turn-limit findings, rather than classifying only the retained suffix.
+- 2026-09-21 PR #207 follow-up: line-wise credential filtering misses assignment keys split across settled messages. Check bounded adjacent spans with line breaks removed and fail closed on the compact whole report; keep unaffected path lines where possible.
+- 2026-09-21 PR #207 Pullfrog follow-up: real V2 authority tests using random UUIDs can trip the renderer-safe opaque-identifier classifier nondeterministically. Inject a known-safe UUID in the persistence fixture, then test the complete authority and ledger path.
+- 2026-09-21 PR #207 follow-up: `.memory/` is ignored even when its existing note is tracked; stage note updates with `git add -f` after checking the exact path.
 - 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
 - 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.
 - 2026-09-17 Live motion: do not key canvas layers by caption/action state; remounting restarts the animation and causes jumps. Kept stable duplex layers and separated visual activity from microphone activity so mic-off sessions retain Stop. Production macOS package must be rebuilt separately from the HTML review bundle.
@@ -534,6 +543,17 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
 
+## 2026-09-18 — CI feedback optimization
+
+- A fresh `npm ci` on this Mac again left Electron's executable absent; run `node node_modules/electron/install.js` before local E2E. The initial shard command stopped before starting any tests.
+- The host defaults to Node 26, while CI pins 22.22.3. Validate registry parsing and process behavior with the installed Node 22 path.
+- Workflow text tests can pass while referenced CLI arguments or package scripts are missing; validate the actual matrix commands and package entry points before pushing.
+- Filename-only lane balancing initially placed native helper tests away from their build prerequisites. Keep binary-dependent tests with those builds and cover that association in registry checks.
+- Local browser E2E encountered an assistant overlay intercepting an Add to chat click. Preserve the strict test and compare hosted behavior before changing product or fixture code.
+- Some `.mjs` regressions import TypeScript modules with `.js` specifiers. Keep ordinary lane tests under the original tsx resolver; plain Node loses that resolution behavior.
+- Moving release eligibility from per-step conditions to an admission job requires updating existing distribution and diagnostics policy tests to assert the new job boundary.
+- The core lane's browser-file regression also launches Chromium. A warm local browser cache hid the missing hosted prerequisite; declare browser installation on both core and renderer matrix entries and check it against preserved browser modes.
+
 - 2026-09-19 provider-streams: fresh worktree omits ignored `.memory`; read canonical checkout project context and will add a lane-specific note. Installed private node_modules with scripts disabled to avoid concurrent native/Electron builds.
 - 2026-09-19 provider-streams: explicit `git add` reported ignored `.papercuts` even while staging its tracked file; used explicit force-add for required lane artifacts.
 ## 2026-09-19 — upgrade compaction checkpoint recovery
@@ -632,6 +652,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Pullfrog caught callback-slot starvation: OkHttp 4.12 releases its per-host async slot only after `onResponse` returns. Validate concurrent stalled responses as well as individual cancellation.
 - HTTP GET-stream retry exhaustion is not whole-session failure: reproduce a subsequent `tools/list` POST before recommending eviction. The pinned SDK successfully serves POST discovery on the retained session after both optional GET retries fail.
 - Pullfrog caught a missing established-chat boundary: attachment intake must check the synchronous pending-send ref before optimistic-clear recovery can restore its payload. Mounted regression reproduced 23 restored attachments from a 20-attachment draft.
+- Reviving the August iOS picker through `git rebase --rebase-merges` replayed September's obsolete desktop/settings merge topology and produced broad conflicts unrelated to the picker. Verify branch ancestry first, then port the still-missing native delta onto current `main` while retaining current chat contracts and tests.
+- The nested iOS working agreement excludes simulator evidence. A focused simulator run completed before that nested instruction surfaced, so it is not counted as acceptance; all physical iPhones were offline and physical XCTest/camera verification remains open.
+- Pullfrog found two cross-lifecycle attachment races in the restored branch: AVFoundation delegate results must be fenced to the exact capture generation, and PhotoKit continuations must retain/cancel their request ID while commit-card cleanup consumes the matching selection generation only.
 - Mounted Composer fixture must explicitly externalize React in esbuild; repository TypeScript wildcard paths can otherwise bundle a second hook runtime despite packages=external.
 - Pullfrog found cmdk 1.1.1 retains keyword aliases while item `value` stays unchanged. Dynamic rows need a value including identity plus current metadata, not merely new `keywords` props.
 - A separate cmdk automatic-selection active-descendant gap reproduces on the unchanged initial PR head before metadata updates; reported centrally. The focused regression preserves explicit arrow-navigation accessibility checks.
@@ -801,3 +824,233 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-21 PR #206 review: project instructions require friction in this tracked troubleshooting file. A separate lane note was easy to overlook; duplicate the native SDK/pretest limitation here and test the runner's four-note eviction plus 8,000-character projection at the event boundary.
 - `test:subagents` native pretest selects a Command Line Tools macOS 27 SDK that Xcode 26.6 cannot link; the build script replaces its child environment, so an outer SDK pin is ineffective. Focused TypeScript, mobile consumer, type-check, and lint validation remain separate from this native gate.
 - 2026-09-21 PR #206 Pullfrog review caught an omitted-provenance edge case: four retained short notes can be under the character cap after a fifth note is evicted. Track count eviction separately from character truncation and test both boundaries.
+- Lane form-fill-specialist: pure `-core.ts` modules cannot own electron-bound singletons — `FormFillArtifactStore` constructor deps like `onStatusChanged` must be wired in a thin electron-importing shim (`artifacts.ts`), not the testable core.
+- Approval row deselection travels the decision-payload path (`approvals.decide` → `takeDecisionPayload` in `beforeToolCall`), never tool arguments; validate each option field at the `chat:approve` IPC edge (`Number.isSafeInteger` predicates) rather than passing `unknown` through.
+- `ipc-contract.test.ts` scans `main/**/*.ts` automatically: handlers must use literal channel strings and `ipcMain.broadcast` for contract coverage; no manual registry edits.
+- The form-fill review card IS the approval surface: `approvalFor` extracts, captures, scores, and mints the plan digest in one step so the approved digest covers exactly what the user saw. Splitting planning from minting breaks that invariant.
+
+- PR #198 picker review: the isolated worktree lacks the ignored `.memory/` notes, so read the primary checkout's project context before editing. Xcode 26.6 emitted DeviceSupport lookup and post-test CoreDevice diagnostics warnings for the physical iPhone 16 Pro Max; both signed XCTest runs passed, so use the result bundles rather than diagnostics warnings to determine test status.
+- PR #198 hosted review: Greptile applied the Electron-only squircle control rule to native SwiftUI camera buttons. The cited design guide names `renderer/components/ui.tsx` and CSS tokens; verify platform scope against `ios/AGENTS.md` and the approved native picker visuals before restyling.
+- PR #198 validation: repeated full iPhone runs intermittently failed two ActivityKit persistence tests and one snapshot window-scene precondition; all three passed immediately in an isolated physical-device rerun. Keep the failed `.xcresult` evidence and distinguish host/order instability from the focused picker regressions.
+- PR #198 follow-up: Pullfrog found a degraded PhotoKit callback could also carry cancellation or error; check terminal flags before discarding previews, and test the picker result-application seam rather than its generation helper alone.
+- PR #198 hosted E2E reached test 103/103 but GitHub canceled the 30-minute job before its last test/report completed. Increase this job's bound to 45 minutes without reducing coverage; keep CI runner-time cost visible.
+## 2026-09-21: Issues 202 and 201
+
+- 2026-09-21: OpenCode Workers doctor passed, but the worker exited immediately because its launcher sends `--dir` to `opencode run` v2.0.3, which rejects that flag. Use a direct CLI review until the wrapper is updated.
+- 2026-09-21: Fresh isolated worktree lacked `node_modules`; installed with `npm ci` before validation.
+- 2026-09-21: `npm run test:subagents` pretest stops in native worktree-remover linking: CLT's `MacOSX.sdk` targets 27.0 and libSystem.tbd declares unsupported `arm64e.x1`. The build script supplies a restricted environment, so setting SDKROOT externally does not select Xcode's SDK. Run focused TS tests independently; full native gate remains unverified.
+
+
+- 2026-09-21 revisit controls: fresh worktree lacked installed dependencies, so the first focused run failed loading `entities` and `react` before those suites executed; install from the lockfile before treating the suite as product evidence. OpenCode lists DeepSeek V4 Flash but no exact 4.1 Flash model identifier.
+- Local `xcrun` resolves the CommandLineTools macOS 27 SDK despite Xcode 26.6's selected developer path; native helper linking rejects `arm64e.x1`. The native build scripts intentionally replace the child environment, so a command-scoped `SDKROOT` pin does not propagate. Build the ignored helper binaries directly with the installed Xcode 26.5 SDK for local E2E without changing shipped build scripts.
+- Held-response E2E sidebar title remains the user prompt until completion; selecting by the completed response text timed out before exercising the revisit. The first live steer test then exposed a real stuck “Stopping…” pane flag after detached settlement; release that flag before queue delivery resumes.
+- OpenCode Workers doctor passed, but the worker launcher failed before model execution: it supplied `opencode run --dir`, which its OpenCode v2.0.3 rejects as an unrecognized flag. The shell's separate OpenCode v1.18.5 CLI ran the same DeepSeek V4 Flash review directly in the plugin-created isolated worktree, read-only; it reported no findings.
+- PR208 terminal-handoff follow-up: an initial regression assertion used `Array.at`, but this project's TS target does not include it. Use length-based indexing in focused tests and rerun type-check before pushing.
+- PR208 follow-up: guarding controls with the cached assistant tail exposed an earlier transcript-read race. Cancel exact-chat in-flight reads before publishing a durable append, then hold and release an old assistant read in a focused regression to verify it cannot overwrite the new user turn.
+- PR208 hosted verify: the narrow chat suite passed locally, but the full JS suite caught a stale Environment/Subagents source assertion against the old readiness expression. Update cross-component source contracts when moving transcript guards and run the broader test inventory.
+
+- 2026-09-20 worktree lifecycle: `git show-ref --verify --hash <ref>` exits 128 ("not a valid ref") for a missing ref on git 2.55 — not exit 1. For exists-or-undefined branch/ref probes use `git for-each-ref --count=1 --format=%(objectname) <ref>`, which exits 0 with empty output.
+- 2026-09-20 worktree lifecycle: the managed-worktree remover helper builds only on macOS (`build/native/aiden-worktree-remover` is absent on Linux), so git.test.ts cases that reach the real remover fail with `io_failed` on this platform. That is a baseline limitation, not a regression — verify against a stashed baseline before assuming a change broke them.
+- 2026-09-20 worktree lifecycle: `git status --porcelain` v1's leading column space is load-bearing (`M ` staged vs ` M` unstaged); trimming stdout erases it. Use `--porcelain=v2 -z` and parse `1 .M`-style records for staged/unstaged assertions.
+- 2026-09-20 worktree lifecycle: `captureProvisionedFile` writes `files/<sha256>` blobs and requires the `files/` directory to exist under the snapshot dir first — create it when provisioning the snapshot directory.
+- 2026-09-20 worktree lifecycle: containment checks that compare `fs.realpath(root)` against `path.resolve(target)` reject legitimate paths on macOS because `/var` resolves to `/private/var`. Canonicalize not-yet-created targets through their parent realpath + basename (and join provisioned destinations under the canonical worktree) instead of string-prefixing raw paths.
+- 2026-09-21 worktree lifecycle review fixes: Pullfrog's three remaining findings were (1) `restore.json` published before its bytes were written, (2) the application-service advisory ignored-path expansion running before the `options.force` branch, and (3) Git-object capacity admission probing `managed.repositoryPath` instead of the object store. The fix publishes the first journal through a temporary file plus `link` (keeping the EEXIST first-writer claim), skips the advisory expansion when force is explicit, and admits object bytes against `repositoryPaths(...).commonDir`.
+
+- 2026-09-21 PR #185 Greptile findings: Greptile's first review of this PR returned 2/5 with four findings — (1) safe deletion never re-verified that `refs/aiden/snapshots/<id>` still described the captured tree, so a vanished anchor let an unrestorable deletion proceed; (2) `restoreProvisionedFiles` removed the inflight temp and read/chmodded an existing destination before its only realpath containment check, so a snapshot-materialized symlink ancestor could redirect those operations outside the worktree; (3) the provisioner verified the source identity and then copied by pathname, leaving a swap-and-restore TOCTOU; (4) a failed manifest publication left the synthetic ref and private blobs behind. Fixes: verify the anchor tree at admission and again at the destructive boundary, verify containment before every mutation (nearest existing ancestor, then the canonical parent after mkdir), open the source with `O_NOFOLLOW` and read through that descriptor, and roll back the ref plus the snapshot directory when manifest persistence fails. The (3) race window is not deterministically reproducible in a test; the other three carry regressions that fail against the previous behavior.
+
+- 2026-09-21 #185 native file helper: `xcrun clang` selected the malformed CLT macOS 27 SDK (`unknown architecture arm64e.x1`) despite `xcode-select` pointing at Xcode. Passing `--sdk macosx` to xcrun selected the full Xcode SDK and fixed the local build; plain xcrun selected CLT.
+- 2026-09-21 #185 validation: running `git.test.ts` before building `aiden-worktree-remover` produced 16 helper-launch failures that resembled deletion regressions. Building the helper with explicit `xcrun --sdk macosx` made all 99 Git tests pass.
+## 2026-09-21: Issue 201
+- OpenCode Workers doctor passed, but the second worker also exited before editing: its launcher sent an unsupported `--dir` flag to `opencode run` v2.0.3. Use the direct CLI for requested review.
+- The Bot home has two persisted incarnation copies. Accepting a remount requires keeping receipt and manifest exactly consistent while comparing each to the live home under the owned-volume check.
+- `npm run test:bots` stops before tests because the native inbox writer links against the CLT macOS 27 SDK with unsupported `arm64e.x1`; `npm --ignore-scripts run test:bots` passes 446 TypeScript tests, but native-helper-dependent pretests remain unverified.
+- Deep OpenCode review exposed the receipt-written/manifest-unpublished crash window after remount: publishing the live device would disagree with the old receipt. Preserve the receipt token in the durable manifest and return a separately re-inspected live token.
+- PR #209 review: Pullfrog required either a remount-stable volume identity or an explicitly documented, tested trust assumption. Node's `fs.statfs` exposes no `f_fsid`, so a real volume identity needs a native probe or a `diskutil` subprocess; the documented assumption is the patch-release choice, so the accepted substituted-volume case and the checks that still fail closed are now stated in `sameHomeByInode` and named in the remount regression.
+
+## 2026-09-21 — CI refresh
+- Reconciled PR #139 with current main in a new worktree; stale registry lacks newly shipped regression files and the worktree file-I/O helper prerequisite.
+- Removed the draft release-admission rewrite from this CI optimization scope to avoid overlapping the active release-hardening work.
+- Local full validation hits the existing CLT MacOSX27 SDK / linker architecture mismatch in the bot inbox writer build. TypeScript/lint and CI-policy tests pass; use pinned Xcode 26.6 hosted native/Electron validation without changing global developer-tool selection.
+- Adversarial review: added full-validation fallback for empty diffs, restricted documentation skips to prose extensions, and checked non-file execution modes/build prerequisites so registry coverage cannot silently lose Rust, browser, coverage, Ruby or native work.
+- Greptile caught iOS-only selection omitting shipping/TestFlight policies held by a desktop lane. Added conditional Node/install/policy steps to the selected iOS job and an invariant test; full runs keep the existing single preserved policy execution.
+
+## 2026-09-21 — 0.42.2 release gates
+
+- Hosted CI run 35643207134 marked `chat-message-queue` flaky because its first attempt read `settings.json` before that file existed (ENOENT); the retry passed. Poll for the file's first durable write, retrying only ENOENT.
+- The `setsid` fixture wrote its PID from the detached grandchild after scheduling; publish it from the intermediate process, allow a bounded 20s wait under CI load, and arrange cleanup even when the test assertion fails.
+- Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
+- Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
+- Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## MCP resources — 2026-09-22
+SDK UriTemplate.variableNames preserves duplicates: deduplicate before exact input-key validation. resources/read content URIs may differ from the requested URI; bound/project as data without minting handles. Cache only successful inventory or clear the same failed discovery promise so cancellation does not poison later calls.
+
+## 2026-09-23 — shell helper early-exit stdin error
+
+- Workspace identity validation may exit before reading the control frame. A child-process error listener does not catch stdin EPIPE: install a stdin listener before writing, record transport failure, close control, and still await close/watchdog before rejecting. Keep write inside try/finally so synchronous failure also cleans timers/abort listeners/streams. Retain an error listener through stream destruction for late events.
+
+- Child `close` is not stdin write settlement. Await the write callback alongside helper close before decoding a valid frame; retain the independent error listener and bound a missing callback with the existing watchdog. Test close-first with valid response bytes and late callback/stream failure.
+## 2026-09-23 — Git cancellation fixture handshakes
+
+- A three-second marker poll can expire before the intended cancellation window begins. Wait for the actual marker with the existing bounded helper, and abort/drain the outstanding operation before removing its temporary repository.
+- A 1200ms post-marker exit timer can race a delayed test process and set upstream before abort. Use a bounded release-file handshake; abort before release and always release/drain in finally. Controlled pre-push and post-marker delays reproduce each separate race.
+- Fresh worktrees need `npm run build:worktree-remover` and `npm run build:worktree-file-io` before invoking the Git test file directly; the normal pretest script supplies these prerequisites.
+## 2026-09-22 — setsid fixture readiness race
+
+- A PID published by the intermediate process is still insufficient if the first parent exits before that process reaches setsid: production group cleanup can kill it. A controlled one-second pre-detachment delay reproduces the missing-marker failure. Synchronize first-parent exit with a bounded pipe acknowledgment after marker publication; keep the production cleanup, detached-child alarm, and test liveness assertions intact.
+- Build native test helpers before standalone shell tests; otherwise ENOENT is only a missing prerequisite, not a valid reproduction.
+
+- Fixture timeout cleanup cannot rely on group/direct signal ordering across setsid+fork. A parent-owned grant pipe makes persistence conditional on success, and EOF closes the late-fork race. Test absent-readiness-marker cleanup using a separate PID witness; mark ESRCH cleanup complete so an after-hook cannot signal a reused PID.
+## 2026-09-22 Telegram run-control audit
+
+- Task began on stale release 0.42.0 checkout; fetched main c8c09e0d2 before work.
+- Initial workspace sandbox blocked shared Git metadata and tsx IPC socket. Used
+  required approval path; later task permissions changed to full access/never.
+- Plain bridge stop() intentionally lets already admitted work settle; shutdown
+  stopAndSettle() and user Stop cancel dispatch preparation. Keep tests distinct.
+- Pi harness queueSteer is not a public foreground input API: host transcript
+  projection and exact-run admission must be implemented before native controls.
+## 2026-09-22 — attachment lifecycle worktree validation
+
+- Reusing the coordinator checkout's node_modules produced unrelated Live orb type errors because thinking-orbs was 0.1.1 while fresh main locks 0.3.1. Install this worktree's lockfile before claiming type-check results.
+- The local Codex and T3 source clones predate the cited September research. Verify upstream PR/files directly before concluding the research applies to Aiden's current implementation.
+- Full hosted verification also runs the subagent deletion source-contract test; expanding its one-line admission-release statement requires updating the literal matcher to preserve both release-order assertions.
+## 2026-09-22 MCP session scope reconciliation
+
+The earlier skill slice covered model-context body loading, not lazy filesystem reads or request-boundary instruction refresh. Audit exact production calls rather than assuming available SDK methods or Pi hooks are wired: main has no resource/getInstructions/AGENTS loader path. Keep metadata-only status separate from runtime authority changes, and preserve the green skill branch in a new worktree.
+## 2026-09-22 skill invocation policy validation
+
+- Isolated worktree Git metadata lives outside the writable sandbox; branch creation needed the existing git-switch escalation. tsx CLI also needs local socket permission.
+- Native validation needs explicit local SDK paths: `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`, Android Studio JBR, and `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. System xcode-select points at CommandLineTools; do not change it globally. Coordinate the physical iPhone slot with the upgrade coordinator.
+## 2026-09-22 MCP guidance test compatibility
+
+The repository TypeScript library target does not include Array.at; use slice(-1)[0] in fixtures without raising the target. Onboarding's source fixture is already loaded with readFileSync; reuse it for copy assertions instead of adding an unimported async reader. These test-only errors were corrected before commit.
+## 2026-09-22 — Pi budget and recovery audit
+
+- Worktree Git metadata lives outside its writable root; fetch/branch operations needed ordinary sandbox escalation. The `tsx` CLI also needs its temporary IPC socket, so `npm run test:compaction` needed escalation after EPERM. Locked `npm ci --ignore-scripts` and direct `node --import tsx` focused tests worked in the sandbox.
+- A startup race fixture initially intercepted `DataStore.load`, which is also called internally during normal store operations and deadlocked the fixture. Intercept the startup-only corruption check instead to hold a second recovery sweep deterministically.
+- Model ownership must gate usage counters, not transient retry/reset handling. Independent review caught that coupling; preserve provider retries even when a response reports a model alias.
+
+- PR #215 hosted review: resetting an initialization promise does not clear DataStore corruption/unsupported-shape quarantine. Keep that authority fence, explicitly limit retry to transient recovery failures, and test operator repair with a fresh owner as well as actual durable-write failure.
+## 2026-09-22 — Small-context semantic budgets
+
+- Default Pi reserve/tail values can exceed a custom model window even though generation preflight is safe. Apply the already-used VCC bounds only to infeasible pairs; keep feasible and exact-fit defaults.
+- A retained-tail regression using one enormous first user entry cannot prove target-budget enforcement: Pi deliberately retains whole cut-point groups. Use several complete turns to prove prefix reduction without changing upstream pairing/cut semantics.
+- The child compatibility test expected a needless final compaction checkpoint after active-output projection. Update it to assert exactly two provider requests and no checkpoint, preserving bounded output before the second inference.
+
+- PR #228 review exposed fake-provider summary fixtures exceeding their own windows. Capacity preflight must inspect Pi's assembled hidden prompt, not just retained-tail budgets. Calibrate fixture window/usage together; do not weaken the fence to preserve impossible mock requests. Pi's char/4 estimate also undercounts Unicode, so the summary fence adds UTF-8 allowance and documents its remaining heuristic limit.
+
+## 2026-09-22 — durable tool outputs
+
+- Fresh isolated worktree lacked node_modules; installed locked dependencies with npm ci --ignore-scripts before meaningful TypeScript checks. tsx requires its local pipe outside this task’s workspace sandbox.
+- Gradle requires the existing user cache and ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk; default Xcode selection points to CLT, so use DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer.
+- Physical iPhone tests are queued through the coordinator: device is locked; do not retry or use prohibited simulators. Unsigned generic iOS build succeeds but is not device execution evidence.
+- Canonical /private/var vs lexical /var paths caused valid new-file provenance to be discarded. Resolve the parent directory before forming the relative path; normalize Windows separators.
+## 2026-09-22 — chat state wireframe review
+- Browser automation blocked the local Downloads `file://` preview (request-header error, then explicit URL-policy block). Do not retry through another browser surface; validate syntax and leave visual review to the user.
+- OpenCode lists `opencode-go/deepseek-v4-flash` but no exact `v4.1-flash` model; label the available V4 Flash substitution.
+- OpenCode Workers launched two isolated worktrees but failed on unsupported `opencode run --dir` in v2.0.3. Direct CLI review from each worktree worked; use the absolute NVM v2 binary because a worktree shell resolves Homebrew OpenCode v1.18.5 first.
+
+## 2026-09-22 — chronological chat motion
+- Fresh Aiden worktrees need `npm ci` before `npm run type-check`; the dependency install completed locally.
+- Android Gradle needed both Android Studio's JBR as `JAVA_HOME` and `~/Library/Android/sdk` as `ANDROID_HOME` in this shell.
+- `npm run build` reached the Bot inbox native helper, where plain `/usr/bin/xcrun clang` selected the malformed CLT macOS 27 SDK (`arm64e.x1`). Setting `SDKROOT` alone did not change that selection; validate Vite/Electron separately and use hosted CI for the full build gate.
+- The full `npm run test` pretest initially stopped at an iOS source-contract regex that assumed the old activity-first branch. Update this contract when the chronological branch changes, while preserving whole-reply Copy actions.
+- Local Electron Playwright smoke tests closed before the first window on this host, before any chat assertion ran; use hosted CI for that gate.
+- Re-running the focused iOS simulator suite on the already booted iPad became unreliable after a parallel clone launch; Xcode reported `Application failed preflight checks: Busy`. The first focused run passed before the final test refinement; use a clean simulator or hosted iOS CI for the final gate.
+- PR #224 Android CI passed its unit gate but one unrelated scheduled-task Compose test saw no hierarchy on its emulator. Rerun the exact commit before changing scoped code.
+- PR #224 verify retained a source-contract assertion for the removed 700 ms Visualizing hold; update it to assert the chronological activity owner and rerun.
+## 2026-09-22 — Mobile Bot controls verification
+
+- Isolated worktree Git metadata and Gradle's shared cache remain outside the effective writable sandbox; use the configured execution approval mechanism after actual `index.lock`/Gradle lock failures. Xcode package resolution likewise needed network-enabled execution.
+- This host's default developer directory lacks `devicectl`; use `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` with isolated `/tmp/aiden-bot-ios-derived`.
+- Coordinator's physical-device run reports `com.apple.dt.deviceprep Code=-3`, `Unlock Sambit’s iPhone to Continue` for `00008110-00063CD91E98801E`. Do not count unsigned test compilation as XCTest execution or repeatedly launch a locked-device run.
+- A held MockWebServer disconnect exposed OkHttp's default connection retry replaying approval POSTs. Disable transport retries specifically for approval/Stop; keep unknown-outcome UI and authoritative reads instead of restoring captured cards.
+## 2026-09-22 — managed worktree stack audit
+
+- Fresh main already merged #185 while #189–193 remain open with incompatible duplicate contracts. A trial main→#189 merge conflicted in Git journals, provisioning metadata and package scripts; aborted it without discarding any PR work. Audit current architecture before transplanting dated research/stack fixes.
+- This task retained workspace-write despite global full-access configuration. Ordinary Git metadata writes, clang temporary output and tsx local IPC were blocked; required tool escalation was used without changing permission settings.
+- `st_dev` inequality does not prove independent APFS free-space pools. A read-only `diskutil info -plist` probe stalled and was stopped; keep admission conservative for unknown relationships instead of introducing a platform-discovery dependency. Git also collapses disabled filter/encoding attributes into literal sentinel values, and worktree-only `includeIf` makes source-config inspection unsafe.
+- 2026-09-22 PR #184: a branch-list lookup is not authoritative negative evidence after an unknown GitHub create. Preserve pending intent on empty/retargeted/advanced-head results, and publish a link plus intent settlement atomically so a crash cannot later undo an unlink. Post-push PR operations must carry the frozen push endpoint's repository; gh's workspace inference can select another remote.
+
+- 2026-09-22 PR #184 automated follow-up: evicting a per-chat DataStore does not revoke delayed provider callbacks or admitted writes. Mark deletion before queue drain, fence publication, and remove the file only after the barrier. Notify pending-create cache consumers after the create outcome, not while the remote request is still active.
+
+- 2026-09-22 PR #184 recovery follow-up: draining DataStore updates does not await initial load recovery. Join existing.load() after revoking admission, then drain writes and remove the file.
+
+- 2026-09-22 PR #184 recovery cleanup: DataStore.load can settle while leaving an unreadable held candidate eligible for a later recovery. Chat deletion must consume exact chat .held/.previous artifacts, including when no store was loaded, and fail if cleanup cannot finish.
+
+- PR #184: Recovery filename prefixes are ambiguous for valid dotted chat IDs. Match the full basename plus fixed recovery fields in both load and deletion; test dotted siblings in both directions.
+- 2026-09-22 PR #195 remediation: pinned cua-driver 0.8.3 tokens are snapshot-scoped, not stable AX identities. Repeated captures legitimately change tokens; tests must use real `sXXXX:index` rollover and bind full reviewed structure plus unique exact semantics and geometry before accepting a fresh token. Unknown/missing metadata fails closed.
+- PR #195 native tests: Command Line Tools cannot resolve XCTest on this host; full Xcode-beta succeeds. Enabling the pinned-model tests exposed an incorrect Bundle fixture subdirectory hidden by prior skips. All 17 native tests now run with SHA-verified model artifacts under /tmp.
+- PR #195 source audit: the FluidAudio Swift reference is Apache-2.0 at the pinned revision, while the CUA model artifact is MIT. Corrected misleading MIT comments and included both notices; no FluidAudio runtime dependency was added.
+
+- 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
+## AGENTS refresh — 2026-09-22
+The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+# 2026-09-24 implementer run-grant worktree
+
+Fresh managed worktrees have no `node_modules`; `npm ci --no-audit --no-fund`
+was needed before type checking. Direct workspace-write tests initially failed
+because their native file-mutator test binary had not been built. Run
+`npm run build:subagent-file-mutator` and
+`node scripts/build-subagent-file-mutator.mjs --test` before the focused suite.
+
+## Composer busy controls — 2026-09-23
+
+- Pi's managed initial user input is not re-emitted, but Steer input is. The queued-user projection must be written before Pi's awaited `message_end` listener returns, and its Pi journal append must include the visible chat-message marker in the same transaction. Otherwise the next generation's visible-history sync duplicates the guidance.
+- This host defaults to Command Line Tools, where `simctl` is unavailable. Set `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and use an iPhone simulator for iOS tests; no physical-device unlock is needed.
+- Pullfrog follow-up: Pi's `reset()` silently drops steer input it never emitted, and the queued-user projection runs inside Pi's serialized `message_end` delivery, so a stalled ChatStore write would block `cancelAndSettle`. Route the projection through `waitForManagedPromise` (quarantine it as detached durability on Stop) and ask the harness for undelivered accepted input before `reset()`. That collection must be synchronous: awaiting the quarantined write before the terminal re-creates an indefinite "Stopping"; report it as a separate `late` promise and return failed late saves on `chat:guidance-returned`. Also keep that cancelled projection in `pendingDurabilitySettlement()` after it settles: the detached-durability set drops settled entries, so a save landing before `runManaged()` returns would otherwise commit the turn without the guidance in Pi and the next sync would append it after the assistant. The renderer restores it from the terminal payload through both the attached `startGeneration` listener and the detached terminal sync.
+- 2026-09-24 compaction budget repair: generic `generation-degraded` and `context_management` entries hid the local guard cause and token budget. Emit fixed reason/stage plus aggregate counts at the coordinator; keep raw provider and summary text out of diagnostics. VCC workers previously returned fixed error messages without typed codes, so preserve the closed code for useful failure logs.
+- 2026-09-24 build: bare `xcrun` selected Command Line Tools MacOSX27.0 SDK and failed linking `libSystem.tbd` (`arm64e.x1-macos` unknown architecture), despite `xcode-select -p` reporting Xcode. The Bot inbox helper's `execFile` uses a fixed environment and drops a scoped `DEVELOPER_DIR`, so retrying the full build with Xcode beta set in the parent still fails. Verify the renderer/Electron build separately until this native build seam is repaired.
+- 2026-09-25 PR #244 review: `pi-compaction-core.test.ts` recovery cases use the real VCC worker at `build/main/pi-vcc-worker.js`; in a fresh worktree they fail with "VCC compilation worker failed" until `npm run build:electron` has run. Pi's `findCutPoint` also retains the message that crosses `keepRecentTokens`, so an oversized fixture placed just before a tiny tail ends up retained rather than summarized.
+## 2026-09-24 — production todo diagnosis
+
+- The diagnostic log records subagent failures but not their admission reason or the task status they affect. Correlating the private Pi journal showed a final review request rejected at the tree deadline and task 12 still `in_progress`. A bounded, content-free task transition diagnostic would make this easier to diagnose without exposing chat text.
+- The isolated worktree had no `node_modules`, so the first focused test and type-check attempts failed before execution. `npm ci --ignore-scripts` restored the locked JavaScript toolchain; reruns passed.
+- The focused todo suite missed an older source-shape assertion in the renderer preflight suite. Hosted CI and two review bots caught it; update that contract and run preflight when changing the shared `ScrollArea`.
+## 2026-09-25 — Simulator devices Phases 0–2
+
+- Worktree-isolated sessions refuse Bash with `$(...)`, computed binaries, or `cd … && <heredoc>`; put scratch scripts in the session scratchpad and run `bash <file>`, and use Edit/Write for source changes. BSD `sed -i ''` multi-line substitutions fail silently.
+- A `show: false` Electron window never resolved a WebCodecs `isConfigSupported` probe; use a visible window with an `app.exit` timeout and write results to a file.
+- `agent-device snapshot` returns `SESSION_NOT_FOUND` until `agent-device open <bundleId> --session <s>` runs; the first open also builds the Apple runner (~4s here).
+- The repo has no Prettier dependency or config; `npx prettier` fetches an unpinned release and reformats to 80 columns. Do not run it — revert with `git checkout -- <file>` and reapply the edit.
+- E2E fixtures had no per-test app environment; `appEnvironment` option and `relaunch(afterClose, appEnvironment)` now exist for experimental flags.
+- A WebSocket test client hung waiting for the first frame: Node can deliver it inside the `upgrade` event's `head` buffer. Decode `head` when it is non-empty before listening for `data`.
+- `tsc` targets a lib older than ES2022: `Array.prototype.at` and `new Error(message, { cause })` fail type-check even though `tsx` runs them. Use index access, and assign `cause` with `declare readonly cause: unknown` as `managed-worktree-file-io.ts` does.
+- Handler modules import `../platform.js` (Electron), so they cannot be unit-tested under `tsx`. Put the IPC registration behind an injected `handle`/`owner`/`service` seam in a services file, and keep the handler as Electron wiring only.
+- Writes to `/Users/…/aiden-macos/.memory/` are refused in a worktree session; edit the worktree's own `.memory/` copy.
+
+## 2026-09-25 — Simulator devices Phase 3
+
+- E2E: right after a chat reply, the streaming-reveal layer briefly duplicates the response text, so `getByText` hits a strict-mode violation. Wait for `.streaming-reveal` to reach count 0 first.
+- `tests/e2e/*.mjs` get no ESLint Node globals. Import `Buffer`, `URL`, and the timers from `node:*` explicitly.
+- Hub E2E without a production seam: seed `userData/devices/tools/expo-device-hub/<v>/…/cli.mjs` (it imports the fake), `.install-complete`, and `consent.json`, then put a fake `xcrun` on PATH through `appEnvironment`.
+- Playwright `request.allHeaders()` showed no `Origin` on the `file://` renderer's stream fetch. Don't assert `Origin: file://`.
+- `local-device-host.test.ts` `waitFor` (200 `setImmediate` turns) flaked under the loaded CI lane. It is now bounded by 5s of wall time.
+- `cd … && python3 - <<'EOF'` passed the worktree guard this time, where a plain heredoc had been refused.
+- A manual test on a real simulator failed with "stream refused access". expo-device-hub routes WebSockets by exact path, so the input socket is `/vendor/serve-sim/helper/ws?device=<udid>`, not the per-device `wsUrl` in serve-sim's config. The fake hub had copied our wrong assumption, so the E2E passed anyway. Check fakes against the real hub's routing (`cli.mjs` `webSocketRoutes`).
+- `npm run dev` port 4143 was taken by another worktree's dev server. Run vite on another port and set `AIDEN_RENDERER_URL` to match (the device proxy allowlists that origin). The E2E uses the built renderer, so run `npm run build` after renderer changes.
+
+## 2026-09-25 — Simulator devices Phases 3.5–4
+
+- The faux LM Studio matched scenarios against the latest user message. pi-ai sends tool-result images to OpenAI-compatible APIs as an extra user message ("Attached image(s) from tool result:"), so image-returning tools ended the scenario early. The fixture now skips that carrier.
+- The Environment tabpanel stays mounted and reports visible after **Close environment panel**. Assert on the `Environment work surface` complementary region and the tab's `aria-selected` instead.
+- A fake agent-device must detach its daemon: the host awaits `devices --json` with a timeout and only polls `daemon.json`. Kill the daemon in `finally` from `agent-state/daemon.json` so a failed run leaves nothing behind.
+- `String.prototype.replaceAll` also fails `tsc` under the old lib; use `split().join()`.
+- `assert.throws(fn, /regex/)` matches against `String(error)`, which includes `Error: `. Anchor as `/^Error: …$/u`, not `/^…$/u`.
+- A fixed `consent.json.<pid>.tmp` let two saves racing each other rename a partial file. Chain the saves and use a unique temp name.
+
+## 2026-09-25 — Simulator devices Phase 5 (paired Macs)
+
+- The desktop protocol test compared the shared mobile fixture with the full capability list. A desktop-only capability must stay out of that fixture, because iOS checks fixture capabilities against its `v1Known` list. Compare with the vocabulary minus the desktop-only members instead.
+- `openapi.json` mixes inline and expanded arrays, so `json.dumps` rewrote about 2,600 lines. Edit it by inserting text at object boundaries.
+- `PeerTransport` maps 401/403 to `authentication_required`, not `request_failed` with a status. Tests that fake an auth failure must use that code.
+- Raw-socket WebSocket tests can read the refusal status line directly. `createAidenRemoteUpgradeHandler` writes `HTTP/1.1 403 Refused`, not `Forbidden`.
+
+## 2026-09-25 — Simulator devices Phase 6 (3D frames)
+
+- three.js geometry, `Texture`, `Raycaster` and `PerspectiveCamera` all run under Node, so projection and UV tests need no WebGL. Only `WebGLRenderer` needs a browser; keep it in `phone-viewer.ts`, which is loaded lazily.
+- `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
+- Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
+- The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
+- 2026-09-26 PR #206 reconciliation: #207 on main superseded the runner-side four-note tail, so the merge took main's runner and kept only the projector gap (failed results with `summaryTruncated` lost the `report_truncated` notice because the gate predated failed summaries).

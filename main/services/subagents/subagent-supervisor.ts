@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import {
   MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
+  MAX_SUBAGENT_REQUESTED_TURNS,
   MAX_SUBAGENT_TOOL_RESULT_CHARS,
   parseSubagentToolRequest,
   effectiveSubagentTaskCapabilities,
@@ -18,6 +19,7 @@ import {
 import {
   DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
   DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
+  MAX_SUBAGENT_CHILD_TURNS,
   type RunSubagentChildInput,
 } from "./subagent-child-runner.js";
 import type { SubagentReadToolName } from "./capability-profile.js";
@@ -62,6 +64,7 @@ import type {
 
 export const DEFAULT_SUBAGENT_TREE_DEADLINE_MS = 10 * 60_000;
 const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
+const MAX_SUBAGENT_V2_TREE_TURNS = 512;
 
 export interface SubagentSupervisorPolicy {
   childDeadlineMs?: number;
@@ -304,6 +307,7 @@ export class SubagentSupervisor {
   private v2ToolCallsUsed = 0;
   private v2OutputCharsUsed = 0;
   private v2TurnsUsed = 0;
+  private v2TurnAllowance = 0;
   private v2NetworkOperationsUsed = 0;
   private calls = 0;
   private treeExpired = false;
@@ -628,6 +632,7 @@ export class SubagentSupervisor {
                   policy: {
                     deadlineMs: dispatchDeadlineMs,
                     cancellationGraceMs: this.cancellationGraceMs,
+                    maxTurns: Math.min(task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS, authority.budgets.maxTurns),
                   },
                   telemetry: {
                     starting: () =>
@@ -1188,6 +1193,10 @@ export class SubagentSupervisor {
               policy: {
                 deadlineMs,
                 cancellationGraceMs: this.cancellationGraceMs,
+                maxTurns: Math.min(
+                  task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
+                  preparedRun?.authority?.budgets.maxTurns ?? MAX_SUBAGENT_REQUESTED_TURNS,
+                ),
               },
               onCleanupFailure: () => recordCleanupFailure(identity.runId),
               telemetry: {
@@ -1455,9 +1464,11 @@ export class SubagentSupervisor {
           Math.min(
             ...authorities.map(({ budgets }) => budgets.maxOutputChars),
           ) - this.v2OutputCharsUsed;
-        const remainingTurns =
-          Math.min(...authorities.map(({ budgets }) => budgets.maxTurns)) -
-          this.v2TurnsUsed;
+        // Every admitted child contributes its own bounded turn ceiling. A
+        // sibling with the default 24 must not silently clamp a 72-turn scout.
+        const nextTurnAllowance = this.v2TurnAllowance +
+          authorities.reduce((total, authority) => total + authority.budgets.maxTurns, 0);
+        const remainingTurns = nextTurnAllowance - this.v2TurnsUsed;
         const remainingNetworkOperations =
           Math.min(
             ...authorities.map(({ budgets }) => budgets.maxNetworkOperations),
@@ -1470,6 +1481,7 @@ export class SubagentSupervisor {
           remainingTokens < 1 ||
           remainingToolCalls < 1 ||
           remainingOutputChars < 1 ||
+          nextTurnAllowance > MAX_SUBAGENT_V2_TREE_TURNS ||
           remainingTurns < 1 ||
           (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
@@ -1506,6 +1518,7 @@ export class SubagentSupervisor {
           );
         }
         try {
+          this.v2TurnAllowance = nextTurnAllowance;
           results = (await scheduler.run(
             request.tasks.map((task, index) => ({
               node: nodes[index]!,

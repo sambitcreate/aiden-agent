@@ -114,6 +114,12 @@ export interface ManagedWorktree {
   worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
+  /**
+   * Worktree-relative ignored paths Aiden provisioned at create time. This is
+   * the authoritative allowlist for snapshot/deletion classification; the
+   * `.worktreeinclude` file is never re-read for lifecycle decisions.
+   */
+  provisionedFiles?: string[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */
@@ -160,6 +166,8 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
+export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
+
 export interface GitHubPullRequestSummary {
   number: number;
   title: string;
@@ -168,6 +176,11 @@ export interface GitHubPullRequestSummary {
   isDraft?: boolean;
   headBranch: string;
   baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
   checksState?: GitHubPullRequestChecksState | null;
   checks: GitHubPullRequestCheck[];
 }
@@ -177,6 +190,45 @@ export interface GitHubPullRequestStatus {
   message?: string;
   pullRequest?: GitHubPullRequestSummary;
 }
+
+export interface GitHubPullRequestListStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequests?: GitHubPullRequestSummary[];
+}
+
+export interface GitHubRepositoryRef {
+  host: string;
+  /** Canonical `owner/repo` (lowercase, no `.git`). */
+  nameWithOwner: string;
+}
+
+export interface GitHubRepositoryStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  repository?: GitHubRepositoryRef;
+}
+
+export interface GitHubPullRequestCreateInput {
+  repository?: string;
+  title: string;
+  body?: string;
+  baseBranch?: string;
+  headBranch?: string;
+  draft?: boolean;
+}
+
+/**
+ * `gh pr create` triage. "failed" means the CLI demonstrably never reached a
+ * successful mutation (missing tool, auth, input rejected before the request).
+ * Anything where GitHub may have created the PR — timeouts, kills, network
+ * errors, even an exit code whose message is ambiguous — is "unknown" and must
+ * go through reconciliation before being retried or reported.
+ */
+export type GitHubPullRequestCreateResult =
+  | { kind: "created"; pullRequest: GitHubPullRequestSummary }
+  | { kind: "failed"; availability: GitHubPullRequestAvailability; message: string }
+  | { kind: "unknown"; message: string };
 
 /** Result of inspecting a folder for git status. */
 export interface GitInfo {
@@ -508,6 +560,9 @@ export interface Skill {
 
 /** An Agent Skill discovered on disk from a skill folder (read-only). */
 export interface DiscoveredSkill {
+  /** Omitted legacy metadata permits both invocation surfaces. */
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
   id: string;
   name: string;
   description: string;
@@ -630,6 +685,8 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
+  formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
@@ -830,6 +887,8 @@ export interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  /** Accepted Steer text Pi never read into the visible chat; the renderer restores it to the draft. */
+  undeliveredGuidance?: string[];
 }
 export interface ChatError {
   streamId: string;
@@ -840,6 +899,7 @@ export interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 export const MAX_CONFIG_ID_LENGTH = 256;
 export const MAX_PROVIDER_BASE_URL_LENGTH = 4_096;

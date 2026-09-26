@@ -564,3 +564,36 @@ test("fresh skill resolution rejects selections after YAML description edits or 
     code: "invalid_reference",
   });
 });
+
+test("strict invocation booleans default to both and isolate malformed policies", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skill-policy-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, ".agents", "skills");
+  const cases = [
+    ["legacy", "", true, true],
+    ["user", "disable-model-invocation: true", false, true],
+    ["model", "user-invocable: false", true, false],
+    ["neither", "disable-model-invocation: true\nuser-invocable: false", false, false],
+    ["both", "disable-model-invocation: false\nuser-invocable: true", true, true],
+  ] as const;
+  for (const [name, metadata] of cases) {
+    await writeSkill(root, name, `---\nname: ${name}\n${metadata}\n---\nInstructions`);
+  }
+  for (const [i, metadata] of [
+    'disable-model-invocation: "true"',
+    'user-invocable: "false"',
+    "user-invocable: null",
+    "user-invocable: [false]",
+    "user-invocable: false\nuser-invocable: true",
+    "flag: &flag false\nuser-invocable: *flag",
+  ].entries()) {
+    await writeSkill(root, `invalid-${i}`, `---\n${metadata}\n---\nInstructions`);
+  }
+  const skills = await discoverSkillCandidates(undefined, home);
+  assert.equal(skills.length, cases.length);
+  for (const [name, , modelInvocable, userInvocable] of cases) {
+    const skill = skills.find((candidate) => candidate.name === name)!;
+    assert.equal(skill.modelInvocable, modelInvocable, name);
+    assert.equal(skill.userInvocable, userInvocable, name);
+  }
+});

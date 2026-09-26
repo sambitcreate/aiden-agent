@@ -11,6 +11,23 @@ checks for same-process writes. Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
+## Implementer run grants (2026-09-24)
+
+The foreground `implementer` role is being added to the host-managed Pi stack.
+Omitted task capabilities request workspace read, write, and shell while web,
+MCP, and nesting remain off. Existing scout, planner, and reviewer defaults stay
+read-only. Positive authority still intersects rollout flags, workspace and
+generation permission, and the parent ceiling. Full grants write and shell for
+the implementer run without a card; Ask presents one write card and one separate
+shell card on first use. The in-memory grants bind the run, authority digest,
+and workspace revision. Each operation still uses its exact-call ledger and
+rechecks live authority, workspace state, file preimage or shell root, and stop.
+
+P1 follow-up: support a per-task child model override resolved through the
+parent's model resolver, with the selected provider/model disclosed on the child
+run. This implementation keeps inheritance from the current parent runtime.
+Concurrent implementer worktree warnings and same-run continuation remain P1.
+
 ## Goal
 
 Evolve Aiden's safe foreground, fresh-context, read-only children into a native
@@ -53,7 +70,7 @@ authority is always the positive intersection:
 
 - Unknown versions, roles, tools, grants, and fields fail closed.
 - A descendant may only preserve or narrow its parent's effective authority.
-- Workspace Full permission is an upper bound, not automatic child consent.
+- Workspace Full permission is an upper bound. The foreground implementer role treats Full as implicit write and shell consent for that run; Ask requires one separate grant per lane.
 - A grant binds the tree, run, parent, chat, renderer owner, workspace identity
   and revision, provider/model fingerprint, context revision, tool identities,
   expiry, and resource budgets.

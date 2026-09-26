@@ -147,6 +147,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(fixture.taskProgress?.tasks.count, 3)
         XCTAssertEqual(fixture.agentRoster?.chatId, fixture.chat.id)
         XCTAssertEqual(fixture.agentRoster?.agents.count, 2)
+        XCTAssertEqual(fixture.agentRoster?.agents.first?.role, .implementer)
         XCTAssertEqual(fixture.agentRoster?.previousTurns.map(\.turnId), [
             "turn_fixture_previous_02",
             "turn_fixture_previous_01",
@@ -256,6 +257,21 @@ final class AidenRemotePhase0Tests: XCTestCase {
                 from: JSONSerialization.data(withJSONObject: malformedAgent)
             )
         )
+    }
+
+    func testImplementerRoleDecodesFromMacRoster() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let data = try Data(contentsOf: fixtureURL)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var roster = try XCTUnwrap(root["agentRoster"] as? [String: Any])
+        var agents = try XCTUnwrap(roster["agents"] as? [[String: Any]])
+        agents[0]["role"] = "implementer"
+        roster["agents"] = agents
+        let decoded = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: JSONSerialization.data(withJSONObject: roster)
+        )
+        XCTAssertEqual(decoded.agents.first?.role, .implementer)
     }
 
     func testAgentRosterPreviousTurnsEnforceNewestFirstButAcceptTies() throws {

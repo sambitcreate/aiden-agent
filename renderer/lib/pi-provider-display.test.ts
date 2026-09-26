@@ -163,6 +163,7 @@ test("uses product marks for Claude and Grok models while keeping provider marks
   assert.equal(resolveProviderIconSlug("anthropic", "claude-sonnet-4"), "claude");
   assert.equal(resolveProviderIconSlug("xai"), "xai");
   assert.equal(resolveProviderIconSlug("xai", "grok-4-fast"), "grok");
+  assert.equal(resolveProviderIconSlug("tailscale"), "tailscale");
   assert.equal(resolveProviderIconSlug("openrouter", "anthropic/claude-sonnet-4"), "openrouter");
   assert.equal(resolveProviderIconSlug("opencode", "anthropic/claude-sonnet-4"), "opencode");
   assert.equal(

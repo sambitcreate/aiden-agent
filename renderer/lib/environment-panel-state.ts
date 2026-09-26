@@ -1,4 +1,4 @@
-export type EnvironmentPanelTab = "review" | "subagents" | "files" | "browser";
+export type EnvironmentPanelTab = "review" | "subagents" | "files" | "browser" | "devices";
 export type EnvironmentSurface = "quick-view" | "tools";
 export type EnvironmentSurfaceMode = "closed" | "tools-pinned" | "tools-floating";
 
@@ -19,8 +19,13 @@ export type EnvironmentSurfaceAction =
   | { type: "activate"; surface: EnvironmentSurface }
   | { type: "close-all" };
 
-export const ENVIRONMENT_PANEL_TABS = ["review", "subagents", "files", "browser"] as const;
-const DISABLED_ENVIRONMENT_PANEL_TABS = ["review", "files", "browser"] as const;
+export const ENVIRONMENT_PANEL_TABS = [
+  "review",
+  "subagents",
+  "files",
+  "browser",
+  "devices",
+] as const satisfies readonly EnvironmentPanelTab[];
 
 interface EnvironmentPanelStorage {
   getItem(key: string): string | null;
@@ -38,32 +43,49 @@ export function shouldRestoreEnvironmentFocus(
   return Boolean(activeElement?.closest(`[data-environment-surface="${surface}"]`));
 }
 
+export function parseEnvironmentPanelTab(value: string | null): EnvironmentPanelTab | null {
+  return (ENVIRONMENT_PANEL_TABS as readonly string[]).includes(value ?? "")
+    ? (value as EnvironmentPanelTab)
+    : null;
+}
+
+function environmentPanelTabEnabled(
+  tab: EnvironmentPanelTab,
+  subagentsEnabled: boolean,
+  devicesEnabled: boolean,
+): boolean {
+  if (tab === "subagents") return subagentsEnabled;
+  if (tab === "devices") return devicesEnabled;
+  return true;
+}
+
 export function availableEnvironmentPanelTabs(
   subagentsEnabled: boolean,
+  devicesEnabled = false,
 ): readonly EnvironmentPanelTab[] {
-  return subagentsEnabled ? ENVIRONMENT_PANEL_TABS : DISABLED_ENVIRONMENT_PANEL_TABS;
+  return ENVIRONMENT_PANEL_TABS.filter((tab) =>
+    environmentPanelTabEnabled(tab, subagentsEnabled, devicesEnabled),
+  );
 }
 
 export function normalizeEnvironmentPanelTab(
   tab: EnvironmentPanelTab,
   subagentsEnabled: boolean,
+  devicesEnabled = false,
 ): EnvironmentPanelTab {
-  return tab === "subagents" && !subagentsEnabled ? "review" : tab;
+  return environmentPanelTabEnabled(tab, subagentsEnabled, devicesEnabled) ? tab : "review";
 }
 
 export function storedEnvironmentPanelTab(
   storage: EnvironmentPanelStorage,
   key: string,
   subagentsEnabled: boolean,
+  devicesEnabled = false,
 ): EnvironmentPanelTab {
-  const stored = storage.getItem(key);
-  const parsed: EnvironmentPanelTab =
-    stored === "review" || stored === "subagents" || stored === "files" || stored === "browser"
-      ? stored
-      : "review";
+  const parsed = parseEnvironmentPanelTab(storage.getItem(key)) ?? "review";
   // Capability bootstrap starts fail-closed and can become authoritative later.
   // Preserve the raw destination instead of destructively repairing storage.
-  return normalizeEnvironmentPanelTab(parsed, subagentsEnabled);
+  return normalizeEnvironmentPanelTab(parsed, subagentsEnabled, devicesEnabled);
 }
 
 export function reduceEnvironmentSurfaceState(

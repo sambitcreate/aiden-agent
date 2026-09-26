@@ -24,6 +24,16 @@ import java.time.Instant
 class AidenBotContractTest {
     private val json = Json { ignoreUnknownKeys = true }
 
+    @Test
+    fun chatReasoningIsAcceptedOnlyForRegularChats() {
+        val regular = """{"id":"chat-1","messages":[{"role":"assistant","reasoning":"visible"}]}"""
+        val bot = """{"id":"chat-1","botId":"bot-1","messages":[{"role":"assistant","reasoning":"private"}]}"""
+        AidenBotPrivateResponseValidator.validate(regular, AidenBotPrivateResponseScope.ChatProjection)
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(bot, AidenBotPrivateResponseScope.ChatProjection)
+        }
+    }
+
     private fun loadSharedContractFixture(): AidenRemoteContractFixture {
         val stream = javaClass.classLoader?.getResourceAsStream("contract.json")
             ?: throw IllegalStateException("Resource contract.json not found")
@@ -154,7 +164,7 @@ class AidenBotContractTest {
         val agentRoster = requireNotNull(fixture.agentRoster)
         assertEquals(AidenChatProgressAvailability.READY, taskProgress.availability)
         assertEquals(3, taskProgress.tasks.size)
-        assertEquals(AidenChatAgentRole.SCOUT, agentRoster.agents.first().role)
+        assertEquals(AidenChatAgentRole.IMPLEMENTER, agentRoster.agents.first().role)
         assertEquals(2, agentRoster.previousTurns.size)
         assertEquals(2, fixture.chatProgressEvents.size)
         assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
