@@ -460,13 +460,13 @@ function OwnedSubagentsPanel({
           />
         )
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(12rem,0.42fr)_minmax(0,1fr)]">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <SubagentRoster
             runs={runs}
             selectedRunId={selection}
             onSelect={selectRun}
             presentationByRunId={presentationByRunId}
-            className="border-r border-separator"
+            className="max-h-44 shrink-0 border-b border-separator"
           />
           {detailRegion}
         </div>

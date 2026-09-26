@@ -34,6 +34,7 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import {
   ASSISTANT_AUTOMATION_DRAFT,
   onAssistantAutomationComposerRequested,
@@ -314,6 +315,8 @@ function RootContent() {
       ),
     [queryClient, reconcileChatCacheAfterIdle],
   );
+
+  React.useEffect(() => subscribeLateReturnedGuidance(onNotification), []);
 
   React.useEffect(
     () => subscribeChatReadReconciliations((owner) => reconcileChatCacheAfterIdle(owner.chatId)),

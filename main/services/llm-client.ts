@@ -42,6 +42,15 @@ import {
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import {
+  DEVICE_AGENT_GUIDANCE,
+  DEVICE_APPROVAL_TOOL_NAMES,
+  canUseDeviceTools,
+  createDeviceAgentTools,
+  deviceToolApprovalSummary,
+  isDeviceToolName,
+} from "./devices/device-tools.js";
+import { devicesEnabled } from "./devices/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -535,6 +544,38 @@ function broadcastChatSettled(
   });
 }
 
+function queuedGuidanceText(messages: readonly { role: string; content?: unknown }[]): string[] {
+  return messages.flatMap((message) =>
+    message.role === "user" && typeof message.content === "string" && message.content.trim()
+      ? [message.content]
+      : [],
+  );
+}
+
+/**
+ * Guidance whose visible save Stop stopped waiting for, and which then did not
+ * land. The stream's terminal has already been sent, so it goes to the window
+ * that owned the stream on its own channel.
+ */
+export function returnLateGuidance(
+  owner: Pick<ChatGenerationOwner, "kind" | "isDestroyed" | "send"> | undefined,
+  chatId: string,
+  streamId: string,
+  guidance: string[],
+): void {
+  if (guidance.length === 0) return;
+  // Steer is desktop-only; a paired-device owner has no draft to restore into.
+  if (!owner || owner.kind === "remote" || owner.isDestroyed()) {
+    logger.warn("pi", `Late guidance for stream ${streamId} had no window to return to.`);
+    return;
+  }
+  try {
+    owner.send("chat:guidance-returned", { chatId, streamId, undeliveredGuidance: guidance });
+  } catch (error) {
+    logger.warn("pi", `Could not return late guidance for stream ${streamId}.`, error);
+  }
+}
+
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
@@ -619,8 +660,9 @@ async function buildSystemPrompt(
   const browserSuffix = availableToolNames?.has("browser_open")
     ? `\n\n${BROWSER_AGENT_GUIDANCE}`
     : "";
+  const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -646,7 +688,8 @@ async function buildSystemPrompt(
         : "") +
     delegation +
     skillsSuffix +
-    browserSuffix
+    browserSuffix +
+    deviceSuffix
   );
 }
 
@@ -887,7 +930,7 @@ async function prepareGeneration(
     childShellRollout &&
     subagentRunStore.selection === "v2" &&
     workspace?.permission !== "none" &&
-    permission !== "none" &&
+    (permission === "ask" || permission === "full") &&
     (!botContext || botContext.admission.authority.shell.enabled) &&
     (await access(subagentShellBinary).then(
       () => true,
@@ -916,6 +959,7 @@ async function prepareGeneration(
           thinkingLevel,
           ownerDocumentId,
           permission: workspace.permission,
+          generationPermission: permission,
           writeEnabled: subagentWriteEnabled,
           webEnabled: subagentWebEnabled,
           mcpInventory: subagentMcpInventory,
@@ -1136,6 +1180,49 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  // Simulator tools: the flag, agent access, and an interactive desktop owner must all hold now.
+  const deviceStaticGate = canUseDeviceTools({
+    enabled: devicesEnabled(),
+    agentAccess: true,
+    permission,
+    rendererOwner,
+    assistantMode,
+    bot: Boolean(botContext),
+  });
+  const deviceService = deviceStaticGate && params.chatId
+    ? await (await import("../handlers/devices.js")).deviceServiceForAgents()
+    : null;
+  const deviceGate = Boolean(deviceService?.state().consent.agentAccess);
+  const deviceTools =
+    deviceService && deviceGate
+      ? createDeviceAgentTools({
+          chatId: params.chatId,
+          signal,
+          supportsImages,
+          port: deviceService,
+          revalidate: async () => {
+            if (signal.aborted || !active.has(streamId))
+              throw new Error("This simulator generation is no longer active.");
+            if (!devicesEnabled()) throw new Error("Simulator support is off.");
+            if (workspace) {
+              const currentWorkspace = await configStore.getWorkspace(workspace.id);
+              if (
+                !currentWorkspace ||
+                currentWorkspace.permission === "none" ||
+                currentWorkspace.permission !== workspace.permission ||
+                currentWorkspace.folderPath !== workspace.folderPath
+              ) {
+                throw new Error("Workspace access changed. Start a new response to use simulators.");
+              }
+            }
+          },
+          screenshotDir: () => deviceService.screenshotDir(params.chatId!),
+        }).filter(({ name }) => !options.excludeToolNames?.has(name))
+      : [];
+  // PATH gets the pinned agent-device only when the gate held at generation start, and
+  // loses it on the next command once agent access is revoked.
+  const deviceShimDir =
+    deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
   const mcpInstructionCollector = createMcpInstructionCollector();
   let tools = (
     await buildAgentTools({
@@ -1147,6 +1234,8 @@ async function prepareGeneration(
       computerUse,
       formFill,
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
+      deviceTools,
+      ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -2167,7 +2256,9 @@ export const llmClient = {
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: SETTINGS_SECTIONS,
+              settingsSections: devicesEnabled()
+                ? SETTINGS_SECTIONS
+                : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
@@ -2417,6 +2508,27 @@ export const llmClient = {
           compaction: compactionOptions,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          beforeQueuedUser: async (message, signal) => {
+            if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
+              throw new Error("Queued guidance must contain text.");
+            }
+            // ChatStore writes are not abortable; never start one after Stop.
+            if (signal.aborted) throw new Error("The response stopped before guidance was saved.");
+            const chat = await chatStore.appendMessage(
+              params.chatId,
+              { role: "user", content: message.content, model: params.model },
+              {
+                providerId: params.providerId,
+                model: params.model,
+                expectedWorkspaceId: initialization.workspaceId,
+              },
+            );
+            const visible = chat.messages[chat.messages.length - 1];
+            if (!visible || visible.role !== "user") {
+              throw new Error("Queued guidance was not saved in the visible chat.");
+            }
+            return visible.id;
+          },
           ...(currentUser
             ? {
                 appendInput: async () => {
@@ -2579,7 +2691,8 @@ export const llmClient = {
             const workspaceApproval =
               permission === "ask" &&
               (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
-                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name));
+                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
+                DEVICE_APPROVAL_TOOL_NAMES.has(context.toolCall.name));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -2719,7 +2832,12 @@ export const llmClient = {
                     ? summarizeScheduleToolCall(context.args)
                     : isBrowserToolName(context.toolCall.name)
                       ? browserToolApprovalSummary(context.toolCall.name)
-                      : summarizeToolCall(context.toolCall.name, context.args);
+                      : isDeviceToolName(context.toolCall.name)
+                        ? deviceToolApprovalSummary(
+                            context.toolCall.name,
+                            context.args as Record<string, unknown>,
+                          )
+                        : summarizeToolCall(context.toolCall.name, context.args);
           }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
@@ -2937,6 +3055,7 @@ export const llmClient = {
             break;
           }
           case "message_end": {
+            if (event.message.role === "user") return;
             if (event.message.role === "assistant") {
               requestUsage.ended();
               lastAssistantMessage = event.message;
@@ -3325,6 +3444,35 @@ export const llmClient = {
       return false;
     }
 
+    // Accepted steer input that Pi never emitted into the visible chat (Stop,
+    // a terminal before the next step, or a failed projection). It rides on
+    // the terminal event so the renderer can restore it instead of losing it.
+    // Collection never waits on host storage: a projection that Stop stopped
+    // waiting for is returned later, only if its visible save did not land.
+    let undeliveredGuidance: string[] = [];
+    let undeliveredGuidanceCollected = false;
+    const collectUndeliveredGuidance = () => {
+      if (undeliveredGuidanceCollected) return;
+      undeliveredGuidanceCollected = true;
+      try {
+        const taken = agent.takeUndeliveredQueuedMessages();
+        undeliveredGuidance = queuedGuidanceText(taken.messages);
+        if (taken.late) {
+          const owner = ownerForStream(streamId);
+          void taken.late.then(
+            (messages) =>
+              returnLateGuidance(owner, params.chatId, streamId, queuedGuidanceText(messages)),
+            (error: unknown) => {
+              logger.warn("pi", `Could not settle late guidance for stream ${streamId}.`, error);
+            },
+          );
+        }
+      } catch (error) {
+        logger.warn("pi", `Could not collect undelivered guidance for stream ${streamId}.`, error);
+      }
+    };
+    const withUndeliveredGuidance = <T extends object>(payload: T) =>
+      undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3366,6 +3514,7 @@ export const llmClient = {
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         reconcileAbandonedVisibleAssistant = runtimeOutcome.finalMessageWasAbandoned === true;
         quarantineSessionFailureWithoutLease =
           runtimeOutcome.kind === "host_failed" && runtimeOutcome.faultKind === "session";
@@ -3417,7 +3566,7 @@ export const llmClient = {
             runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `${finalError} The partial response could not be saved: ${persisted.error}`
@@ -3426,7 +3575,7 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else if (
           !generationHasVisibleOutput(
             full,
@@ -3438,7 +3587,7 @@ export const llmClient = {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
@@ -3446,7 +3595,7 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
@@ -3459,30 +3608,31 @@ export const llmClient = {
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           if (persisted.error) {
-            sendGeneration(streamId, "chat:error", {
+            sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
               message: `The response completed but could not be saved: ${persisted.error}`,
               content: full || undefined,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
-            });
+            }));
           } else {
-            sendGeneration(streamId, "chat:done", {
+            sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
               streamId,
               content: full,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
               chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-            });
+            }));
           }
         }
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
-        sendGeneration(streamId, "chat:error", {
+        sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
           streamId,
           message: persisted.error
             ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
@@ -3491,7 +3641,7 @@ export const llmClient = {
           reasoning: reasoning || undefined,
           timeline: finalTimeline,
           chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-        });
+        }));
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
@@ -3531,6 +3681,14 @@ export const llmClient = {
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
     return questionnaires.respond(promptId, response, ownerDocumentId);
+  },
+
+  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
+    const generation = active.get(streamId);
+    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
+      return false;
+    }
+    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
   },
 
   /**

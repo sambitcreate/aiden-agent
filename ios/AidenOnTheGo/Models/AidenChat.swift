@@ -584,6 +584,13 @@ enum AidenAgentActivityPresentation {
         "compact_context": ("Compacting context", "Compacted context"),
     ]
 
+    /// Exactly one compaction: its line carries every metric. Repeated compactions
+    /// keep the step list so each run's metrics stay reachable.
+    static func isCompactContextOnly(_ steps: [AidenAgentStep]) -> Bool {
+        guard steps.count == 1, let only = steps.first else { return false }
+        return only.kind == .tool && only.toolName == "compact_context"
+    }
+
     static func duration(_ milliseconds: Double?) -> String {
         guard let milliseconds, milliseconds >= 2_000 else { return "briefly" }
         let seconds = Int((milliseconds / 1_000).rounded())

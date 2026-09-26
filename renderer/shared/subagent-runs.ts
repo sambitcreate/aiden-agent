@@ -12,7 +12,7 @@ export const MAX_SUBAGENT_WARNINGS = 5;
 export const MAX_SUBAGENT_WARNING_CHARS = 240;
 export const MAX_SUBAGENT_MILESTONES = 12;
 
-export type SubagentSnapshotRole = "scout" | "planner" | "reviewer";
+export type SubagentSnapshotRole = "scout" | "planner" | "reviewer" | "implementer";
 
 /**
  * Renderer-safe activity facts. These values are deliberately closed and
@@ -137,7 +137,7 @@ const RUN_STATES = new Set<SubagentRunState>([
   ...SUBAGENT_ACTIVE_STATES,
   ...SUBAGENT_TERMINAL_STATES,
 ]);
-const ROLES = new Set<SubagentSnapshotRole>(["scout", "planner", "reviewer"]);
+const ROLES = new Set<SubagentSnapshotRole>(["scout", "planner", "reviewer", "implementer"]);
 const MILESTONE_KINDS = new Set<SubagentMilestoneKind>(SUBAGENT_MILESTONE_KINDS);
 const PROJECTION_NOTICE_KINDS = new Set<SubagentProjectionNoticeKind>(
   SUBAGENT_PROJECTION_NOTICE_KINDS,

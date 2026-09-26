@@ -43,6 +43,7 @@ import {
   subagentMcpMutationAllowLabel,
 } from "../components/subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
+import { SubagentRunGrantApproval } from "../components/subagent-run-grant-approval";
 import { FormFillApproval } from "../components/form-fill-approval";
 import {
   chatsApi,
@@ -50,6 +51,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  steerGeneration,
   stopDetachedGeneration,
   gitApi,
   workspacesApi,
@@ -143,6 +145,7 @@ import {
   isFormFillBatchApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
@@ -415,8 +418,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [streamComplete, setStreamComplete] = React.useState(false);
+  const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
+    null,
+  );
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  // Closes busy admission in the same tick as Stop, before React re-renders.
+  const stopRequestedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    stopRequestedRef.current = isStoppingGeneration;
+  }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
@@ -576,6 +587,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingArtifacts([]);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
+    setPersistedHandoffMessageId(null);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
@@ -878,6 +890,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingArtifacts([]);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
+      setPersistedHandoffMessageId(null);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
       streamedTextRef.current = "";
@@ -1059,6 +1072,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+            setPersistedHandoffMessageId(
+              persistedAssistant?.role === "assistant" && persistedAssistant.content === full
+                ? persistedAssistant.id
+                : null,
+            );
             clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
@@ -1080,6 +1099,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
               setStreamComplete(false);
+              setPersistedHandoffMessageId(null);
               setIsStoppingGeneration(false);
               setIsModelLoading(false);
               setGenerationTimeline(null);
@@ -1110,6 +1130,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+              setPersistedHandoffMessageId(
+                persistedAssistant?.role === "assistant" &&
+                  persistedAssistant.content === resolvedPartialContent
+                  ? persistedAssistant.id
+                  : null,
+              );
               clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
@@ -1138,6 +1165,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   streamedTextRef.current = "";
                   streamedReasoningRef.current = "";
                   setStreamComplete(false);
+                  setPersistedHandoffMessageId(null);
                 }
                 const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
                 setHasUnpersistedResponse(
@@ -1355,12 +1383,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
         }
       });
-      return;
+      return true;
     }
-    if (!generationRef.current || !canStopGeneration) return;
+    if (!generationRef.current || !canStopGeneration) return false;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
+    return true;
   }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
@@ -1416,6 +1445,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (stopRequestedRef.current) {
+        throw new Error("Aiden is stopping this response. Send your message after it stops.");
+      }
       messageQueue.add({
         id: createChatTurnId(),
         text,
@@ -1425,6 +1457,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     },
     [messageQueue],
+  );
+
+  const steerMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Steer requires text without attachments or a skill.");
+      }
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      await steerGeneration(streamId, text);
+    },
+    [isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const redirectMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Redirect requires text without attachments or a skill.");
+      }
+      if (
+        !(canStopGeneration || visibleDetachedProjection) ||
+        isStoppingGeneration ||
+        stopRequestedRef.current
+      ) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      const replacement = {
+        id: createChatTurnId(), text, attachments: [] as Attachment[],
+      };
+      messageQueue.replaceWith(replacement, () => {
+        const stopping = handleStop();
+        if (stopping) stopRequestedRef.current = true;
+        return stopping;
+      });
+    },
+    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -1904,6 +1974,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingShell =
     pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
+  const pendingRunGrantClaim =
+    typeof pendingDetails === "object" && pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-run-grant";
+  const pendingRunGrant = pending && isSubagentRunGrantApprovalDetails(pending.details)
+    ? pending.details : undefined;
+  const invalidPendingRunGrant = pendingRunGrantClaim && pendingRunGrant === undefined;
   const pendingFormFillClaim =
     typeof pendingDetails === "object" &&
     pendingDetails !== null &&
@@ -1916,6 +1993,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     invalidPendingWorkspaceWrite ||
     invalidPendingMcpMutation ||
     invalidPendingShell ||
+    invalidPendingRunGrant ||
     invalidPendingFormFill;
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
   React.useEffect(() => {
@@ -1986,6 +2064,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+
   return (
     <>
       <ScrollArea
@@ -2052,7 +2132,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
-        scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
+        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
+        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
           <>
             <EventPresence
@@ -2092,6 +2173,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
                                 : pendingShell
                                   ? `${pendingShell.childLabel} wants to run a full-host command`
+                                  : pendingRunGrant
+                                    ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
                                   : `${toolLabel(pending.toolName)} needs approval`}
                         </Text>
                         <Text variant="small" color="secondary" as="p" className="mt-0.5">
@@ -2103,6 +2186,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? "Review this one exact external mutation before Aiden continues."
                                 : pendingShell
                                   ? "Review this one exact full-host command before Aiden continues."
+                                  : pendingRunGrant
+                                    ? "Review this grant for the entire subagent run."
                                   : "Review this one action before Aiden continues."}
                         </Text>
                       </div>
@@ -2130,6 +2215,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ) : pendingShell ? (
                       <SubagentShellApproval
                         details={pendingShell}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingRunGrant ? (
+                      <SubagentRunGrantApproval
+                        details={pendingRunGrant}
                         descriptionId={`approval-summary-${pending.approvalId}`}
                       />
                     ) : pendingFormFill ? (
@@ -2177,6 +2267,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                               ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
                               : pendingMcpMutation
                                 ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                                : pendingRunGrant
+                                  ? "Allow for run"
                                 : "Allow once"}
                         </Button>
                       ) : null}
@@ -2247,27 +2339,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
+                onSteer={draft ? undefined : steerMessage}
+                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
-                    canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                     returnFocus={() => composerRef.current}
-                    onSteer={(id) => {
-                      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
-                      messageQueue.move(id, 0);
-                      messageQueue.resume();
-                      handleStop();
-                    }}
                   />
                 }
                 onStop={() => {
-                  messageQueue.pause();
-                  handleStop();
+                  messageQueue.discard();
+                  if (handleStop()) stopRequestedRef.current = true;
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
                 canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
                 workspace={effectiveWorkspace}
@@ -2428,6 +2516,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
+            persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
             timeline={displayedGenerationTimeline}
             liveSubagents={displayedLiveSubagents}

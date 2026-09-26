@@ -14,6 +14,7 @@ import {
 } from "./aiden-remote-pairing.js";
 import {
   createAidenRemoteRequestHandler,
+  createAidenRemoteUpgradeHandler,
   type AidenRemoteRouterDependencies,
 } from "./aiden-remote-router.js";
 import type {
@@ -123,6 +124,8 @@ export interface AidenRemoteServiceOptions {
     & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
   bonjour: AidenRemoteBonjourPublisher;
   notifyPairingChanged?: () => void;
+  /** Simulator sharing relay (Simulator devices Phase 5); absent when the feature is off. */
+  simulators?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["simulators"];
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -437,6 +440,7 @@ export class AidenRemoteService {
         devices: this.options.state,
         pairing,
         ...(workspaceApi ?? {}),
+        ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
         now: this.now,
         log: (entry) => {
@@ -524,6 +528,15 @@ export class AidenRemoteService {
               lanHandler(request, response);
             },
           );
+          const lanUpgrade = createAidenRemoteUpgradeHandler(routerDependencies);
+          lanServer.on("upgrade", (request, socket, head) => {
+            const mode = this.activeState?.connectionMode ?? state.connectionMode;
+            if (mode === "tailscale") {
+              socket.destroy();
+              return;
+            }
+            lanUpgrade(request, socket, head);
+          });
           lanServer.prependListener("connection", (socket) => {
             const mode = this.activeState?.connectionMode ?? state.connectionMode;
             if (mode === "tailscale") {
@@ -550,6 +563,18 @@ export class AidenRemoteService {
               return;
             }
             tailscaleHandler(request, response);
+          });
+          const tailscaleUpgrade = createAidenRemoteUpgradeHandler({
+            ...routerDependencies,
+            acceptStrippedBasePath: true,
+          });
+          tailscaleServer.on("upgrade", (request, socket, head) => {
+            const mode = this.activeState?.connectionMode ?? state.connectionMode;
+            if (mode === "lan") {
+              socket.destroy();
+              return;
+            }
+            tailscaleUpgrade(request, socket, head);
           });
           tailscaleServer.prependListener("connection", (socket) => {
             const mode = this.activeState?.connectionMode ?? state.connectionMode;
