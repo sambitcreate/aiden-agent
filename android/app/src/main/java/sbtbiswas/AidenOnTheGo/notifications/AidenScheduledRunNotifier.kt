@@ -46,6 +46,7 @@ class AidenScheduledRunNotifier(context: Context) {
         if (!notificationsEnabled()) return
         val cursorKey = "cursor_$instanceId"
         val deliveredKey = "delivered_$instanceId"
+        val deliveredOrderKey = "delivered_order_$instanceId"
         val cursor = preferences.getLong(cursorKey, -1L).takeIf { it >= 0L }
         val feed = try {
             client.scheduledRunNotifications(cursor?.let { Instant.ofEpochMilli(it) })
@@ -56,15 +57,22 @@ class AidenScheduledRunNotifier(context: Context) {
             // retries instead of silently skipping runs.
             return
         }
-        val delivered = preferences.getStringSet(deliveredKey, emptySet()).orEmpty().toMutableSet()
+        // Insertion-ordered (a StringSet is unordered) so trimming to the cap
+        // evicts the OLDEST ids; the legacy set seeds it once.
+        val storedOrder = preferences.getString(deliveredOrderKey, null)
+        val delivered = LinkedHashSet<String>(
+            storedOrder?.split('\n')?.filter { it.isNotEmpty() }
+                ?: preferences.getStringSet(deliveredKey, emptySet()).orEmpty().toList()
+        )
         if (cursor == null) {
             // First poll: baseline to the SERVER clock so device-clock skew can
             // neither replay history nor permanently skip runs. All returned
             // ids are marked delivered so nothing storms.
-            delivered.addAll(feed.notifications.map { it.id })
+            delivered.addAll(feed.notifications.sortedBy { it.finishedAt }.map { it.id })
             preferences.edit()
                 .putLong(cursorKey, feed.serverNow.toEpochMilli())
-                .putStringSet(deliveredKey, delivered.toList().takeLast(MAX_DELIVERED_IDS).toSet())
+                .putString(deliveredOrderKey, delivered.toList().takeLast(MAX_DELIVERED_IDS).joinToString("\n"))
+                .remove(deliveredKey)
                 .apply()
             return
         }
@@ -84,7 +92,8 @@ class AidenScheduledRunNotifier(context: Context) {
         }
         preferences.edit()
             .putLong(cursorKey, nextCursor)
-            .putStringSet(deliveredKey, delivered.toList().takeLast(MAX_DELIVERED_IDS).toSet())
+            .putString(deliveredOrderKey, delivered.toList().takeLast(MAX_DELIVERED_IDS).joinToString("\n"))
+            .remove(deliveredKey)
             .apply()
     }
 

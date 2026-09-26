@@ -57,14 +57,20 @@ final class AidenScheduledRunNotifier {
             let feed = try await client.scheduledRunNotifications(
                 since: cursor.map { Date(timeIntervalSince1970: $0 / 1_000) }
             )
-            var delivered = Set(defaults.stringArray(forKey: deliveredKey(instanceId)) ?? [])
+            // Insertion-ordered so trimming to the cap evicts the OLDEST ids;
+            // the Set is only the membership index.
+            var deliveredOrder = defaults.stringArray(forKey: deliveredKey(instanceId)) ?? []
+            var delivered = Set(deliveredOrder)
+            func markDelivered(_ id: String) {
+                if delivered.insert(id).inserted { deliveredOrder.append(id) }
+            }
             guard let cursor else {
                 // First poll: baseline to the SERVER clock so phone-clock skew
                 // can neither replay history nor permanently skip runs. All
                 // returned ids are marked delivered so nothing storms.
-                feed.notifications.forEach { delivered.insert($0.id) }
+                feed.notifications.sorted(by: { $0.finishedAt < $1.finishedAt }).forEach { markDelivered($0.id) }
                 defaults.set(feed.serverNow.timeIntervalSince1970 * 1_000, forKey: cursorKey(instanceId))
-                defaults.set(Array(Array(delivered).suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
+                defaults.set(Array(deliveredOrder.suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
                 return
             }
             // Cursor advances only past CONTIGUOUSLY handled items (oldest
@@ -93,7 +99,7 @@ final class AidenScheduledRunNotifier {
                 )
                 do {
                     try await center.add(request)
-                    delivered.insert(item.id)
+                    markDelivered(item.id)
                     nextCursor = item.finishedAt.timeIntervalSince1970 * 1_000
                 } catch {
                     if error is CancellationError { return }
@@ -101,7 +107,7 @@ final class AidenScheduledRunNotifier {
                 }
             }
             defaults.set(nextCursor, forKey: cursorKey(instanceId))
-            defaults.set(Array(Array(delivered).suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
+            defaults.set(Array(deliveredOrder.suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
         } catch {
             // Fetch/validation failure or cancellation: keep cursor state so a
             // later poll retries instead of silently skipping runs.
