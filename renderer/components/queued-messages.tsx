@@ -1,3 +1,4 @@
+import { MAX_CHAT_RUN_INPUT_BYTES } from "../shared/chat-run-input";
 import * as React from "react";
 import {
   ArrowDown,
@@ -15,11 +16,13 @@ export function QueuedMessages({
   queue,
   canSteer,
   onSteer,
+  onInterrupt,
   returnFocus,
 }: {
   queue: ChatMessageQueue;
   canSteer: boolean;
   onSteer: (id: string) => void;
+  onInterrupt?: (id: string) => void;
   returnFocus: () => HTMLElement | null;
 }) {
   const state = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot);
@@ -28,6 +31,7 @@ export function QueuedMessages({
   const draggedId = React.useRef<string | null>(null);
   React.useEffect(() => () => queue.closeEditor(), [queue]);
   if (state.messages.length === 0) return null;
+  const uncertainIds = new Set(state.uncertainIds);
   const editing = state.messages.find((message) => message.id === state.editingId);
   const draftIndex = state.messages.findIndex((message) => message.id === draft?.id);
   return (
@@ -102,14 +106,18 @@ export function QueuedMessages({
             <Button
               variant="transparent"
               size="small"
-              disabled={!canSteer || Boolean(state.sendingId || editing)}
+              disabled={(!canSteer && !uncertainIds.has(message.id)) || new TextEncoder().encode(message.text).byteLength > MAX_CHAT_RUN_INPUT_BYTES || message.attachments.length > 0 || !!message.skillInvocation || !!message.options?.visualize || Boolean(state.sendingId || editing)}
               onClick={() => onSteer(message.id)}
               aria-label={`Steer with queued message ${index + 1}`}
-              title="Stop the current response, wait for it to save, then send this message next"
+              title="Add this text at the active response's next steering boundary"
             >
               <CornerDownRight aria-hidden="true" />
-              Steer
+              {uncertainIds.has(message.id) ? "Check delivery" : "Steer"}
             </Button>
+            {onInterrupt ? <Button variant="transparent" size="small"
+              disabled={!canSteer || Boolean(state.sendingId || editing) || !!uncertainIds.has(message.id)}
+              onClick={() => onInterrupt(message.id)} aria-label={`Interrupt with queued message ${index + 1}`}
+              title="Stop the current response, then send this message next">Interrupt</Button> : null}
             <Button
               variant="transparent"
               size="small"
@@ -145,7 +153,7 @@ export function QueuedMessages({
         ))}
       </ol>
       <p className="px-1 pt-1 text-small text-tertiary">
-        Unsent messages stay in this window until it closes. Open this chat to continue its queue.
+        {state.uncertainIds?.length ? "Delivery is uncertain. Check delivery before resuming; your message is preserved." : "Unsent messages stay in this window until it closes. Open this chat to continue its queue."}
       </p>
       <Dialog
         open={Boolean(editing && draft)}

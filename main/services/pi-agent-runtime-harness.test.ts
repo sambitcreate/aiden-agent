@@ -2766,3 +2766,53 @@ test("provider diagnostics classify before outcome redaction without exporting t
   assert.equal(failures[0].fields.failurePhase, "provider-request");
   assert.doesNotMatch(bytes, /PRIVATE_MODEL_CANARY|PRIVATE_PROMPT_CANARY|errorMessage/u);
 });
+
+test("persisted input holds terminal settlement and is consumed only after host commit", async () => {
+  let atTool!: () => void;
+  const toolStarted = new Promise<void>((resolve) => { atTool = resolve; });
+  let releaseTool!: () => void;
+  const toolWait = new Promise<void>((resolve) => { releaseTool = resolve; });
+  let releaseWrite!: () => void;
+  const writeWait = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const tool: AgentTool = { name: "wait_for_input_write", label: "Wait", description: "Wait", parameters: Type.Object({}), execute: async () => {
+    atTool(); await toolWait; return { content: [{ type: "text", text: "ready" }], details: null };
+  } };
+  const { harness, session } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("first result"), fauxAssistantMessage("follow-up result"),
+  ], { tools: [tool] });
+  let committed = false;
+  harness.subscribe((event) => { if (event.type === "message_start" && event.message.role === "user") assert.equal(committed, true); });
+  const running = harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "start", timestamp: 1 } });
+  await toolStarted;
+  const receipt = harness.queuePersistedInput({ role: "user", content: "follow-up", timestamp: 2 }, "queue", async () => { await writeWait; committed = true; });
+  releaseTool();
+  let finished = false;
+  void running.then(() => { finished = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(finished, false);
+  releaseWrite();
+  assert.deepEqual(await receipt, { accepted: true, queue: "follow-up" });
+  assert.equal((await running).kind, "completed");
+  assert.deepEqual((await session.buildContext()).messages.filter((message) => message.role === "user").map((message) => message.content), ["start", "follow-up"]);
+});
+
+test("cancellation during host persistence never injects committed input", async () => {
+  let atTool!: () => void;
+  const started = new Promise<void>((resolve) => { atTool = resolve; });
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  let write!: () => void;
+  const writing = new Promise<void>((resolve) => { write = resolve; });
+  const tool: AgentTool = { name: "wait_for_input_cancel", label: "Wait", description: "Wait", parameters: Type.Object({}), execute: async () => {
+    atTool(); await wait; return { content: [{ type: "text", text: "ready" }], details: null };
+  } };
+  const { harness, session } = await managedTestHarness([fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" })], { tools: [tool] });
+  const running = harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "start", timestamp: 1 } });
+  await started;
+  const receipt = harness.queuePersistedInput({ role: "user", content: "cancelled input", timestamp: 2 }, "steer", async () => writing);
+  harness.abort(); release(); write();
+  assert.equal((await receipt).accepted, true, "host committed input stays accepted history");
+  assert.equal((await running).kind, "app_cancelled");
+  assert.deepEqual((await session.buildContext()).messages.filter((message) => message.role === "user").map((message) => message.content), ["start"]);
+});

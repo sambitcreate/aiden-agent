@@ -1,3 +1,4 @@
+import { parseChatRunInput, type ChatRunInputRequest, type ChatRunInputReceipt } from "../../renderer/shared/chat-run-input.js";
 import type { ServerResponse } from "node:http";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
@@ -25,6 +26,7 @@ import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
+  AidenOperationUnknownOutcomeError,
 } from "./aiden-remote-operation-contract.js";
 
 const MAX_STREAMS = 256;
@@ -412,6 +414,7 @@ export class AidenRemoteStreamService {
     private readonly options: {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
+      submitInput?(streamId: string, ownerDocumentId: string, input: ChatRunInputRequest): Promise<ChatRunInputReceipt>;
       approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
       notifyChatChanged?: (chatId: string) => void;
       notifyApprovalChanged?: (chatId: string) => void;
@@ -1123,6 +1126,52 @@ export class AidenRemoteStreamService {
       return false;
     }
     return this.resolveApproval(approvalId, decision);
+  }
+
+  get supportsRunInput(): boolean { return this.options.submitInput !== undefined; }
+
+  async submitInput(
+    deviceId: string, streamId: string, key: string, raw: unknown,
+    authorize: (chatId: string, action: () => Promise<ChatRunInputReceipt>) => Promise<ChatRunInputReceipt> = (_chatId, action) => action(),
+  ): Promise<ChatRunInputReceipt> {
+    let input: ChatRunInputRequest;
+    try { input = parseChatRunInput(raw); }
+    catch { throw new AidenRemoteServiceError("invalid_request", "Invalid run input.", 400); }
+    if (key.toLowerCase() !== input.requestId) throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key must match requestId.", 400);
+    if (!this.options.submitInput) throw new AidenRemoteServiceError("not_found", "Run input is unavailable.", 404);
+    try {
+      const scope = { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key: input.requestId };
+      this.prune();
+      const stream = this.streams.get(streamId);
+      if (!stream || stream.deviceId !== deviceId) {
+        // Evicted event journals may still have a durable receipt. Inspecting
+        // it must never reserve a fresh key or poison a pre-admission failure.
+        const replay = this.idempotency.replayExisting<{ chatId: string; receipt: ChatRunInputReceipt }>(scope, input);
+        if (!replay) throw new AidenRemoteServiceError("not_found", "This Aiden stream is unavailable.", 404);
+        const result = await replay;
+        return await authorize(result.chatId, async () => result.receipt);
+      }
+      // Keep current authorization around ledger execution and the host effect.
+      // A policy denial before the callback runs must leave no ledger entry.
+      return await authorize(stream.chatId, async () => {
+        const result = await this.executeIdempotent(scope, input, async () => {
+          let receipt: ChatRunInputReceipt;
+          if (terminal(stream.state) || stream.cancelRequested) {
+            receipt = { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: stream.cancelRequested ? "cancelled" : "not-active" };
+          } else {
+            try {
+              receipt = await this.options.submitInput!(streamId, stream.owner.owner.documentId, input);
+            } catch {
+              // Once the host callback starts, an exception can follow a
+              // committed transcript write. Never expire this into a new effect.
+              throw new AidenOperationUnknownOutcomeError();
+            }
+          }
+          return { chatId: stream.chatId, receipt };
+        });
+        return result.receipt;
+      });
+    } catch (error) { return this.mapIdempotencyError(error); }
   }
 
   async cancel(deviceId: string, streamId: string, key: string): Promise<AidenRemoteStreamStatus> {

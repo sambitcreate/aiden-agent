@@ -1,3 +1,4 @@
+import { CHAT_RUN_INPUT_FEATURE } from "../../renderer/shared/chat-run-input.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -145,7 +146,7 @@ export interface AidenRemoteRouterDependencies {
   streams?: Pick<
     AidenRemoteStreamService,
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
-  >;
+  > & Partial<Pick<AidenRemoteStreamService, "submitInput" | "supportsRunInput">>;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -246,6 +247,7 @@ export type AidenRemoteRouteLabel =
   | "stream"
   | "streamApproval"
   | "streamEvents"
+  | "streamInputs"
   | "streamCancel"
   | "approvalRespond"
   | "unknown";
@@ -306,6 +308,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   stream: ["/streams/:streamId"],
   streamApproval: ["/streams/:streamId/approval"],
   streamEvents: ["/streams/:streamId/events"],
+  streamInputs: ["/streams/:streamId/inputs"],
   streamCancel: ["/streams/:streamId/cancel"],
   approvalRespond: ["/approvals/:approvalId/respond"],
   unknown: [],
@@ -1212,6 +1215,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.streams?.supportsRunInput && dependencies.streams.submitInput ? [CHAT_RUN_INPUT_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
               : []),
@@ -2506,6 +2510,19 @@ export function createAidenRemoteRequestHandler(
             ? { ...pending, canAllow: false }
             : pending;
         writeJson(response, 200, { approval });
+        return;
+      }
+      const inputMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/inputs$/u.exec(path);
+      if (inputMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "streamInputs";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        if (!dependencies.streams?.supportsRunInput || !dependencies.streams.submitInput || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Run input is unavailable.", 404);
+        const body = await readJsonBody(request, 128 * 1024);
+        writeJson(response, 200, await dependencies.streams.submitInput(device.id, inputMatch[1]!, key, body,
+          (chatId, action) => runChatMutation(dependencies.chats!, device, chatId, "stream", action)));
         return;
       }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);

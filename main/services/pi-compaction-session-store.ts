@@ -541,9 +541,14 @@ export async function appendPiMessages(
   session: PiSessionPort,
   messages: readonly AgentMessage[],
   visibleChatMessageId?: string,
+  queuedUserMessageId?: (message: AgentMessage) => string | undefined,
 ): Promise<void> {
   await appendPiTransaction(session, async () => {
-    for (const message of messages) await session.appendMessage(message);
+    for (const message of messages) {
+      await session.appendMessage(message);
+      const queuedId = message.role === "user" ? queuedUserMessageId?.(message) : undefined;
+      if (queuedId) await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, { chatMessageId: queuedId } satisfies ChatMessageMarker);
+    }
     if (visibleChatMessageId) {
       await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
         chatMessageId: visibleChatMessageId,

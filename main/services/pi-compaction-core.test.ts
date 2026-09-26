@@ -1904,3 +1904,13 @@ test("skill-free visible context compacts and reopens through the real JSONL rep
     "rich history is still durable when the user re-enables skills");
   assert.doesNotMatch(JSON.stringify(await reopened.buildContext()), /HIDDEN_SKILL/u);
 });
+
+test("queued user journal and host marker commit together without later replay", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const queued = { role: "user" as const, content: "steering input", timestamp: 42 };
+  await appendPiMessages(session, [queued], undefined, (message) => message === queued ? "input-1" : undefined);
+  await syncChatMessagesToPiSession(session, [{ id: "input-1", role: "user", content: queued.content, createdAt: 42 }], model, false);
+  assert.equal((await session.buildContext()).messages.length, 1);
+  assert.equal((await session.getEntries()).filter((entry) => entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER).length, 1);
+});

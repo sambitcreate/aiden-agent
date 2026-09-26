@@ -529,6 +529,7 @@ interface HarnessOptions {
   ) => Promise<void>;
   compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
+  submitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["submitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
@@ -596,6 +597,7 @@ function harness(o: HarnessOptions = {}) {
     applyModelSelection: o.applyModelSelection,
     compactChat: o.compactChat,
     abortChat: o.abortChat,
+    submitRunInput: o.submitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
@@ -2095,6 +2097,49 @@ test("a cancelled dispatch rejection does not send a late error reply", async ()
   h.service.stop();
 });
 
+
+for (const stopBeforeAdmission of [false, true]) {
+test(`Telegram Steer offset barrier ${stopBeforeAdmission ? "discards unacknowledged input on stop" : "admits the original run after persistence"}`, async () => {
+  let durableOffset = 0;
+  let release!: () => void;
+  const persistenceGate = new Promise<void>((resolve) => { release = resolve; });
+  let persisting = false;
+  const submissions: Array<{ streamId: string; text: string }> = [];
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), "/steer new direction"))]],
+    submitRunInput: async (streamId, owner, input) => {
+      assert.equal(owner, `telegram:${streamId}`);
+      assert.equal(durableOffset, 3);
+      submissions.push({ streamId, text: input.text });
+      return { requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "input-1" };
+    },
+    abortChat: async () => assert.fail("Steer must not cancel the active response"),
+  });
+  h.config.persistOffset = async (offset) => {
+    if (offset === 3) { persisting = true; await persistenceGate; }
+    durableOffset = offset;
+  };
+  await h.service.start();
+  await waitFor(() => persisting);
+  assert.equal(submissions.length, 0);
+  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("Steering accepted")), false);
+  if (stopBeforeAdmission) h.service.stop();
+  release();
+  if (stopBeforeAdmission) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(submissions.length, 0);
+    assert.equal(h.api.sentMessages.some(({ text }) => text.includes("Steering accepted")), false);
+    h.turnMock.completePendingTurn();
+    return;
+  }
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Steering accepted")));
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0]?.text, "new direction");
+  assert.equal(h.turnMock.startCalls(), 1);
+  h.turnMock.completePendingTurn(); h.service.stop();
+});
+
+}
 
 for (const command of ["/queue follow-up", "/continue follow-up"]) {
   for (const preparing of [false, true]) {

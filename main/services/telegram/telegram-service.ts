@@ -450,6 +450,7 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       lifecycle.cancelChat(chatId);
       await llmClient.cancelChat(chatId);
     },
+    submitRunInput: (streamId, ownerDocumentId, input) => llmClient.submitRunInput(streamId, ownerDocumentId, input),
     compactChat: lifecycle.compactChat,
     transcribeAudio: transcribe,
     storeInboundFile: async ({ bytes, name, workspaceId, botId }) => {

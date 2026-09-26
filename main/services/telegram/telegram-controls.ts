@@ -16,6 +16,7 @@ import {
 export const TELEGRAM_COMMANDS = [
   { command: "start", description: "Open the Aiden operator menu" },
   { command: "interrupt", description: "Stop this turn and prioritize a replacement prompt" },
+  { command: "steer", description: "Add an instruction to the active response" },
   { command: "new", description: "Compact a bound Bot conversation without replacing it" },
   { command: "compact", description: "Compact the current Aiden session" },
   { command: "next", description: "Stop this turn and run the next queued prompt" },

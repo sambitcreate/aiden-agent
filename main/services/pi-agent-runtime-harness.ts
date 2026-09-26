@@ -766,6 +766,7 @@ export class PiAgentRuntimeHarness {
   private compactionPromise?: Promise<PiCompactionCoordinator>;
   private pendingDurableMessages: AgentMessage[] = [];
   private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
+  private readonly pendingInputPersistence = new Set<Promise<void>>();
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
   private activeEffectOperation:
@@ -1213,7 +1214,7 @@ export class PiAgentRuntimeHarness {
           : undefined,
     });
 
-    this.agent.subscribe((event) => {
+    this.agent.subscribe(async (event) => {
       if (event.type === "agent_start" && this.managedRunning && !this.appCancelRequested) {
         this.managedQueueOpen = true;
       } else if (
@@ -1228,6 +1229,11 @@ export class PiAgentRuntimeHarness {
         this.managedQueueOpen = false;
       } else if (event.type === "agent_end") {
         this.managedQueueOpen = false;
+        // Already reserved host input must settle before this operation can
+        // retire. New admission is closed while its transcript write drains.
+        const pending = Promise.allSettled([...this.pendingInputPersistence]);
+        if (this.managedAbortController) await waitForManagedPromise(pending, this.managedAbortController.signal);
+        else await pending;
       }
     });
 
@@ -2118,6 +2124,14 @@ export class PiAgentRuntimeHarness {
           if (recovery.value.messages) this.agent.state.messages = [...recovery.value.messages];
           this.pendingEmergencyCheckpoint = false;
         }
+        // Input may have reserved admission before agent_end and finished its
+        // host write while the final event drained. Pi already checked its
+        // queues then, so explicitly continue these accepted inputs here.
+        if (this.requeueAcceptedMessagesAfterTerminal()) {
+          attempts = 0;
+          this.lastAssistantMessage = undefined;
+          continue;
+        }
         return await finish({ kind: "completed", finalMessage: assistant, attempts });
       }
     } finally {
@@ -2138,6 +2152,36 @@ export class PiAgentRuntimeHarness {
       if (this.managedOperationSettlement === managedOperationSettlement) {
         this.managedOperationSettlement = undefined;
       }
+    }
+  }
+
+  /** Reserve before awaiting host persistence; never expose uncommitted input to Pi. */
+  async queuePersistedInput(
+    message: AgentMessage,
+    mode: "steer" | "queue",
+    persist: () => Promise<void>,
+  ): Promise<PiRuntimeQueueReceipt> {
+    const rejected = this.rejectedQueueReceipt(message);
+    if (rejected) return rejected;
+    const queued = snapshotQueuedMessage(message);
+    if (!queued) return { accepted: false, reason: "invalid-message" };
+    const operation = this.managedOperationSettlement;
+    let settle!: () => void;
+    const pending = new Promise<void>((resolve) => { settle = resolve; });
+    this.pendingInputPersistence.add(pending);
+    try {
+      await persist();
+      // Stop/revocation can win while a committed history write settles. The
+      // input stays accepted history, but must not restart cancelled inference.
+      if (!this.appCancelRequested && !this.disposed && this.managedRunning && this.managedOperationSettlement === operation) {
+        this.acceptedQueuedMessages.push(queued);
+        if (mode === "steer") this.agent.steer(queued.message);
+        else this.agent.followUp(queued.message);
+      }
+      return { accepted: true, queue: mode === "steer" ? "steer" : "follow-up" };
+    } finally {
+      this.pendingInputPersistence.delete(pending);
+      settle();
     }
   }
 
@@ -2530,7 +2574,7 @@ export class PiAgentRuntimeHarness {
     }
     if (this.appCancelRequested) return { accepted: false, reason: "cancelled" };
     if (message.role !== "user") return { accepted: false, reason: "invalid-message" };
-    if (this.acceptedQueuedMessages.length >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
+    if (this.acceptedQueuedMessages.length + this.pendingInputPersistence.size >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
       return { accepted: false, reason: "capacity" };
     }
     return undefined;

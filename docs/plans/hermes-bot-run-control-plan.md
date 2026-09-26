@@ -1,6 +1,6 @@
 # Hermes-inspired Bot run control
 
-Status: Active (Telegram slice under review; shared foreground admission next)
+Status: Active (Telegram PR #216 under review; shared foreground admission implemented, native consumers in progress)
 Owner: Hermes runtime task; native consumers coordinated with the Bot mobile task.
 
 ## Evidence and scope
@@ -30,12 +30,22 @@ PR #205 owns managed-home remount recovery; this plan does not change those file
 - Run Telegram/onboarding/type/lint checks and two independent Sol medium reviews.
   Open focused PR, address hosted reviews and wait for required checks.
 
-## Slice 2: shared foreground admission (owned follow-up, not shipped)
+## Slice 2: shared foreground admission (implemented; review and native validation in progress)
 
-PiAgentRuntimeHarness has queueSteer/queueFollowUp, but llm-client has no public
-admission path and its message_start projection only handles assistant messages.
-Calling those primitives directly would lose host-owned user transcript/projection
-semantics. Implement a main-owned admission boundary before adding consumers:
+The main-owned admission boundary now reserves bounded Pi capacity, persists the
+user message before injection, and journals the matching visible-message marker
+atomically with the Pi message. Agent completion drains outstanding persistence
+reservations; Stop may prevent consumption after history has committed. Desktop
+Steer and Telegram `/steer` use this path; Interrupt retains stop-and-send behavior.
+Remote receipts retain the chat authorization resource through stream eviction and
+restart and recheck current Bot access before returning an exact retry. Desktop
+unknown outcomes retain their original request identity and cannot auto-resend.
+Telegram `/steer` captures its target and waits for a durable polling offset before
+admission. Like the pending Telegram queue, this waiting action is memory-only:
+a crash or bridge stop between offset persistence and admission can discard an
+unacknowledged command. Only the later host receipt produces “Steering accepted”;
+accepted user history survives cancellation. No durable Telegram ingress is claimed.
+Implementation and acceptance checklist:
 
 1. Negotiate an additive capability (`chat-run-input-v1`, subject to native review).
 2. Bind requests to chat, exact stream/run identity, authenticated principal,
@@ -53,7 +63,7 @@ semantics. Implement a main-owned admission boundary before adding consumers:
 7. Native/desktop draft retention, Stop behavior and old-server fallback must pass
    along with runtime race/adversarial tests and two independent Sol reviews.
 
-Do not advertise Steer/Queue server capability until the full path works.
+The server advertises `chat-run-input-v1` only when the host admission callback is configured. Native clients must negotiate this feature and retain drafts on rejection or uncertainty. No merge or release is authorized.
 
 ## Later dependencies assessed
 
@@ -79,3 +89,11 @@ edit was not sent because the original message is not queued.” Neither path
 admits another turn or aborts a running one. Five regressions cover pending edits
 and all three commands after dequeue. This closes a misleading success receipt
 in the source-deduplication path rather than deferring it as a cosmetic issue.
+
+Remote admission review follow-up: authorization failures before the live host
+callback leave no idempotency record; exact retries can succeed after access is
+restored. Evicted streams allow only read-only lookup of existing receipts with
+current chat authorization. OpenAPI's nonblank pattern and required UTF-8 byte
+extension are part of the native client validation contract. Host unknown outcomes
+still prevent repeat execution. Regression coverage includes denial/retry,
+missing-stream lookup, revoked replay access, clock rollback, and Unicode limits.

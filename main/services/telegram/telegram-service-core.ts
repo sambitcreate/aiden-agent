@@ -1,3 +1,4 @@
+import type { ChatRunInputRequest, ChatRunInputReceipt } from "../../../renderer/shared/chat-run-input.js";
 // Telegram service core — the polling orchestrator that ties together
 // inbound handling, owner pairing, queue dispatch, and outbound reply delivery.
 //
@@ -106,6 +107,7 @@ export interface TelegramServiceDeps {
   listWorkspaces(): Promise<readonly TelegramSelectableWorkspace[]>;
   listModels?(): Promise<readonly TelegramModelChoice[]>;
   abortChat?(chatId: string): Promise<void>;
+  submitRunInput?(streamId: string, ownerDocumentId: string, input: ChatRunInputRequest): Promise<ChatRunInputReceipt>;
   compactChat?(chatId: string): Promise<TelegramCompactionResult>;
   transcribeAudio?(input: { audioBase64: string; mimeType: string }): Promise<string>;
   storeInboundFile?(input: {
@@ -199,6 +201,7 @@ const TELEGRAM_HELP_TEXT = [
   "/thinking — choose reasoning effort",
   "/queue [prompt] — inspect the queue or add a follow-up",
   "/interrupt <prompt> — stop this turn and run your replacement next",
+  "/steer <text> — add an instruction at the active run's next steering boundary",
   "/new — compact a bound Bot conversation without replacing it",
   "/workspace — list and choose a workspace",
   "/settings — open Telegram agent settings",
@@ -225,6 +228,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   let abortController: AbortController | undefined;
   let activeTurn = false;
   let activeChatId: string | undefined;
+  let activeStream: { streamId: string; ownerDocumentId: string } | undefined;
   let dispatchPending = false;
   let processingUpdates = false;
   let botUsername: string | undefined;
@@ -479,8 +483,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       for (const update of updates) {
         if (offset !== undefined && update.update_id < offset) continue;
         let handled = false;
+        const afterPersist: Array<() => Promise<void>> = [];
         try {
-          await handleUpdate(update);
+          await handleUpdate(update, (action) => afterPersist.push(action));
           handled = true;
         } catch (cause) {
           if (cause instanceof TelegramQueueCapacityError && (update.message || update.edited_message)) {
@@ -515,6 +520,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
               await deps.sleep(ERROR_SLEEP_MS, signal).catch(() => undefined);
             }
           }
+          // Run-scoped side effects capture their original target and execute
+          // only after this update cannot be redelivered following a crash.
+          if (started && !signal.aborted) for (const action of afterPersist) await action();
         }
       }
 
@@ -523,7 +531,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
   }
 
-  async function handleUpdate(update: TelegramUpdate): Promise<void> {
+  async function handleUpdate(update: TelegramUpdate, afterPersist: (action: () => Promise<void>) => void): Promise<void> {
     if (update.message_reaction) {
       await handleReaction(update.message_reaction);
       return;
@@ -622,7 +630,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         }).catch(() => undefined);
         return;
       }
-      await handleCommand(rawText.trim(), message, selectedWorkspaceId, threadWorkspaceId !== undefined, binding);
+      await handleCommand(rawText.trim(), message, afterPersist, selectedWorkspaceId, threadWorkspaceId !== undefined, binding);
       return;
     }
 
@@ -1296,6 +1304,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   async function handleCommand(
     command: string,
     message: TelegramMessage,
+    afterPersist: (action: () => Promise<void>) => void,
     effectiveWorkspaceId?: string,
     managedThread = false,
     binding?: TelegramBotBindingSnapshot,
@@ -1325,6 +1334,32 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
     if (cmd === "/thinking") {
       await openThinkingMenu(message);
+      return;
+    }
+
+    if (cmd === "/steer") {
+      const text = commandArgument(command);
+      if (!text || Buffer.byteLength(text, "utf8") > 16 * 1024) {
+        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Use /steer followed by up to 16 KiB of text." });
+        return;
+      }
+      if (!activeStream || !matchesControl(activeInput, binding, message) || !deps.submitRunInput) {
+        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This response is not accepting steering. Your instruction was not sent; use /queue for a follow-up." });
+        return;
+      }
+      const digest = createHash("sha256").update(JSON.stringify([deps.profile, message.chat.id, message.message_thread_id, message.message_id])).digest("hex");
+      const requestId = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+      const target = activeStream;
+      const submit = deps.submitRunInput;
+      afterPersist(async () => {
+        try {
+          const receipt = await submit(target.streamId, target.ownerDocumentId, { requestId, mode: "steer", text });
+          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: receipt.accepted ? "Steering accepted. It will be read at the next available steering boundary unless the run stops." : `Steering was not accepted (${receipt.reason}). Your instruction was not queued.` }).catch(() => undefined);
+        } catch {
+          // An unknown host outcome must not replay as a new ordinary prompt.
+          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Steering delivery could not be confirmed. Check the Aiden conversation before sending it again." }).catch(() => undefined);
+        }
+      });
       return;
     }
 
@@ -1643,7 +1678,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         workspace,
         turn.attachments,
         activity.observe,
-        { binding: turn.binding, skillInvocation: turn.skillInvocation, signal: cancellation.signal },
+        { binding: turn.binding, skillInvocation: turn.skillInvocation, signal: cancellation.signal,
+          onStream: (streamId, ownerDocumentId) => { activeStream = { streamId, ownerDocumentId }; } },
       );
       await activity.settle();
       if (cancellation.signal.aborted) return;
@@ -1668,6 +1704,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     } finally {
       activeTurn = false;
       activeChatId = undefined;
+      activeStream = undefined;
       activeInput = undefined;
       dispatchPending = false;
       dispatchCancellation = undefined;

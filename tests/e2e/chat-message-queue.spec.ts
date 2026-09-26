@@ -208,7 +208,7 @@ test("queued messages edit, reorder, delete and steer without changing the compo
   await reorder.focus();
   await reorder.press("Alt+ArrowDown");
   await expect(queue.getByRole("listitem").last()).toContainText("Edited priority message");
-  await queue.getByRole("button", { name: "Steer with queued message 2", exact: true }).click();
+  await queue.getByRole("button", { name: "Interrupt with queued message 2", exact: true }).click();
   await expect
     .poll(
       () =>
@@ -323,7 +323,7 @@ test("revisiting a running chat can queue, steer, and stop its exact response", 
   await expect(queue).toContainText("Steer after revisiting");
   expect(lmStudio.requests.filter((request) => lastUserText(request) === "Steer after revisiting"))
     .toHaveLength(0);
-  await queue.getByRole("button", { name: "Steer with queued message 1", exact: true }).click();
+  await queue.getByRole("button", { name: "Interrupt with queued message 1", exact: true }).click();
   await expect.poll(() => lmStudio.requests.filter(
     (request) => lastUserText(request) === "Steer after revisiting",
   ).length).toBe(1);
@@ -423,4 +423,94 @@ test("queue keeps image attachments, pauses on Stop, and resumes FIFO exactly on
   );
   expect(queued.map(lastUserText)).toEqual(["Queued image first", "Queued text second"]);
   expect(JSON.stringify(queued[0].body)).toContain(`data:image/png;base64,${image}`);
+});
+
+test("true steering persists input without stopping the response or changing a newer draft", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Active response for true steering");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await page.locator("[data-sidebar]").getByRole("button", { name: /^Active response for true steering/u }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await composer.fill("Use the new direction");
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue).toContainText("Use the new direction");
+  await composer.fill("Keep this separate draft");
+  await queue.getByRole("button", { name: "Steer with queued message 1", exact: true }).click();
+  await expect(queue).toBeHidden();
+  await expect(composer).toHaveValue("Keep this separate draft");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Use the new direction")).toHaveLength(0);
+  lmStudio.releaseCompletions!();
+  await expect.poll(() => lmStudio.requests.filter((request) => lastUserText(request) === "Use the new direction").length).toBe(1);
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await composer.fill("Next ordinary turn");
+  await composer.press("Enter");
+  await expect.poll(() => lmStudio.requests.some((request) => lastUserText(request) === "Next ordinary turn")).toBe(true);
+  const next = lmStudio.requests.find((request) => lastUserText(request) === "Next ordinary turn");
+  expect(JSON.stringify(next?.body).split("Use the new direction").length - 1).toBe(1);
+});
+
+
+test("oversized queued text stays editable and cannot enter uncertain steering", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Hold for an oversized queued instruction");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await composer.fill("x".repeat(16 * 1024 + 1));
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("button", { name: "Steer with queued message 1", exact: true })).toBeDisabled();
+  await expect(queue.getByRole("button", { name: "Interrupt with queued message 1", exact: true })).toBeEnabled();
+  await expect(queue.getByRole("button", { name: "Edit queued message 1", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Stop generating" }).click();
+});
+
+
+test("uncertain steering cannot become a new send after its old receipt is unavailable", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  await aiden.app.evaluate(({ ipcMain }) => {
+    const handlers = (ipcMain as unknown as {
+      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
+    })._invokeHandlers;
+    const original = handlers.get("chat:run-input")!;
+    let first = true;
+    handlers.set("chat:run-input", async (event, ...args) => {
+      if (first) {
+        first = false;
+        await original(event, ...args);
+        throw new Error("Simulated lost accepted receipt");
+      }
+      const input = args[1] as { requestId: string; mode: string };
+      return { requestId: input.requestId, streamId: args[0], mode: input.mode, accepted: false, reason: "not-active" };
+    });
+  });
+  const composer = page.locator("textarea");
+  await composer.fill("Hold while a receipt is lost");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await composer.fill("Already accepted instruction");
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  const steer = queue.getByRole("button", { name: "Steer with queued message 1", exact: true });
+  await steer.click();
+  await expect(steer).toHaveText("Check delivery");
+  await steer.click();
+  await expect(page.getByText("Delivery remains unconfirmed.", { exact: false })).toBeVisible();
+  await expect(steer).toHaveText("Check delivery");
+  await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
+  lmStudio.releaseCompletions!();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect(queue).toContainText("Already accepted instruction");
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Already accepted instruction")).toHaveLength(1);
 });

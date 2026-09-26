@@ -70,6 +70,11 @@ export function registerChatGenerationHandlers(): void {
     },
   );
 
+  ipcMain.handle("chat:run-input", async (event, streamId: unknown, input: unknown) => {
+    if (!isSafeSubagentIdentifier(streamId)) throw new Error("Invalid chat stream identifier.");
+    return llmClient.submitRunInput(streamId, chatGenerationOwner(event).documentId, input);
+  });
+
   ipcMain.handle("chat:cancel", async (event, streamId: unknown, origin: unknown) => {
     if (!isSafeSubagentIdentifier(streamId)) {
       throw new Error("Invalid chat stream identifier.");

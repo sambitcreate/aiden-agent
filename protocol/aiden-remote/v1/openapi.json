@@ -1875,6 +1875,53 @@
         }
       }
     },
+    "/streams/{streamId}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "submitStreamInput",
+        "x-aiden-feature": "chat-run-input-v1",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "description": "Exact owned active stream only. Bot chat access also requires bot:read and bot:write. Admission is queued, not evidence of model consumption.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/StreamId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRunInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Definitive admission receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatRunInputReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/streams/{streamId}/cancel": {
       "parameters": [
         {
@@ -6483,6 +6530,117 @@
           }
         },
         "additionalProperties": false
+      },
+      "ChatRunInputRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "mode",
+          "text"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384,
+            "pattern": "\\S",
+            "x-aiden-max-utf8-bytes": 16384,
+            "description": "Must contain a non-whitespace character. Clients MUST enforce x-aiden-max-utf8-bytes on the UTF-8 encoding before submission; JSON Schema maxLength alone is insufficient for multibyte text."
+          }
+        }
+      },
+      "ChatRunInputReceipt": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId",
+              "streamId",
+              "mode",
+              "accepted",
+              "admission",
+              "messageId"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "streamId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "mode": {
+                "enum": [
+                  "steer",
+                  "queue"
+                ]
+              },
+              "accepted": {
+                "const": true
+              },
+              "admission": {
+                "const": "queued"
+              },
+              "messageId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestId",
+              "streamId",
+              "mode",
+              "accepted",
+              "reason"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "streamId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "mode": {
+                "enum": [
+                  "steer",
+                  "queue"
+                ]
+              },
+              "accepted": {
+                "const": false
+              },
+              "reason": {
+                "enum": [
+                  "not-active",
+                  "cancelled",
+                  "capacity"
+                ]
+              }
+            }
+          }
+        ]
       },
       "StreamStatus": {
         "type": "object",

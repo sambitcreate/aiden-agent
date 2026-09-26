@@ -1,3 +1,4 @@
+import { parseChatRunInput, MAX_CHAT_RUN_INPUT_BYTES } from "../../renderer/shared/chat-run-input.js";
 import assert from "node:assert/strict";
 import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -258,6 +259,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
+    "/streams/{streamId}/inputs",
     "/streams/{streamId}/cancel",
     "/approvals/{approvalId}/respond",
     "/models",
@@ -930,6 +932,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/bots/{botId}/chats", "post"],
     ["/bots/{botId}/avatar", "put"],
     ["/bot-access-notice/acknowledgement", "post"],
+    ["/streams/{streamId}/inputs", "post"],
     ["/streams/{streamId}/cancel", "post"],
     ["/approvals/{approvalId}/respond", "post"],
     ["/workspaces/{workspaceId}/git/branches", "post"],
@@ -1526,4 +1529,17 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
     true,
   );
+});
+
+
+test("run input OpenAPI nonblank and UTF-8 byte rules match host validation", async () => {
+  const document = await json("openapi.json") as { components: { schemas: { ChatRunInputRequest: { properties: { text: { pattern: string; "x-aiden-max-utf8-bytes": number } } } } } };
+  const textSchema = document.components.schemas.ChatRunInputRequest.properties.text;
+  assert.equal(textSchema["x-aiden-max-utf8-bytes"], MAX_CHAT_RUN_INPUT_BYTES);
+  for (const text of ["", " \t\r\n", "\u00a0\u2003\ufeff", "hello", "x".repeat(16384), "x".repeat(16385), "😀".repeat(4096), "😀".repeat(4097), "é".repeat(8192), "é".repeat(8193)]) {
+    const contractValid = new RegExp(textSchema.pattern, "u").test(text) && Buffer.byteLength(text, "utf8") <= textSchema["x-aiden-max-utf8-bytes"];
+    const input = { requestId: "019a0000-0000-4000-8000-000000000001", mode: "steer", text };
+    if (contractValid) assert.equal(parseChatRunInput(input).text, text);
+    else assert.throws(() => parseChatRunInput(input), /Invalid run input/u);
+  }
 });

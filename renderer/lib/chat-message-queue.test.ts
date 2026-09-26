@@ -215,3 +215,19 @@ test("deleting a chat while waiting for persistence invalidates its claimed mess
   assert.deepEqual(input.sent, []);
   assert.deepEqual(queue.getSnapshot().messages, []);
 });
+
+test("run input preserves exact retry identity and blocks automatic replay after unknown outcome", () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one")); queue.add(message("two"));
+  const identity = { streamId: "active-stream", requestId: "019a0000-0000-4000-8000-000000000001" };
+  assert.deepEqual(queue.claimForRun("two", identity)?.runInput, identity);
+  assert.equal(queue.claimForRun("one"), undefined, "duplicate interaction is locked synchronously");
+  queue.settle("two", "uncertain");
+  queue.resume();
+  assert.equal(queue.claim(), undefined, "uncertain input must never become an ordinary send");
+  assert.equal(queue.edit("two"), false);
+  assert.deepEqual(queue.claimForRun("two")?.runInput, identity);
+  queue.settle("two", "sent");
+  assert.equal(queue.getSnapshot().messages.length, 1);
+  assert.equal(queue.claim()?.id, "one");
+});

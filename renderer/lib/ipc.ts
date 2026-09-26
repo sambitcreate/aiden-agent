@@ -1,3 +1,4 @@
+import type { ChatRunInputRequest, ChatRunInputReceipt } from "../shared/chat-run-input";
 import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
@@ -1075,6 +1076,10 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+export function submitRunInput(streamId: string, input: ChatRunInputRequest): Promise<ChatRunInputReceipt> {
+  return invoke<ChatRunInputReceipt>("chat:run-input", streamId, input);
 }
 
 /** Stop a same-document generation after its visible pane has released ownership. */

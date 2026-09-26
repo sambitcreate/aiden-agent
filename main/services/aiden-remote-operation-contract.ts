@@ -654,6 +654,26 @@ export class AidenIdempotencyLedger {
     throw new AidenOperationContractError("idempotency_capacity");
   }
 
+  /** Inspect only: never reserve an operation, advance the clock, or prune. */
+  replayExisting<T>(
+    scope: { deviceId: string; route: string; resourceId: string; key: string },
+    input: unknown,
+  ): Promise<T> | undefined {
+    const now = this.readWallClock();
+    const ledgerKey = createHash("sha256").update(canonical(scope)).digest("base64url");
+    const entry = this.entries.get(ledgerKey);
+    if (!entry) return undefined;
+    // A rollback must not turn a retained result into an execution opportunity.
+    if (now >= this.lastObservedAt && entry.settled && entry.expiresAt !== null && entry.expiresAt <= now) return undefined;
+    const requestDigest = createHash("sha256").update(canonical(input)).digest("base64url");
+    if (entry.requestDigest !== requestDigest) throw new AidenOperationContractError("idempotency_conflict");
+    if (entry.rejectionCode) throw new AidenOperationContractError(entry.rejectionCode);
+    if (!entry.result) throw new AidenOperationContractError("idempotency_in_flight");
+    return entry.settled
+      ? Promise.resolve().then(() => cloneDurableResult(entry.settledResult)) as Promise<T>
+      : entry.result.then((result) => cloneDurableResult(result)) as Promise<T>;
+  }
+
   execute<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,

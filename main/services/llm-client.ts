@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { createChatRunInputAdmission } from "./chat-run-input.js";
+import { parseChatRunInput, type ChatRunInputReceipt } from "../../renderer/shared/chat-run-input.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
@@ -149,6 +152,7 @@ import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compactio
 import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import {
   beginPiVisibleTurnLease,
+  appendPiMessages,
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
@@ -402,6 +406,7 @@ interface LoadMonitorState {
 }
 
 interface ActiveGeneration {
+  submitInput(input: unknown): Promise<ChatRunInputReceipt>;
   agent: PiAgentRuntimeHarness;
   chatId: string;
   owner: ChatGenerationOwner;
@@ -418,6 +423,7 @@ interface ActiveGeneration {
 }
 
 const active = new Map<string, ActiveGeneration>();
+const runInputRetries = new Map<string, { streamId: string; fingerprint: string; at: number; result: Promise<ChatRunInputReceipt> }>();
 const CHAT_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const initializing = new Map<
@@ -1727,6 +1733,8 @@ export const llmClient = {
       initialization.loadMonitor = loadMonitorState;
     }
 
+    const queuedInputMarkers = new Map<number, { messageId: string; text: string }>();
+    let inputTimestamp = Date.now();
     const deniedToolCalls = new Set<string>();
     let consecutiveAttendedToolErrorTurns = 0;
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
@@ -2279,6 +2287,11 @@ export const llmClient = {
         ),
         durability: {
           session: promptJournal,
+          appendMessages: (session, messages) => appendPiMessages(session, messages, undefined, (message) => {
+            if (message.role !== "user") return undefined;
+            const queued = queuedInputMarkers.get(message.timestamp);
+            return queued?.text === message.content ? queued.messageId : undefined;
+          }),
           compaction: compactionOptions,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
@@ -3011,7 +3024,31 @@ export const llmClient = {
         }
       }
     };
+    const inputIsCurrent = () => active.get(streamId) === activeGeneration &&
+      !activeGeneration.cancelRequested && !owner.isDestroyed() &&
+      !botContext?.admission.signal.aborted;
     const activeGeneration: ActiveGeneration = {
+      submitInput: createChatRunInputAdmission({
+        streamId,
+        ownerDocumentId: owner.documentId,
+        isCurrent: inputIsCurrent,
+        revalidate: async () => { await botContext?.admission.revalidateBeforeEffect(); },
+        persist: async (messageId, text) => {
+          await chatStore.appendMessage(params.chatId, { id: messageId, role: "user", content: text }, {
+            expectedWorkspaceId: initialization.workspaceId,
+            isCurrent: inputIsCurrent,
+          });
+          ipcMain.broadcast("chats:changed", {});
+        },
+        queue: (input, persist) => {
+          const timestamp = inputTimestamp = Math.max(inputTimestamp + 1, Date.now());
+          return agent.queuePersistedInput({ role: "user", content: input.text, timestamp }, input.mode, async () => {
+            await persist();
+            const messageId = `input-${createHash("sha256").update(`${owner.documentId}:${streamId}:${input.requestId}`).digest("hex")}`;
+            queuedInputMarkers.set(timestamp, { messageId, text: input.text });
+          });
+        },
+      }),
       agent,
       chatId: params.chatId,
       owner,
@@ -3360,6 +3397,28 @@ export const llmClient = {
       }
     }
     return true;
+  },
+
+  async submitRunInput(streamId: string, ownerDocumentId: string, raw: unknown): Promise<ChatRunInputReceipt> {
+    const input = parseChatRunInput(raw);
+    const key = JSON.stringify([ownerDocumentId, streamId, input.requestId]);
+    const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    const previous = runInputRetries.get(key);
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw new Error("Run input request ID was reused with different content.");
+      return previous.result;
+    }
+    const entry = active.get(streamId);
+    if (!entry || entry.owner.documentId !== ownerDocumentId) {
+      return { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: "not-active" };
+    }
+    for (const [id, receipt] of runInputRetries) {
+      if (!active.has(receipt.streamId) && Date.now() - receipt.at > 86_400_000) runInputRetries.delete(id);
+    }
+    if (runInputRetries.size >= 4096) return { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: "capacity" };
+    const result = entry.submitInput(input);
+    runInputRetries.set(key, { streamId, fingerprint, at: Date.now(), result });
+    return result;
   },
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */

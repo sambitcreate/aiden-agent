@@ -370,3 +370,46 @@ When moving a phone between Macs, select the intended saved Mac before starting 
 ## 10. Contract change process
 
 Change this document, OpenAPI, TypeScript contract constants/types, shared fixtures, and Swift/TypeScript fixture tests in one phase. Additive changes increment `contractRevision`. Breaking changes require `/v2`. No handler may ship an undocumented route or field.
+
+
+## Active-run input admission (`chat-run-input-v1`)
+
+Advertise this server feature only when the host admission method is installed.
+`POST /streams/{streamId}/inputs` derives chat identity from an exact stream owned
+by the authenticated device. It requires `chat:write` and, for Bot chats, the
+existing conjunctive `bot:read`/`bot:write` mutation authority. No client chat ID,
+provider/model change, attachment, permission grant or tool selection is accepted.
+
+The exact body is `{requestId, mode, text}`. `requestId` is a UUID, and the
+`Idempotency-Key` header must equal it (case-insensitive canonical UUID).
+`mode` is `steer` or `queue`; `text` is nonblank and at most 16,384 UTF-8 bytes.
+The host bounds pending reservations plus Pi inputs to 32 and all request receipts
+per active run to 128. Host transcript persistence precedes input injection and
+an accepted response. `steer` enters Pi's next steering boundary; `queue` enters
+its follow-up lane. These operations never replace the canonical Bot chat.
+
+HTTP 200 carries a `ChatRunInputReceipt`: shared `requestId`, `streamId`, `mode`,
+then either `accepted:true, admission:"queued", messageId`, or
+`accepted:false, reason:"not-active"|"cancelled"|"capacity"`. **Queued admission is
+not a model-consumption receipt.** Stop, revocation, terminal failure or process
+shutdown may prevent consumption. Already committed user input remains history;
+input reserved before Stop may finish persistence and return accepted without
+restarting inference. Rejected input does not consume the client draft.
+
+The durable Remote operation ledger scopes replay to device, route, stream and
+UUID. Same payload retries return the original admission receipt, never an
+inferred consumed state; different payload reuse is HTTP 409. Existing ledger
+retention/bounds apply (10,000 entries maximum; unknown in-flight outcomes do not
+expire into execution retries). Restored terminal streams never resume inference.
+Invalid input is 400, revoked/insufficient authority 403, unknown or unowned stream
+404, conflicting/unknown outcome 409, and ledger capacity 429. A transport error
+is an unknown outcome: clients preserve the captured draft and do not silently
+fall back to a new turn. Clients disable duplicate taps, preserve newer edits,
+and show no controls when the negotiated feature is absent.
+
+
+Run-input clients must validate text before submission using both OpenAPI's
+nonblank `pattern` and `x-aiden-max-utf8-bytes: 16384`. The latter is a required
+Aiden validation extension: encode the text as UTF-8 and count bytes, not Unicode
+characters or UTF-16 code units. For example, 4,096 `😀` characters fit exactly;
+4,097 do not. Whitespace-only text (including nonbreaking spaces) is invalid.

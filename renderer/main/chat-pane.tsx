@@ -1,3 +1,4 @@
+import { parseChatRunInput } from "../shared/chat-run-input";
 import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
 import { chatMessageQueue } from "../lib/chat-message-queue";
@@ -41,6 +42,7 @@ import {
   settingsApi,
   startGeneration,
   stopDetachedGeneration,
+  submitRunInput,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -1356,6 +1358,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
   });
 
+  const steerQueuedMessage = React.useCallback(async (id: string) => {
+    const snapshot = messageQueue.getSnapshot();
+    const wasUncertain = snapshot.uncertainIds?.includes(id) ?? false;
+    const candidate = snapshot.messages.find((message) => message.id === id);
+    if (!candidate) return;
+    const previous = candidate.runInput;
+    const streamId = previous?.streamId ?? generationRef.current?.streamId ?? visibleDetachedStreamId;
+    if (!streamId || isStoppingGeneration) return;
+    const identity = previous ?? { streamId, requestId: crypto.randomUUID() };
+    try {
+      if (candidate.attachments.length || candidate.skillInvocation || candidate.options?.visualize) throw new Error("Steering accepts plain text only. Use Interrupt for this message.");
+      parseChatRunInput({ requestId: identity.requestId, mode: "steer", text: candidate.text });
+    } catch {
+      toast.info("Steering accepts non-empty plain text up to 16 KiB. Edit this message or use Interrupt.");
+      return;
+    }
+    const message = messageQueue.claimForRun(id, identity);
+    if (!message) return;
+    try {
+      const receipt = await submitRunInput(identity.streamId, { requestId: identity.requestId, mode: "steer", text: message.text });
+      if (!receipt.accepted) {
+        if (wasUncertain) {
+          messageQueue.settle(id, "uncertain");
+          toast.info("Delivery remains unconfirmed. Check the chat history before deleting this queued copy; it will not be sent again automatically.");
+          return;
+        }
+        messageQueue.settle(id, "failed");
+        toast.info(receipt.reason === "capacity" ? "The active run's input queue is full." : "That response is no longer accepting input. Your message is still queued.");
+        return;
+      }
+      messageQueue.settle(id, "sent");
+      void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    } catch (error) {
+      messageQueue.settle(id, "uncertain");
+      toast.error(error instanceof Error ? error.message : "Delivery could not be confirmed. Check delivery before resuming.");
+    }
+  }, [messageQueue, visibleDetachedStreamId, isStoppingGeneration, qc, chatId]);
+
   const queueMessage = React.useCallback(async (
     text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1,
     options?: { visualize?: boolean; btw?: boolean },
@@ -2130,7 +2170,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
               canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
               returnFocus={() => composerRef.current}
-              onSteer={(id) => {
+              onSteer={(id) => { void steerQueuedMessage(id); }}
+              onInterrupt={(id) => {
                 if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
                 messageQueue.move(id, 0);
                 messageQueue.resume();
