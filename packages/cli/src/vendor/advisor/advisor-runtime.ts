@@ -7,6 +7,7 @@ explicit paths. tests/extensions.test.mjs enforces byte parity modulo those
 specifier rewrites; re-vendor after changing the desktop source.
 */
 
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import type {
   AgentMessage,
@@ -608,11 +609,11 @@ export class AdvisorRuntime {
                 return await runtime.streams
                   .streamSimple(
                     runtime.model,
-                    {
+                    normalizeContext({
                       systemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
                       messages: projection.messages,
                       tools: [],
-                    },
+                    }),
                     {
                       signal: requestSignal,
                       apiKey: runtime.apiKey,

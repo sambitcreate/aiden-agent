@@ -44,7 +44,9 @@ export async function importSession(agentDir: string, cwd: string, source: strin
   let messages: Message[] = [], name: string | undefined;
   let first: Record<string, unknown>;
   try { first = JSON.parse(text); } catch { first = JSON.parse(text.split("\n").find((line) => line.trim()) ?? "null"); }
-  if (first?.kind === "header" && first.version === 4) {
+  // pi 0.87 storage v1 headers carry `v: 4`; 0.84.4 journals carry `version: 4`
+  // and are upgraded by the repository port when listed.
+  if (first?.kind === "header" && (first.v === 4 || first.version === 4)) {
     const staging = join(agentDir, "import-staging", randomUUID()); mkdirSync(staging, { recursive: true, mode: 0o700 });
     try {
       mkdirSync(join(staging, "workspace"), { mode: 0o700 });

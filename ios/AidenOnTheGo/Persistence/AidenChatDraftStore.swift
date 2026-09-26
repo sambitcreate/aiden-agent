@@ -19,13 +19,15 @@ actor AidenChatDraftStore {
         let text: String
     }
 
+    private let beforeWrite: (@Sendable () async -> Void)?
     private let root: URL
     private let fileManager: FileManager
     private let maximumDraftScalars = 100_000
     private let maximumDraftBytes = 400_000
     private var generations: [String: UInt64] = [:]
 
-    init(root: URL? = nil, fileManager: FileManager = .default) {
+    init(root: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil, fileManager: FileManager = .default) {
+        self.beforeWrite = beforeWrite
         self.fileManager = fileManager
         if let root {
             self.root = root
@@ -66,8 +68,9 @@ actor AidenChatDraftStore {
     }
 
     @discardableResult
-    func save(_ text: String, session: Session) throws -> Bool {
-        guard isCurrent(session), isBounded(text) else { return false }
+    func save(_ text: String, session: Session) async throws -> Bool {
+        await beforeWrite?()
+        guard !Task.isCancelled, isCurrent(session), isBounded(text) else { return false }
         if text.isEmpty {
             try? fileManager.removeItem(at: fileURL(instanceId: session.instanceId, chatId: session.chatId))
             return true
@@ -85,7 +88,7 @@ actor AidenChatDraftStore {
             withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
-        guard isCurrent(session) else { return false }
+        guard !Task.isCancelled, isCurrent(session) else { return false }
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return true
     }

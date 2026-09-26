@@ -12,8 +12,8 @@ const UNKNOWN_COST_SENTINEL = -1_000_000;
 const MAX_CATALOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /** Keep synchronized with the deliberately pinned @earendil-works/pi-ai dependency. */
-export const AIDEN_PI_CATALOG_VERSION = "0.84.4";
-export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-07-16T22:04:50.937Z");
+export const AIDEN_PI_CATALOG_VERSION = "0.87.1";
+export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-09-22T19:31:44.346Z");
 export const AIDEN_PI_CATALOG_USER_AGENT = `Aiden-Agent pi-ai/${AIDEN_PI_CATALOG_VERSION}`;
 export const PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 

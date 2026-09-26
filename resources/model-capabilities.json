@@ -76059,8 +76059,8 @@
           "output": 16384
         },
         "cost": {
-          "input": 0.09,
-          "output": 0.34,
+          "input": 0.08,
+          "output": 0.3,
           "cache_read": 0.05
         }
       },
@@ -108296,9 +108296,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.398634,
-          "output": 0.797268,
-          "cache_read": 0.03322
+          "input": 0.348,
+          "output": 0.696,
+          "cache_read": 0.029
         }
       },
       "deepseek/deepseek-r1-0528": {

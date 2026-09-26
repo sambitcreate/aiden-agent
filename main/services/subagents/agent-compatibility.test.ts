@@ -561,7 +561,8 @@ test("child bounds an irreducible active tool output before the next provider ca
   assert.doesNotMatch(secondContext, /START-x{1000}/u);
   assert.ok(secondContext.length < 100_000);
   assert.equal(core.state.callCount, 2, "bounded active output does not need a summary request");
-  assert.equal(runningChild.agent.state.messages[0]?.role, "user");
+  assert.equal(runningChild.agent.state.messages[0]?.role, "system");
+  assert.equal(runningChild.agent.state.messages[1]?.role, "user");
   assert.equal(runningChild.agent.state.messages.some((message) => message.role === "compactionSummary"), false);
   assert.equal(registry.activeCount, 0);
 });
@@ -1024,7 +1025,7 @@ test("registry shutdown aborts every child and leaves no active Agent state", as
       assert.equal(entry.agent.state.isStreaming, false);
       assert.equal(entry.agent.state.pendingToolCalls.size, 0);
       assert.equal(entry.agent.signal, undefined);
-      assert.deepEqual(entry.agent.state.messages, []);
+      assert.deepEqual(entry.agent.state.messages.map((message) => message.role), ["system"]);
     }
   });
 });

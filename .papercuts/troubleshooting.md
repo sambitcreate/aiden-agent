@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
+- 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
 - 2026-09-21 Subagents layout: this fresh worktree had no `node_modules`; focused `tsx`, TypeScript, and ESLint commands failed on missing packages until `npm ci`. Check dependency installation before interpreting those failures as code regressions.
 
 - 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
@@ -1114,6 +1116,35 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+# Pi 0.87.1 pin migration
+
+- The 0.87.1 typecheck exposed a larger session API break than the digest listed: `InMemorySessionRepo`, `buildSessionContext`, v4 JSONL header shape, and append/move methods changed. Recheck persisted journal compatibility before treating a clean prompt migration as shippable.
+- Pi's `TranscriptContext` is branded, so direct custom stream tests and wrappers need `normalizeContext`; raw `{messages}` fixtures no longer compile.
+- `test:subagents` first hit a CommandLineTools SDK linker error (`arm64e.x1` in MacOSX27.0.tbd). The three subagent native build scripts stripped toolchain variables; pass scoped `DEVELOPER_DIR` and `SDKROOT` through their sanitized child environments.
+- Pi's 0.87.1 catalog removed pinned Codex/Google fixture IDs and added built-in Radius models. Refresh provider fixtures and advance synthetic catalog timestamps beyond the bundled manifest when bumping the pin.
+- The full test command reached Bot native prebuild and found the same stripped SDK selection in `build-bot-inbox-writer.mjs`; preserve scoped `DEVELOPER_DIR` and `SDKROOT` there too.
+- A 0.87.1 provider smoke hung while `server.close()` waited on new SDK keepalive sockets; close loopback connections in fixture teardown. Anthropic now appends `?beta=true`, so assert the single `/v1/messages` pathname.
+## 2026-09-22 — native recovery verification
+
+- The initial isolated checkout was behind main; fetched `c8c09e0d2` before coding. The local Hermex study checkout also lacked the cited commits; verified/fetched upstream HEAD `aa7830b28a071769c2d26bc08949e38e09f4b388` into Git objects for read-only comparison.
+- Effective task policy still requires workspace-write escalations for shared `.git` metadata, Gradle cache and Xcode/CoreDevice despite the coordinator's global full-access preference; reused authorized commands without changing permissions.
+- Cursor-zero HTTP requests omit both `after` and Last-Event-ID; the first regression assertion was corrected to match that existing wire behavior. Original ViewModel then fails four enhanced regressions and the fixed implementation passes.
+- Physical iPhone 13 Pro is shared and locked (`com.apple.dt.deviceprep Code=-3: Unlock Sambit’s iPhone to Continue` from the preceding coordinated run). Generic unsigned build-for-testing is compilation evidence only. No simulator or device-unlock bypass.
+
+- PR #217 Pullfrog exposed three missing held-I/O scenarios after green initial CI. Added explicit cache/status/HTTP barriers instead of timing-only sleeps; native transcript generation now advances for terminal authority too. Follow-up Android old-head experiment fails exactly the held-load case; final 177-test run passes. The shared URLProtocol fixture withholds terminal delivery until the intended GET is captured, preventing it from accidentally holding the final reconciliation request.
+
+- 2026-09-22 mobile recovery: synchronous Swift actor disk writes do not imply FIFO queued-call ordering. Reserve ordering tokens before the actor hop and reject stale tokens inside persistence; a held GET test alone cannot prove already-admitted write ordering. Verify disk through a reopened cache after deliberately reversed write delivery.
+
+- 2026-09-22 PR217: gh run view --log-failed refuses logs while sibling jobs run; direct gh api jobs/{id}/logs with --allow-escape-sequences retrieves completed-job logs. Rerun also rejected until workflow completion. Local focused ESLint lacks @eslint/js in this checkout; focused Node harness tests remain runnable after building native helper.
+
+## 2026-09-23 native integration repair
+- Preserved integration compiles but chat tests expose independent list-token, premature Stop, approval fallback, and draft/recovery interleavings; compilation alone missed these regressions.
+- Physical devices are offline; asked for simulator exception because ios/AGENTS.md prohibits it despite the simulator-based handoff.
+- Android full JVM execution exposed a reproducible terminal-settlement timeout; isolated reproduction is being inspected before treating it as runner flakiness.
+- The preserved worktree had no Node dependencies; install its lockfile dependencies before running the integrated worktree test.
+- Android held-load recovery timeout concealed a fixture contract error: default JSON serialization emitted forbidden `reasoning: null`; omit null optional fields to match the public host projection, then the full chat class passes.
+- Direct worktree test execution needs `build:worktree-remover` and `build:worktree-file-io` first; missing native helpers caused ENOENT before the prerequisite builds and rerun.
+- First authorized simulator run caught the detail overlay admitting a re-created chat for metadata reserved during its deletion cleanup. Apply the existing per-chat deletion floor to overlay rows too; preserve the pending-era regression's expected exclusion.
 ## 2026-09-24 — origin/main merge into feature/linux-desktop-support
 
 - The lane38 linux external-editor memory describes the original 5-editor bounded support; the branch later expanded to a union model (21 executables, Flatpak fallback, `file-manager` id). Merge resolution kept the union model and ported main's `zeditor` alias plus PATH hardening (absolute roots only, regular-file check, PATH-major ordering) that linux's variant lacked.
@@ -1279,6 +1310,7 @@ because their native file-mutator test binary had not been built. Run
 - Changing any `native/*` C source (even a test fixture like setsid-fixture.c) invalidates the prebuilt manifest hashes. Linux prebuilts need Docker.
 - Main and the PR both bumped the remote contract revision to 11 independently. Watch for revision collisions on long-lived branches.
 - Shell flags differ by platform: zsh -f skips rc files, but POSIX sh -f is noglob. Guard shell flags per platform and cover them with a behavioral glob test (Hermes P1 on #121).
+- PR #199 update: the worktree guard rejects `npx playwright ... -g "a|b"` and `&&`-chained `npm run build; npx playwright`; run build and playwright as separate plain commands.
 - PR #128 merge (2026-09-26): main replaced the text Assistant dock with the Aiden Live orb, so the dock conflict resolved to main's side and the PR's dock hook usage and source-grep tests were dropped. The worktree guard rejects `npx playwright ... -g "a|b"` alternations; use a single-word `--grep`.
 - 2026-09-26 main merge: 15 `git.test.ts` managed-worktree removal tests fail locally with "could not safely remove the managed worktree quarantine"; this is the same host native-remover SDK issue above, not the PATH change.
 - 2026-09-26 PR #206 reconciliation: #207 on main superseded the runner-side four-note tail, so the merge took main's runner and kept only the projector gap (failed results with `summaryTruncated` lost the `report_truncated` notice because the gate predated failed summaries).
@@ -1286,3 +1318,9 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-26 PR #121 merge of #71 (Linux desktop)
 - `node scripts/build-native-helpers.mjs --docker ...` bind-mounts the repo and leaves Linux ELF helpers in `build/native`. Rebuild the macOS helpers before you run local native tests, or they fail with `spawn ENOEXEC`.
 - After merging main, run `npm ci`. #71 added `bonjour-service`, and without it `tsc` fails.
+
+## 2026-09-26 PR #121 merge of #246 (pi 0.87.1)
+- The CLI bundles main/services, so it has to use the same pi version as root. Bump `packages/cli` `@earendil-works/pi-coding-agent` to match, otherwise mixing 0.84 and 0.87 types breaks `tsc`.
+- In 0.87 chord is nested, not hoisted, so declare it directly in `packages/cli`. Its exports are import-only, so `require.resolve` in the build's external check fails even when chord is installed. The check needs an ESM resolve fallback.
+- 0.87 pulls in `proxy-agent-negotiate`, which has an optional `import("kerberos")`. Add it to the CLI external allowlist.
+- 0.87 storage v1 journal headers use `v: 4`, not `version: 4`. Session import has to accept both.

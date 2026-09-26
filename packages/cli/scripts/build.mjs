@@ -62,6 +62,9 @@ const allowedExternalPackages = new Set([
 	"utf-8-validate",
 	// Optional debug output coloring.
 	"supports-color",
+	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
+	// lazily inside try/catch and only reached behind a Negotiate proxy.
+	"kerberos",
 ]);
 
 const lazyJitiPlugin = {
@@ -314,10 +317,26 @@ for (const output of emittedFiles) {
 }
 const { createRequire } = await import("node:module");
 const runtimeRequire = createRequire(join(appDir, "cli.js"));
+const { execFileSync } = await import("node:child_process");
+function resolvesAsEsm(specifier) {
+	// Packages such as chord (pi 0.87+) export subpaths under the "import"
+	// condition only, which require.resolve cannot see. Resolve them the way the
+	// bundle's own `import` will, from the app directory.
+	try {
+		execFileSync(process.execPath, ["--input-type=module", "-e", `import.meta.resolve(${JSON.stringify(specifier)})`], {
+			cwd: appDir,
+			stdio: "ignore",
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
 for (const specifier of referencedExternals) {
 	try {
 		runtimeRequire.resolve(specifier.startsWith("jiti") ? "jiti" : specifier);
 	} catch {
+		if (resolvesAsEsm(specifier)) continue;
 		throw new Error(
 			`Bundle references external "${specifier}" which does not resolve from dist/app. Add it as a dependency of packages/cli.`,
 		);

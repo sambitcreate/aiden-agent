@@ -1,9 +1,10 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { InMemorySessionRepo, JsonlSessionRepo } from "@earendil-works/pi-agent-core";
+import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createModels,
@@ -34,6 +35,7 @@ import {
 import type { ChatMessage } from "./types.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
+import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1446,6 +1448,51 @@ test("completed migration of an empty legacy journal is disposable with indexed 
   assert.equal(await readFile(promoted, "utf8"), originalPromoted);
 });
 
+test("Pi 0.84.4 rollback backups count as history only when they hold conversation", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-084-backup-history-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inspect = (chatId: string) => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
+  const oldHeader = (chatId: string) => JSON.stringify({ kind: "header", version: 4, id: chatId, createdAt: 1, cwd: root,
+    metadata: { kind: "aiden-chat-compaction-v1", chatId } });
+
+  // An owned header-only journal promoted on open leaves a header-only backup.
+  const empty = path.join(root, "empty.jsonl");
+  await writeFile(empty, `${oldHeader("empty-084")}\n`, { mode: 0o600 });
+  await upgradeOldPiV4File(empty);
+  assert.equal(await readFile(`${empty}.pi084-backup`, "utf8"), `${oldHeader("empty-084")}\n`);
+  assert.equal(await inspect("empty-084"), false, "a header-only backup is not conversation history");
+
+  // A backup with a private body stays protected even when the promoted file is gone.
+  const withBody = path.join(root, "body.jsonl");
+  const bodySource = `${oldHeader("body-084")}\n${JSON.stringify({ kind: "entry", seq: 1, id: "m", parentId: null,
+    timestamp: 2, type: "message", message: { role: "user", content: "private", timestamp: 2 } })}\n`;
+  await writeFile(withBody, bodySource, { mode: 0o600 });
+  await upgradeOldPiV4File(withBody);
+  await unlink(withBody);
+  assert.equal(await inspect("body-084"), true);
+  assert.equal(await inspect("unrelated-084"), false);
+
+  // An empty v3 journal migrated to v4 by 0.84.4 and then promoted again
+  // keeps only migration scaffolding in both the promoted file and backup.
+  const chatId = "empty-migrated-084";
+  const promoted = path.join(root, "migrated.jsonl");
+  await writeFile(promoted, `${JSON.stringify({ type: "session", version: 3, id: chatId,
+    timestamp: "2026-08-31T12:00:00.000Z", cwd: root, metadata: { kind: "aiden-chat-compaction-v1", chatId } })}\n`);
+  await migratePiSessionJournal(promoted, chatId);
+  const current = (await readFile(promoted, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const [header, metadataValue, , started, finished] = current;
+  const v4 = [
+    { kind: "header", version: 4, id: chatId, createdAt: header.createdAt, cwd: header.cwd, metadata: metadataValue.value },
+    { kind: "lane", seq: 1, lane: "main", leafId: null }, started.value, finished.value,
+  ].map((item) => JSON.stringify(item)).join("\n") + "\n";
+  await writeFile(promoted, v4);
+  await upgradeOldPiV4File(promoted);
+  assert.equal(await readFile(`${promoted}.pi084-backup`, "utf8"), v4);
+  assert.equal(await inspect(chatId), false, "0.84.4 migration scaffolding is disposable");
+  await appendFile(`${promoted}.pi084-backup`, `${JSON.stringify({ kind: "lane", seq: 4, lane: "main", leafId: null })}\n`);
+  assert.equal(await inspect(chatId), true, "any extra backup content is preserved");
+});
+
 test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-open-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
@@ -1468,7 +1515,7 @@ test("opening a chat promotes its legacy v3 journal before current repository di
     "chat-v3-open",
   );
   assert.match(JSON.stringify(await session.buildContext()), /Inspect the image/u);
-  assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version, 4);
+  assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v, 4);
   assert.equal((await stat(`${journalPath}.v3-backup`)).mode & 0o777, 0o600);
   assert.equal((await stat(`${journalPath}.migration-v1.json`)).mode & 0o777, 0o600);
 
@@ -1762,20 +1809,22 @@ test("newest corrupt duplicate is quarantined and older valid history reopens", 
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const repo = new JsonlSessionRepo({
-    fs: new NodeExecutionEnv({ cwd: root }),
+    fileSystem: new NodeExecutionEnv({ cwd: root }),
     sessionsRoot: root,
   });
   const older = await repo.create({
     id: "chat-fallback-test",
     cwd: root,
-    metadata: {
-      kind: "aiden-chat-compaction-v1",
-      chatId: "chat-fallback-test",
-    },
-  });
-  await older.appendMessage(user("older valid", 10));
+  }, TODO_CONTEXT);
+  const olderPort = createPiSessionPort(older);
+  await older.setValue(
+    { namespace: "aiden", key: "session-metadata", kind: "value" },
+    { kind: "aiden-chat-compaction-v1", chatId: "chat-fallback-test" },
+    TODO_CONTEXT,
+  );
+  await olderPort.appendMessage(user("older valid", 10));
   await new Promise((resolve) => setTimeout(resolve, 2));
-  const olderMetadata = await older.getMetadata();
+  const olderMetadata = older.metadata;
   const newerPath = path.join(
     path.dirname(olderMetadata.path),
     `9999-12-31T23-59-59-999Z_chat-fallback-test.jsonl`,

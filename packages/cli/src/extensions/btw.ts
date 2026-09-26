@@ -7,6 +7,7 @@
  * ephemeral follow-ups.
  */
 
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { recordUsage } from "../usage-ledger.ts";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -81,7 +82,7 @@ export function createBtwInlineExtension(_context: {
 						const runtime = await resolveRuntimeFromContext(runtimeContext, model.provider, model.id);
 						const response = await runtime.streams.streamSimple(
 							runtime.model,
-							{ systemPrompt: BTW_SYSTEM_PROMPT, messages, tools: [] },
+							normalizeContext({ systemPrompt: BTW_SYSTEM_PROMPT, messages, tools: [] }),
 							{
 								signal: undefined,
 								apiKey: runtime.apiKey,

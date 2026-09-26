@@ -49,7 +49,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           const args = validateToolArguments(tool, toolCall);
           const assistantMessage = messages.at(-1);
           if (!assistantMessage) throw new Error("Child tool call has no assistant turn.");
-          await beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { systemPrompt: "", messages, tools } });
+          await beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
           const result = tool.name === "subagent" && input.executeNested
