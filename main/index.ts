@@ -15,6 +15,7 @@ import path from "node:path";
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
+import { shutdownDevices } from "./handlers/devices.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
@@ -420,6 +421,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       })(),
       terminalService.flushHistory(),
       browserService.shutdown(),
+      shutdownDevices(),
     ]);
   } catch (error) {
     logger.error(

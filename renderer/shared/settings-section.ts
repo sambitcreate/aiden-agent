@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "simulator",
   "memory",
   "scheduledTasks",
   "geminiLive",
@@ -106,6 +107,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
   },
   {
+    id: "simulator",
+    title: "Simulator",
+    group: "Agent",
+    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs"],
+  },
+  {
     id: "memory",
     title: "Memory",
     group: "Agent",
@@ -139,10 +146,13 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
 
 export function availableSettingsDestinations(capabilities: {
   computerUse: boolean;
+  devices: boolean;
 }): typeof SETTINGS_DESTINATIONS {
-  return capabilities.computerUse
-    ? SETTINGS_DESTINATIONS
-    : SETTINGS_DESTINATIONS.filter((destination) => destination.id !== "computerUse");
+  return SETTINGS_DESTINATIONS.filter(
+    (destination) =>
+      (destination.id !== "computerUse" || capabilities.computerUse) &&
+      (destination.id !== "simulator" || capabilities.devices),
+  );
 }
 
 export function parseSettingsSection(value: unknown): SettingsSection | undefined {

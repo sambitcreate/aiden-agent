@@ -47,9 +47,12 @@ test("fresh renderer capabilities fail closed until main explicitly enables feat
     platform: "linux",
     subagents: true,
     geminiLive: false,
+    devices: false,
   });
   assert.equal(parseAppCapabilities({ bots: true }).bots, true);
   assert.equal(parseAppCapabilities({ geminiLive: true }).geminiLive, true);
+  assert.equal(parseAppCapabilities({ devices: true }).devices, true);
+  assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [
     "review",
@@ -236,7 +239,7 @@ test("archived subagent references remain stored but are invisible while disable
 test("the Environment work surface owns one mounted Subagents destination", () => {
   const environment = source("./environment-panel.tsx");
 
-  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled\)/u);
+  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
   assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
   assert.match(environment, /id="environment-subagents-panel"/u);
   assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
@@ -269,6 +272,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(appHandler, /bots: host\.bots/u);
   assert.match(appHandler, /computerUse: host\.computerUse/u);
   assert.match(appHandler, /dictationHoldToTalk: host\.dictationHoldToTalk/u);
+  assert.match(appHandler, /devices: devicesEnabled\(\)/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
@@ -277,8 +281,11 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
   assert.match(capabilityProvider, /if \(!cancelled && request === revision\) setCurrent\(next\)/u);
   assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
-  assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
-  assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
+  assert.match(environment, /surfaceState\.toolsTab,\s+subagentsEnabled,\s+devicesEnabled/u);
+  assert.match(
+    environment,
+    /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled, devicesEnabled\)/u,
+  );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);

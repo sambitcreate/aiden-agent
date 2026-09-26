@@ -10,6 +10,8 @@ import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
+  AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -91,6 +93,7 @@ export interface AidenRemoteDeviceProjection {
 export interface AidenRemoteAuthenticatedDevice {
   id: string;
   name: string;
+  type: AidenRemoteDeviceType;
   capabilities: ReadonlySet<AidenRemoteCapability>;
   acceptsBotCapabilities: boolean;
   acceptsProgressCapabilities: boolean;
@@ -205,18 +208,35 @@ function isProgressCapability(
   );
 }
 
+function isSimulatorCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/** Simulator control is a desktop-to-desktop grant; phones and tablets never hold it. */
+export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boolean {
+  return type === "mac" || type === "linux";
+}
+
 function parsePersistedCapabilities(
   value: unknown,
   acceptsBotCapabilities: boolean,
   acceptsProgressCapabilities: boolean,
+  type: unknown,
 ): AidenRemoteCapability[] | null {
   // Opt-in vocabularies are stripped before validation so an older or corrupt
   // persisted record can never hold grants it could not have negotiated.
+  const desktop = type === "mac" || type === "linux";
   const negotiatedValue = Array.isArray(value)
     ? value.filter(
         (capability) =>
           (acceptsBotCapabilities || !isBotCapability(capability)) &&
-          (acceptsProgressCapabilities || !isProgressCapability(capability)),
+          (acceptsProgressCapabilities || !isProgressCapability(capability)) &&
+          (desktop || !isSimulatorCapability(capability)),
       )
     : value;
   return parseCapabilities(negotiatedValue);
@@ -251,6 +271,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     record.capabilities,
     acceptsBotCapabilities,
     acceptsProgressCapabilities,
+    record.type,
   );
   if (
     !boundedString(record.id, 128) ||
@@ -721,9 +742,9 @@ export class AidenRemoteStateRegistry {
       !boundedString(deviceId, 128) ||
       !Array.isArray(accepts) ||
       accepts.length < 1 ||
-      accepts.length > AIDEN_REMOTE_PROGRESS_CAPABILITIES.length ||
+      accepts.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
       new Set(accepts).size !== accepts.length ||
-      accepts.some((capability) => !isProgressCapability(capability))
+      accepts.some((capability) => !isProgressCapability(capability) && !isSimulatorCapability(capability))
     ) {
       return null;
     }
@@ -732,19 +753,24 @@ export class AidenRemoteStateRegistry {
       if (!device || device.revokedAt !== undefined) {
         return { changed: false, value: null };
       }
+      // Callers check the device type first; a phone can never be granted simulator control.
+      if (accepts.some(isSimulatorCapability) && !mayHoldSimulatorCapabilities(device.type)) {
+        return { changed: false, value: null };
+      }
       const granted = new Set(device.capabilities);
       const additions = accepts.filter(
         (capability): capability is AidenRemoteCapability =>
-          isProgressCapability(capability) &&
+          (isProgressCapability(capability) || isSimulatorCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
-      if (additions.length === 0 && device.acceptsProgressCapabilities) {
+      const acceptsProgress = accepts.some(isProgressCapability);
+      if (additions.length === 0 && (!acceptsProgress || device.acceptsProgressCapabilities)) {
         return { changed: false, value: projectDevice(device) };
       }
       for (const capability of additions) {
         device.capabilities.push(capability);
       }
-      if (accepts.length > 0) device.acceptsProgressCapabilities = true;
+      if (acceptsProgress) device.acceptsProgressCapabilities = true;
       return { changed: true, value: projectDevice(device) };
     });
   }
@@ -860,11 +886,13 @@ export class AidenRemoteStateRegistry {
         current.capabilities,
         acceptsBotCapabilities,
         current.acceptsProgressCapabilities === true,
+        current.type,
       );
       if (!capabilities) return { changed: false, value: null };
       const authenticated: AidenRemoteAuthenticatedDevice = {
         id: current.id,
         name: current.name,
+        type: current.type,
         capabilities: new Set(capabilities),
         acceptsBotCapabilities,
         acceptsProgressCapabilities:

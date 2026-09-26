@@ -146,6 +146,10 @@ import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type {
   AidenRemoteConnectionMode,
   AidenRemoteBeginPairingResult,
@@ -170,6 +174,19 @@ import type {
   ChatPullRequestView,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import {
+  parseDeviceServiceState,
+  parseDeviceSettings,
+  parseDeviceStreamGrant,
+  parseDeviceToolchainState,
+  type DeviceActionInput,
+  type DeviceConsentKind,
+  type DeviceServiceState,
+  type DeviceSession,
+  type DeviceSettings,
+  type DeviceStreamGrant,
+  type DeviceToolchainState,
+} from "../shared/devices";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
@@ -744,6 +761,70 @@ export const browserApi = {
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
+async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
+  const toolchain = parseDeviceToolchainState(await invoke<unknown>(channel));
+  if (!toolchain) throw new Error("The simulator tool versions were invalid.");
+  return toolchain;
+}
+
+async function invokeDeviceState(channel: string, ...args: unknown[]): Promise<DeviceServiceState> {
+  const state = parseDeviceServiceState(await invoke<unknown>(channel, ...args));
+  if (!state) throw new Error("The simulator state response was invalid.");
+  return state;
+}
+
+async function invokeDeviceSettings(channel: string, ...args: unknown[]): Promise<DeviceSettings> {
+  const settings = parseDeviceSettings(await invoke<unknown>(channel, ...args));
+  if (!settings) throw new Error("The simulator settings response was invalid.");
+  return settings;
+}
+
+export const devicesApi = {
+  getState: () => invokeDeviceState("devices:get-state"),
+  setConsent: (kind: DeviceConsentKind, granted: boolean) =>
+    invokeDeviceState("devices:consent", kind, granted),
+  /** Refreshes this Mac and paired Macs; `"local"` never contacts paired Macs. */
+  refresh: (scope?: "local") =>
+    scope ? invokeDeviceState("devices:refresh", scope) : invokeDeviceState("devices:refresh"),
+  /** Contacts paired Macs only when the user asks. */
+  refreshPeers: () => invokeDeviceState("devices:refresh-peers"),
+  open: (input: { chatId: string; deviceId: string; hostId?: string }) =>
+    invoke<DeviceSession>("devices:open", input),
+  close: (input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }) =>
+    invoke<void>("devices:close", input),
+  action: (input: DeviceActionInput) => invokeDeviceSettings("devices:action", input),
+  settings: (input: { hostId: string; deviceId: string }) =>
+    invokeDeviceSettings("devices:settings", input),
+  screenshot: async (input: { hostId: string; deviceId: string }): Promise<Uint8Array> => {
+    const png = await invoke<unknown>("devices:screenshot", input);
+    if (!(png instanceof Uint8Array) || png.byteLength === 0) {
+      throw new Error("The simulator screenshot was invalid.");
+    }
+    return png;
+  },
+  streamGrant: async (): Promise<DeviceStreamGrant> => {
+    const grant = parseDeviceStreamGrant(await invoke<unknown>("devices:stream-grant"));
+    if (!grant) throw new Error("The simulator stream grant was invalid.");
+    return grant;
+  },
+  /** Installed helper versions, read from disk only. */
+  toolchain: () => invokeDeviceToolchain("devices:toolchain"),
+  pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
+  /** Turns every simulator permission off and deletes the installed helpers. */
+  removeTools: () => invokeDeviceState("devices:remove-tools"),
+  onState: (handler: (state: DeviceServiceState) => void) =>
+    onNotification<unknown>("devices:state", (payload) => {
+      const state = parseDeviceServiceState(payload);
+      if (state) handler(state);
+    }),
+  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
+  onReveal: (handler: (chatId: string) => void) =>
+    onNotification<unknown>("devices:reveal", (payload) => {
+      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
+      if (typeof chatId === "string" && chatId) handler(chatId);
+    }),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
@@ -1089,6 +1170,7 @@ interface ChatDone {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 interface ChatError {
   streamId: string;
@@ -1097,6 +1179,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  undeliveredGuidance?: string[];
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1149,6 +1232,11 @@ export interface GenerationHandle {
 /** Stop a same-document generation after its visible pane has released ownership. */
 export function stopDetachedGeneration(streamId: string): Promise<boolean> {
   return invoke<boolean>("chat:cancel", streamId, "user_stop");
+}
+
+export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
+  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
+  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
@@ -1238,6 +1326,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
@@ -1248,6 +1337,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
+      restoreUndeliveredGuidance(params.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),

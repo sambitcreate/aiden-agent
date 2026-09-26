@@ -674,6 +674,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
             scope.tools.some((tool) => tool.effect === "mutating"),
           ) === true,
         delegation: input.executeNested !== undefined,
+        permission: input.permission,
       }),
       tools: childTools,
       beforeToolCall:

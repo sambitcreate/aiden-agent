@@ -368,3 +368,42 @@ test("browser recording produces a real bounded WebM artifact", async ({ aiden }
   }
   await command(page, { action: "close", tabId });
 });
+
+test("guest identity headers match the renderer's navigator.userAgentData", async ({ aiden }) => {
+  const seen: Array<Record<string, string | string[] | undefined>> = [];
+  const server = createServer((request, response) => {
+    // /favicon.ico is fetched by Aiden's own tab strip, not by the guest page.
+    if (request.url === "/" || request.url === "/pixel") seen.push(request.headers);
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<!doctype html><title>Identity fixture</title><img src=\"/pixel\">");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  try {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const opened = await command(page, { action: "create", url });
+    const tabId = opened.state.activeTabId!;
+    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Identity fixture");
+    await expect.poll(() => seen.length).toBeGreaterThanOrEqual(2);
+    const renderer = (await command(page, {
+      action: "evaluate",
+      tabId,
+      expression: "({ userAgent: navigator.userAgent, brands: navigator.userAgentData.brands.map(({ brand, version }) => ({ brand, version })), mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform })",
+    })).value as { userAgent: string; brands: Array<{ brand: string; version: string }>; mobile: boolean; platform: string };
+    expect(renderer.userAgent).not.toMatch(/Electron|Aiden/iu);
+    expect(renderer.brands.map(({ brand }) => brand)).not.toContain("Electron");
+    const expectedBrands = renderer.brands.map(({ brand, version }) => `"${brand}";v="${version}"`).join(", ");
+    // Document and subresource requests carry the identity the page's JavaScript sees.
+    for (const headers of seen) {
+      expect(headers["user-agent"]).toBe(renderer.userAgent);
+      expect(headers["sec-ch-ua"]).toBe(expectedBrands);
+      expect(headers["sec-ch-ua-mobile"]).toBe(renderer.mobile ? "?1" : "?0");
+      expect(headers["sec-ch-ua-platform"]).toBe(`"${renderer.platform}"`);
+      expect(Object.keys(headers).filter(name => name.startsWith("sec-ch-ua")).sort()).toEqual(["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
+    }
+    await command(page, { action: "close", tabId });
+  } finally {
+    server.close();
+  }
+});

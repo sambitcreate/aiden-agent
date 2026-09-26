@@ -20,6 +20,7 @@ import {
   Clock3,
   Send,
   Smartphone,
+  TabletSmartphone,
   AudioWaveform,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
@@ -36,6 +37,7 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { SimulatorSettings } from "../components/settings/simulator-settings";
 import {
   availableSettingsDestinations,
   SETTINGS_DESTINATIONS,
@@ -67,6 +69,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   geminiLive: <AudioWaveform className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
+  simulator: <TabletSmartphone className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
@@ -91,6 +94,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  simulator: SimulatorSettings,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
   geminiLive: AidenLiveSettings,
@@ -109,6 +113,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   remoteAccess: "Pair your devices to use Aiden on the go.",
   websearch: "Choose how Aiden searches and reads the web.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
+  simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers and how long chats stay manageable.",
   scheduledTasks: "Manage when Aiden works in the background.",
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",

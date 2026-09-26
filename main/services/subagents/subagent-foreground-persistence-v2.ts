@@ -95,6 +95,8 @@ export interface ForegroundSubagentPersistenceV2Input {
   thinkingLevel: ThinkingLevel;
   ownerDocumentId: string;
   permission: WorkspacePermission;
+  /** Active turn ceiling; stored workspace permission alone cannot authorize a child. */
+  generationPermission?: WorkspacePermission | "read-only";
   control?: SubagentControlMainV2;
   applyControlSnapshot?: (
     snapshot: SubagentRunSnapshotV2,
@@ -224,14 +226,18 @@ export function createForegroundSubagentPersistenceV2(
         "A nested subagent request cannot widen its parent capability ceiling.",
       );
     }
+    const generationPermission = input.generationPermission ?? input.permission;
+    const generationWritable = generationPermission === "ask" || generationPermission === "full";
     const writeAvailable =
       input.writeEnabled === true &&
+      generationWritable &&
       (input.permission === "ask" || input.permission === "full") &&
       typeof input.requestApproval === "function" &&
       typeof input.currentWorkspace === "function" &&
       typeof input.validateWorkspace === "function";
     const shellAvailable =
       input.shellEnabled === true &&
+      generationWritable &&
       typeof input.shellBinary === "string" &&
       input.shellBinary.length > 0 &&
       input.permission !== "none" &&
@@ -404,6 +410,9 @@ export function createForegroundSubagentPersistenceV2(
         mcp: [],
         delegate: false,
       };
+      if (value.task.role === "implementer" && requestedCapabilities.delegate === true) {
+        throw new Error("An implementer cannot request delegation.");
+      }
       if (value.parentAuthority && requestedCapabilities.delegate === true) {
         throw new Error("A depth-2 subagent cannot request delegation.");
       }
@@ -417,6 +426,19 @@ export function createForegroundSubagentPersistenceV2(
           "Requested subagent delegation capability is unavailable.",
         );
       }
+      // V1 rollback never mints V2 authority, so the child could only receive
+      // read tools. Refuse the coding role instead of launching a lane that
+      // cannot perform its advertised write or shell work.
+      if (input.store.selection === "v1" && value.task.role === "implementer") {
+        throw new Error("The implementer role is unavailable during V1 rollback.");
+      }
+      const implicitImplementer = value.task.role === "implementer" &&
+        value.task.capabilities === undefined &&
+        requestedCapabilities.workspaceRead &&
+        !requestedCapabilities.web &&
+        requestedCapabilities.mcp.length === 0 &&
+        (requestedCapabilities.mcpMutations?.length ?? 0) === 0 &&
+        requestedCapabilities.delegate !== true;
       if (
         input.store.selection === "v1" &&
         (!requestedCapabilities.workspaceRead ||
@@ -432,8 +454,9 @@ export function createForegroundSubagentPersistenceV2(
         );
       }
       if (
-        requestedCapabilities.workspaceWrite &&
+        requestedCapabilities.workspaceWrite && !implicitImplementer &&
         (input.writeEnabled !== true ||
+          (input.generationPermission !== undefined && input.generationPermission !== "ask" && input.generationPermission !== "full") ||
           (input.permission !== "ask" && input.permission !== "full") ||
           typeof input.requestApproval !== "function" ||
           typeof input.currentWorkspace !== "function" ||
@@ -444,8 +467,9 @@ export function createForegroundSubagentPersistenceV2(
         );
       }
       if (
-        requestedCapabilities.shell === true &&
+        requestedCapabilities.shell === true && !implicitImplementer &&
         (input.shellEnabled !== true ||
+          (input.generationPermission !== undefined && input.generationPermission !== "ask" && input.generationPermission !== "full") ||
           !input.shellBinary ||
           input.permission === "none" ||
           !input.requestApproval ||
@@ -599,6 +623,8 @@ export function createForegroundSubagentPersistenceV2(
             childId: value.identity.childId,
             childLabel: value.task.label,
             workspace: input.workspace,
+            parentPermission: input.generationPermission === "full" ? "full" :
+              input.generationPermission === undefined ? input.permission : "ask",
             workspaceRoot: input.workspace.folderPath,
             bindings,
             ledger: approvals,
@@ -608,6 +634,7 @@ export function createForegroundSubagentPersistenceV2(
             validateWorkspace: input.validateWorkspace,
             requestApproval: input.requestApproval,
             runSignal,
+            implementerRunGrant: value.task.role === "implementer",
             registry: input.workspaceOperationRegistry,
             now,
           });
@@ -684,6 +711,8 @@ export function createForegroundSubagentPersistenceV2(
             childId: value.identity.childId,
             childLabel: value.task.label,
             workspace: input.workspace,
+            parentPermission: input.generationPermission === "full" ? "full" :
+              input.generationPermission === undefined ? input.permission : "ask",
             workspaceRoot: input.workspace.folderPath,
             ledger: approvals,
             journal: input.store,
@@ -694,6 +723,7 @@ export function createForegroundSubagentPersistenceV2(
             requestApproval: input.requestApproval,
             binary: input.shellBinary,
             runSignal,
+            implementerRunGrant: value.task.role === "implementer",
             registry: input.workspaceOperationRegistry,
             now,
             randomUUID: allocateUuid,

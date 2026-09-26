@@ -31,6 +31,7 @@ import {
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import {
@@ -519,6 +520,7 @@ export function registerChatHistoryHandlers(): void {
       ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
       : await chatApplicationService.remove(chatId);
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
+    closeDeviceSessionsForChat(chatId);
     return result;
   });
 
