@@ -2181,10 +2181,16 @@ export class PiAgentRuntimeHarness {
    * queued in Pi when the run ended (for example after Stop), or its visible
    * projection failed. Call after the managed run settles and before reset();
    * the caller must return these to the user rather than silently drop them.
-   * A projection that cancellation stopped waiting for is awaited here so a
-   * late visible save is not reported as undelivered too.
+   *
+   * This never waits on host storage, so the caller can deliver its terminal
+   * at once. A projection that cancellation stopped waiting for is reported
+   * separately: `late` settles with that input only if its visible save did
+   * not land, so a late save is never returned to the user as well.
    */
-  async takeUndeliveredQueuedMessages(): Promise<AgentMessage[]> {
+  takeUndeliveredQueuedMessages(): {
+    messages: AgentMessage[];
+    late?: Promise<AgentMessage[]>;
+  } {
     if (this.running || this.managedRunning) {
       throw new Error("Pi runtime harness is busy.");
     }
@@ -2192,16 +2198,24 @@ export class PiAgentRuntimeHarness {
     const uncertain = this.uncertainQueuedProjections;
     this.acceptedQueuedMessages = [];
     this.uncertainQueuedProjections = [];
+    const pending: Array<{ message: AgentMessage; operation: Promise<unknown> }> = [];
     for (const projection of uncertain) {
-      const saved = await projection.operation.then(
-        (id) => typeof id === "string" && id.length > 0,
-        () => false,
-      );
-      if (!saved) continue;
       const index = accepted.findIndex((item) => item.fingerprint === projection.fingerprint);
-      if (index >= 0) accepted.splice(index, 1);
+      if (index < 0) continue;
+      const [item] = accepted.splice(index, 1);
+      pending.push({ message: structuredClone(item.message), operation: projection.operation });
     }
-    return accepted.map(({ message }) => structuredClone(message));
+    const messages = accepted.map(({ message }) => structuredClone(message));
+    if (pending.length === 0) return { messages };
+    const late = Promise.all(
+      pending.map(({ message, operation }) =>
+        operation.then(
+          (id) => (typeof id === "string" && id.length > 0 ? [] : [message]),
+          () => [message],
+        ),
+      ),
+    ).then((results) => results.flat());
+    return { messages, late };
   }
 
   abort(): void {

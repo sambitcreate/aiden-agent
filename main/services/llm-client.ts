@@ -535,6 +535,38 @@ function broadcastChatSettled(
   });
 }
 
+function queuedGuidanceText(messages: readonly { role: string; content?: unknown }[]): string[] {
+  return messages.flatMap((message) =>
+    message.role === "user" && typeof message.content === "string" && message.content.trim()
+      ? [message.content]
+      : [],
+  );
+}
+
+/**
+ * Guidance whose visible save Stop stopped waiting for, and which then did not
+ * land. The stream's terminal has already been sent, so it goes to the window
+ * that owned the stream on its own channel.
+ */
+export function returnLateGuidance(
+  owner: Pick<ChatGenerationOwner, "kind" | "isDestroyed" | "send"> | undefined,
+  chatId: string,
+  streamId: string,
+  guidance: string[],
+): void {
+  if (guidance.length === 0) return;
+  // Steer is desktop-only; a paired-device owner has no draft to restore into.
+  if (!owner || owner.kind === "remote" || owner.isDestroyed()) {
+    logger.warn("pi", `Late guidance for stream ${streamId} had no window to return to.`);
+    return;
+  }
+  try {
+    owner.send("chat:guidance-returned", { chatId, streamId, undeliveredGuidance: guidance });
+  } catch (error) {
+    logger.warn("pi", `Could not return late guidance for stream ${streamId}.`, error);
+  }
+}
+
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
@@ -3350,14 +3382,26 @@ export const llmClient = {
     // Accepted steer input that Pi never emitted into the visible chat (Stop,
     // a terminal before the next step, or a failed projection). It rides on
     // the terminal event so the renderer can restore it instead of losing it.
+    // Collection never waits on host storage: a projection that Stop stopped
+    // waiting for is returned later, only if its visible save did not land.
     let undeliveredGuidance: string[] = [];
-    const collectUndeliveredGuidance = async () => {
+    let undeliveredGuidanceCollected = false;
+    const collectUndeliveredGuidance = () => {
+      if (undeliveredGuidanceCollected) return;
+      undeliveredGuidanceCollected = true;
       try {
-        undeliveredGuidance = (await agent.takeUndeliveredQueuedMessages()).flatMap((message) =>
-          message.role === "user" && typeof message.content === "string" && message.content.trim()
-            ? [message.content]
-            : [],
-        );
+        const taken = agent.takeUndeliveredQueuedMessages();
+        undeliveredGuidance = queuedGuidanceText(taken.messages);
+        if (taken.late) {
+          const owner = ownerForStream(streamId);
+          void taken.late.then(
+            (messages) =>
+              returnLateGuidance(owner, params.chatId, streamId, queuedGuidanceText(messages)),
+            (error: unknown) => {
+              logger.warn("pi", `Could not settle late guidance for stream ${streamId}.`, error);
+            },
+          );
+        }
       } catch (error) {
         logger.warn("pi", `Could not collect undelivered guidance for stream ${streamId}.`, error);
       }
@@ -3405,7 +3449,7 @@ export const llmClient = {
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
-        await collectUndeliveredGuidance();
+        collectUndeliveredGuidance();
         reconcileAbandonedVisibleAssistant = runtimeOutcome.finalMessageWasAbandoned === true;
         quarantineSessionFailureWithoutLease =
           runtimeOutcome.kind === "host_failed" && runtimeOutcome.faultKind === "session";
@@ -3518,7 +3562,7 @@ export const llmClient = {
         }
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
-        if (undeliveredGuidance.length === 0) await collectUndeliveredGuidance();
+        collectUndeliveredGuidance();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);

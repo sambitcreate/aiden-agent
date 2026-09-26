@@ -72,6 +72,20 @@ export function undeliveredGuidanceFromTerminal(payload: unknown): string[] {
     .slice(0, MAX_RESTORED_GUIDANCE);
 }
 
+/**
+ * Guidance returned after its stream's terminal: Stop stopped waiting for its
+ * visible save and that save then failed. Routed by chat, not by stream.
+ */
+export function subscribeLateReturnedGuidance(
+  subscribe: (channel: "chat:guidance-returned", handler: (payload: unknown) => void) => () => void,
+): () => void {
+  return subscribe("chat:guidance-returned", (payload) => {
+    const chatId = (payload as { chatId?: unknown } | null | undefined)?.chatId;
+    if (typeof chatId !== "string" || chatId.length === 0) return;
+    restoreUndeliveredGuidance(chatId, undeliveredGuidanceFromTerminal(payload));
+  });
+}
+
 export function mergeRestoredGuidance(current: string, guidance: readonly string[]): string {
   return [current, ...guidance].filter((part) => part.trim().length > 0).join("\n\n");
 }

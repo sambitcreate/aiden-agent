@@ -12,7 +12,11 @@ import {
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
 } from "./chat-terminal-sync.js";
-import { loadComposerDraft, subscribeGuidanceRestore } from "./composer-draft-store.js";
+import {
+  loadComposerDraft,
+  subscribeGuidanceRestore,
+  subscribeLateReturnedGuidance,
+} from "./composer-draft-store.js";
 
 interface FakeBridge {
   listeners: Map<string, Set<(payload: unknown) => void>>;
@@ -691,6 +695,41 @@ test("a detached stream's unread Steer guidance is saved to the chat's draft", a
     unsubscribe();
     globalThis.localStorage = priorStorage;
     restore();
+  }
+});
+
+test("guidance returned after the terminal reaches the open composer or the stored draft", () => {
+  const values = new Map<string, string>();
+  const priorStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  const handlers = new Set<(payload: unknown) => void>();
+  const unsubscribe = subscribeLateReturnedGuidance((channel, handler) => {
+    assert.equal(channel, "chat:guidance-returned");
+    handlers.add(handler);
+    return () => handlers.delete(handler);
+  });
+  const restored: string[][] = [];
+  const unsubscribeComposer = subscribeGuidanceRestore("chat-open", (guidance) => {
+    restored.push([...guidance]);
+  });
+  try {
+    const emit = (payload: unknown) => {
+      for (const handler of handlers) handler(payload);
+    };
+    emit({ chatId: "chat-open", streamId: "s1", undeliveredGuidance: ["Late guidance"] });
+    emit({ chatId: "chat-closed", streamId: "s2", undeliveredGuidance: ["Saved for later"] });
+    emit({ streamId: "s3", undeliveredGuidance: ["No chat"] });
+    assert.deepEqual(restored, [["Late guidance"]]);
+    assert.equal(loadComposerDraft("chat-closed").text, "Saved for later");
+    assert.equal(loadComposerDraft("chat-open").text, "");
+  } finally {
+    unsubscribeComposer();
+    unsubscribe();
+    globalThis.localStorage = priorStorage;
   }
 });
 

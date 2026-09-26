@@ -2203,7 +2203,7 @@ test("managed steering is accepted only while active and queued input is durable
       (entry.data as { chatMessageId?: string }).chatMessageId === "visible-steer-message"),
     true,
   );
-  assert.deepEqual(await harness.takeUndeliveredQueuedMessages(), []);
+  assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
 });
 
 function steerWaitTool(): { tool: AgentTool; atTool: Promise<void>; release: () => void } {
@@ -2263,13 +2263,14 @@ test("Stop before Pi emits accepted steering reports it as undelivered", async (
   await harness.cancelAndSettle();
   assert.equal((await running).kind, "app_cancelled");
   assert.deepEqual(projected, []);
-  const undelivered = await harness.takeUndeliveredQueuedMessages();
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.equal(undelivered.late, undefined);
   assert.deepEqual(
-    undelivered.map((message) => (message.role === "user" ? message.content : undefined)),
+    undelivered.messages.map((message) => (message.role === "user" ? message.content : undefined)),
     ["keep this guidance"],
   );
   // Taking is one-shot, and nothing reached the journal.
-  assert.deepEqual(await harness.takeUndeliveredQueuedMessages(), []);
+  assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
   assert.equal(
     (await session.buildContext()).messages.some(
       (message) => message.role === "user" && message.content === "keep this guidance",
@@ -2308,9 +2309,10 @@ test("a failed visible projection of queued input is a managed session failure w
   assert.equal(outcome.kind, "host_failed");
   assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
   assert.deepEqual(faults, ["projection"]);
-  const undelivered = await harness.takeUndeliveredQueuedMessages();
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.equal(undelivered.late, undefined);
   assert.deepEqual(
-    undelivered.map((message) => (message.role === "user" ? message.content : undefined)),
+    undelivered.messages.map((message) => (message.role === "user" ? message.content : undefined)),
     ["failed guidance"],
   );
   assert.equal(
@@ -2365,12 +2367,25 @@ for (const lateResult of ["saved", "failed"] as const) {
     assert.equal(projectionSignal?.aborted, true);
     const quarantine = harness.pendingDurabilitySettlement();
     assert.ok(quarantine, "the in-flight projection is quarantined as detached durability");
+    // Collection returns at once while the write is still unresolved, so
+    // the host can deliver Stop's terminal without waiting on storage.
     const undelivered = harness.takeUndeliveredQueuedMessages();
+    assert.deepEqual(undelivered.messages, []);
+    assert.ok(undelivered.late, "the unresolved projection is reported separately");
+    let lateSettled = false;
+    void undelivered.late.then(() => {
+      lateSettled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lateSettled, false);
+    assert.deepEqual(harness.takeUndeliveredQueuedMessages(), { messages: [] });
     if (lateResult === "saved") finishProjection("late-visible-id");
     else failProjection(new Error("late failure"));
     await quarantine;
     assert.deepEqual(
-      (await undelivered).map((message) => (message.role === "user" ? message.content : undefined)),
+      (await undelivered.late).map((message) =>
+        message.role === "user" ? message.content : undefined,
+      ),
       lateResult === "saved" ? [] : ["in flight"],
     );
   });
