@@ -334,8 +334,16 @@ static int run_shell(const char *root_path, int root_fd, const struct request *r
       "NPM_CONFIG_UPDATE_NOTIFIER=false", "NPM_CONFIG_FUND=false", "NPM_CONFIG_AUDIT=false",
       "ZDOTDIR=/dev/null", NULL,
     };
+#ifdef __APPLE__
+    /* zsh -f (NO_RCS) skips startup files; ZDOTDIR=/dev/null is the backstop. */
     char *arguments[] = {AIDEN_SHELL, "-f", "-c", (char *)request->command,
                          "aiden-subagent", NULL};
+#else
+    /* POSIX sh -f means noglob, so it must not be passed. The scrubbed
+       environment leaves ENV unset, so sh -c reads no startup file. */
+    char *arguments[] = {AIDEN_SHELL, "-c", (char *)request->command,
+                         "aiden-subagent", NULL};
+#endif
     execve(AIDEN_SHELL, arguments, environment);
     _exit(126);
   }

@@ -131,6 +131,16 @@ test("native runner returns zero, nonzero, signal, and no-output outcomes", asyn
   assert.equal((await run(t, "printf '\\377'")).stdout, "�");
 });
 
+test("native runner expands filename globs in subagent commands", async (t) => {
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
+  // POSIX sh treats -f as noglob, so this breaks if the rc-skipping zsh flag
+  // is passed to /bin/sh.
+  const result = await run(t, "touch a.ts b.ts c.md && printf '%s\\n' *.ts");
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "a.ts\nb.ts\n");
+});
+
 test("native runner uses a secret-free fixed environment and private 0700 directories", async (t) => {
   if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   process.env.AIDEN_PHASE5D_SECRET = "must-not-cross";

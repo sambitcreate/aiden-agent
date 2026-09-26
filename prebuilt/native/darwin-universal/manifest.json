@@ -1,6 +1,6 @@
 {
   "target": "darwin-universal",
-  "builtAt": "2026-09-26T05:59:56.330Z",
+  "builtAt": "2026-09-26T08:16:25.885Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "4d18a2d13ce21d79ca428df2094d31903a9a5b455721ee3f8b4ac771dd359465",
@@ -12,7 +12,7 @@
     },
     "subagent-shell-runner": {
       "sha256": "b63988adf218e13c0c4400a13355ef83228a28720075a18b9b387ee7cab01b3b",
-      "source": "d67b43ec01bb874c5e76dccfa226cea8c11d5c949a01d7810672234a51641db4"
+      "source": "fdaf43aaf356d13443df2bf7ed8a31aaa1a3878109deda95e96f5fb29814d21b"
     },
     "subagent-file-mutator": {
       "sha256": "1d6b5b79468a656568f8efe3262152e68a624ad0bf7a8c1c1eb0c1cd36289886",
