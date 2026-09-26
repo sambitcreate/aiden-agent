@@ -101,7 +101,7 @@ class AidenChatScrollTest {
             ),
         )
         val key = AidenChatScroll.taskListFollowKey(base)
-        assertEquals("1:COMPLETED::Plan:|2:IN_PROGRESS:Writing:Write:", key)
+        assertEquals(key, AidenChatScroll.taskListFollowKey(base.map { it.copy() }))
         assertNotEquals(
             key,
             AidenChatScroll.taskListFollowKey(listOf(base[0], base[1].copy(subject = "Write a much longer subject"))),
@@ -113,6 +113,15 @@ class AidenChatScrollTest {
         assertNotEquals(
             key,
             AidenChatScroll.taskListFollowKey(listOf(base[0], base[1].copy(activeForm = "Rewriting"))),
+        )
+        // Free-text fields must not collide when they contain separators.
+        assertNotEquals(
+            AidenChatScroll.taskListFollowKey(
+                listOf(base[1].copy(activeForm = "a:b", subject = "c")),
+            ),
+            AidenChatScroll.taskListFollowKey(
+                listOf(base[1].copy(activeForm = "a", subject = "b:c")),
+            ),
         )
     }
 }

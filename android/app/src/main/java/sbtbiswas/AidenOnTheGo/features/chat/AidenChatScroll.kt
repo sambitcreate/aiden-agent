@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import sbtbiswas.AidenOnTheGo.models.AidenChatTask
+import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
 
 /** Reverse-layout transcripts keep the latest item at index 0. */
 object AidenChatScroll {
@@ -69,16 +70,19 @@ object AidenChatScroll {
         return lastVisibleItemEndOffset - viewportContentEndOffset <= thresholdPx
     }
 
-    /** Every field a task row renders, so any visible change re-arms follow. */
-    fun taskListFollowKey(tasks: List<AidenChatTask>): String {
-        return tasks.joinToString("|") { task ->
-            listOf(
-                task.id,
-                task.status.name,
-                task.activeForm.orEmpty(),
-                task.subject,
-                task.blockedBy.orEmpty().joinToString(","),
-            ).joinToString(":")
+    /**
+     * Every field a task row renders, so any visible change re-arms follow.
+     * Structured (not a joined string) so free-text fields cannot collide.
+     */
+    fun taskListFollowKey(tasks: List<AidenChatTask>): List<TaskFollowEntry> {
+        return tasks.map { task ->
+            TaskFollowEntry(
+                id = task.id,
+                status = task.status,
+                activeForm = task.activeForm,
+                subject = task.subject,
+                blockedBy = task.blockedBy.orEmpty(),
+            )
         }
     }
 
@@ -124,4 +128,12 @@ data class FollowLatchState(
     val consumedItemCount: Int = -1,
     val followLatest: Boolean = true,
     val wasScrolling: Boolean = false,
+)
+
+data class TaskFollowEntry(
+    val id: Long,
+    val status: AidenChatTaskStatus,
+    val activeForm: String?,
+    val subject: String,
+    val blockedBy: List<Long>,
 )

@@ -17,4 +17,6 @@ live edge only while the reader is there.
   `listState.layoutInfo` (last visible row == last task and its bottom within
   80px of `viewportEndOffset - afterContentPadding`), never from a captured
   `tasks.size`. The repin key includes every rendered field (id, status,
-  activeForm, subject, blockedBy); iOS `taskListFollowKey` matches.
+  activeForm, subject, blockedBy) as a structured list, not a joined string, so
+  free text with separators cannot collide; iOS `taskListFollowKey` returns the
+  Equatable task array for the same reason.

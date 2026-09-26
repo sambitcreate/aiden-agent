@@ -33,11 +33,10 @@ enum AidenChatScrollPolicy {
         wasFollowingLatest
     }
 
-    static func taskListFollowKey(_ tasks: [AidenRemoteChatTask]) -> String {
-        tasks.map { task in
-            let blockedBy = (task.blockedBy ?? []).map(String.init).joined(separator: ",")
-            return "\(task.id):\(task.status.rawValue):\(task.subject):\(task.activeForm ?? ""):\(blockedBy)"
-        }.joined(separator: "|")
+    /// Every rendered task field, compared structurally so free-text values
+    /// containing separators cannot collide.
+    static func taskListFollowKey(_ tasks: [AidenRemoteChatTask]) -> [AidenRemoteChatTask] {
+        tasks
     }
 
     static func taskListAnchorID<Task: Identifiable>(_ tasks: [Task]) -> Task.ID? {
