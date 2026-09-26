@@ -23,6 +23,8 @@ export interface AskUserQuestionExtensionScope {
   assistantMode: boolean;
   botBound: boolean;
   rendererOwner: boolean;
+  /** Paired-device owners also reach a questionnaire surface through Remote v1. */
+  remoteOwner?: boolean;
   excluded: boolean;
 }
 
@@ -33,7 +35,7 @@ export function shouldEnableAskUserQuestionExtension(
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.botBound &&
-    scope.rendererOwner &&
+    (scope.rendererOwner || scope.remoteOwner === true) &&
     !scope.excluded &&
     !scope.assistantMode
   );

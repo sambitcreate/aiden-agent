@@ -73,6 +73,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSummariesFeature = "chat-summaries-v1"
     static let chatTasksFeature = "chat-tasks-v1"
     static let chatAgentsFeature = "chat-agents-v1"
+    static let chatRunInputFeature = "chat-run-input-v1"
+    static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
+    static let chatSkillsFeature = "chat-skills-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -204,6 +207,18 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatAgents: Bool {
         features.contains(Self.chatAgentsFeature)
+    }
+
+    var supportsChatRunInput: Bool {
+        features.contains(Self.chatRunInputFeature)
+    }
+
+    var supportsQuestionPrompts: Bool {
+        features.contains(Self.chatQuestionPromptsFeature)
+    }
+
+    var supportsChatSkills: Bool {
+        features.contains(Self.chatSkillsFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -488,6 +503,10 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ScheduledTaskList: Decodable { let tasks: [AidenScheduledTask] }
     private struct ScheduledRunList: Decodable { let runs: [AidenScheduledRun] }
+    private struct ScheduledRunNotificationList: Decodable {
+        let notifications: [AidenScheduledRunNotification]
+        let now: Int64
+    }
     private struct ScheduledScriptList: Decodable { let scripts: [AidenScheduledScript] }
     private struct ScheduledMcpServerList: Decodable { let servers: [AidenScheduledMcpServer] }
     private struct ScheduledPreviewRequest: Encodable {
@@ -715,7 +734,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     func updateDeviceCapabilities(
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
-        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        let allowed = Set([
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+        ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {
@@ -759,6 +780,13 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteClientError.invalidResponse
         }
         return value
+    }
+
+    /// Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+    /// the Bot's currently admitted skills; the catalog is presentation input
+    /// only — the Mac re-validates every lease redemption at turn admission.
+    func chatSkills(chatId: String) async throws -> AidenRemoteSkillCatalog {
+        try await send(method: "GET", path: ["chats", chatId, "skills"])
     }
 
     func updateDeviceIdentity(name: String) async throws {
@@ -1417,6 +1445,21 @@ final class AidenRemoteClient: @unchecked Sendable {
         return try AidenScheduledTaskValidation.runs(value.runs, taskId: taskId)
     }
 
+    /// Completed runs across all tasks since `since` (epoch-ms cursor) — the polling feed behind schedule notifications.
+    func scheduledRunNotifications(since: Date? = nil) async throws -> AidenScheduledRunNotificationFeed {
+        let query = since.map {
+            [URLQueryItem(name: "since", value: String(Int64($0.timeIntervalSince1970 * 1000)))]
+        } ?? []
+        let value: ScheduledRunNotificationList = try await send(
+            method: "GET", path: ["scheduled-tasks", "notifications"], query: query
+        )
+        guard value.now >= 0 else { throw AidenRemoteClientError.invalidResponse }
+        return AidenScheduledRunNotificationFeed(
+            notifications: try AidenScheduledTaskValidation.notifications(value.notifications),
+            serverNow: Date(timeIntervalSince1970: TimeInterval(value.now) / 1_000)
+        )
+    }
+
     func previewSchedule(cron: String, timezone: String, count: Int = 3) async throws -> [Date] {
         let value: AidenScheduledPreview = try await send(
             method: "POST", path: ["scheduled-tasks", "preview"],
@@ -1751,6 +1794,22 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    /// Remote Slice 2: submits mid-flight input bound to the displayed stream.
+    /// The Mac persists the user message before Pi queue admission; callers
+    /// must pass a stable request UUID so retries replay the original outcome.
+    func submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenStreamInputResult {
+        try await send(
+            method: "POST",
+            path: ["streams", id, "inputs"],
+            body: input,
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+    }
+
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -1760,6 +1819,27 @@ final class AidenRemoteClient: @unchecked Sendable {
             method: "POST",
             path: ["approvals", id, "respond"],
             body: ApprovalRequest(decision: decision),
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+    }
+
+    /// Aiden On The Go pending-question snapshot. The stream-level route is
+    /// additive; a `nil` question means the prompt resolved or expired.
+    func streamQuestion(id: String) async throws -> AidenStreamQuestionSnapshot {
+        try await send(method: "GET", path: ["streams", id, "question"])
+    }
+
+    /// Resolves one pending prompt owned by this device. Callers must pass a
+    /// stable request UUID so a transport retry replays the original outcome.
+    func respondToQuestion(
+        id: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenQuestionRespondResponse {
+        try await send(
+            method: "POST",
+            path: ["questions", id, "respond"],
+            body: request,
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }

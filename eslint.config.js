@@ -14,12 +14,17 @@ export default [
       ".papercuts/**",
       ".agents/**",
       "resources/generative-ui/**",
+      "packages/cli/dist/**",
+      "packages/cli-playground/dist/**",
+      "**/node_modules/**",
+      "packages/cli-playground/test-results/**",
     ],
   },
   js.configs.recommended,
   {
     files: [
       "scripts/aiden-remote-*.mjs",
+      "packages/cli/**/*.mjs",
       "scripts/ios-asc-monitor*.mjs",
       "scripts/ios-live-activity-process-proof*.mjs",
       "scripts/vendor-generative-ui-libs.mjs",

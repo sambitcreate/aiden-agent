@@ -896,6 +896,98 @@ Pull-request CI now gives Android its own Java 21/SDK 36 job. Pull requests run 
 
 Implementation in `feature/native-workspace-browsing`: optional per-directory pages supplement the legacy recursive index; iOS and Android expand loaded folders, search only downloaded entries, and open bounded source previews before explicit editing. Explicit `./` file links resolve through opaque directory/file handles. Both native clients retain offline read-only caches and expected-version writes. The workspace-browser selection service, Bot files, streaming, and produced-file events are outside this slice. Focused test and review evidence is tracked in `.memory/native-workspace-browsing.md`; PR/physical-device acceptance remains pending.
 
+## Quiet Open Chat and push foundation — 2026-09-24
+
+Quiet Open Chat ships on both clients: while a conversation is on screen, its
+ambient surfaces stay quiet instead of re-reporting progress the user is
+already watching. A shared decision table classifies every run-status kind —
+ambient progress churn (starting/thinking/tool/responding and
+queued/reconciling/running stream states) is suppressed for the foregrounded
+chat, blocking kinds (waiting-for-approval and failure) always publish, and
+terminal kinds (complete/cancelled) clear the surface quietly rather than
+posting a redundant banner. iOS applies the policy to Live Activity update
+churn (`pushType` stays `nil`; start, blocking updates, finish, stale marking,
+and reconcile are never gated). Android applies the same table to the
+low-importance agent-run notification: foregrounding a chat dismisses its
+posted progress entry, suppressed updates are skipped, and terminal states
+dismiss instead of posting. Opening a chat mid-run therefore quiets it on both
+platforms; leaving the chat or backgrounding the app resumes normal ambient
+updates. Pending approvals, `ask_user_question` prompts, and errors surface in
+app or through the blocking notification path unchanged.
+
+**E.2 — push foundation (documented, not shipped).** Cloud push pairing is
+deferred: APNs (iOS) + FCM (Android) would need a Mac-mediated or sealed-relay
+path with content-available or mute-safe titles so plaintext agent content
+never leaves the Remote trust boundary. When pairing lands, Live Activity
+APNs updates (`pushType: .token`) become possible; the current local-only LA
+must not be broken in the meantime. The shipped Quiet Open Chat policy is the
+hook real notifications will consult: notification kinds are already
+classified blocking vs ambient, so a future push pipeline can reuse the same
+decision table server- and client-side.
+
+## Cold-open snappiness and streaming polish — 2026-09-24
+
+Chat open is already cache-first on both clients (exact cached transcript
+before secondary loads; Android restores draft + transcript synchronously in
+the ViewModel init). This slice removes the remaining open-time serial work
+and per-token settled-row churn:
+
+- iOS `load()` now overlaps stream restore (status probe plus approval and
+  question snapshots) with the transcript + catalog fetch — matching Android,
+  where `resumeActiveStreamIfNeeded` has always launched independently of the
+  parallel `loadChat`/`loadCatalog` coroutines.
+- iOS settled transcript rows moved into `AidenSettledMessageRows`, a child
+  view tracking only `chat`: per-token `liveText` updates no longer re-run
+  the `ForEach` or re-evaluate finished message bodies. `AidenMessageView`
+  also conforms to `Equatable` (message + presentation style; the attachment
+  loader closure is intentionally ignored) so even real `chat` changes only
+  re-render the rows that actually changed.
+- Android now collects `liveText`/`reasoning`/`tools`/`activityTimeline`
+  inside the `live_stream` LazyColumn item instead of at screen level, so a
+  token recomposes only the streaming card rather than the whole screen.
+  Settled-row inputs are `remember`ed (message callbacks, attachment loader,
+  reversed list) making `UserMessageRow`/`AssistantMessageRow` skippable —
+  previously fresh lambdas forced every visible row to recompose per token.
+
+Deferred per the slice scope: device-local unread marks and Live Activity
+freshness chips wait for the E.2 push foundation.
+
+## Composer power (`/skills`, `@mentions`) — 2026-09-25
+
+The Mac stays the execution authority; mobile only ever sees bounded display
+metadata plus an opaque invocation lease. Contract revision 14 adds the
+`skills:invoke` negotiable capability, the `chat-skills-v1` feature token,
+`GET /chats/{chatId}/skills` (≤500 entries of `invocationId`/`name`/
+`description`/`source`/`available`/`unavailableReason` — never paths,
+instructions, or registry internals), an optional `skill` lease on
+`POST /chats/{chatId}/turns`, and the `skill_unavailable` error code. Bot
+catalogs are narrowed by the bot's currently admitted skill policy, and the
+turn route redeems the lease through the same
+`reserveSkillPreparation`/`prepareSkillInvocation`/`handoff` path desktop
+slash selection uses — stale, malformed, or unavailable leases fail closed
+and the turn is released cleanly.
+
+On both native clients the composer parses the trailing `/query` or `@query`
+token: `/` lists catalog skills (hidden while a run is active, since stream
+inputs cannot carry a lease) and `@` lists roster agents plus workspace files
+through the existing `agents`, `botConversationFiles`, and `workspaceFiles`
+reads. Selecting a skill sets a pending lease chip the send attaches to
+`AidenTurnStart`; mention selections insert plain `@label`/`@displayPath`
+text. Capability upgrades negotiate `skills:invoke` post-pairing exactly like
+the question grant — this also fixed a latent iOS bug where the
+`updateDeviceCapabilities` allowlist had never gained `questionsRespond`.
+
+Subagent interrupt stays deferred: Remote intentionally exposes no child-run
+control surface, so mobile remains inspect-only for subagents.
+
+Review follow-ups (`59caafa7`): the remote turn now consumes attachments and
+reserves append/skill capacity inside the protected try so failures release
+the lease and mark the stream; the workspace mutation gate wraps remote skill
+preparation exactly like desktop; catalog/lease failures map onto the remote
+error vocabulary instead of 500s; empty skill descriptions decode on all
+three platforms; Android persists the negotiated `skills:invoke` grant; and
+both composers pin the Unicode White_Space trigger grammar.
+
 ## Desktop-configured Read Aloud follow-up — September 2026
 
 The user's approved `tts-v1` extension supersedes this plan's earlier exclusion

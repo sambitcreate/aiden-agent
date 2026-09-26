@@ -1,5 +1,5 @@
 {
-  "contractRevision": 11,
+  "contractRevision": 15,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -20,7 +20,9 @@
     "bot:read",
     "bot:write",
     "tasks:read",
-    "agents:read"
+    "agents:read",
+    "questions:respond",
+    "skills:invoke"
   ],
   "health": { "ok": true, "protocolVersion": 1 },
   "pairingBootstrap": {
@@ -37,7 +39,7 @@
     "deviceId": "device_fixture_01",
     "credential": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "displayName": "Fixture Aiden",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"],
+    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
     "endpoint": "https://aiden-fixture.example.test/api/aiden/v1",
     "serverSpkiSha256": "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   },
@@ -46,9 +48,9 @@
     "instanceId": "instance_fixture_01",
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1"],
+    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
+    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -145,7 +147,7 @@
     "chatId": "chat_fixture_01",
     "turnId": "turn_fixture_01",
     "state": "waiting_for_approval",
-    "lastSequence": 9,
+    "lastSequence": 11,
     "updatedAt": "2026-08-18T19:01:09.000Z"
   },
   "streamApproval": {
@@ -160,6 +162,22 @@
       "canAllow": true
     }
   },
+  "streamInput": {
+    "request": {
+      "mode": "queue",
+      "text": "Also add a regression test."
+    },
+    "response": {
+      "streamId": "stream_fixture_01",
+      "chatId": "chat_fixture_01",
+      "turnId": "turn_fixture_01",
+      "mode": "queue",
+      "status": "admitted",
+      "queue": "follow-up",
+      "committed": true,
+      "messageId": "message_fixture_user_03"
+    }
+  },
   "events": [
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:01.000Z", "type": "snapshot", "terminal": false, "payload": { "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "nextSequence": 2 } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:02.000Z", "type": "status", "terminal": false, "payload": { "state": "running" } },
@@ -169,8 +187,9 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.750Z", "type": "heartbeat", "terminal": false, "payload": {} },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 10, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "question_required", "terminal": false, "payload": { "promptId": "q-fixture-01", "questions": [{ "question": "Which tolerance should the chamfer use?", "header": "Chamfer", "multiSelect": false, "options": [{ "label": "0.5 mm", "description": "Standard shop chamfer." }, { "label": "1.0 mm", "description": "Heavy chamfer for handling." }] }], "expiresAt": "2026-08-18T19:06:10.000Z" } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 10, "timestamp": "2026-08-18T19:01:09.750Z", "type": "heartbeat", "terminal": false, "payload": {} },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 11, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_error", "sequence": 1, "timestamp": "2026-08-18T19:02:00.000Z", "type": "error", "terminal": true, "payload": { "code": "server_interrupted", "message": "Aiden restarted before the turn completed." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_cancelled", "sequence": 1, "timestamp": "2026-08-18T19:03:00.000Z", "type": "cancelled", "terminal": true, "payload": { "source": "device" } }
   ],
@@ -277,6 +296,16 @@
     "startedAt": "2026-08-18T19:10:00.000Z",
     "finishedAt": "2026-08-18T19:10:03.000Z",
     "summary": "Review completed."
+  },
+  "scheduleRunNotification": {
+    "id": "run_fixture_01",
+    "taskId": "task_fixture_01",
+    "taskName": "Morning review",
+    "status": "succeeded",
+    "startedAt": "2026-08-18T19:10:00.000Z",
+    "finishedAt": "2026-08-18T19:10:03.000Z",
+    "summary": "Review completed.",
+    "notify": true
   },
   "botSummary": {
     "id": "bot_fixture_01",
@@ -876,9 +905,9 @@
     ]
   },
   "deviceCapabilitiesUpdate": {
-    "request": { "accepts": ["tasks:read", "agents:read"] },
+    "request": { "accepts": ["tasks:read", "agents:read", "questions:respond", "skills:invoke"] },
     "response": {
-      "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"]
+      "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"]
     }
   },
   "chatProgressEvents": [
@@ -928,6 +957,72 @@
       "retryable": false,
       "details": { "currentRevision": "workspace_revision_8" }
     }
+  },
+  "question": {
+    "pending": {
+      "promptId": "q-fixture-01",
+      "streamId": "stream_fixture_01",
+      "chatId": "chat_fixture_01",
+      "toolCallId": "tool_fixture_02",
+      "questions": [
+        {
+          "question": "Which tolerance should the chamfer use?",
+          "header": "Chamfer",
+          "multiSelect": false,
+          "options": [
+            {
+              "label": "0.5 mm",
+              "description": "Standard shop chamfer."
+            },
+            {
+              "label": "1.0 mm",
+              "description": "Heavy chamfer for handling."
+            }
+          ]
+        }
+      ],
+      "expiresAt": "2026-08-18T19:06:10.000Z"
+    },
+    "respondRequest": {
+      "cancelled": false,
+      "answers": [
+        {
+          "questionIndex": 0,
+          "kind": "option",
+          "answer": "0.5 mm"
+        }
+      ]
+    },
+    "respondResponse": {
+      "promptId": "q-fixture-01",
+      "resolvedAt": "2026-08-18T19:02:30.000Z"
+    }
+  },
+  "chatSkills": {
+    "skills": [
+      {
+        "invocationId": "sk1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "review-code",
+        "description": "Review the current changes for bugs, regressions, and style drift.",
+        "source": "workspace",
+        "available": true
+      },
+      {
+        "invocationId": "sk1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "release-notes",
+        "description": "Draft release notes from the recent commit history.",
+        "source": "configured",
+        "available": false,
+        "unavailableReason": "Shadowed by workspace skill \"release-notes\"."
+      },
+      {
+        "invocationId": "sk1_ccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "triage",
+        "description": "",
+        "source": "global",
+        "available": true
+      }
+    ]
   },
   "readAloudStatus": {
     "enabled": true,

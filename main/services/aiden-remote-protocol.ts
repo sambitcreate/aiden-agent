@@ -1,5 +1,18 @@
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
+  ChatRunInputMode,
+  ChatRunInputRejectionReason,
+} from "../../renderer/shared/chat-run-input.js";
+import {
+  ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
+  ASK_USER_MAX_LABEL_LENGTH,
+  ASK_USER_MAX_OPTIONS,
+  ASK_USER_MAX_QUESTIONS,
+  parseAskUserQuestions,
+  type AskUserQuestionAnswerV1,
+  type AskUserQuestionV1,
+} from "../../renderer/shared/ask-user-question.js";
+import type {
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
   AidenRemoteChatSummaryProjection,
@@ -48,6 +61,8 @@ export const AIDEN_REMOTE_BOT_CAPABILITIES = [
 export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
   "tasks:read",
   "agents:read",
+  "questions:respond",
+  "skills:invoke",
 ] as const;
 
 export type AidenRemoteProgressCapability =
@@ -90,6 +105,39 @@ export const AIDEN_REMOTE_PROGRESS_FEATURES = [
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
 ] as const;
 
+/**
+ * Server feature token for the shared foreground admission endpoint
+ * `POST /streams/{streamId}/inputs`. Advertised only while the host wires a
+ * main-owned admission path; old servers omit it and clients must fall back
+ * to the Stop-only busy composer.
+ */
+export const AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1" as const;
+
+/**
+ * Server feature token for the pending-question surface
+ * (`GET /streams/{streamId}/question`, `POST /questions/{promptId}/respond`,
+ * and the `question_required` stream event). The host advertises it only while
+ * a main-owned questionnaire path is wired, and it additionally requires the
+ * device-declared `questions:respond` capability before the tool is offered on
+ * that device's turns. Old servers omit it and clients must not render
+ * question cards.
+ */
+export const AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1" as const;
+
+/**
+ * Server feature token for the chat skill surface (`GET /chats/{chatId}/skills`
+ * and the `skill` invocation field on `POST /chats/{chatId}/turns`). The host
+ * advertises it only while a main-owned skill registry path is wired. Catalog
+ * reads and invocation both additionally require the negotiated `skills:invoke`
+ * grant; old servers omit the token and clients must not show the skill palette
+ * or send a `skill` field.
+ */
+export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
+
+export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
+export type AidenRemoteRunInputMode = ChatRunInputMode;
+export const AIDEN_REMOTE_RUN_INPUT_MAX_TEXT = 200_000;
+
 export const AIDEN_REMOTE_EVENT_TYPES = [
   "snapshot",
   "status",
@@ -99,6 +147,7 @@ export const AIDEN_REMOTE_EVENT_TYPES = [
   "tool_finished",
   "timeline",
   "approval_required",
+  "question_required",
   "task_update",
   "agents_update",
   "done",
@@ -142,6 +191,9 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "stream_gone",
   "approval_already_resolved",
   "approval_expired",
+  "question_already_resolved",
+  "question_expired",
+  "skill_unavailable",
   "operation_in_progress",
   "operation_stale",
   "git_capability_denied",
@@ -768,6 +820,16 @@ export interface AidenRemoteContractFixture {
   turnStart: unknown;
   streamStatus: unknown;
   streamApproval: unknown;
+  streamInput: {
+    request: AidenRemoteStreamInputRequest;
+    response: AidenRemoteStreamInputResult;
+  };
+  question: {
+    pending: AidenRemotePendingQuestion;
+    respondRequest: AidenRemoteQuestionRespondRequest;
+    respondResponse: AidenRemoteQuestionRespondResponse;
+  };
+  chatSkills: AidenRemoteSkillCatalog;
   events: AidenRemoteStreamEvent[];
   fileIndex: unknown;
   fileDocument: unknown;
@@ -776,6 +838,7 @@ export interface AidenRemoteContractFixture {
   scheduleSettings: unknown;
   scheduleRunAccepted: unknown;
   scheduleRun: unknown;
+  scheduleRunNotification: unknown;
   speechStatus: unknown;
   speechTranscription: unknown;
   botSummary: AidenRemoteBotSummary;
@@ -1274,10 +1337,10 @@ function assertAidenRemoteJsonValue(value: unknown, location: string): void {
   visit(value, 0, location);
 }
 
-function requiredString(record: Record<string, unknown>, key: string): string {
+function requiredString(record: Record<string, unknown>, key: string, allowEmpty = false): string {
   const value = record[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Aiden Remote fixture field ${key} must be a non-empty string.`);
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
+    throw new Error(`Aiden Remote fixture field ${key} must be a ${allowEmpty ? "" : "non-empty "}string.`);
   }
   return value;
 }
@@ -1331,6 +1394,7 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   tool_finished: ["toolId", "status"],
   timeline: ["timeline"],
   approval_required: ["approvalId", "summary", "expiresAt"],
+  question_required: ["promptId", "questions", "expiresAt"],
   task_update: [],
   agents_update: [],
   done: ["messageId"],
@@ -1347,8 +1411,8 @@ function assertExactKeys(record: Record<string, unknown>, allowed: readonly stri
   }
 }
 
-function assertBoundedString(record: Record<string, unknown>, key: string, maxLength: number): string {
-  const value = requiredString(record, key);
+function assertBoundedString(record: Record<string, unknown>, key: string, maxLength: number, allowEmpty = false): string {
+  const value = requiredString(record, key, allowEmpty);
   if (characterLength(value) > maxLength) throw new Error(`Aiden Remote field ${key} exceeds ${maxLength} characters.`);
   return value;
 }
@@ -3378,6 +3442,328 @@ export function parseAidenRemoteChatAgentRoster(
   return { ...base, availability, unavailableReason, agents: [] };
 }
 
+/**
+ * Public invocable-skill contract (version 1). Entries are the same bounded,
+ * renderer-safe `SkillCatalogEntry` projection the desktop slash palette
+ * consumes: an opaque invocation lease plus safe display metadata — never skill
+ * paths, instructions, fingerprints, or registry internals. A lease is
+ * workspace- and registry-revision-bound and may only be redeemed on the turn
+ * route by a device holding `skills:invoke`.
+ */
+export const AIDEN_REMOTE_SKILL_SOURCES = ["configured", "workspace", "global"] as const;
+export type AidenRemoteSkillSource = (typeof AIDEN_REMOTE_SKILL_SOURCES)[number];
+export const AIDEN_REMOTE_SKILL_MAX_ENTRIES = 500;
+export const AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH = 64;
+export const AIDEN_REMOTE_SKILL_NAME_MAX_LENGTH = 80;
+export const AIDEN_REMOTE_SKILL_DESCRIPTION_MAX_LENGTH = 240;
+export const AIDEN_REMOTE_SKILL_UNAVAILABLE_REASON_MAX_LENGTH = 160;
+
+export interface AidenRemoteSkillCatalogEntry {
+  invocationId: string;
+  name: string;
+  description: string;
+  source: AidenRemoteSkillSource;
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export interface AidenRemoteSkillCatalog {
+  skills: AidenRemoteSkillCatalogEntry[];
+}
+
+export function parseAidenRemoteSkillCatalogEntry(
+  value: unknown,
+  label = "Skill catalog entry",
+): AidenRemoteSkillCatalogEntry {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(
+    value,
+    ["invocationId", "name", "description", "source", "available", "unavailableReason"],
+    label,
+  );
+  const invocationId = assertBoundedString(
+    value,
+    "invocationId",
+    AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH,
+  );
+  const name = assertBoundedString(value, "name", AIDEN_REMOTE_SKILL_NAME_MAX_LENGTH);
+  // A skill with no description frontmatter legitimately projects "".
+  const description = assertBoundedString(
+    value,
+    "description",
+    AIDEN_REMOTE_SKILL_DESCRIPTION_MAX_LENGTH,
+    true,
+  );
+  const source = enumMember(value.source, AIDEN_REMOTE_SKILL_SOURCES, `${label} source`);
+  if (typeof value.available !== "boolean") {
+    throw new Error(`${label} available must be a boolean.`);
+  }
+  const unavailableReason = hasOwn(value, "unavailableReason")
+    ? assertBoundedString(
+        value,
+        "unavailableReason",
+        AIDEN_REMOTE_SKILL_UNAVAILABLE_REASON_MAX_LENGTH,
+      )
+    : undefined;
+  if (value.available && unavailableReason !== undefined) {
+    throw new Error(`${label} unavailableReason is only valid when unavailable.`);
+  }
+  if (!value.available && unavailableReason === undefined) {
+    throw new Error(`${label} unavailableReason is required when unavailable.`);
+  }
+  return {
+    invocationId,
+    name,
+    description,
+    source,
+    available: value.available,
+    ...(unavailableReason !== undefined ? { unavailableReason } : {}),
+  };
+}
+
+export function parseAidenRemoteSkillCatalog(
+  value: unknown,
+  label = "Skill catalog",
+): AidenRemoteSkillCatalog {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["skills"], label);
+  if (!Array.isArray(value.skills) || value.skills.length > AIDEN_REMOTE_SKILL_MAX_ENTRIES) {
+    throw new Error(`${label} skills must be a bounded array.`);
+  }
+  const skills = value.skills.map((entry) => parseAidenRemoteSkillCatalogEntry(entry, label));
+  const invocationIds = new Set(skills.map((entry) => entry.invocationId));
+  if (invocationIds.size !== skills.length) {
+    throw new Error(`${label} invocationIds must be unique.`);
+  }
+  return { skills };
+}
+
+export interface AidenRemoteStreamInputRequest {
+  mode: AidenRemoteRunInputMode;
+  text: string;
+}
+
+export type AidenRemoteStreamInputRejectionReason = ChatRunInputRejectionReason;
+
+/**
+ * Admission receipt for `POST /streams/{streamId}/inputs`. `committed` means
+ * the user message is durable in the chat transcript; a rejected-but-committed
+ * input remains conversation history and must not be resent.
+ */
+export interface AidenRemoteStreamInputResult {
+  streamId: string;
+  chatId: string;
+  turnId: string;
+  mode: AidenRemoteRunInputMode;
+  status: "admitted" | "rejected";
+  queue?: "steer" | "follow-up";
+  reason?: AidenRemoteStreamInputRejectionReason;
+  committed: boolean;
+  messageId?: string;
+}
+
+export function parseAidenRemoteStreamInputRequest(
+  value: unknown,
+): AidenRemoteStreamInputRequest {
+  if (!isRecord(value)) {
+    throw new Error("Stream input request must be an object.");
+  }
+  assertExactKeys(value, ["mode", "text"], "Stream input request");
+  const mode = enumMember(value.mode, AIDEN_REMOTE_RUN_INPUT_MODES, "Stream input mode");
+  const text = boundedText(
+    value.text,
+    "Stream input text",
+    AIDEN_REMOTE_RUN_INPUT_MAX_TEXT,
+  );
+  return { mode, text };
+}
+
+export function parseAidenRemoteStreamInputResult(
+  value: unknown,
+): AidenRemoteStreamInputResult {
+  if (!isRecord(value)) {
+    throw new Error("Stream input result must be an object.");
+  }
+  assertExactKeys(
+    value,
+    ["streamId", "chatId", "turnId", "mode", "status", "queue", "reason", "committed", "messageId"],
+    "Stream input result",
+  );
+  const streamId = boundedText(value.streamId, "Stream input result streamId", 128);
+  const chatId = boundedText(value.chatId, "Stream input result chatId", 128);
+  const turnId = boundedText(value.turnId, "Stream input result turnId", 128);
+  const mode = enumMember(value.mode, AIDEN_REMOTE_RUN_INPUT_MODES, "Stream input result mode");
+  const status = enumMember(value.status, ["admitted", "rejected"] as const, "Stream input result status");
+  const queue = hasOwn(value, "queue")
+    ? enumMember(value.queue, ["steer", "follow-up"] as const, "Stream input result queue")
+    : undefined;
+  const reason = hasOwn(value, "reason")
+    ? enumMember(
+        value.reason,
+        ["run_not_active", "cancelled", "capacity", "invalid"] as const,
+        "Stream input result reason",
+      )
+    : undefined;
+  if (typeof value.committed !== "boolean") {
+    throw new Error("Stream input result committed must be boolean.");
+  }
+  const messageId = hasOwn(value, "messageId")
+    ? boundedText(value.messageId, "Stream input result messageId", 128)
+    : undefined;
+  if (status === "admitted" && (queue === undefined || reason !== undefined || value.committed !== true || messageId === undefined)) {
+    throw new Error("Admitted stream input results must carry queue, committed, and messageId.");
+  }
+  if (status === "rejected" && (reason === undefined || queue !== undefined)) {
+    throw new Error("Rejected stream input results must carry reason and no queue.");
+  }
+  if (value.committed === true && messageId === undefined) {
+    throw new Error("Committed stream input results must carry messageId.");
+  }
+  return {
+    streamId,
+    chatId,
+    turnId,
+    mode,
+    status,
+    ...(queue === undefined ? {} : { queue }),
+    ...(reason === undefined ? {} : { reason }),
+    committed: value.committed,
+    ...(messageId === undefined ? {} : { messageId }),
+  };
+}
+
+export interface AidenRemotePendingQuestion {
+  promptId: string;
+  streamId: string;
+  chatId: string;
+  toolCallId: string;
+  questions: AskUserQuestionV1[];
+  expiresAt: string;
+}
+
+export interface AidenRemotePendingQuestionResponse {
+  question: AidenRemotePendingQuestion | null;
+}
+
+export type AidenRemoteQuestionAnswer = AskUserQuestionAnswerV1;
+
+export interface AidenRemoteQuestionRespondRequest {
+  cancelled: boolean;
+  answers: AidenRemoteQuestionAnswer[];
+}
+
+export interface AidenRemoteQuestionRespondResponse {
+  promptId: string;
+  resolvedAt: string;
+}
+
+export function parseAidenRemotePendingQuestion(
+  value: unknown,
+): AidenRemotePendingQuestion {
+  if (!isRecord(value)) {
+    throw new Error("Pending question must be an object.");
+  }
+  assertExactKeys(
+    value,
+    ["promptId", "streamId", "chatId", "toolCallId", "questions", "expiresAt"],
+    "Pending question",
+  );
+  const promptId = boundedText(value.promptId, "Pending question promptId", 128);
+  const streamId = boundedText(value.streamId, "Pending question streamId", 128);
+  const chatId = boundedText(value.chatId, "Pending question chatId", 128);
+  const toolCallId = boundedText(value.toolCallId, "Pending question toolCallId", 128);
+  const questions = parseAskUserQuestions(value.questions);
+  if (!questions) throw new Error("Pending question questions are invalid.");
+  const expiresAt = requiredString(value, "expiresAt");
+  parseStrictRfc3339(expiresAt, "Pending question expiry");
+  return { promptId, streamId, chatId, toolCallId, questions, expiresAt };
+}
+
+export function parseAidenRemotePendingQuestionResponse(
+  value: unknown,
+): AidenRemotePendingQuestionResponse {
+  if (!isRecord(value)) {
+    throw new Error("Pending question response must be an object.");
+  }
+  assertExactKeys(value, ["question"], "Pending question response");
+  return {
+    question:
+      value.question === null ? null : parseAidenRemotePendingQuestion(value.question),
+  };
+}
+
+function parseQuestionAnswer(value: unknown): AidenRemoteQuestionAnswer {
+  if (!isRecord(value)) {
+    throw new Error("Question answer must be an object.");
+  }
+  if (!Number.isSafeInteger(value.questionIndex) || (value.questionIndex as number) < 0) {
+    throw new Error("Question answer questionIndex must be a non-negative integer.");
+  }
+  const questionIndex = value.questionIndex as number;
+  if (value.kind === "option" || value.kind === "custom") {
+    assertExactKeys(value, ["questionIndex", "kind", "answer"], "Question answer");
+    const answer = boundedText(
+      value.answer,
+      "Question answer text",
+      value.kind === "custom" ? ASK_USER_MAX_CUSTOM_ANSWER_LENGTH : ASK_USER_MAX_LABEL_LENGTH,
+    );
+    return { questionIndex, kind: value.kind, answer };
+  }
+  if (value.kind === "multi") {
+    assertExactKeys(value, ["questionIndex", "kind", "selected"], "Question answer");
+    if (
+      !Array.isArray(value.selected) ||
+      value.selected.length < 1 ||
+      value.selected.length > ASK_USER_MAX_OPTIONS ||
+      new Set(value.selected).size !== value.selected.length
+    ) {
+      throw new Error("Question answer selected must list unique options.");
+    }
+    const selected = value.selected.map((entry) =>
+      boundedText(entry, "Question answer selected option", ASK_USER_MAX_LABEL_LENGTH),
+    );
+    return { questionIndex, kind: "multi", selected };
+  }
+  throw new Error("Question answer kind is invalid.");
+}
+
+/**
+ * Validate the structural request shape only. Answer semantics (question index
+ * range, option membership, multi-select rules) are validated against the
+ * stored prompt before the questionnaire is settled.
+ */
+export function parseAidenRemoteQuestionRespondRequest(
+  value: unknown,
+): AidenRemoteQuestionRespondRequest {
+  if (!isRecord(value)) {
+    throw new Error("Question respond request must be an object.");
+  }
+  assertExactKeys(value, ["cancelled", "answers"], "Question respond request");
+  if (typeof value.cancelled !== "boolean") {
+    throw new Error("Question respond request cancelled must be boolean.");
+  }
+  if (!Array.isArray(value.answers) || value.answers.length > ASK_USER_MAX_QUESTIONS) {
+    throw new Error("Question respond request answers are invalid.");
+  }
+  return {
+    cancelled: value.cancelled,
+    answers: value.answers.map(parseQuestionAnswer),
+  };
+}
+
+export function parseAidenRemoteQuestionRespondResponse(
+  value: unknown,
+): AidenRemoteQuestionRespondResponse {
+  if (!isRecord(value)) {
+    throw new Error("Question respond response must be an object.");
+  }
+  assertExactKeys(value, ["promptId", "resolvedAt"], "Question respond response");
+  const promptId = boundedText(value.promptId, "Question respond promptId", 128);
+  const resolvedAt = requiredString(value, "resolvedAt");
+  parseStrictRfc3339(resolvedAt, "Question respond resolvedAt");
+  return { promptId, resolvedAt };
+}
+
 export function parseAidenRemoteDeviceCapabilitiesUpdateRequest(
   value: unknown,
 ): AidenRemoteDeviceCapabilitiesUpdateRequest {
@@ -3567,6 +3953,12 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     assertBoundedString(payload, "approvalId", 128);
     assertBoundedString(payload, "summary", 2_000);
     parseStrictRfc3339(requiredString(payload, "expiresAt"), "Approval expiry");
+  } else if (type === "question_required") {
+    assertBoundedString(payload, "promptId", 128);
+    if (!parseAskUserQuestions(payload.questions)) {
+      throw new Error("question_required payload must contain valid questions.");
+    }
+    parseStrictRfc3339(requiredString(payload, "expiresAt"), "Question expiry");
   } else if (type === "done") {
     assertBoundedString(payload, "messageId", 128);
   } else if (type === "error") {
@@ -3779,8 +4171,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Aiden Remote contract fixture protocolVersion must be 1.");
   }
   const contractRevision = requiredInteger(value, "contractRevision");
-  if (contractRevision < 11) {
-    throw new Error("The canonical progress fixture requires contractRevision 11 or newer.");
+  if (contractRevision < 12) {
+    throw new Error("The canonical progress fixture requires contractRevision 12 or newer.");
   }
   if (value.generated !== false) throw new Error("The canonical fixture must be synthetic.");
   const fixtureNotice = boundedText(value.notice, "Fixture notice", 280);
@@ -3867,6 +4259,15 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SUMMARY_FEATURE)) {
     throw new Error("Fixture server must advertise chat summaries.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE)) {
+    throw new Error("Fixture server must advertise chat run input.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE)) {
+    throw new Error("Fixture server must advertise chat question prompts.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SKILLS_FEATURE)) {
+    throw new Error("Fixture server must advertise chat skills.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
@@ -4422,6 +4823,62 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   ) {
     throw new Error("Canonical agent roster must target the canonical turn.");
   }
+  const streamInputRecord = isRecord(value.streamInput) ? value.streamInput : null;
+  if (!streamInputRecord) throw new Error("Stream input fixture must be an object.");
+  assertExactKeys(streamInputRecord, ["request", "response"], "Stream input fixture");
+  const streamInput = {
+    request: parseAidenRemoteStreamInputRequest(streamInputRecord.request),
+    response: parseAidenRemoteStreamInputResult(streamInputRecord.response),
+  };
+  if (
+    streamInput.response.chatId !== chat.id ||
+    streamInput.response.mode !== streamInput.request.mode
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical Chat.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.streamId === "string" &&
+    streamInput.response.streamId !== value.turnStart.streamId
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical stream.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.turnId === "string" &&
+    streamInput.response.turnId !== value.turnStart.turnId
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical turn.");
+  }
+  const questionRecord = isRecord(value.question) ? value.question : null;
+  if (!questionRecord) throw new Error("Question fixture must be an object.");
+  assertExactKeys(
+    questionRecord,
+    ["pending", "respondRequest", "respondResponse"],
+    "Question fixture",
+  );
+  const question = {
+    pending: parseAidenRemotePendingQuestion(questionRecord.pending),
+    respondRequest: parseAidenRemoteQuestionRespondRequest(questionRecord.respondRequest),
+    respondResponse: parseAidenRemoteQuestionRespondResponse(questionRecord.respondResponse),
+  };
+  if (question.pending.chatId !== chat.id) {
+    throw new Error("Canonical question fixture must target the canonical Chat.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.streamId === "string" &&
+    question.pending.streamId !== value.turnStart.streamId
+  ) {
+    throw new Error("Canonical question fixture must target the canonical stream.");
+  }
+  if (question.respondResponse.promptId !== question.pending.promptId) {
+    throw new Error("Canonical question fixture must answer the pending prompt.");
+  }
+  const chatSkills = parseAidenRemoteSkillCatalog(value.chatSkills, "Fixture skill catalog");
+  if (chatSkills.skills.length === 0) {
+    throw new Error("Canonical skill catalog fixture must list at least one skill.");
+  }
   if (
     JSON.stringify(deviceCapabilitiesUpdate.response.capabilities) !==
       JSON.stringify(deviceCapabilities) ||
@@ -4536,6 +4993,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     turnStart: value.turnStart,
     streamStatus: value.streamStatus,
     streamApproval: value.streamApproval,
+    streamInput,
+    question,
+    chatSkills,
     fileIndex: value.fileIndex,
     fileDocument: value.fileDocument,
     git: value.git,
@@ -4543,6 +5003,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     scheduleSettings: value.scheduleSettings,
     scheduleRunAccepted: value.scheduleRunAccepted,
     scheduleRun: value.scheduleRun,
+    scheduleRunNotification: value.scheduleRunNotification,
     speechStatus: value.speechStatus,
     speechTranscription: value.speechTranscription,
     botSummary,

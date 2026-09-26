@@ -141,11 +141,11 @@ export interface AidenRemoteServiceOptions {
         chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
@@ -187,11 +187,11 @@ export interface AidenRemoteServiceOptions {
         chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;

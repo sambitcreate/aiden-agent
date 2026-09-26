@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
@@ -47,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -193,14 +196,20 @@ private fun AidenProgressChip(
 ) {
     val palette = AidenTheme.palette
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = CircleShape,
         modifier = Modifier
             .heightIn(min = AidenUi.MinimumTouchTarget)
+            .shadow(
+                elevation = 2.dp,
+                shape = CircleShape,
+                ambientColor = Color.Black.copy(alpha = 0.08f),
+                spotColor = Color.Black.copy(alpha = 0.08f)
+            )
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
                 role = Role.Button
-                contentDescription = "$description: $label"
+                contentDescription = "$description: $label${supportingLabel?.let { ", $it" } ?: ""}"
             }
     ) {
         Column(

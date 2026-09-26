@@ -26,9 +26,18 @@ Settings must follow [`docs/settings-design-system.md`](docs/settings-design-sys
 
 ## Release model metadata
 
-models.dev may be contacted only by `npm run models:refresh`, the release refresh invoked by `npm run dist`, the scoped post-merge catalog workflow, or the user-initiated foreground **Update model catalogs** action in Settings → Providers. The live action may request only the fixed `https://models.dev/api.json` endpoint without credentials, cookies, prompts, chats, selections, custom endpoints, or a device identifier; its validated device-local cache is display-only and must never change runtime limits, routing, or selectable inventory. Never add a models.dev call to startup, normal development, unpacked builds, ordinary live-app reads, onboarding navigation, or background polling. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
+models.dev may be contacted only by `npm run models:refresh`, the release refresh invoked by `npm run dist`, the scoped post-merge catalog workflow, the user-initiated foreground **Update model catalogs** action in Settings → Providers, or its CLI counterpart: the explicit, user-initiated foreground `aiden catalog models-dev fetch` command, which follows the same rules. The live action and the CLI command may request only the fixed `https://models.dev/api.json` endpoint without credentials, cookies, prompts, chats, selections, custom endpoints, or a device identifier; each validated device-local cache is display-only and must never change runtime limits, routing, or selectable inventory. Never add a models.dev call to startup, normal development, unpacked builds, ordinary live-app reads, onboarding navigation, or background polling. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
 
 OpenRouter benchmark insights are also manual-only. The live app may contact only the fixed `/api/v1/benchmarks?source=artificial-analysis&max_results=100` endpoint after the user explicitly chooses Connect & fetch or Fetch latest, using the dedicated encrypted Model Pad credential rather than any inference-provider credential. Never send prompts or model traffic during that action, never import OpenRouter's model catalog, never bundle the returned data, and serve ordinary model-info reads only from the normalized device-local cache.
+
+## Aiden CLI (`packages/cli`)
+
+The headless Aiden Agent lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. See `packages/cli/README.md` and `docs/plans/aiden-cli-plan.md` for architecture and phasing.
+
+- Never hand-edit `packages/cli/themes/*.json`: they are generated from `renderer/shared/appearance.ts` by `npm run themes` (in `packages/cli`), and the fidelity test fails on drift. Change palettes in `appearance.ts`, then regenerate.
+- The rebrand depends on the bundle layout: `dist/app/cli.js` plus the generated `dist/app/package.json` (`piConfig`) must stay the nearest package.json to the bundled code. Restructure `dist/app/` only with that contract and `tests/bundle.test.mjs` in mind.
+- Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
+- The CLI keeps the same manual-only network posture as the desktop for models.dev, Artificial Analysis, and OpenRouter benchmark data.
 
 ## Papercuts
 

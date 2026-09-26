@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { sharedWorkspaceScopeId } from "./memory-shared.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import {
@@ -27,9 +28,12 @@ export interface MemoryProposal {
   supersedesId?: string;
 }
 
-export function memoryScopeForChat(chat: Chat): MemoryScope {
-  return chat.botId
-    ? { kind: "bot", id: chat.botId }
+export function memoryScopeForChat(chat: Chat, workspaceFolderPath?: string): MemoryScope {
+  if (chat.botId) return { kind: "bot", id: chat.botId };
+  // Workspaces with a known folder share one scope with the CLI's identical
+  // folder hash; a removed/unresolved workspace keeps its legacy id scope.
+  return workspaceFolderPath
+    ? { kind: "workspace", id: sharedWorkspaceScopeId(workspaceFolderPath) }
     : { kind: "workspace", id: persistedChatWorkspaceId(chat.workspaceId) };
 }
 

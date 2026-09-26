@@ -54,6 +54,7 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   parseAidenRemoteChatSummaryPage,
   parseAidenRemoteChatProjection,
+  parseAidenRemoteSkillCatalog,
 } from "./aiden-remote-protocol.js";
 import {
   beginSurfaceGeneration,
@@ -61,8 +62,25 @@ import {
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import {
+  parseSkillInvocationV1,
+  SkillInvocationError,
+  type SkillCatalogEntry,
+  type SkillInvocationV1,
+} from "../../renderer/shared/slash-commands.js";
+import {
+  prepareSkillInvocationForAppend,
+  requireSkillInvocationWorkspace,
+  type PreparedSkillInvocation,
+} from "./skill-invocation-turn.js";
+import type { RegisteredSkill } from "./skill-registry.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
+  ASK_USER_QUESTION_TOOL_NAME,
+]);
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 const SUMMARY_CURSOR = /^cur_([A-Za-z0-9_-]{1,384})\.([A-Za-z0-9_-]{43})$/u;
 const SUMMARY_CURSOR_TTL_MS = 5 * 60_000;
@@ -499,6 +517,7 @@ function parseTurn(input: unknown): {
   modelId?: string;
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   attachmentIds?: string[];
+  skill?: SkillInvocationV1;
 } {
   const record = ownRecord(input);
   const attachmentIds = record?.attachmentIds;
@@ -510,7 +529,7 @@ function parseTurn(input: unknown): {
       attachmentIds.every((value) => typeof value === "string"));
   if (
     !record ||
-    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds"]) ||
+    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill"]) ||
     typeof record.text !== "string" ||
     Array.from(record.text).length > 200_000 ||
     (!record.text.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) ||
@@ -525,6 +544,18 @@ function parseTurn(input: unknown): {
       400,
     );
   }
+  let skill: SkillInvocationV1 | undefined;
+  if (record.skill !== undefined) {
+    try {
+      skill = parseSkillInvocationV1(record.skill);
+    } catch {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The skill invocation is invalid.",
+        400,
+      );
+    }
+  }
   return {
     text: record.text,
     ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
@@ -533,7 +564,42 @@ function parseTurn(input: unknown): {
       ? { thinkingLevel: record.thinkingLevel }
       : {}),
     ...(Array.isArray(attachmentIds) ? { attachmentIds: [...attachmentIds] as string[] } : {}),
+    ...(skill ? { skill } : {}),
   };
+}
+
+/** Maps skill-lease failures onto the remote error vocabulary exactly once. */
+function skillInvocationRemoteError(error: unknown): AidenRemoteServiceError {
+  if (error instanceof AidenRemoteServiceError) return error;
+  if (error instanceof SkillInvocationError) {
+    if (error.code === "instructions_too_large") {
+      return new AidenRemoteServiceError("payload_too_large", error.message, 413);
+    }
+    if (error.code === "turn_unavailable") {
+      return new AidenRemoteServiceError("rate_limited", error.message, 429, true);
+    }
+    if (error.code === "invalid_reference") {
+      return new AidenRemoteServiceError("invalid_request", error.message, 400);
+    }
+    return new AidenRemoteServiceError("skill_unavailable", error.message, 409);
+  }
+  return new AidenRemoteServiceError(
+    "internal_error",
+    "The skill could not be prepared. Try again.",
+    500,
+    true,
+  );
+}
+
+/** Maps append/skill reservation failures onto the remote error vocabulary. */
+function turnReservationRemoteError(error: unknown): AidenRemoteServiceError {
+  if (error instanceof SkillInvocationError) return skillInvocationRemoteError(error);
+  return new AidenRemoteServiceError(
+    "rate_limited",
+    error instanceof Error ? error.message : "This message turn is no longer available.",
+    429,
+    true,
+  );
 }
 
 function ephemeralOwner(deviceId: string, operationId: string): ChatGenerationOwner {
@@ -594,6 +660,8 @@ export class AidenRemoteChatService {
         beginChatTurn(chatId: string, turnId: string, ownerId: string): {
           isActive(): boolean;
           reserveAppendPayload(bytes: number): void;
+          reserveSkillPreparation(): void;
+          prepareSkillInvocation(invocation: PreparedSkillInvocation): void;
           settleAsyncWork(): void;
           onReleased(cleanup: () => void): void;
           release(): void;
@@ -608,6 +676,7 @@ export class AidenRemoteChatService {
             usageSource: "chat";
             turnId: string;
             botAudienceId?: string;
+            excludeToolNames?: ReadonlySet<string>;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -626,6 +695,35 @@ export class AidenRemoteChatService {
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
+      /**
+       * Device-declared `questions:respond` grant lookup. When absent (or the
+       * device did not negotiate the capability) the ask_user_question tool is
+       * excluded from that device's turns so a prompt can never be stranded.
+       */
+      deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
+       * is rejected with `capability_denied` unless the device negotiated the
+       * grant; omission of this option fails closed the same way.
+       */
+      deviceSupportsSkillInvocation?: (deviceId: string) => Promise<boolean>;
+      /** Workspace-scoped invocable catalog; identical to the desktop slash source. */
+      skillCatalog?: (workspaceId: string) => Promise<readonly SkillCatalogEntry[]>;
+      /**
+       * Bot-narrowed invocable catalog. The Bot's Full/Custom authority is
+       * admitted fresh so Custom skill removals never surface in the palette.
+       */
+      botSkillCatalog?: (
+        deviceId: string,
+        botId: string,
+        chatId: string,
+        workspaceId: string,
+      ) => Promise<readonly SkillCatalogEntry[]>;
+      /** Fresh lease redemption for a turn's `skill` field. */
+      resolveSkillInvocation?: (
+        workspaceId: string,
+        invocationId: string,
+      ) => Promise<RegisteredSkill>;
       notifyChanged?: (chatId?: string) => void;
       isTitlePending?: (chatId: string) => boolean;
       activeChatIds?: () => readonly string[];
@@ -1167,6 +1265,37 @@ export class AidenRemoteChatService {
     this.options.notifyChanged?.(chatId);
   }
 
+  /**
+   * Bounded invocable-skill catalog for one chat. Regular chats see the same
+   * workspace projection the desktop slash palette consumes; Bot chats see
+   * only the skills their Full/Custom authority currently allows. Chats
+   * without a real workspace have no invocable skills and return empty.
+   */
+  async chatSkillCatalog(
+    deviceId: string,
+    chatId: string,
+  ): Promise<{ skills: SkillCatalogEntry[] }> {
+    if (!this.options.skillCatalog) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    const authoritative = await this.chat(chatId);
+    const workspaceId = persistedChatWorkspaceId(authoritative.workspaceId);
+    if (workspaceId === ASSISTANT_WORKSPACE_ID) {
+      return { skills: [] };
+    }
+    let skills: readonly SkillCatalogEntry[];
+    try {
+      skills = authoritative.botId
+        ? await (this.options.botSkillCatalog?.(deviceId, authoritative.botId, authoritative.id, workspaceId) ?? [])
+        : await this.options.skillCatalog(workspaceId);
+    } catch (error) {
+      throw skillInvocationRemoteError(error);
+    }
+    // The registry projection is already renderer-safe; revalidating through
+    // the remote parser pins the exact wire contract at the boundary.
+    return parseAidenRemoteSkillCatalog({ skills });
+  }
+
   async startTurn(
     deviceId: string,
     chatId: string,
@@ -1179,6 +1308,16 @@ export class AidenRemoteChatService {
     message: AidenRemoteMessageProjection;
   }> {
     const parsed = parseTurn(input);
+    if (
+      parsed.skill &&
+      (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true
+    ) {
+      throw new AidenRemoteServiceError(
+        "capability_denied",
+        "This device does not have access to that Aiden capability.",
+        403,
+      );
+    }
     try {
       return await this.executeIdempotent(
         { deviceId, route: "POST /chats/{id}/turns", resourceId: safeId(chatId, "chat"), key },
@@ -1257,6 +1396,9 @@ export class AidenRemoteChatService {
             model: selection.modelId,
             thinkingLevel: parsed.thinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
+            ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
+              ? {}
+              : { excludeToolNames: QUESTION_PROMPT_EXCLUDED_TOOLS }),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);
@@ -1271,17 +1413,79 @@ export class AidenRemoteChatService {
             this.options.streams.markStartError(deviceId, streamId, new Error("This chat already has a response in progress."));
             throw new AidenRemoteServiceError("turn_already_active", "This chat already has a response in progress.", 409);
           }
-          const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
-          turn.onReleased(owner.owner.onInvalidated(turn.release));
-          turn.reserveAppendPayload(
-            Buffer.byteLength(parsed.text, "utf8") +
-              attachmentRepresentationBytes(attachments) +
-              1_024,
-          );
           const messageId = `message_${randomUUID()}`;
           let appended = false;
           let appendedChat: Chat | undefined;
           try {
+            turn.onReleased(owner.owner.onInvalidated(turn.release));
+            const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
+            try {
+              if (parsed.skill) turn.reserveSkillPreparation();
+              turn.reserveAppendPayload(
+                Buffer.byteLength(parsed.text, "utf8") +
+                  attachmentRepresentationBytes(attachments) +
+                  1_024,
+              );
+            } catch (error) {
+              throw turnReservationRemoteError(error);
+            }
+            // The lease reserves, prepares, and hands the expanded prompt to
+            // generation exactly like a desktop send; the stored message keeps
+            // the user's own text plus safe skill provenance.
+            let preparedSkill: PreparedSkillInvocation | undefined;
+            let workspaceAdmission: { signal: AbortSignal; release: () => void } | undefined;
+            if (parsed.skill) {
+              const resolveFresh = this.options.resolveSkillInvocation;
+              if (!resolveFresh) {
+                throw new AidenRemoteServiceError(
+                  "not_found",
+                  "This endpoint is unavailable.",
+                  404,
+                );
+              }
+              let admission: { signal: AbortSignal; release: () => void };
+              try {
+                admission = workspaceMutationGate.admit(
+                  requireSkillInvocationWorkspace(workspaceId),
+                );
+              } catch (error) {
+                throw error instanceof SkillInvocationError
+                  ? skillInvocationRemoteError(error)
+                  : new AidenRemoteServiceError(
+                      "rate_limited",
+                      error instanceof Error
+                        ? error.message
+                        : "The workspace is changing. Try again in a moment.",
+                      429,
+                      true,
+                    );
+              }
+              workspaceAdmission = admission;
+              const abortTurn = () => turn.release();
+              admission.signal.addEventListener("abort", abortTurn, {
+                once: true,
+              });
+              turn.onReleased(() => {
+                admission.signal.removeEventListener("abort", abortTurn);
+                admission.release();
+              });
+              try {
+                preparedSkill = await prepareSkillInvocationForAppend(
+                  {
+                    invocationId: parsed.skill.invocationId,
+                    role: "user",
+                    content: parsed.text,
+                    attachments,
+                    workspaceId: requireSkillInvocationWorkspace(workspaceId),
+                    userMessageId: messageId,
+                  },
+                  resolveFresh,
+                );
+                turn.prepareSkillInvocation(preparedSkill);
+              } catch (error) {
+                throw skillInvocationRemoteError(error);
+              }
+            }
             const chat = await appendChatMessageWithReconciliation({
               messageId,
               append: () => this.options.chatStore.appendMessage(
@@ -1291,12 +1495,14 @@ export class AidenRemoteChatService {
                   role: "user",
                   content: parsed.text,
                   ...(attachments?.length ? { attachments } : {}),
+                  ...(preparedSkill ? { skill: preparedSkill.provenance } : {}),
                 },
                 {
                   providerId: selection.providerId,
                   model: selection.modelId,
                   expectedWorkspaceId: workspaceId,
-                  isCurrent: turn.isActive,
+                  isCurrent: () =>
+                    turn.isActive() && workspaceAdmission?.signal.aborted !== true,
                 },
               ),
               recover: () => this.options.chatStore.get(chatId),
@@ -1310,6 +1516,7 @@ export class AidenRemoteChatService {
               owner.owner,
             );
             if (!started && !accepted) {
+              turn.release();
               this.options.streams.markStartError(
                 deviceId,
                 streamId,
@@ -1325,7 +1532,7 @@ export class AidenRemoteChatService {
               message: projectAidenRemoteChat({ ...chat, messages: [message] }).messages[0]!,
             };
           } catch (error) {
-            if (!appended) turn.release();
+            turn.release();
             turn.settleAsyncWork();
             this.options.streams.markStartError(deviceId, streamId, error);
             if (isAppendReconciliationRequiredError(error)) {

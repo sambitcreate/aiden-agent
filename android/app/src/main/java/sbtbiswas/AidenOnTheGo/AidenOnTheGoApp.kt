@@ -51,11 +51,16 @@ class AidenOnTheGoApp : Application() {
             val notificationManager: NotificationManager =
                 getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
+            val scheduledChannel = NotificationChannel(SCHEDULED_RUNS_CHANNEL_ID, "Aiden Scheduled Runs", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Completed scheduled-task runs from the paired Aiden instance"
+            }
+            notificationManager.createNotificationChannel(scheduledChannel)
         }
     }
 
     companion object {
         const val AGENT_RUN_CHANNEL_ID = "aiden_agent_run_channel"
+        const val SCHEDULED_RUNS_CHANNEL_ID = "aiden_scheduled_runs_channel"
 
         internal fun projectPriorTerminationReason(reason: Int): AidenDiagnosticCode? = when (reason) {
             android.app.ApplicationExitInfo.REASON_CRASH,

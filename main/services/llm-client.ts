@@ -293,6 +293,11 @@ import {
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
+import {
+  createChatRunInputAdmission,
+  type ChatRunInputAdmissionRequest,
+  type ChatRunInputAdmissionResult,
+} from "./chat-run-input-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import {
@@ -461,6 +466,12 @@ const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+const runInputAdmission = createChatRunInputAdmission({
+  active,
+  isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
+  appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
+  readChat: (chatId) => chatStore.get(chatId),
+});
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
 const geminiContextCache = new GeminiContextCache({
@@ -703,6 +714,7 @@ async function prepareGeneration(
       assistantMode,
       botBound,
       rendererOwner,
+      remoteOwner: browserOwner.kind === "remote",
       excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
     })
   ) {
@@ -2048,7 +2060,10 @@ export const llmClient = {
         if (!(await memoryEnabledForChat(configStore, generationChat))) {
           throw new Error("Durable memory is disabled by the current memory policy.");
         }
-        const scope = memoryScopeForChat(generationChat);
+        const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+          ? undefined
+          : await configStore.getWorkspace(generationChat.workspaceId);
+        const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
         await memoryStore.replaceChatMetadata(
           scope,
           generationChat.id,
@@ -2176,6 +2191,7 @@ export const llmClient = {
           assistantMode: authoritativeMode !== undefined,
           botBound: preparedBotContext !== undefined,
           rendererOwner: owner.id !== 0,
+          remoteOwner: owner.kind === "remote",
           excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
         })
           ? {
@@ -3752,6 +3768,18 @@ export const llmClient = {
     approvals.cancelStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
     return true;
+  },
+
+  /**
+   * Shared foreground admission for mid-flight user input. Remote API
+   * `POST /streams/{id}/inputs` and the desktop IPC surface both enter the Pi
+   * runtime queues through this boundary so transcript persistence and
+   * owner/cancel validation stay main-owned.
+   */
+  admitChatRunInput(
+    input: ChatRunInputAdmissionRequest,
+  ): Promise<ChatRunInputAdmissionResult> {
+    return runInputAdmission.admit(input);
   },
 
   isChatBusy(chatId: string): boolean {

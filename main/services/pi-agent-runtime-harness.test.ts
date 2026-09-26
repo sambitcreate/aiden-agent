@@ -76,6 +76,7 @@ async function managedTestHarness(
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
     effects?: PiRuntimeSessionBinding["effects"];
+    signal?: AbortSignal;
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
@@ -158,6 +159,7 @@ async function managedTestHarness(
         retryDelayMs: options.retryDelayMs,
         consumeHostFailure: options.consumeHostFailure,
       },
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.effects ? { effects: options.effects } : {}),
     },
   });
@@ -2436,6 +2438,65 @@ test("a queued projection saved just after cancellation still forces transaction
   const undelivered = harness.takeUndeliveredQueuedMessages();
   assert.deepEqual(undelivered.messages, []);
   assert.deepEqual(await undelivered.late, []);
+});
+
+test("queueAdmissionBlocked mirrors receipt rejection without consuming capacity", async () => {
+  let toolStarted!: () => void;
+  const atTool = new Promise<void>((resolve) => {
+    toolStarted = resolve;
+  });
+  let releaseTool!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseTool = resolve;
+  });
+  const tool: AgentTool = {
+    name: "wait_for_probe",
+    label: "Wait",
+    description: "Wait for probing.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolStarted();
+      await release;
+      return { content: [{ type: "text", text: "ready" }], details: null };
+    },
+  };
+  const cancel = new AbortController();
+  const { harness } = await managedTestHarness(
+    [fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" })],
+    { tools: [tool], signal: cancel.signal },
+  );
+  // Before a managed run exists the probe and the receipt agree.
+  assert.equal(harness.queueAdmissionBlocked(), "not-active");
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  // An open window stays open across repeated probes: probing never reserves
+  // or consumes a queue slot.
+  assert.equal(harness.queueAdmissionBlocked(), undefined);
+  assert.equal(harness.queueAdmissionBlocked(), undefined);
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "first", timestamp: 2 }).accepted,
+    true,
+  );
+  // Fill the accepted queue: the probe reports capacity while receipts do too.
+  while (
+    harness.queueFollowUp({ role: "user", content: "fill", timestamp: 3 }).accepted
+  ) {
+    // bounded by MAX_ACCEPTED_QUEUE_MESSAGES
+  }
+  assert.equal(harness.queueAdmissionBlocked(), "capacity");
+  // A parent-signal cancellation reports cancelled while the queue is open.
+  cancel.abort();
+  assert.equal(harness.queueAdmissionBlocked(), "cancelled");
+  releaseTool();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.equal(harness.queueAdmissionBlocked(), "not-active");
+  assert.equal(
+    harness.queueFollowUp({ role: "user", content: "too late", timestamp: 4 }).accepted,
+    false,
+  );
 });
 
 test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {

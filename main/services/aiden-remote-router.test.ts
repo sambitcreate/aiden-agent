@@ -18,6 +18,7 @@ import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-rem
 import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   type AidenRemoteCapability,
+  type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
@@ -41,6 +42,9 @@ async function fixture(options: {
   oversizedChatResponse?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
+  runInputAvailable?: boolean;
+  questionsAvailable?: boolean;
+  skillsAvailable?: boolean;
   deviceType?: "iphone" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
 } = {}) {
@@ -175,6 +179,7 @@ async function fixture(options: {
             (capability) =>
               capability !== "tasks:read" &&
               capability !== "agents:read" &&
+              capability !== "questions:respond" &&
               capability !== "simulators:control",
           )
         ) {
@@ -348,6 +353,24 @@ async function fixture(options: {
         calls.push(`attachment-content:${id}:${attachmentId}`);
         return { bytes: Buffer.from("fixture"), mimeType: "image/png" };
       },
+      ...(options.skillsAvailable === false
+        ? {}
+        : {
+            chatSkillCatalog: async (deviceId, id) => {
+              calls.push(`skill-catalog:${deviceId}:${id}`);
+              return {
+                skills: [
+                  {
+                    invocationId: `sk1_${"a".repeat(43)}`,
+                    name: "review-code",
+                    description: "Review changes.",
+                    source: "workspace" as const,
+                    available: true,
+                  },
+                ],
+              };
+            },
+          }),
     },
     chatProgress: options.progressAvailable === false
       ? undefined
@@ -578,7 +601,6 @@ async function fixture(options: {
         expiresAt: new Date(60_000).toISOString(),
         canAllow: options.approvalCanAllow ?? false,
       }),
-      approvalChatId: () => "chat-1",
       approvalRequiredCapability: () =>
         options.approvalRequiredCapability,
       cancel: async (deviceId, streamId, _key) => {
@@ -592,9 +614,104 @@ async function fixture(options: {
           updatedAt: new Date(4_000).toISOString(),
         };
       },
-      respondApproval: async (deviceId, approvalId, decision, _key) => {
-        calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
-        return { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+      ...(options.runInputAvailable === false
+        ? {}
+        : {
+            supportsRunInput: () => true,
+            submitInput: async (
+              deviceId: string,
+              streamId: string,
+              input: { mode: "steer" | "queue"; text: string },
+              _key: string,
+              runAccess?: (
+                chatId: string,
+                action: () => Promise<AidenRemoteStreamInputResult>,
+              ) => Promise<AidenRemoteStreamInputResult>,
+            ) => {
+              calls.push(`input:${deviceId}:${streamId}:${input.mode}`);
+              const result = {
+                streamId,
+                chatId: "chat-1",
+                turnId: "turn-1",
+                mode: input.mode,
+                status: "admitted" as const,
+                queue: input.mode === "steer" ? ("steer" as const) : ("follow-up" as const),
+                committed: true,
+                messageId: "message-remote-input-1",
+              };
+              if (runAccess) {
+                return runAccess("chat-1", async () => result);
+              }
+              return result;
+            },
+          }),
+      ...(options.questionsAvailable === false || options.progressAvailable === false
+        ? {}
+        : {
+            supportsQuestionPrompts: () => true,
+            pendingQuestion: (_deviceId: string, streamId: string) => ({
+              promptId: "q-prompt-1",
+              streamId,
+              chatId: "chat-1",
+              toolCallId: "tool-2",
+              questions: [
+                {
+                  question: "Which chamfer?",
+                  header: "Chamfer",
+                  multiSelect: false,
+                  options: [
+                    { label: "0.5 mm", description: "Standard." },
+                    { label: "1.0 mm", description: "Heavy." },
+                  ],
+                },
+              ],
+              expiresAt: new Date(60_000).toISOString(),
+            }),
+            respondQuestion: async (
+              deviceId: string,
+              promptId: string,
+              input: { cancelled: boolean },
+              _key: string,
+              runAccess?: (
+                chatId: string,
+                action: () => Promise<{ promptId: string; resolvedAt: string }>,
+              ) => Promise<{ promptId: string; resolvedAt: string }>,
+            ) => {
+              calls.push(`question:${deviceId}:${promptId}:${input.cancelled}`);
+              const result = { promptId, resolvedAt: new Date(6_000).toISOString() };
+              if (runAccess) {
+                return runAccess("chat-1", async () => result);
+              }
+              return result;
+            },
+          }),
+      respondApproval: async (
+        deviceId,
+        approvalId,
+        decision,
+        _key,
+        runAccess?: (
+          chatId: string,
+          action: () => Promise<{
+            approvalId: string;
+            decision: "allow" | "deny";
+            resolvedAt: string;
+          }>,
+        ) => Promise<{
+          approvalId: string;
+          decision: "allow" | "deny";
+          resolvedAt: string;
+        }>,
+      ) => {
+        const result = { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+        const action = async () => {
+          calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
+          return result;
+        };
+        if (runAccess) {
+          return runAccess("chat-1", action);
+        }
+        return action();
       },
       openEvents: (_deviceId, streamId, after, response) => {
         calls.push(`events:${streamId}:${after}`);
@@ -716,6 +833,10 @@ async function fixture(options: {
       runs: async (taskId) => {
         calls.push(`schedule-runs:${taskId}`);
         return { runs: [] };
+      },
+      notifications: async (since) => {
+        calls.push(`schedule-notifications:${since ?? ""}`);
+        return { notifications: [], now: 2_000 };
       },
       preview: () => ({ dates: [new Date(2_000).toISOString()] }),
       scripts: async (deviceId, workspaceId) => {
@@ -852,6 +973,81 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
   } finally {
     await app.close();
+  }
+});
+
+test("stream inputs advertise the run-input feature and gate on chat:write", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write"],
+  });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-run-input-v1"), true);
+
+    const missingKey = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ mode: "steer", text: "Now." }),
+    });
+    assert.equal(missingKey.status, 400);
+    assert.equal(
+      app.calls.some((call) => call.startsWith("input:")),
+      false,
+    );
+
+    const admitted = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-steer-key-0001" },
+      body: JSON.stringify({ mode: "steer", text: "Prefer the cached path." }),
+    });
+    assert.equal(admitted.status, 200);
+    const receipt = await admitted.json();
+    assert.equal(receipt.status, "admitted");
+    assert.equal(receipt.queue, "steer");
+    assert.equal(receipt.committed, true);
+    assert.equal(
+      app.calls.some((call) => call === "input:device-authorized-12345678:stream-1:steer"),
+      true,
+    );
+  } finally {
+    await app.close();
+  }
+
+  const readOnly = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const denied = await fetch(`${readOnly.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-readonly-key-01" },
+      body: JSON.stringify({ mode: "steer", text: "Denied." }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(
+      readOnly.calls.some((call) => call.startsWith("input:")),
+      false,
+    );
+  } finally {
+    await readOnly.close();
+  }
+
+  const unavailable = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write"],
+    runInputAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${unavailable.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-run-input-v1"), false);
+    const missing = await fetch(`${unavailable.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-absent-key-0001" },
+      body: JSON.stringify({ mode: "queue", text: "Not wired." }),
+    });
+    assert.equal(missing.status, 404);
+  } finally {
+    await unavailable.close();
   }
 });
 
@@ -1121,9 +1317,11 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "git:write",
       "schedule:read",
       "schedule:write",
+      "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
     assert.equal(server.features.includes("chat-agents-v1"), false);
+    assert.equal(server.features.includes("chat-skills-v1"), true);
 
     const read = await fetch(`${unsupported.base}/chats/chat-1/tasks`, { headers });
     assert.equal(read.status, 404);
@@ -1763,6 +1961,23 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
       headers: { ...headers, "idempotency-key": "cancel-stream-key-0001" },
     });
     assert.equal(cancelled.status, 202);
+
+    const input = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-stream-key-0001" },
+      body: JSON.stringify({ mode: "queue", text: "Follow up with tests." }),
+    });
+    assert.equal(input.status, 200);
+    assert.deepEqual(await input.json(), {
+      streamId: "stream-1",
+      chatId: "chat-1",
+      turnId: "turn-1",
+      mode: "queue",
+      status: "admitted",
+      queue: "follow-up",
+      committed: true,
+      messageId: "message-remote-input-1",
+    });
 
     const approval = await fetch(`${app.base}/approvals/approval-1/respond`, {
       method: "POST",
@@ -2610,6 +2825,41 @@ test("authenticated scheduled-task routes enforce capability and mutation precon
   }
 });
 
+test("the scheduled-notifications feed enforces schedule:read and a strict since cursor", async () => {
+  const app = await fixture({ capabilities: ["schedule:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const feed = await fetch(`${app.base}/scheduled-tasks/notifications`, { headers });
+    assert.equal(feed.status, 200);
+    assert.deepEqual(await feed.json(), { notifications: [], now: 2_000 });
+    assert.deepEqual(app.calls, ["schedule-notifications:"]);
+
+    const cursor = await fetch(`${app.base}/scheduled-tasks/notifications?since=1700000000000`, { headers });
+    assert.equal(cursor.status, 200);
+    assert.deepEqual(app.calls[app.calls.length - 1], "schedule-notifications:1700000000000");
+
+    // 9999999999999999 (16 digits) passes the regex but exceeds Number.MAX_SAFE_INTEGER;
+    // 99999999999999999 (17 digits) is rejected by the regex itself — both must 400.
+    for (const query of ["since=-1", "since=1.5", "since=1e5", "since=01", "since=", "since=1&since=2", "since=9999999999999999", "since=99999999999999999", "other=1"]) {
+      const rejected = await fetch(`${app.base}/scheduled-tasks/notifications?${query}`, { headers });
+      assert.equal(rejected.status, 400, query);
+    }
+  } finally {
+    await app.close();
+  }
+
+  const unscoped = await fixture({ capabilities: ["schedule:write"] });
+  try {
+    const denied = await fetch(`${unscoped.base}/scheduled-tasks/notifications`, { headers });
+    assert.equal(denied.status, 403);
+  } finally {
+    await unscoped.close();
+  }
+});
+
 test("workspace routes reject query aliases, duplicate query keys, and missing mutation preconditions", async () => {
   const app = await fixture({
     capabilities: ["workspace:read", "workspace:manage", "workspace:browse"],
@@ -3024,6 +3274,144 @@ test("every matcher path pattern in the router source is declared as a route tem
   );
 });
 
+test("question prompts negotiate, project, and respond under the device grant", async () => {
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "questions:respond"],
+    acceptsProgressCapabilities: true,
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), true);
+    assert.equal(server.capabilities.includes("questions:respond"), true);
+
+    const snapshot = await fetch(`${app.base}/streams/stream-1/question`, { headers });
+    assert.equal(snapshot.status, 200);
+    const { question } = await snapshot.json();
+    assert.equal(question.promptId, "q-prompt-1");
+    assert.equal(question.questions[0].options.length, 2);
+
+    const resolved = await fetch(`${app.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-01" },
+      body: JSON.stringify({
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: "0.5 mm" }],
+      }),
+    });
+    assert.equal(resolved.status, 200);
+    assert.deepEqual(await resolved.json(), {
+      promptId: "q-prompt-1",
+      resolvedAt: new Date(6_000).toISOString(),
+    });
+    assert.equal(
+      app.calls.some((call) => call.startsWith("question:device-authorized-12345678:q-prompt-1")),
+      true,
+    );
+  } finally {
+    app.close();
+  }
+});
+
+test("question routes fail closed without the grant or the host surface", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  const noGrant = await fixture({ capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${noGrant.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), true);
+    const denied = await fetch(`${noGrant.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-02" },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    noGrant.close();
+  }
+
+  const noSurface = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "questions:respond"],
+    acceptsProgressCapabilities: true,
+    questionsAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${noSurface.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), false);
+    const missing = await fetch(`${noSurface.base}/streams/stream-1/question`, { headers });
+    assert.equal(missing.status, 404);
+    const respondMissing = await fetch(`${noSurface.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-03" },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(respondMissing.status, 404);
+  } finally {
+    noSurface.close();
+  }
+});
+
+test("chat skills route gates on negotiated skills:invoke and advertises its feature", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  const legacy = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${legacy.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), true,
+      "the feature advertises the host wiring even before a device negotiates the grant");
+    const denied = await fetch(`${legacy.base}/chats/chat-1/skills`, { headers });
+    assert.equal(denied.status, 403);
+    assert.equal(legacy.calls.some((call) => call.startsWith("skill-catalog:")), false);
+  } finally {
+    legacy.close();
+  }
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const server = await (await fetch(`${negotiated.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), true);
+    const skills = await fetch(`${negotiated.base}/chats/chat-1/skills`, { headers });
+    assert.equal(skills.status, 200);
+    assert.deepEqual(await skills.json(), {
+      skills: [{
+        invocationId: `sk1_${"a".repeat(43)}`,
+        name: "review-code",
+        description: "Review changes.",
+        source: "workspace",
+        available: true,
+      }],
+    });
+    assert.equal(negotiated.calls.includes("skill-catalog:device-authorized-12345678:chat-1"), true);
+  } finally {
+    negotiated.close();
+  }
+
+  const noSurface = await fixture({
+    capabilities: ["server:read", "chat:read", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+    skillsAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${noSurface.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), false);
+    const missing = await fetch(`${noSurface.base}/chats/chat-1/skills`, { headers });
+    assert.equal(missing.status, 404);
+  } finally {
+    noSurface.close();
+  }
+});
 
 test("Read Aloud authenticates before parsing, checks Bot access and never exposes setup writes", async () => {
   let called = 0;

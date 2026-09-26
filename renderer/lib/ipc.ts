@@ -120,6 +120,10 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type {
+  ChatRunInputAdmissionResult,
+  ChatRunInputMode,
+} from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import {
   parseSubagentHistoryDetailV1,
@@ -1284,6 +1288,19 @@ export interface GenerationHandle {
 /** Stop a same-document generation after its visible pane has released ownership. */
 export function stopDetachedGeneration(streamId: string): Promise<boolean> {
   return invoke<boolean>("chat:cancel", streamId, "user_stop");
+}
+
+/**
+ * Shared foreground admission for mid-flight input. Same Mac-owned boundary
+ * as Remote `POST /streams/{id}/inputs`; the renderer document must own the
+ * generation. Desktop callers keep their local queue UX — this surface exists
+ * for parity tests and future steer/queue work.
+ */
+export function admitChatRunInput(
+  streamId: string,
+  input: { mode: ChatRunInputMode; text: string },
+): Promise<ChatRunInputAdmissionResult> {
+  return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
 }
 
 export async function steerGeneration(streamId: string, instruction: string): Promise<void> {

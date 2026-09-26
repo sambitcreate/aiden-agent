@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.networking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -17,6 +18,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenChatAgentRoster
 import sbtbiswas.AidenOnTheGo.models.AidenChatProgressCodec
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskProgress
+import sbtbiswas.AidenOnTheGo.models.AidenQuestionContractCodec
+import sbtbiswas.AidenOnTheGo.models.AidenQuestionRequiredPayload
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
@@ -53,7 +56,12 @@ data class AidenRemoteEventPayload(
     /** Direct task_update payload; the wire contract does not wrap snapshots. */
     val taskProgress: AidenChatTaskProgress? = null,
     /** Direct agents_update payload; the wire contract does not wrap snapshots. */
-    val agentRoster: AidenChatAgentRoster? = null
+    val agentRoster: AidenChatAgentRoster? = null,
+    /** Direct question_required payload; the wire contract does not wrap it in
+     * the flat transcript envelope. Populated only by the strict event codec —
+     * never by the loose kotlinx fixture path. */
+    @Transient
+    val questionPrompt: AidenQuestionRequiredPayload? = null
 ) {
     operator fun get(key: String): JsonPrimitive? {
         return when (key) {
@@ -285,6 +293,24 @@ class AidenSSEParser {
             validateNoForbiddenKeys(payloadObj)
 
             val presentKeys = payloadObj.keys
+            if (type == AidenRemoteEventType.QUESTION_REQUIRED) {
+                val questionPrompt = try {
+                    AidenQuestionContractCodec.parseRequiredPayload(payloadObj)
+                } catch (error: AidenRemoteContractException) {
+                    throw error
+                } catch (_: Exception) {
+                    throw AidenRemoteContractException.InvalidJson("Invalid question_required payload")
+                }
+                return AidenRemoteStreamEvent(
+                    protocolVersion = protocolVersion,
+                    streamId = streamId,
+                    sequence = sequence,
+                    timestamp = timestamp,
+                    type = type,
+                    terminal = terminal,
+                    payload = AidenRemoteEventPayload(questionPrompt = questionPrompt)
+                )
+            }
             if (type == AidenRemoteEventType.TASK_UPDATE || type == AidenRemoteEventType.AGENTS_UPDATE) {
                 // Progress events carry the snapshot directly in `payload`.
                 // Decode them through the narrow contract codec so additive
