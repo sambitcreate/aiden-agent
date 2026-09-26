@@ -21,7 +21,7 @@ import {
   DEFAULT_COMPACTION_SETTINGS,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -2275,9 +2275,7 @@ export const llmClient = {
         ),
         mcpServerInstructions,
       );
-      const runtimeContributions = agentsInstructions
-        ? await agentsInstructions.apply(modelContributions, initialization.controller.signal)
-        : modelContributions;
+      const runtimeContributions = modelContributions;
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
         contextWindow: model.contextWindow,
@@ -2287,11 +2285,6 @@ export const llmClient = {
         providerId: model.provider,
         modelId: model.id,
       };
-      rememberChatContextProfile(params.chatId, generationContextOptions, {
-        instructionRoots: agentsInstructionRoots,
-        permission,
-        toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
-      });
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -2428,7 +2421,29 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
-      const initialMessages = (await promptJournal.buildContext()).messages;
+      let initialMessages = (await promptJournal.buildContext()).messages;
+      const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
+      if (head) initialMessages = [head, ...initialMessages];
+      if (agentsInstructions) {
+        const prepared = await agentsInstructions.apply({
+          messages: initialMessages,
+          tools: [...runtimeTools],
+        }, initialization.controller.signal);
+        initialMessages = prepared.messages;
+        generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
+        assertGenerationContextCapacity({
+          contextWindow: model.contextWindow,
+          systemPrompt: generationContextOptions.systemPrompt,
+          tools: runtimeTools,
+        });
+      }
+      // Register once the transcript carries AGENTS.md, so the profile's
+      // instruction baseline matches the prompt it captured.
+      rememberChatContextProfile(params.chatId, generationContextOptions, {
+        instructionRoots: agentsInstructionRoots,
+        permission,
+        toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
+      });
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       candidate = new PiAgentRuntimeHarness({
@@ -2552,11 +2567,11 @@ export const llmClient = {
           if (changed) {
             assertGenerationContextCapacity({
               ...generationContextOptions,
-              systemPrompt: nextContext.systemPrompt,
+              systemPrompt: getCurrentSystemPrompt(nextContext.messages),
               tools: nextContext.tools ?? [],
             });
             generationContextOptions.tools = nextContext.tools ?? [];
-            generationContextOptions.systemPrompt = nextContext.systemPrompt;
+            generationContextOptions.systemPrompt = getCurrentSystemPrompt(nextContext.messages);
           }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
@@ -2569,7 +2584,7 @@ export const llmClient = {
                 "pi",
                 `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
               );
-              nextContext = recoverAttendedToolErrorContext(context);
+              nextContext = recoverAttendedToolErrorContext(nextContext);
               changed = true;
             }
           }

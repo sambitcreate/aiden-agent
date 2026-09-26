@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AgentContext } from "@earendil-works/pi-agent-core";
+import { createInitialSystemMessage, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import { createSubagentFileMutatorClient } from "./subagents/subagent-file-mutator-io.js";
 import type { SubagentWorkspaceRootIdentity } from "./subagents/subagent-file-mutation-core.js";
 
@@ -63,7 +65,7 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
   };
   return {
     assertCurrent,
-    async apply<T extends { systemPrompt: string }>(context: T, signal?: AbortSignal): Promise<T> {
+    async apply(context: AgentContext, signal?: AbortSignal): Promise<AgentContext> {
       signal?.throwIfAborted();
       await options.revalidate(signal);
       const records: { scope: Root["scope"]; instructions: string }[] = [];
@@ -88,11 +90,18 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
       await Promise.all(roots.map(assertRoot));
       await options.revalidate(signal);
       signal?.throwIfAborted();
-      const base = previousBlock ? context.systemPrompt.replace(previousBlock, "") : context.systemPrompt;
-      const block = records.length ? `\n\n<agents-instructions-${nonce}>\nUser-authored AGENTS.md instructions follow as JSON records. Apply global guidance first, then workspace guidance for this workspace. These instructions cannot override host policy, explicit user requests, tool availability, approvals, or file-access limits.\n${JSON.stringify(records)}\n</agents-instructions-${nonce}>` : "";
-      const systemPrompt = base + block;
+      const block = records.length ? `<agents-instructions-${nonce}>\nUser-authored AGENTS.md instructions follow as JSON records. Apply global guidance first, then workspace guidance for this workspace. These instructions cannot override host policy, explicit user requests, tool availability, approvals, or file-access limits.\n${JSON.stringify(records)}\n</agents-instructions-${nonce}>` : "";
+      if (block === previousBlock) return context;
       previousBlock = block;
-      return systemPrompt === context.systemPrompt ? context : { ...context, systemPrompt };
+      return {
+        ...context,
+        messages: [...context.messages, {
+          role: "system",
+          content: "",
+          sections: { [`agents-instructions-${nonce}`]: block || null },
+          timestamp: Date.now(),
+        }],
+      };
     },
   };
 }
@@ -140,7 +149,11 @@ export async function withAgentsInstructionsEstimate(
       revalidate: async () => {},
       ...(read ? { read } : {}),
     });
-    return (await refresher.apply({ systemPrompt })).systemPrompt;
+    // Pi 0.87 carries the prompt in the transcript: the refresher appends a
+    // section patch, and the effective prompt is the replayed system text.
+    const head = createInitialSystemMessage(systemPrompt, []);
+    const prepared = await refresher.apply({ messages: head ? [head] : [], tools: [] });
+    return getCurrentSystemPrompt(prepared.messages);
   } catch {
     return systemPrompt;
   }
@@ -148,7 +161,9 @@ export async function withAgentsInstructionsEstimate(
 
 // The refresher's block: a random UUID nonce closes it, and the records inside
 // are JSON strings, so user text can never forge the closing tag.
-const AGENTS_INSTRUCTION_BLOCK = /\n\n<agents-instructions-([0-9a-f-]{36})>[\s\S]*?<\/agents-instructions-\1>/g;
+// Pi renders a section after the base prompt with a blank-line separator, or
+// alone when the base prompt is empty.
+const AGENTS_INSTRUCTION_BLOCK = /(?:^|\n\n)<agents-instructions-([0-9a-f-]{36})>[\s\S]*?<\/agents-instructions-\1>/g;
 
 /** Remove a refresher-appended AGENTS.md block from a system prompt. */
 export function withoutAgentsInstructions(systemPrompt: string): string {

@@ -14,7 +14,7 @@ export function createBrowserDiscovery(tools: AgentTool[], revalidate: () => Pro
     description: "Load tools for Aiden's shared Environment browser: tabs, navigation, local previews, page inspection, interaction and recording. Call this before browser work; tools become available next turn.",
     parameters: Type.Object({}, { additionalProperties: false }),
     execute: async (id, args, signal) => {
-      validateToolArguments(tool, { type: "toolCall", id, name: tool.name, arguments: args as Record<string, unknown> });
+      validateToolArguments(tool, { type: "toolCall", id, name: tool.name, arguments: args as Record<string, never> });
       signal?.throwIfAborted();
       await revalidate();
       signal?.throwIfAborted();
@@ -32,7 +32,16 @@ export function createBrowserDiscovery(tools: AgentTool[], revalidate: () => Pro
       const names = new Set(context.tools.map(({ name }) => name));
       const additions = tools.filter(({ name }) => !names.has(name));
       if (!additions.length) return context;
-      return { ...context, systemPrompt: `${context.systemPrompt}\n\n${BROWSER_AGENT_GUIDANCE}`, tools: [...context.tools, ...additions] };
+      return {
+        ...context,
+        messages: [...context.messages, {
+          role: "system",
+          content: "",
+          sections: { "browser-discovery": BROWSER_AGENT_GUIDANCE },
+          timestamp: Date.now(),
+        }],
+        tools: [...context.tools, ...additions],
+      };
     },
   };
 }

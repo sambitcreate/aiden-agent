@@ -160,7 +160,7 @@ test("reports stored OAuth as configured without claiming live connectivity", as
   assert.equal(snapshot.needsAttention, false);
   assert.equal("signedIn" in snapshot, false);
   assert.ok(snapshot.models.length > 0);
-  assert.deepEqual(snapshot.models.find((model) => model.id === "gpt-5.4")?.thinkingLevels, [
+  assert.deepEqual(snapshot.models.find((model) => model.id === "gpt-5.5")?.thinkingLevels, [
     "low",
     "medium",
     "high",
@@ -179,22 +179,22 @@ test("uses an injected Models collection instead of constructing a private regis
   const credentials = new InMemoryCredentialStore();
   const models = builtinModels({ credentials });
   const service = new CodexProviderService(models, credentials);
-  assert.equal(service.getModel("gpt-5.4"), models.getModel("openai-codex", "gpt-5.4"));
+  assert.equal(service.getModel("gpt-5.5"), models.getModel("openai-codex", "gpt-5.5"));
 });
 
 test("validates Codex thinking choices against the exact selected model", () => {
   const credentials = new InMemoryCredentialStore();
   const service = new CodexProviderService(builtinModels({ credentials }), credentials);
-  assert.deepEqual(service.parseThinkingSelection("gpt-5.4", "xhigh"), {
-    modelId: "gpt-5.4",
+  assert.deepEqual(service.parseThinkingSelection("gpt-5.5", "xhigh"), {
+    modelId: "gpt-5.5",
     level: "xhigh",
   });
   assert.deepEqual(service.parseThinkingSelection("gpt-5.6-sol", "max"), {
     modelId: "gpt-5.6-sol",
     level: "max",
   });
-  assert.throws(() => service.parseThinkingSelection("gpt-5.4", "max"), /not supported/u);
-  assert.throws(() => service.parseThinkingSelection("gpt-5.4", "minimal"), /not supported/u);
+  assert.throws(() => service.parseThinkingSelection("gpt-5.5", "max"), /not supported/u);
+  assert.throws(() => service.parseThinkingSelection("gpt-5.5", "minimal"), /not supported/u);
   assert.throws(
     () => service.parseThinkingSelection("unknown", "high"),
     /does not support thinking/u,
@@ -271,7 +271,7 @@ test("preflights request auth, preserves failed credentials, and exposes only sa
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  await assert.rejects(service.prepareRuntimeModel("gpt-5.4"), (error: unknown) => {
+  await assert.rejects(service.prepareRuntimeModel("gpt-5.5"), (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
     assert.equal(error.code, "sign_in_needs_attention");
     assert.equal(error.message.includes("secret"), false);
@@ -281,7 +281,7 @@ test("preflights request auth, preserves failed credentials, and exposes only sa
   assert.equal((await service.snapshot()).needsAttention, true);
 
   authFails = false;
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal((await service.snapshot()).needsAttention, false);
 });
 
@@ -304,14 +304,14 @@ test("keeps transient refresh failures recoverable without hiding Codex", async 
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  await assert.rejects(service.prepareRuntimeModel("gpt-5.4"), (error: unknown) => {
+  await assert.rejects(service.prepareRuntimeModel("gpt-5.5"), (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
     assert.equal(error.code, "temporarily_unavailable");
     return true;
   });
   assert.equal((await service.snapshot()).needsAttention, false);
 
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal((await service.snapshot()).needsAttention, false);
   assert.equal(refreshCalls, 2);
 });
@@ -339,7 +339,7 @@ test("refreshes within the expiry safety window before request setup", async (t)
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal(refreshCalls, 1);
   assert.deepEqual(await credentials.read("openai-codex"), refreshed);
 });
@@ -366,8 +366,8 @@ test("concurrent refresh waiters survive the shared generation abort", async () 
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  const first = service.prepareRuntimeModel("gpt-5.4");
-  const second = service.prepareRuntimeModel("gpt-5.4");
+  const first = service.prepareRuntimeModel("gpt-5.5");
+  const second = service.prepareRuntimeModel("gpt-5.5");
   await refreshStarted.promise;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(refreshCalls, 1);
@@ -376,7 +376,7 @@ test("concurrent refresh waiters survive the shared generation abort", async () 
   const results = await Promise.all([first, second]);
   assert.deepEqual(
     results.map((model) => model.id),
-    ["gpt-5.4", "gpt-5.4"],
+    ["gpt-5.5", "gpt-5.5"],
   );
   assert.deepEqual(await credentials.read("openai-codex"), rotated);
   assert.equal(refreshCalls, 1);
@@ -395,7 +395,7 @@ test("an already-cancelled auth wait still observes a later credential-read reje
   controller.abort(new Error("request already cancelled"));
 
   await assert.rejects(
-    service.prepareRuntimeModel("gpt-5.4", controller.signal),
+    service.prepareRuntimeModel("gpt-5.5", controller.signal),
     (error: unknown) => {
       assert.ok(error instanceof CodexRuntimeError);
       assert.equal(error.code, "request_cancelled");
@@ -424,7 +424,7 @@ test("classifies Pi's bodyless refresh status errors as requiring sign-in", asyn
     } as unknown as Models;
     const service = new CodexProviderService(models, credentials);
 
-    await assert.rejects(service.prepareRuntimeModel("gpt-5.4"), (error: unknown) => {
+    await assert.rejects(service.prepareRuntimeModel("gpt-5.5"), (error: unknown) => {
       assert.ok(error instanceof CodexRuntimeError);
       assert.equal(error.code, "sign_in_needs_attention");
       return true;
@@ -455,7 +455,7 @@ test("a definitive refresh rejection updates health after its caller times out",
   service.onStatusChange((needsAttention) => {
     if (needsAttention) attentionChanged.resolve();
   });
-  const preflight = service.prepareRuntimeModel("gpt-5.4");
+  const preflight = service.prepareRuntimeModel("gpt-5.5");
   await refreshStarted.promise;
 
   await assert.rejects(preflight, (error: unknown) => {
@@ -495,7 +495,7 @@ test("a terminal operation deadline releases a hung refresh so a later retry can
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials, () => undefined, 5, 15);
 
-  const firstAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const firstAttempt = service.prepareRuntimeModel("gpt-5.5");
   await firstRefreshStarted.promise;
   await assert.rejects(firstAttempt, (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
@@ -504,7 +504,7 @@ test("a terminal operation deadline releases a hung refresh so a later retry can
   });
 
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal(refreshCalls, 2);
   assert.deepEqual(await credentials.read("openai-codex"), recovered);
 
@@ -565,7 +565,7 @@ test("the operation deadline releases a stalled credential write for a new refre
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials, () => undefined, 5, 15);
 
-  const firstAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const firstAttempt = service.prepareRuntimeModel("gpt-5.5");
   await firstWriteEntered.promise;
   await assert.rejects(firstAttempt, (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
@@ -574,7 +574,7 @@ test("the operation deadline releases a stalled credential write for a new refre
   });
 
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const secondAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const secondAttempt = service.prepareRuntimeModel("gpt-5.5");
   await secondRefreshStarted.promise;
   await assert.rejects(secondAttempt, (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
@@ -587,7 +587,7 @@ test("the operation deadline releases a stalled credential write for a new refre
   await firstWriteCommitted.promise;
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(await credentials.read("openai-codex"), firstRotation);
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal(refreshCalls, 2);
 });
 
@@ -622,7 +622,7 @@ test("a valid late rotation repairs a retry that rejected the consumed old token
     else if (observedFailure) recoveredHealth.resolve();
   });
 
-  const firstAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const firstAttempt = service.prepareRuntimeModel("gpt-5.5");
   await firstRefreshStarted.promise;
   await assert.rejects(firstAttempt, (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
@@ -631,7 +631,7 @@ test("a valid late rotation repairs a retry that rejected the consumed old token
   });
 
   await new Promise((resolve) => setTimeout(resolve, 20));
-  await assert.rejects(service.prepareRuntimeModel("gpt-5.4"), (error: unknown) => {
+  await assert.rejects(service.prepareRuntimeModel("gpt-5.5"), (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
     assert.equal(error.code, "sign_in_needs_attention");
     return true;
@@ -642,7 +642,7 @@ test("a valid late rotation repairs a retry that rejected the consumed old token
   await recoveredHealth.promise;
   assert.deepEqual(await credentials.read("openai-codex"), lateRotation);
   assert.equal((await service.snapshot()).needsAttention, false);
-  assert.equal((await service.prepareRuntimeModel("gpt-5.4")).id, "gpt-5.4");
+  assert.equal((await service.prepareRuntimeModel("gpt-5.5")).id, "gpt-5.5");
   assert.equal(refreshCalls, 2);
 });
 
@@ -671,7 +671,7 @@ test("logout invalidates an auth preflight before the old token can dispatch", a
     logout: builtin.logout.bind(builtin),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = service.getModel("gpt-5.4");
+  const model = service.getModel("gpt-5.5");
   assert.ok(model);
 
   const result = service.streamSimple(model, { messages: [] }).result();
@@ -704,7 +704,7 @@ test("account switch escapes a stalled header hook and dispatches only the repla
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = service.getModel("gpt-5.4");
+  const model = service.getModel("gpt-5.5");
   assert.ok(model);
 
   const result = service
@@ -739,7 +739,7 @@ test("account switch escapes a stalled payload hook without a stale handshake", 
   await credentials.modify("openai-codex", async () => oauthCredential(oldAccess));
   const models = builtinModels({ credentials });
   const service = new CodexProviderService(models, credentials);
-  const model = service.getModel("gpt-5.4");
+  const model = service.getModel("gpt-5.5");
   assert.ok(model);
   const payloadStarted = deferred<void>();
   const releasePayload = deferred<void>();
@@ -805,7 +805,7 @@ test("cancelled stalled refresh releases the caller and does not block account r
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials, () => undefined, 1_000);
   const controller = new AbortController();
-  const preflight = service.prepareRuntimeModel("gpt-5.4", controller.signal);
+  const preflight = service.prepareRuntimeModel("gpt-5.5", controller.signal);
   await refreshStarted.promise;
 
   controller.abort(new Error("user cancelled"));
@@ -843,7 +843,7 @@ test("a successful refresh persists even when its only caller cancels", async ()
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials, () => rotationObserved.resolve());
   const controller = new AbortController();
-  const preflight = service.prepareRuntimeModel("gpt-5.4", controller.signal);
+  const preflight = service.prepareRuntimeModel("gpt-5.5", controller.signal);
   await refreshStarted.promise;
 
   controller.abort(new Error("user cancelled"));
@@ -884,7 +884,7 @@ test("auth refresh has a safe deadline and credential cleanup failures stay non-
     10,
   );
 
-  await assert.rejects(service.prepareRuntimeModel("gpt-5.4"), (error: unknown) => {
+  await assert.rejects(service.prepareRuntimeModel("gpt-5.5"), (error: unknown) => {
     assert.ok(error instanceof CodexRuntimeError);
     assert.equal(error.code, "temporarily_unavailable");
     return true;
@@ -913,7 +913,7 @@ test("marks a successful-preflight credential unhealthy when the Codex backend r
   const service = new CodexProviderService(models, credentials);
   const changes: boolean[] = [];
   service.onStatusChange((needsAttention) => changes.push(needsAttention));
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
 
   const result = await service
     .streamSimple(model, { messages: [] }, { sessionId: "chat-auth-rejected" })
@@ -938,12 +938,12 @@ test("keeps backend rejection sticky until the current credential receives a suc
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
 
   await service.streamSimple(model, { messages: [] }).result();
   assert.equal((await service.snapshot()).needsAttention, true);
 
-  await service.prepareRuntimeModel("gpt-5.4");
+  await service.prepareRuntimeModel("gpt-5.5");
   assert.equal((await service.snapshot()).needsAttention, true);
 
   await service.streamSimple(model, { messages: [] }).result();
@@ -976,7 +976,7 @@ test("observes WebSocket auth rejection and recovery without an HTTP response ca
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
 
   await service.streamSimple(model, { messages: [] }, { transport: "websocket" }).result();
   assert.equal((await service.snapshot()).needsAttention, true);
@@ -989,7 +989,7 @@ test("isolated Codex preserves a closed auth-failure hint after sanitizing provi
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai-codex", async () => oauthCredential("locally-valid"));
   const service = new CodexProviderService(builtinModels({ credentials }), credentials);
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
   const prepared = await service.prepareIsolatedStream(model);
   prepared.observeResult(
     {
@@ -1052,7 +1052,7 @@ test("applies resolved Codex auth and caller transforms once to the native provi
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
 
   await service
     .streamSimple(
@@ -1120,14 +1120,14 @@ test("ignores a stale request rejection after Pi automatically rotates OAuth", a
   const service = new CodexProviderService(models, credentials, () => {
     cleanups += 1;
   });
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
   const staleResult = service
     .streamSimple(model, { messages: [] }, { transport: "websocket" })
     .result();
   await streamStarted.promise;
 
   now += 60_001;
-  await service.prepareRuntimeModel("gpt-5.4");
+  await service.prepareRuntimeModel("gpt-5.5");
   assert.equal(cleanups, 1);
   const error: AssistantMessage = {
     role: "assistant",
@@ -1177,7 +1177,7 @@ test("rechecks OAuth on tool follow-up turns and reports refresh failure with sa
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const model = await service.prepareRuntimeModel("gpt-5.5");
 
   assert.equal((await service.streamSimple(model, { messages: [] }).result()).stopReason, "stop");
   const followUp = await service.streamSimple(model, { messages: [] }).result();
@@ -1193,8 +1193,8 @@ test("returns Pi-authoritative capabilities and rejects unknown runtime models",
   const credentials = new InMemoryCredentialStore();
   const service = new CodexProviderService(builtinModels({ credentials }), credentials);
 
-  const info = service.getModelInfo("gpt-5.4");
-  assert.equal(info?.id, "gpt-5.4");
+  const info = service.getModelInfo("gpt-5.5");
+  assert.equal(info?.id, "gpt-5.5");
   assert.equal(info?.vision, true);
   assert.equal(info?.toolCall, true);
   assert.equal(info?.reasoning, true);
@@ -1226,7 +1226,7 @@ test("an in-flight preflight rebinds to a newly committed credential", async () 
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const staleAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const staleAttempt = service.prepareRuntimeModel("gpt-5.5");
   const replacement: OAuthCredential = {
     type: "oauth",
     access: "replacement-access",
@@ -1236,7 +1236,7 @@ test("an in-flight preflight rebinds to a newly committed credential", async () 
 
   await service.commitCredential(replacement);
   pendingAuth.resolve({ apiKey: "old-access" });
-  assert.equal((await staleAttempt).id, "gpt-5.4");
+  assert.equal((await staleAttempt).id, "gpt-5.5");
 
   assert.deepEqual(await credentials.read("openai-codex"), replacement);
   assert.equal(authCalls, 2);
@@ -1263,7 +1263,7 @@ test("a failed credential commit does not discard an in-flight auth failure", as
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.4"), CodexRuntimeError);
+  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.5"), CodexRuntimeError);
   const commitResult = assert.rejects(
     service.commitCredential({
       type: "oauth",
@@ -1298,7 +1298,7 @@ test("a failed logout does not discard an in-flight auth failure", async () => {
     logout: async () => pendingLogout.promise,
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.4"), CodexRuntimeError);
+  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.5"), CodexRuntimeError);
   const logoutResult = assert.rejects(service.logout(), /credential delete failed/);
 
   pendingAuth.reject(new Error("invalid_grant"));
@@ -1326,12 +1326,12 @@ test("an older success cannot clear a newer request-time auth failure", async ()
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  const olderAttempt = service.prepareRuntimeModel("gpt-5.4");
-  const newerAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const olderAttempt = service.prepareRuntimeModel("gpt-5.5");
+  const newerAttempt = service.prepareRuntimeModel("gpt-5.5");
   secondAuth.reject(new Error("invalid_grant"));
   await assert.rejects(newerAttempt, CodexRuntimeError);
   firstAuth.resolve({ apiKey: "current-access" });
-  assert.equal((await olderAttempt).id, "gpt-5.4");
+  assert.equal((await olderAttempt).id, "gpt-5.5");
 
   assert.equal((await service.snapshot()).needsAttention, true);
 });
@@ -1353,14 +1353,14 @@ test("a completed older auth failure remains visible while a newer check is pend
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
 
-  const olderAttempt = service.prepareRuntimeModel("gpt-5.4");
-  const newerAttempt = service.prepareRuntimeModel("gpt-5.4");
+  const olderAttempt = service.prepareRuntimeModel("gpt-5.5");
+  const newerAttempt = service.prepareRuntimeModel("gpt-5.5");
   firstAuth.reject(new Error("invalid_grant"));
   await assert.rejects(olderAttempt, CodexRuntimeError);
   assert.equal((await service.snapshot()).needsAttention, true);
 
   secondAuth.resolve({ apiKey: "current-access" });
-  assert.equal((await newerAttempt).id, "gpt-5.4");
+  assert.equal((await newerAttempt).id, "gpt-5.5");
   assert.equal((await service.snapshot()).needsAttention, false);
 });
 
@@ -1369,7 +1369,7 @@ for (const hook of ["transformHeaders", "onPayload", "onResponse"] as const) {
     const credentials = new InMemoryCredentialStore();
     await credentials.modify("openai-codex", async () => oauthCredential(codexAccessToken("account")));
     const service = new CodexProviderService(builtinModels({ credentials }), credentials);
-    const model = service.getModel("gpt-5.4");
+    const model = service.getModel("gpt-5.5");
     assert.ok(model);
     const started = deferred<void>();
     const blocked = deferred<never>();

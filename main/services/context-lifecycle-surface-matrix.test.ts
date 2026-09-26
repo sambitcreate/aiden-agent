@@ -1,7 +1,8 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
+
 import {
   createModels,
   fauxAssistantMessage,

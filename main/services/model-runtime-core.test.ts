@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -294,7 +295,7 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
 
   await pinned.streams.streamSimple(
     googleModel,
-    { messages: [] },
+    normalizeContext({ messages: [] }),
     {
       apiKey: "later-key",
       headers: { Authorization: "Later", "X-Request": "kept" },

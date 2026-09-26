@@ -5571,6 +5571,24 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(normalized.codeFontSize, 10)
     }
 
+    @MainActor
+    func testThemeTileSelectionAppliesPresetToBothSchemes() throws {
+        let suiteName = "AidenAppearanceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenAppearanceStore(defaults: defaults)
+        store.lightPreset = .berry
+        store.darkPreset = .moss
+        store.selectTheme(.dusk)
+        XCTAssertEqual(store.lightPreset, .dusk)
+        XCTAssertEqual(store.darkPreset, .dusk)
+
+        let restored = AidenAppearanceStore(defaults: defaults)
+        XCTAssertEqual(restored.lightPreset, .dusk)
+        XCTAssertEqual(restored.darkPreset, .dusk)
+    }
+
     func testUnifiedWorkspaceSidebarProjectsOwnedChatsWithoutDuplicates() {
         let base = Date(timeIntervalSince1970: 1_000)
         let workspaces = [

@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { BotAvatarSuggestion, BotAvatarSuggestionInput } from "../../renderer/shared/bots.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
@@ -72,7 +73,7 @@ export async function generateBotAvatarSuggestion(
       controller.signal.throwIfAborted();
       const stream = runtime.streams.streamSimple(
         runtime.model,
-        {
+        normalizeContext({
           systemPrompt: BOT_AVATAR_SYSTEM_PROMPT,
           messages: [
             {
@@ -81,7 +82,7 @@ export async function generateBotAvatarSuggestion(
               timestamp: Date.now(),
             },
           ],
-        },
+        }),
         {
           apiKey: runtime.apiKey,
           headers: runtime.headers,

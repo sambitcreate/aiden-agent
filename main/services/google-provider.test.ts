@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -44,7 +45,7 @@ test("configuration migration replaces the legacy preset and preserves selection
   );
   const google = config.providers[1];
   assert.equal(google?.baseUrl, GOOGLE_BASE_URL);
-  assert.equal(google?.defaultModel, "gemini-2.0-flash");
+  assert.equal(google?.defaultModel, "gemini-2.5-flash");
   assert.ok(google?.models.includes("gemini-2.5-pro"));
   assert.ok(!google?.models.includes("gemini-1.5-pro"));
   assert.equal(config.settings.lastProviderId, GOOGLE_PROVIDER_ID);
@@ -82,11 +83,11 @@ test("canonicalization preserves a discovered native subset", () => {
 test("native thinking metadata preserves only distinct choices", () => {
   const provider = canonicalGoogleProvider();
   assert.deepEqual(
-    provider.modelMetadata?.["gemini-3-pro-preview"]?.thinkingLevels,
-    ["off", "low", "high"],
+    provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingLevels,
+    ["off", "low", "medium", "high"],
   );
   assert.equal(
-    provider.modelMetadata?.["gemini-3-pro-preview"]?.thinkingCanDisable,
+    provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingCanDisable,
     false,
   );
   assert.deepEqual(
@@ -97,14 +98,14 @@ test("native thinking metadata preserves only distinct choices", () => {
 
 test("native thinking mutations reject unsupported or unknown selections", () => {
   assert.deepEqual(
-    parseGoogleThinkingSelection("gemini-3-pro-preview", "low"),
+    parseGoogleThinkingSelection("gemini-3.1-pro-preview", "low"),
     {
-      modelId: "gemini-3-pro-preview",
+      modelId: "gemini-3.1-pro-preview",
       level: "low",
     },
   );
   assert.throws(
-    () => parseGoogleThinkingSelection("gemini-3-pro-preview", "medium"),
+    () => parseGoogleThinkingSelection("gemini-3.1-pro-preview", "xhigh"),
     /not supported/u,
   );
   assert.throws(
@@ -194,10 +195,10 @@ test("native Google streaming sends Gemini thinking through the google-generativ
   const result = await service
     .streamSimple(
       model,
-      {
+      normalizeContext({
         systemPrompt: "Keep the response short.",
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
-      },
+      }),
       { apiKey: "native-test-key", maxRetries: 0, reasoning: "high" },
     )
     .result();

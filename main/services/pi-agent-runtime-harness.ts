@@ -15,6 +15,8 @@ import {
   formatSkillsForSystemPrompt,
 } from "@earendil-works/pi-agent-core";
 import {
+  getCurrentSystemPrompt,
+  getCurrentSystemMessage,
   type AssistantMessage,
   type ImageContent,
   type Model,
@@ -758,7 +760,7 @@ async function waitForManagedPromise<T>(
 /**
  * Aiden's Pi-shaped runtime boundary.
  *
- * Pi 0.84.4's public AgentHarness owns a different session lifecycle and
+ * Pi 0.87.1's public AgentHarness owns a different session lifecycle and
  * silently falls back to parallel tool execution. This adapter keeps Aiden's
  * durable journal/compaction protocol while centralizing the stable Pi Agent
  * surface that both foreground and child runs need. It is deliberately the
@@ -880,7 +882,7 @@ export class PiAgentRuntimeHarness {
     if (initialState.model) {
       this.contextProjectionOptions = {
         contextWindow: initialState.model.contextWindow,
-        systemPrompt: initialState.systemPrompt ?? "",
+        systemPrompt: getCurrentSystemPrompt(initialState.messages ?? []) || initialState.systemPrompt || "",
         tools: initialState.tools ?? [],
         supportsImages: initialState.model.input.includes("image"),
         providerId: initialState.model.provider,
@@ -1075,7 +1077,11 @@ export class PiAgentRuntimeHarness {
               }
               // The host capacity/privacy transform is deliberately last so an
               // extension cannot re-expand an already bounded provider request.
-              if (!options.transformContext) return current;
+              const preserveSystem = (next: AgentMessage[]): AgentMessage[] =>
+                messages[0]?.role === "system" && next[0]?.role !== "system"
+                  ? [messages[0], ...next]
+                  : next;
+              if (!options.transformContext) return preserveSystem(current);
               try {
                 const transformed = await options.transformContext(current, signal);
                 const emergency = (
@@ -1087,7 +1093,7 @@ export class PiAgentRuntimeHarness {
                     this.pendingEmergencyCheckpoint = true;
                   }
                 }
-                return transformed;
+                return preserveSystem(transformed);
               } catch (error) {
                 this.policyFault ??= toError(error);
                 this.reportFault({
@@ -1386,11 +1392,11 @@ export class PiAgentRuntimeHarness {
         // generation's state; the checks below prevent a provider turn, and the
         // next generation constructs a fresh discovery registry.
         if (hostPrepared?.context) {
+          this.agent.state.messages = [...context.messages];
           this.agent.state.tools = [...(context.tools ?? [])];
-          this.agent.state.systemPrompt = context.systemPrompt;
           if (this.contextProjectionOptions) {
             this.contextProjectionOptions.tools = context.tools ?? [];
-            this.contextProjectionOptions.systemPrompt = context.systemPrompt;
+            this.contextProjectionOptions.systemPrompt = getCurrentSystemPrompt(context.messages);
           }
         }
         try {
@@ -1439,18 +1445,18 @@ export class PiAgentRuntimeHarness {
             return hostPrepared;
           }
           if (!result.messages) return hostPrepared;
-          this.agent.state.messages = [...result.messages];
+          const compactedMessages = this.installCompactedMessages(result.messages, context.messages);
           if (result.compacted) {
             this.pendingEmergencyCheckpoint = false;
             if (this.contextProjectionOptions) {
               this.emitContextProjection(
-                projectNextContextUsage(result.messages, this.contextProjectionOptions),
+                projectNextContextUsage(compactedMessages, this.contextProjectionOptions),
               );
             }
           }
           return {
             ...hostPrepared,
-            context: { ...context, messages: [...result.messages] },
+            context: { ...context, messages: compactedMessages },
           };
         } catch (error) {
           if (error instanceof PiManagedCancellationError) {
@@ -1778,7 +1784,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (repaired.value.messages) {
-          this.agent.state.messages = [...repaired.value.messages];
+          this.installCompactedMessages(repaired.value.messages);
         }
       } catch (error) {
         this.reportFault({ source: "session", error: toError(error) });
@@ -1861,13 +1867,10 @@ export class PiAgentRuntimeHarness {
             return await finish({ kind: "provider_failed", reason: "compaction-failed", attempts });
           }
           if (preflight.value.messages) {
-            this.agent.state.messages = [...preflight.value.messages];
+            const compactedMessages = this.installCompactedMessages(preflight.value.messages);
             if (this.contextProjectionOptions) {
               this.emitContextProjection(
-                projectNextContextUsage(
-                  preflight.value.messages,
-                  this.contextProjectionOptions,
-                ),
+                projectNextContextUsage(compactedMessages, this.contextProjectionOptions),
               );
             }
           }
@@ -1990,7 +1993,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (compactionResult.messages) {
-          this.agent.state.messages = [...compactionResult.messages];
+          this.installCompactedMessages(compactionResult.messages);
         }
         const terminalCompactionHostFault = compactionHostFault(compactionResult);
         if (terminalCompactionHostFault) {
@@ -2168,7 +2171,7 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
-          if (recovery.value.messages) this.agent.state.messages = [...recovery.value.messages];
+          if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
           this.pendingEmergencyCheckpoint = false;
         }
         return await finish({ kind: "completed", finalMessage: assistant, attempts });
@@ -2651,6 +2654,18 @@ export class PiAgentRuntimeHarness {
       session.withEntryProjectors(this.entryProjectors),
     );
     return this.sessionPromise;
+  }
+
+  private installCompactedMessages(
+    messages: readonly AgentMessage[],
+    source: readonly AgentMessage[] = this.agent.state.messages,
+  ): AgentMessage[] {
+    const system = getCurrentSystemMessage(source);
+    const next = system
+      ? [system, ...messages.filter((message) => message.role !== "system")]
+      : [...messages];
+    this.agent.state.messages = next;
+    return next;
   }
 
   private ensureSessionSeeded(session: PiSessionPort): Promise<void> {
