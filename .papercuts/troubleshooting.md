@@ -1124,3 +1124,4 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
   setsid-fixture compile failure (`clock_gettime` undeclared under strict
   c17 on glibc) applied to both trees — fixed with the shared feature-test
   macro block.
+- 2026-09-25: Linux x64 E2E on ubuntu-24.04 aborts because AppArmor restricts unprivileged user namespaces. Do not setuid `node_modules/electron/dist/chrome-sandbox` (PR-controlled checkout after `npm ci`); `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` on the ephemeral runner restores the namespace sandbox instead.

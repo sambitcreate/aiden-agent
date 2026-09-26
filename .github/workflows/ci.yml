@@ -359,9 +359,13 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
 
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
@@ -456,8 +460,13 @@ jobs:
       - name: Run deterministic Electron E2E gate
         if: matrix.arch == 'x64'
         run: |
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          set -euo pipefail
+          # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
+          # which leaves Electron with neither sandbox and makes it abort.
+          # Re-enable the namespace sandbox at the runner level instead of
+          # granting setuid-root to chrome-sandbox inside the PR-controlled
+          # checkout, where untrusted install scripts could swap the target.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run --auto-servernum npm run test:e2e
 
       - name: Build sanitized E2E failure receipt

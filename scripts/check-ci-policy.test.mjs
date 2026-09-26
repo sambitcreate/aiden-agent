@@ -133,6 +133,26 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
   assert.doesNotMatch(rpmJob, /\brpm-build\b/u);
 });
 
+test("Linux pull-request E2E never grants privileges to checkout content", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const linuxJob = workflow.match(/^ {2}linux:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  assert.ok(linuxJob, "Linux package job is missing");
+
+  assert.match(linuxJob, /^ {4}permissions:\n {6}contents: read\n {4}steps:/mu);
+  const checkout = linuxJob.match(/- name: Check out source\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
+  assert.match(checkout ?? "", /persist-credentials: false/u);
+  assert.doesNotMatch(linuxJob, /\$\{\{\s*secrets\./u);
+
+  // npm ci runs PR-controlled lifecycle scripts, so nothing below the checkout
+  // may become setuid or root-owned.
+  assert.doesNotMatch(linuxJob, /sudo (chown|chmod)[^\n]*node_modules/u);
+  assert.doesNotMatch(linuxJob, /chmod [0-7]*[4-7][0-7]{3}\b[^\n]*node_modules/u);
+  const e2e = linuxJob.match(/- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
+  assert.ok(e2e, "Linux E2E gate is missing");
+  assert.match(e2e, /sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u);
+  assert.doesNotMatch(e2e.replace(/^\s*#.*$/gmu, ""), /chrome-sandbox|--no-sandbox/u);
+});
+
 test("Linux GUI smokes force teardown without masking startup failures", async () => {
   const workflows = await Promise.all([
     readFile(workflowUrl, "utf8"),
