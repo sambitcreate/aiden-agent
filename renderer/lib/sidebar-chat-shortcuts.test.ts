@@ -91,7 +91,14 @@ test("derives hint reveal modifiers from customized chat bindings", () => {
       "Alt+2",
       "Command+Shift+3",
       null,
-    ]),
+    ], "darwin"),
     [["Control"], ["Alt"], ["Meta", "Shift"]],
+  );
+});
+
+test("maps hint reveal modifiers to Ctrl and Super outside macOS", () => {
+  assert.deepEqual(
+    chatShortcutRevealModifierSets(["Command+1", "Control+2", "Command+Shift+3"], "linux"),
+    [["Control"], ["Meta"], ["Control", "Shift"]],
   );
 });

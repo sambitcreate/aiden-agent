@@ -210,11 +210,12 @@ final class AidenHomeModel {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
         let generation = nextSummaryCacheGeneration()
+        let writeToken = chatCache.reserveChatWrite()
         Task {
             try? await chatCache.saveChatSummaries(
                 snapshot,
                 instanceId: context.instanceId,
-                generation: generation
+                generation: generation, writeToken: writeToken
             )
         }
     }
@@ -234,6 +235,7 @@ final class AidenHomeModel {
         _ page: AidenChatSummaryPage,
         requestedCursor: String,
         instanceId: String,
+        writeToken: UInt64,
         isCurrent: @MainActor () -> Bool = { true }
     ) async throws {
         let validated: [AidenChatSummary]
@@ -256,7 +258,7 @@ final class AidenHomeModel {
             try await chatCache.saveChatSummaries(
                 snapshot,
                 instanceId: instanceId,
-                generation: generation
+                generation: generation, writeToken: writeToken
             )
         } catch {
             paginationState = .failed(error.localizedDescription)
@@ -273,6 +275,7 @@ final class AidenHomeModel {
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected,
               let context = try? coordinator.requestContext() else { return }
+        let writeToken = chatCache.reserveChatWrite()
         let attempt = LoadAttempt(context: context)
         let plan = AidenHomeLoadPlan(
             installation: coordinator.installationStore.activeInstallation
@@ -349,7 +352,7 @@ final class AidenHomeModel {
                         try await chatCache.saveChatSummaries(
                             snapshot,
                             instanceId: context.instanceId,
-                            generation: generation
+                            generation: generation, writeToken: writeToken
                         )
                         guard generation == summaryCacheGeneration,
                               loadingAttempt == attempt,
@@ -401,6 +404,7 @@ final class AidenHomeModel {
               let cursor = nextChatCursor,
               let context = contentContext,
               coordinator.isCurrent(context) else { return }
+        let writeToken = chatCache.reserveChatWrite()
         paginationState = .loading
         do {
             let page = try await coordinator.remoteClient(for: context).chatSummaries(cursor: cursor)
@@ -409,6 +413,7 @@ final class AidenHomeModel {
                 page,
                 requestedCursor: cursor,
                 instanceId: context.instanceId,
+                writeToken: writeToken,
                 isCurrent: {
                     coordinator.isCurrent(context) && self.contentContext == context
                 }
