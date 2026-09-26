@@ -22,6 +22,7 @@ import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
   distanceFromScrollBottom,
   isAtScrollBottom,
+  isUserScrollKey,
   resolveProgrammaticFollowLatch,
   SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
 } from "../lib/scroll-follow";
@@ -870,7 +871,7 @@ export function ScrollArea({
     setAtTop(element.scrollHeight <= element.clientHeight);
   }, []);
 
-  const updateScrollEdges = React.useCallback((element = viewport.current) => {
+  const updateScrollEdges = React.useCallback((element = viewport.current, terminated = false) => {
     if (!element) return;
     setAtTop(element.scrollTop < 2);
     const remaining = distanceFromScrollBottom(
@@ -879,12 +880,30 @@ export function ScrollArea({
       element.scrollTop,
     );
     const atBottom = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
-    const next = resolveProgrammaticFollowLatch(programmaticPinPendingRef.current, atBottom);
+    const next = resolveProgrammaticFollowLatch(
+      programmaticPinPendingRef.current,
+      atBottom,
+      terminated,
+    );
     programmaticPinPendingRef.current = next.pending;
     atBottomRef.current = next.followLatest;
     setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
   }, []);
+
+  // A smooth jump can be aborted by the reader or can end short of the live
+  // edge; either way the pending latch must yield to the real position.
+  const releaseProgrammaticPin = React.useCallback(() => {
+    if (!programmaticPinPendingRef.current) return;
+    updateScrollEdges(viewport.current, true);
+  }, [updateScrollEdges]);
+
+  React.useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    element.addEventListener("scrollend", releaseProgrammaticPin);
+    return () => element.removeEventListener("scrollend", releaseProgrammaticPin);
+  }, [releaseProgrammaticPin]);
 
   const followBottomNow = React.useCallback(() => {
     const element = viewport.current;
@@ -981,6 +1000,17 @@ export function ScrollArea({
         style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
+        }}
+        onWheel={releaseProgrammaticPin}
+        onTouchStart={releaseProgrammaticPin}
+        onPointerDown={(event) => {
+          // Only the viewport's own box (its scrollbar) starts a user scroll.
+          if (event.target === event.currentTarget) releaseProgrammaticPin();
+        }}
+        onKeyDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+          if (isUserScrollKey(event.key)) releaseProgrammaticPin();
         }}
       >
         <div ref={content} data-scroll-content className="min-h-full">

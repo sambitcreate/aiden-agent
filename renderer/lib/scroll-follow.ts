@@ -40,17 +40,35 @@ export function pinOverflowListToEnd(element: { scrollHeight: number; scrollTop:
 
 /**
  * Smooth jump-to-bottom samples intermediate scrollTop. Keep follow latched
- * until the animation reaches the trailing edge.
+ * until the animation reaches the trailing edge. A user interruption or the
+ * animation ending (`scrollend`) terminates the jump: the latch then follows
+ * the real position so an aborted jump never keeps an away reader pinned.
  */
 export function resolveProgrammaticFollowLatch(
   programmaticPinPending: boolean,
   atBottom: boolean,
+  terminated = false,
 ): { pending: boolean; followLatest: boolean } {
-  if (!programmaticPinPending) {
+  if (!programmaticPinPending || terminated) {
     return { pending: false, followLatest: atBottom };
   }
   if (atBottom) {
     return { pending: false, followLatest: true };
   }
   return { pending: true, followLatest: true };
+}
+
+const USER_SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
+/** Keys that scroll a focused viewport and so abort a smooth programmatic scroll. */
+export function isUserScrollKey(key: string): boolean {
+  return USER_SCROLL_KEYS.has(key);
 }

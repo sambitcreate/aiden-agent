@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   distanceFromScrollBottom,
   isAtScrollBottom,
+  isUserScrollKey,
   pinOverflowListToEnd,
   resolveProgrammaticFollowLatch,
   shouldFollowScrollBottom,
@@ -30,6 +31,25 @@ test("programmatic jump keeps follow latched until the live edge is reached", ()
   assert.deepEqual(resolveProgrammaticFollowLatch(true, true), { pending: false, followLatest: true });
   assert.deepEqual(resolveProgrammaticFollowLatch(false, false), { pending: false, followLatest: false });
   assert.equal(shouldPinAfterContentGrowth(resolveProgrammaticFollowLatch(true, false).followLatest), true);
+});
+
+test("an interrupted or finished smooth jump releases the latch away from the live edge", () => {
+  // Intermediate animation samples keep the latch.
+  assert.deepEqual(resolveProgrammaticFollowLatch(true, false, false), { pending: true, followLatest: true });
+  // User interruption or scrollend short of the edge: follow the real position.
+  assert.deepEqual(resolveProgrammaticFollowLatch(true, false, true), { pending: false, followLatest: false });
+  assert.equal(shouldPinAfterContentGrowth(resolveProgrammaticFollowLatch(true, false, true).followLatest), false);
+  // Terminating at the edge still follows.
+  assert.deepEqual(resolveProgrammaticFollowLatch(true, true, true), { pending: false, followLatest: true });
+});
+
+test("only scrolling keys count as a user interruption", () => {
+  for (const key of ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]) {
+    assert.equal(isUserScrollKey(key), true, key);
+  }
+  for (const key of ["a", "Enter", "Tab", "Escape", "ArrowLeft"]) {
+    assert.equal(isUserScrollKey(key), false, key);
+  }
 });
 
 test("opening a long task list pins to the latest rows", () => {

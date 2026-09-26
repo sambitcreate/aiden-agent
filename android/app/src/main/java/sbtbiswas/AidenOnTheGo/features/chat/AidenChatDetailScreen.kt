@@ -334,7 +334,9 @@ fun AidenChatDetailScreen(
         }
     }
 
-    LaunchedEffect(chat?.messages?.size, isStreaming) {
+    // Keyed by listState too: a chat switch with an equal item count must still
+    // consume the new list's insertion epoch.
+    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
         val itemCount = AidenChatScroll.reverseLayoutItemCount(
             chat?.messages?.size ?: 0,
             isStreaming

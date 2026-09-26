@@ -2,8 +2,11 @@ package sbtbiswas.AidenOnTheGo.features.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.models.AidenChatTask
+import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
 
 class AidenChatScrollTest {
     @Test
@@ -61,14 +64,55 @@ class AidenChatScrollTest {
         assertFalse(AidenChatScroll.shouldPinTaskList(true, 3))
         assertFalse(AidenChatScroll.shouldPinTaskList(false, 0))
         assertFalse(AidenChatScroll.isFollowingLatest(2, 0))
-        assertTrue(AidenChatScroll.isFollowingTaskListEnd(17, 18))
-        assertFalse(AidenChatScroll.isFollowingTaskListEnd(0, 18))
         assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(true))
-        assertEquals(
-            "1:in_progress:Writing|2:pending:",
-            AidenChatScroll.taskListFollowKey(
-                listOf(Triple(1L, "in_progress", "Writing"), Triple(2L, "pending", "")),
+    }
+
+    @Test
+    fun taskSheetFollowsWhenTheLastRowIsVisibleInAMultiRowViewport() {
+        // 18 tasks, rows 12..17 visible, last row flush with the content end.
+        assertTrue(
+            AidenChatScroll.isFollowingTaskListEnd(
+                lastVisibleItemIndex = 17,
+                lastVisibleItemEndOffset = 1200,
+                viewportContentEndOffset = 1200,
+                totalItemCount = 18,
+            )
+        )
+        // Within the follow slop.
+        assertTrue(AidenChatScroll.isFollowingTaskListEnd(17, 1280, 1200, 18))
+        // Reader scrolled up so the last row is partly below the fold.
+        assertFalse(AidenChatScroll.isFollowingTaskListEnd(17, 1281, 1200, 18))
+        // Last row not visible at all.
+        assertFalse(AidenChatScroll.isFollowingTaskListEnd(15, 1200, 1200, 18))
+        // A task was appended: the live total moves the end, so the old last row no longer counts.
+        assertFalse(AidenChatScroll.isFollowingTaskListEnd(17, 1200, 1200, 19))
+        assertFalse(AidenChatScroll.isFollowingTaskListEnd(-1, 0, 1200, 0))
+    }
+
+    @Test
+    fun taskFollowKeyChangesForEveryRenderedField() {
+        val base = listOf(
+            AidenChatTask(id = 1, subject = "Plan", status = AidenChatTaskStatus.COMPLETED),
+            AidenChatTask(
+                id = 2,
+                subject = "Write",
+                status = AidenChatTaskStatus.IN_PROGRESS,
+                activeForm = "Writing",
             ),
+        )
+        val key = AidenChatScroll.taskListFollowKey(base)
+        assertEquals("1:COMPLETED::Plan:|2:IN_PROGRESS:Writing:Write:", key)
+        assertNotEquals(
+            key,
+            AidenChatScroll.taskListFollowKey(listOf(base[0], base[1].copy(subject = "Write a much longer subject"))),
+        )
+        assertNotEquals(
+            key,
+            AidenChatScroll.taskListFollowKey(listOf(base[0], base[1].copy(blockedBy = listOf(1L)))),
+        )
+        assertNotEquals(
+            key,
+            AidenChatScroll.taskListFollowKey(listOf(base[0], base[1].copy(activeForm = "Rewriting"))),
         )
     }
 }

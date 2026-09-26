@@ -35,7 +35,8 @@ enum AidenChatScrollPolicy {
 
     static func taskListFollowKey(_ tasks: [AidenRemoteChatTask]) -> String {
         tasks.map { task in
-            "\(task.id):\(task.status.rawValue):\(task.subject):\(task.activeForm ?? "")"
+            let blockedBy = (task.blockedBy ?? []).map(String.init).joined(separator: ",")
+            return "\(task.id):\(task.status.rawValue):\(task.subject):\(task.activeForm ?? ""):\(blockedBy)"
         }.joined(separator: "|")
     }
 

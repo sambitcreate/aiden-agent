@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import sbtbiswas.AidenOnTheGo.models.AidenChatTask
+
 /** Reverse-layout transcripts keep the latest item at index 0. */
 object AidenChatScroll {
     const val FOLLOW_OFFSET_PX = 80
@@ -49,19 +51,34 @@ object AidenChatScroll {
 
     fun taskListEndIndex(visibleCount: Int): Int = maxOf(0, visibleCount - 1)
 
+    /**
+     * Forward-layout task lists show several rows at once, so the live edge is
+     * reached when the last visible row is the last task and its bottom sits
+     * within [thresholdPx] of the viewport's content end. Read these values from
+     * the live `layoutInfo` so appends and deletions never use a stale count.
+     */
     fun isFollowingTaskListEnd(
-        firstVisibleItemIndex: Int,
-        visibleCount: Int,
+        lastVisibleItemIndex: Int,
+        lastVisibleItemEndOffset: Int,
+        viewportContentEndOffset: Int,
+        totalItemCount: Int,
+        thresholdPx: Int = FOLLOW_OFFSET_PX,
     ): Boolean {
-        if (visibleCount <= 0) return false
-        return firstVisibleItemIndex >= taskListEndIndex(visibleCount)
+        if (totalItemCount <= 0) return false
+        if (lastVisibleItemIndex < taskListEndIndex(totalItemCount)) return false
+        return lastVisibleItemEndOffset - viewportContentEndOffset <= thresholdPx
     }
 
-    fun taskListFollowKey(
-        tasks: List<Triple<Long, String, String>>,
-    ): String {
-        return tasks.joinToString("|") { (id, status, activeForm) ->
-            "$id:$status:$activeForm"
+    /** Every field a task row renders, so any visible change re-arms follow. */
+    fun taskListFollowKey(tasks: List<AidenChatTask>): String {
+        return tasks.joinToString("|") { task ->
+            listOf(
+                task.id,
+                task.status.name,
+                task.activeForm.orEmpty(),
+                task.subject,
+                task.blockedBy.orEmpty().joinToString(","),
+            ).joinToString(":")
         }
     }
 

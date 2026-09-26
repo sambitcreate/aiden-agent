@@ -247,20 +247,26 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val listState = rememberLazyListState()
     var didPinToEnd by remember(listState) { mutableStateOf(false) }
     var followLatest by remember(listState) { mutableStateOf(true) }
-    val taskFollowKey = AidenChatScroll.taskListFollowKey(
-        tasks.map { Triple(it.id, it.status.name, it.activeForm.orEmpty()) }
-    )
+    val taskFollowKey = AidenChatScroll.taskListFollowKey(tasks)
     LaunchedEffect(listState) {
         var wasScrolling = false
         snapshotFlow {
-            Triple(listState.isScrollInProgress, listState.firstVisibleItemIndex, tasks.size)
-        }.collect { (scrolling, index, visibleCount) ->
+            // Live layout state only: `tasks` captured here would go stale after updates.
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            listState.isScrollInProgress to AidenChatScroll.isFollowingTaskListEnd(
+                lastVisibleItemIndex = last?.index ?: -1,
+                lastVisibleItemEndOffset = last?.let { it.offset + it.size } ?: 0,
+                viewportContentEndOffset = layout.viewportEndOffset - layout.afterContentPadding,
+                totalItemCount = layout.totalItemsCount,
+            )
+        }.collect { (scrolling, atEnd) ->
             if (scrolling) {
                 wasScrolling = true
-                followLatest = AidenChatScroll.isFollowingTaskListEnd(index, visibleCount)
+                followLatest = atEnd
             } else if (wasScrolling) {
                 wasScrolling = false
-                followLatest = AidenChatScroll.isFollowingTaskListEnd(index, visibleCount)
+                followLatest = atEnd
             }
         }
     }

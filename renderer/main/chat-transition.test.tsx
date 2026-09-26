@@ -296,6 +296,11 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   assert.match(scrollArea, /data-scroll-content className="min-h-full"/u);
   assert.match(scrollArea, /resolveProgrammaticFollowLatch/u);
   assert.match(scrollArea, /programmaticPinPendingRef/u);
+  // An aborted or finished smooth jump must release the pending latch.
+  assert.match(scrollArea, /addEventListener\("scrollend", releaseProgrammaticPin\)/u);
+  assert.match(scrollArea, /onWheel=\{releaseProgrammaticPin\}/u);
+  assert.match(scrollArea, /onTouchStart=\{releaseProgrammaticPin\}/u);
+  assert.match(scrollArea, /isUserScrollKey\(event\.key\)\) releaseProgrammaticPin\(\)/u);
   assert.doesNotMatch(
     effect,
     /subtree:\s*true/u,
