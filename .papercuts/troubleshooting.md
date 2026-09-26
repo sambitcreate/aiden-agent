@@ -1129,6 +1129,23 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
 
+- 2026-09-23 durable-job research: ranking notes mention Design/Comfy as current runners, but tip `7a4d9d0b` has no built-in Comfy adapter and Designer Mode is still planned. Treat provider/MCP workflows as integration work, not a migration of an existing job queue. Aiden already has Pi unknown-effect/no-replay recovery; preserve it.
+- 2026-09-23 durable Bot/chat research: Pi continueFromDurableTail is a legacy path that rejects durable runtimes; planned continuation must use runManaged. SQL ownership cannot alone fence live Pi JSONL/effect writes; require predecessor settlement and existing turn admission before takeover. Scope narrowed by user to Bots/chats only.
+- 2026-09-23 durable-run implementation: rolling back a rejected expired-lease write also rolled back the clock watermark, potentially reviving that owner after a wall-clock rollback. A savepoint now rolls back the mutation while retaining observed time; a reopen regression covers it. Runtime settlement failure must retain ownership and must not trigger repeated close callbacks.
+- 2026-09-23 hosted TypeScript check: dynamic import destructuring of node:events.once passed the local graph but was absent from the Linux runner's inferred CommonJS namespace. Use the static named import in crash/concurrency tests; no runtime cast or compiler-setting relaxation.
+- 2026-09-23 PR #243 review: reproduced three failures before fixes—shutdown erased resumable evidence, checkpoint property order changed its digest, and lifetime terminal history exhausted active quotas. Canonicalized checkpoints, preserved shutdown recovery, and scoped quotas to unresolved work while retaining receipts. All three new regressions now pass.
+
+- PR #243 review: lease release and attempt settlement are distinct; recording an outcome on controls rewrote completed attempts and prematurely finished live ones. Added separate settlement flag plus resume/retry/pause regressions. Wrong-input checkpoints now report integrity failure rather than lease loss.
+
+- PR #243 Pullfrog review: asynchronous input preparation needs an explicit pre-commit lease guard plus retained chat reservation through IO settlement. Failed-safe evidence must include the checkpoint required by retry admission; added regressions for both.
+
+- PR #243 follow-up: reconciliation can occur after an attempt already finished; finalize only attempts with null finished_at to preserve historical outcome/time. Covered cancel-after-settlement without a new execution.
+
+- PR #243 recovery review: an authoritative input checkpoint may exist before SQL dispatch (including a lost admission receipt). Recover this as start without re-appending; reject a changed stored head. Added restart, explicit-resume, lost-receipt, and mismatched-head regressions.
+
+- PR #243 correction: a missing SQL input checkpoint cannot prove the original session/head. Removed wildcard recovery; null-checkpoint evidence fails closed, with changed-session/head regressions. Exact stored checkpoints still recover before dispatch.
+
+- PR #243 recovery authority: a reconciliation lease does not authorize dispatch. Gate first-start on admitting/queued state in service and SQL admission/dispatch methods; recovered blocked runs settle observationally and require explicit Resume. Added checkpoint/not-started and direct-store regressions.
 - 2026-09-25 PR #250 review fix: Pullfrog can drop an inline finding whose line misses a diff hunk; the review body only names the file and line. The full comment text is in the Pullfrog workflow log (`gh run view <run> --log`, search the posted `"line":` payloads). Also, a fresh agent worktree without its own `node_modules` resolves the parent checkout's packages and reports false `tsc` errors; run `npm ci --ignore-scripts` first.
 - 2026-09-25 PR #222 fixer: fresh worktrees lack `build/native/aiden-worktree-file-io{,-test}`, so lazy remote-file and native tests fail with ENOENT/"cannot currently be listed" until `npm run build:worktree-file-io` and `node scripts/build-worktree-file-io.mjs --test` run. Android Gradle needs `JAVA_HOME` (Android Studio jbr) and `ANDROID_HOME=~/Library/Android/sdk` on this host.
 # Pi 0.87.1 pin migration

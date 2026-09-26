@@ -67,6 +67,8 @@
         "main/services/dictation-key-state.test.ts",
         "main/services/dictation-keycode.test.ts",
         "main/services/dictation-paste.test.ts",
+        "main/services/durable-jobs/service.test.ts",
+        "main/services/durable-jobs/store.test.ts",
         "main/services/external-editors.test.ts",
         "main/services/foundation-models-connection-core.test.ts",
         "main/services/foundation-models-connection.test.ts",
