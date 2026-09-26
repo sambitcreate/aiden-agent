@@ -458,6 +458,32 @@ test("pause halts dispatch and resume finishes the remaining segments", async ()
   assert.equal(calls, 2);
 });
 
+test("resuming after the final segment finished while paused keeps the soundbite replayable", async () => {
+  const h = harness({ enabled: true });
+  let resolveOnly!: (value: TtsUnarySynthesisResult) => void;
+  h.provider.synthesize = () =>
+    new Promise<TtsUnarySynthesisResult>((resolve) => {
+      resolveOnly = resolve;
+    });
+  const first = await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  h.service.pause(h.owner());
+  resolveOnly({
+    audio: { bytes: wavBytes(), mimeType: "audio/wav", sampleRate: 24000, channels: 1 },
+    usage: { inputTokens: 1, outputTokens: 2 },
+  });
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.service.resume(h.owner())?.phase, "completed");
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  // Stop keeps a retained completed soundbite; Play again replays it for free.
+  h.service.stop(h.owner());
+  assert.ok(h.service.readAudio(h.owner(), first.jobId, 0, 0, 1024));
+  const replayed = await h.service.start(h.owner(), { ...startRequest(h), requestId: "replay-after-resume" });
+  assert.equal(replayed.jobId, first.jobId);
+  assert.equal(replayed.phase, "completed");
+  assert.equal(h.usage.length, 1);
+});
+
 test("settings updates use compare-and-set and reject stale revisions", async () => {
   const h = harness({ enabled: false });
   await h.service.updateSettings(h.owner(), h.revision, { enabled: true });

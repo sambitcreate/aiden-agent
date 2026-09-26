@@ -534,7 +534,9 @@ export function createTtsService(deps: TtsServiceDeps) {
           await job.waitWhilePaused();
         }
       }
-      if (job.terminal()) return;
+      // resume() may already have projected "completed" for a job whose final
+      // segment arrived while paused; it still needs retention here.
+      if (job.phase === "cancelled" || job.phase === "failed") return;
       if (job.readySegments >= job.segments.length) {
         job.clearPauseTimeout();
         job.phase = "completed";

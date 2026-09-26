@@ -134,6 +134,102 @@ export function TtsSettings() {
     }
   };
 
+  const clearDedicatedKey = async () => {
+    setSaving(true);
+    try {
+      await ttsApi.clearDedicatedCredential();
+      await refresh();
+    } catch {
+      toast.info("Could not remove the dedicated key.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <TtsSettingsView
+      snapshot={snapshot}
+      loadError={loadError}
+      voices={voices}
+      saving={saving}
+      dedicatedKey={dedicatedKey}
+      deliveryNote={deliveryNote}
+      previewActive={previewActive}
+      previewError={previewState.error}
+      onRetry={() => void refresh()}
+      onPatch={(update) => void patch(update)}
+      onDedicatedKeyChange={setDedicatedKey}
+      onSaveDedicatedKey={() => void saveDedicatedKey()}
+      onClearDedicatedKey={() => void clearDedicatedKey()}
+      onPreview={() => void previewController.preview()}
+      onStopPreview={() => previewController.stop()}
+      onDeliveryNoteChange={setDeliveryNote}
+      onClearCache={() =>
+        void clearGeneratedAudio({
+          stopPreview: () => previewController.stop(),
+          clearCache: () => ttsApi.clearCache(),
+          notify: (message) => toast.info(message),
+        })
+      }
+    />
+  );
+}
+
+/** Stop any audible preview before wiping the session cache, then report the outcome. */
+export async function clearGeneratedAudio(deps: {
+  stopPreview: () => void;
+  clearCache: () => Promise<unknown>;
+  notify: (message: string) => void;
+}): Promise<void> {
+  try {
+    deps.stopPreview();
+    await deps.clearCache();
+    deps.notify("Generated audio cleared.");
+  } catch {
+    deps.notify("Could not clear generated audio.");
+  }
+}
+
+export interface TtsSettingsViewProps {
+  snapshot: TtsSettingsSnapshot | null;
+  loadError: boolean;
+  voices: ReadonlyArray<{ providerVoiceId: string; name: string }>;
+  saving: boolean;
+  dedicatedKey: string;
+  deliveryNote: string;
+  previewActive: boolean;
+  previewError: { message: string } | null;
+  onRetry: () => void;
+  onPatch: (update: Partial<TtsSettingsV1> & object) => void;
+  onDedicatedKeyChange: (value: string) => void;
+  onSaveDedicatedKey: () => void;
+  onClearDedicatedKey: () => void;
+  onPreview: () => void;
+  onStopPreview: () => void;
+  onDeliveryNoteChange: (value: string) => void;
+  onClearCache: () => void;
+}
+
+/** Stateless Text to Speech settings surface; the container owns IPC and playback. */
+export function TtsSettingsView({
+  snapshot,
+  loadError,
+  voices,
+  saving,
+  dedicatedKey,
+  deliveryNote,
+  previewActive,
+  previewError,
+  onRetry,
+  onPatch,
+  onDedicatedKeyChange,
+  onSaveDedicatedKey,
+  onClearDedicatedKey,
+  onPreview,
+  onStopPreview,
+  onDeliveryNoteChange,
+  onClearCache,
+}: TtsSettingsViewProps) {
   if (!snapshot) {
     return (
       <div>
@@ -143,7 +239,7 @@ export function TtsSettings() {
             : "Loading Text to Speech settings…"}
         </Text>
         {loadError ? (
-          <Button variant="muted" onClick={() => void refresh()}>
+          <Button variant="muted" onClick={onRetry}>
             Try again
           </Button>
         ) : null}
@@ -163,7 +259,7 @@ export function TtsSettings() {
           <Switch
             checked={settings.enabled}
             disabled={saving}
-            onCheckedChange={(checked) => void patch({ enabled: checked })}
+            onCheckedChange={(checked) => onPatch({ enabled: checked })}
           />
         </Field>
       </FieldSet>
@@ -177,7 +273,7 @@ export function TtsSettings() {
             value={settings.credentialSource}
             disabled={saving}
             onValueChange={(value) =>
-              void patch({ credentialSource: value as "saved-google" | "dedicated" })
+              onPatch({ credentialSource: value as "saved-google" | "dedicated" })
             }
           >
             <SelectTrigger
@@ -207,31 +303,21 @@ export function TtsSettings() {
                 type="password"
                 value={dedicatedKey}
                 placeholder="Paste a Google API key"
-                onChange={(event) => setDedicatedKey(event.target.value)}
+                onChange={(event) => onDedicatedKeyChange(event.target.value)}
                 autoComplete="off"
                 aria-label="Dedicated Google API key"
               />
               <Button
                 variant="muted"
                 disabled={saving || dedicatedKey.trim().length === 0}
-                onClick={() => void saveDedicatedKey()}
+                onClick={onSaveDedicatedKey}
               >
                 Save key
               </Button>
               <Button
                 variant="transparent"
                 disabled={saving}
-                onClick={async () => {
-                  setSaving(true);
-                  try {
-                    await ttsApi.clearDedicatedCredential();
-                    await refresh();
-                  } catch {
-                    toast.info("Could not remove the dedicated key.");
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
+                onClick={onClearDedicatedKey}
               >
                 Remove
               </Button>
@@ -255,7 +341,7 @@ export function TtsSettings() {
           <Select
             value={settings.model}
             disabled={saving}
-            onValueChange={(value) => void patch({ model: value as TtsModelId })}
+            onValueChange={(value) => onPatch({ model: value as TtsModelId })}
           >
             <SelectTrigger size="small" className="w-56 max-w-full" aria-label="Speech model">
               <SelectValue>{MODEL_LABELS[settings.model]}</SelectValue>
@@ -281,7 +367,7 @@ export function TtsSettings() {
               value={settings.selectedVoice?.localVoiceId ?? DEFAULT_VOICE}
               disabled={saving}
               onValueChange={(providerVoiceId) => {
-                void patch({
+                onPatch({
                   selectedVoice:
                     providerVoiceId !== DEFAULT_VOICE
                       ? { kind: "prebuilt", localVoiceId: providerVoiceId }
@@ -313,8 +399,8 @@ export function TtsSettings() {
                 !previewActive && (saving || !settings.enabled || !snapshot.credentialReady)
               }
               onClick={() => {
-                if (previewActive) previewController.stop();
-                else void previewController.preview();
+                if (previewActive) onStopPreview();
+                else onPreview();
               }}
             >
               {previewActive ? "Stop preview" : "Preview sample"}
@@ -323,9 +409,9 @@ export function TtsSettings() {
         </Field>
       </FieldSet>
 
-      {previewState.error ? (
+      {previewError ? (
         <Text color="secondary" role="alert">
-          {previewState.error.message}
+          {previewError.message}
         </Text>
       ) : null}
 
@@ -335,7 +421,7 @@ export function TtsSettings() {
             value={settings.delivery.preset}
             disabled={saving}
             onValueChange={(value) =>
-              void patch({
+              onPatch({
                 delivery: {
                   preset: value as TtsDeliveryPreset,
                   note: settings.delivery.note,
@@ -365,10 +451,10 @@ export function TtsSettings() {
             aria-label="Optional delivery note"
             maxLength={TTS_LIMITS.deliveryNoteMaxChars}
             placeholder="e.g. slightly slower pace"
-            onChange={(event) => setDeliveryNote(event.target.value)}
+            onChange={(event) => onDeliveryNoteChange(event.target.value)}
             onBlur={() => {
               if (deliveryNote !== settings.delivery.note) {
-                void patch({ delivery: { preset: settings.delivery.preset, note: deliveryNote } });
+                onPatch({ delivery: { preset: settings.delivery.preset, note: deliveryNote } });
               }
             }}
           />
@@ -384,7 +470,7 @@ export function TtsSettings() {
             checked={settings.reading.inlineCode}
             disabled={saving}
             onCheckedChange={(checked) =>
-              void patch({ reading: { ...settings.reading, inlineCode: checked } })
+              onPatch({ reading: { ...settings.reading, inlineCode: checked } })
             }
           />
         </Field>
@@ -396,7 +482,7 @@ export function TtsSettings() {
             checked={settings.reading.fencedCode}
             disabled={saving}
             onCheckedChange={(checked) =>
-              void patch({ reading: { ...settings.reading, fencedCode: checked } })
+              onPatch({ reading: { ...settings.reading, fencedCode: checked } })
             }
           />
         </Field>
@@ -421,15 +507,7 @@ export function TtsSettings() {
           <Button
             variant="muted"
             disabled={saving}
-            onClick={async () => {
-              try {
-                previewController.stop();
-                await ttsApi.clearCache();
-                toast.info("Generated audio cleared.");
-              } catch {
-                toast.info("Could not clear generated audio.");
-              }
-            }}
+            onClick={onClearCache}
           >
             Clear generated audio
           </Button>
