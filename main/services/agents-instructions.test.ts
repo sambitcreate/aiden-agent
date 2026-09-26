@@ -287,7 +287,17 @@ test("next-request options apply the selected model's tool policy to a tool-bear
   const withTools = nextRequestContextOptions(ambient, selection);
   assert.deepEqual(
     { ...withTools, tools: withTools.tools.length },
-    { ...ambient, ...selection, tools: 1 },
+    { ...ambient, ...selection, retainsSystemUpdates: false, tools: 1 },
+  );
+  // A profile captured on a model that kept system updates in place does not
+  // leak that transport into a selected model that folds them.
+  assert.equal(
+    nextRequestContextOptions({ ...ambient, retainsSystemUpdates: true }, selection).retainsSystemUpdates,
+    false,
+  );
+  assert.equal(
+    nextRequestContextOptions(ambient, { ...selection, retainsSystemUpdates: true }).retainsSystemUpdates,
+    true,
   );
   const noTools = nextRequestContextOptions(ambient, { ...selection, overrides: { toolCall: false } });
   assert.equal(noTools.tools.length, 0);

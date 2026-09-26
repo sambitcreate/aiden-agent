@@ -10,7 +10,11 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { gitInfo } from "./git.js";
-import { projectChatContextPressure, type GenerationContextOptions } from "./generation-context.js";
+import {
+  modelRetainsSystemUpdates,
+  projectChatContextPressure,
+  type GenerationContextOptions,
+} from "./generation-context.js";
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
@@ -251,6 +255,7 @@ export async function chatContextPressure(
     modelId,
     contextWindow: model.contextWindow,
     supportsImages,
+    retainsSystemUpdates: modelRetainsSystemUpdates(model),
     overrides,
   });
   const hasDraft =

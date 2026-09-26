@@ -200,6 +200,7 @@ import {
   assertGenerationContextCapacity,
   chatContextPressureFromProjection,
   createGenerationContextTransform,
+  modelRetainsSystemUpdates,
 } from "./generation-context.js";
 import {
   invalidateChatContextJournal,
@@ -2284,6 +2285,7 @@ export const llmClient = {
         supportsImages,
         providerId: model.provider,
         modelId: model.id,
+        retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,

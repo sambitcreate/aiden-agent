@@ -760,3 +760,54 @@ test("model changes rescale capacity without touching the conversation", () => {
   assert.ok(small.percentOfUsableInput > large.percentOfUsableInput);
   assert.ok(large.reservedTokens > small.reservedTokens);
 });
+
+// Pi keeps later system messages in place for mid-conversation-capable models
+// (supportsMidConvoSystemMessages), so every AGENTS.md revision is sent even
+// though the replayed prompt only carries the latest one.
+function agentsPatch(body: string): AgentMessage {
+  return {
+    role: "system",
+    content: "",
+    sections: { "agents-instructions-test": body },
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+test("retained AGENTS.md revisions count toward pressure and compaction for mid-conversation models", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  const messages: AgentMessage[] = [
+    head,
+    user("first"),
+    agentsPatch("A".repeat(8_000)),
+    user("second"),
+    agentsPatch("B".repeat(8_000)),
+    user("x".repeat(36_000)),
+  ];
+  const base = {
+    ...options,
+    contextWindow: 16_000,
+    systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  const folded = projectNextContextUsage(messages, base);
+  const retained = projectNextContextUsage(messages, { ...base, retainsSystemUpdates: true });
+  // The superseded 8,000-character revision (plus update framing) is extra.
+  const extra = retained.messageTokens - folded.messageTokens;
+  assert.ok(extra >= 2_000 && extra < 2_100, `extra=${extra}`);
+  assert.equal(folded.shouldCompact, false);
+  assert.equal(retained.shouldCompact, true);
+
+  // Without later system messages both representations price the same request.
+  const headOnly = [head, user("hello")];
+  assert.equal(
+    projectNextContextUsage(headOnly, { ...base, retainsSystemUpdates: true }).contextTokens,
+    projectNextContextUsage(headOnly, base).contextTokens,
+  );
+
+  // Compaction sees the same over-budget transcript and replays the prompt into
+  // one head, which removes the retained revisions from the outbound request.
+  const compacted = compactGenerationContext(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(compacted.compacted, true);
+  assert.ok(compacted.estimatedTokensBefore > compactGenerationContext(messages, base).estimatedTokensBefore);
+  assert.equal(compacted.messages.filter((message) => message.role === "system").length, 1);
+  assert.ok(compacted.estimatedTokensAfter <= compacted.inputBudgetTokens);
+});

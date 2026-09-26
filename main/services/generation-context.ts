@@ -1,4 +1,12 @@
-import { getCurrentSystemMessage, type ToolResultMessage, type UserMessage } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemMessage,
+  getCurrentSystemPrompt,
+  getSystemMessageText,
+  renderSystemMessageUpdate,
+  type SystemMessage,
+  type ToolResultMessage,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   estimateContextTokens,
@@ -27,6 +35,17 @@ export interface GenerationContextOptions {
   modelId?: string;
   /** Project model-neutral journal images only when this request can accept them. */
   supportsImages?: boolean;
+  /**
+   * The model receives later transcript system messages in place (Pi
+   * `supportsMidConvoSystemMessages`) instead of one replayed prompt.
+   */
+  retainsSystemUpdates?: boolean;
+}
+
+/** Whether Pi sends this model's later system messages in place. */
+export function modelRetainsSystemUpdates(model: { compat?: unknown }): boolean {
+  const compat = model.compat as { supportsMidConvoSystemMessages?: boolean } | undefined;
+  return compat?.supportsMidConvoSystemMessages === true;
 }
 
 export interface GenerationContextCompaction {
@@ -96,6 +115,36 @@ function messageTokens(messages: AgentMessage[]): number {
   return messages.reduce(
     (total, message) => total + (message.role === "system" ? 0 : estimateTokens(message)),
     0,
+  );
+}
+
+/**
+ * Static context prices the replayed system prompt once. A model that keeps
+ * later system messages receives each one in place instead, including
+ * superseded section revisions (e.g. an older AGENTS.md) and Pi's update
+ * framing. Price what that transcript sends beyond the replayed prompt.
+ */
+function retainedSystemUpdateTokens(messages: readonly AgentMessage[]): number {
+  const system = messages.filter((message): message is SystemMessage => message.role === "system");
+  if (system.length === 0) return 0;
+  const leading = messages[0]?.role === "system" ? (messages[0] as SystemMessage) : undefined;
+  let sentChars = 0;
+  for (const message of system) {
+    if (message !== leading) sentChars += renderSystemMessageUpdate(message).length;
+  }
+  const replayedChars =
+    getCurrentSystemPrompt(system).length - (leading ? getSystemMessageText(leading).length : 0);
+  return Math.max(0, Math.ceil((sentChars - replayedChars) / 4));
+}
+
+/** Message tokens for a whole outbound transcript under the model's system-message handling. */
+function transcriptMessageTokens(
+  messages: AgentMessage[],
+  options: GenerationContextOptions,
+): number {
+  return (
+    messageTokens(messages) +
+    (options.retainsSystemUpdates ? retainedSystemUpdateTokens(messages) : 0)
   );
 }
 
@@ -264,7 +313,7 @@ export function projectNextContextUsage(
 ): NextContextUsageProjection {
   const projected = projectRequestMessages(messages, options.supportsImages !== false);
   const staticTokens = estimateStaticContextTokens(options);
-  const estimatedMessages = messageTokens(projected);
+  const estimatedMessages = transcriptMessageTokens(projected, options);
   const providerEstimate = estimateContextTokens(projected);
   const candidateAnchorIndex = providerEstimate.lastUsageIndex;
   const candidateAnchor =
@@ -502,7 +551,7 @@ export function compactGenerationContext(
   const retained = projectRequestMessages(messages, options.supportsImages !== false);
   const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } =
     contextLimits(options);
-  const estimatedMessageTokensBefore = messageTokens(retained);
+  const estimatedMessageTokensBefore = transcriptMessageTokens(retained, options);
   const providerEstimate = estimateContextTokens(retained);
   const candidateUsageAnchor =
     providerEstimate.lastUsageIndex === null
@@ -532,7 +581,7 @@ export function compactGenerationContext(
         )
       : 1;
   const estimatedTotalTokens = (candidate: AgentMessage[]) => {
-    const estimatedMessages = messageTokens(candidate);
+    const estimatedMessages = transcriptMessageTokens(candidate, options);
     const heuristicTotal = staticTokens + estimatedMessages;
     if (!usageAnchor) return Math.ceil(heuristicTotal);
 

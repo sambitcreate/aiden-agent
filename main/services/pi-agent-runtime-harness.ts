@@ -52,6 +52,7 @@ import { providerFailureDiagnosticFields, providerFailureFromTerminalOutcome } f
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import {
+  modelRetainsSystemUpdates,
   projectNextContextUsage,
   type GenerationContextTransform,
   type GenerationEmergencyProjection,
@@ -887,6 +888,7 @@ export class PiAgentRuntimeHarness {
         supportsImages: initialState.model.input.includes("image"),
         providerId: initialState.model.provider,
         modelId: initialState.model.id,
+        retainsSystemUpdates: modelRetainsSystemUpdates(initialState.model),
       };
     }
     const reportExtensionFault = (

@@ -111,6 +111,8 @@ export interface NextRequestModel {
   modelId: string;
   contextWindow: number;
   supportsImages: boolean;
+  /** The selected model receives later transcript system messages in place. */
+  retainsSystemUpdates?: boolean;
   /** The selected model's saved overrides (e.g. tool calls disabled). */
   overrides?: CustomModelOptions;
 }
@@ -131,6 +133,7 @@ export function nextRequestContextOptions(
       supportsImages: model.supportsImages,
       providerId: model.providerId,
       modelId: model.modelId,
+      retainsSystemUpdates: model.retainsSystemUpdates ?? false,
     },
     model.overrides,
   );
