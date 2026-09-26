@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- 2026-09-25 transcript open-at-bottom: Hermex's `defaultScrollAnchor(.bottom, for: .initialOffset)` plus a size-change bottom anchor is the first-paint solution; `ScrollViewProxy.scrollTo` in `onAppear` is only a fallback after the destination is visible. Desktop long-chat follow should observe one content wrapper, not a subtree MutationObserver.
 - 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
 - 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
 - 2026-09-21 Subagents layout: this fresh worktree had no `node_modules`; focused `tsx`, TypeScript, and ESLint commands failed on missing packages until `npm ci`. Check dependency installation before interpreting those failures as code regressions.
@@ -1128,6 +1129,7 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
 
+- 2026-09-25 PR #250 review fix: Pullfrog can drop an inline finding whose line misses a diff hunk; the review body only names the file and line. The full comment text is in the Pullfrog workflow log (`gh run view <run> --log`, search the posted `"line":` payloads). Also, a fresh agent worktree without its own `node_modules` resolves the parent checkout's packages and reports false `tsc` errors; run `npm ci --ignore-scripts` first.
 - 2026-09-25 PR #222 fixer: fresh worktrees lack `build/native/aiden-worktree-file-io{,-test}`, so lazy remote-file and native tests fail with ENOENT/"cannot currently be listed" until `npm run build:worktree-file-io` and `node scripts/build-worktree-file-io.mjs --test` run. Android Gradle needs `JAVA_HOME` (Android Studio jbr) and `ANDROID_HOME=~/Library/Android/sdk` on this host.
 # Pi 0.87.1 pin migration
 
