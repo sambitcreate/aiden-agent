@@ -726,10 +726,15 @@ async function prepareGeneration(
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   // Bot and Assistant prompts retain their exact, separately granted sources.
-  const agentsInstructions = !botBound && !assistantMode
-    ? await createAgentsInstructionRefresher({
+  const agentsInstructionRoots = !botBound && !assistantMode
+    ? {
         globalRoot: aidenConfigDir(),
         workspaceRoot: permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
+      }
+    : undefined;
+  const agentsInstructions = agentsInstructionRoots
+    ? await createAgentsInstructionRefresher({
+        ...agentsInstructionRoots,
         revalidate: async (requestSignal) => {
           signal.throwIfAborted();
           requestSignal?.throwIfAborted();
@@ -1496,6 +1501,7 @@ async function prepareGeneration(
   return {
     runtime: { ...runtime, model },
     agentsInstructions,
+    agentsInstructionRoots,
     browserDiscovery,
     browserSelection,
     browserFileApprovals,
@@ -1819,6 +1825,7 @@ export const llmClient = {
     const {
       runtime,
       agentsInstructions,
+      agentsInstructionRoots,
       browserDiscovery,
       browserSelection,
       browserFileApprovals,
@@ -2274,7 +2281,7 @@ export const llmClient = {
         providerId: model.provider,
         modelId: model.id,
       };
-      rememberChatContextProfile(params.chatId, generationContextOptions);
+      rememberChatContextProfile(params.chatId, generationContextOptions, agentsInstructionRoots);
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -2431,7 +2438,7 @@ export const llmClient = {
         onContextProjection: (projection, projectionOptions) => {
           // The harness keeps these options current with host-disclosed tool
           // and prompt updates, so ambient reads reuse the live profile.
-          rememberChatContextProfile(params.chatId, projectionOptions);
+          rememberChatContextProfile(params.chatId, projectionOptions, agentsInstructionRoots);
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
             chatId: params.chatId,

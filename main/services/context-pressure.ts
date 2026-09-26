@@ -16,7 +16,12 @@ import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { agentsInstructionFingerprint, withAgentsInstructionsEstimate } from "./agents-instructions.js";
+import {
+  agentsInstructionFingerprint,
+  createAgentsInstructionTracker,
+  withAgentsInstructionsEstimate,
+  type AgentsInstructionRoots,
+} from "./agents-instructions.js";
 import { buildAgentTools } from "./tools.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
@@ -26,13 +31,27 @@ import { draftUserPiMessage } from "./generation-messages.js";
  * mutated in place by the generation path, so a stored reference stays live
  * for the rest of the session.
  */
-const generationProfiles = new Map<string, GenerationContextOptions>();
+interface GenerationProfile {
+  options: GenerationContextOptions;
+  /** Present when the generation appended AGENTS.md guidance to its prompt. */
+  instructions?: ReturnType<typeof createAgentsInstructionTracker>;
+}
+const generationProfiles = new Map<string, GenerationProfile>();
 
+/**
+ * Callers register right after the runtime applied AGENTS.md to `options`
+ * (generation start, and each pre-request projection), so the tracker's
+ * baseline is the file state that prompt was built from.
+ */
 export function rememberChatContextProfile(
   chatId: string,
   options: GenerationContextOptions,
+  instructionRoots?: AgentsInstructionRoots,
 ): void {
-  generationProfiles.set(chatId, options);
+  generationProfiles.set(chatId, {
+    options,
+    instructions: instructionRoots ? createAgentsInstructionTracker(instructionRoots) : undefined,
+  });
 }
 
 export function forgetChatContextProfile(chatId: string): void {
@@ -207,14 +226,21 @@ export async function chatContextPressure(
   const messages = await journalMessages(chatId, chat.createdAt);
   if (!messages) return null;
   const supportsImages = model.input.includes("image");
-  const remembered = generationProfiles.get(chatId);
+  const profile = generationProfiles.get(chatId);
+  const remembered = profile?.options;
   const base =
     remembered &&
     remembered.providerId === providerId &&
     remembered.modelId === modelId &&
     remembered.contextWindow === model.contextWindow &&
     remembered.supportsImages === supportsImages
-      ? remembered
+      ? {
+          ...remembered,
+          // The next request re-reads AGENTS.md; price an edit made since.
+          systemPrompt: profile.instructions
+            ? await profile.instructions.current(remembered.systemPrompt)
+            : remembered.systemPrompt,
+        }
       : await ambientContextOptions(chatId, model.contextWindow, supportsImages);
   if (!base) return null;
   // Keep the generation-accurate static context (tools + system prompt) while

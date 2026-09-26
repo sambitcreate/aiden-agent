@@ -145,3 +145,42 @@ export async function withAgentsInstructionsEstimate(
     return systemPrompt;
   }
 }
+
+// The refresher's block: a random UUID nonce closes it, and the records inside
+// are JSON strings, so user text can never forge the closing tag.
+const AGENTS_INSTRUCTION_BLOCK = /\n\n<agents-instructions-([0-9a-f-]{36})>[\s\S]*?<\/agents-instructions-\1>/g;
+
+/** Remove a refresher-appended AGENTS.md block from a system prompt. */
+export function withoutAgentsInstructions(systemPrompt: string): string {
+  return systemPrompt.replace(AGENTS_INSTRUCTION_BLOCK, "");
+}
+
+/**
+ * Keeps a prompt captured from a real generation aligned with the AGENTS.md
+ * files the next request will read. Create it when the prompt is captured:
+ * while the files are unchanged the captured prompt is returned as-is (no
+ * file reads); after an edit the stale block is replaced with a fresh
+ * estimate, cached until the files or the captured prompt change again.
+ */
+export function createAgentsInstructionTracker(
+  roots: AgentsInstructionRoots,
+  read?: AgentsInstructionOptions["read"],
+) {
+  const baseline = agentsInstructionFingerprint(roots);
+  let refreshed: { key: string; systemPrompt: string } | undefined;
+  return {
+    async current(systemPrompt: string): Promise<string> {
+      const fingerprint = await agentsInstructionFingerprint(roots);
+      if (fingerprint === (await baseline)) return systemPrompt;
+      const key = `${fingerprint}\u0000${systemPrompt}`;
+      if (refreshed?.key === key) return refreshed.systemPrompt;
+      const estimate = await withAgentsInstructionsEstimate(
+        withoutAgentsInstructions(systemPrompt),
+        roots,
+        read,
+      );
+      refreshed = { key, systemPrompt: estimate };
+      return estimate;
+    },
+  };
+}
