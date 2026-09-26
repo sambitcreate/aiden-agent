@@ -34,7 +34,7 @@ object AidenProviderIconResolver {
         "huggingface", "kimi-coding", "lmstudio", "minimax", "minimax-cn",
         "mistral", "moonshotai", "moonshotai-cn", "nvidia", "ollama",
         "openai", "openai-codex", "opencode", "opencode-go", "openrouter",
-        "together", "vercel-ai-gateway", "xai", "xiaomi", "xiaomi-token-plan-ams",
+        "tailscale", "together", "vercel-ai-gateway", "xai", "xiaomi", "xiaomi-token-plan-ams",
         "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai", "zai-coding-cn"
     )
 
