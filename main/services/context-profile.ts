@@ -22,11 +22,18 @@ export interface GenerationContextProfile {
   instructionRoots?: AgentsInstructionRoots;
   /** Effective workspace permission; `ask` and `full` build different prompts. */
   permission?: string;
+  /**
+   * The model's tool policy when captured. Captured options hold the tools
+   * after that policy ran (`toolCall: false` leaves none), so they cannot be
+   * re-priced for a different policy.
+   */
+  toolsDisabled?: boolean;
 }
 
 export interface GenerationContextScope {
   instructionRoots?: AgentsInstructionRoots;
   permission?: string;
+  toolsDisabled?: boolean;
 }
 
 /**
@@ -38,7 +45,7 @@ export function createGenerationContextProfile(
   scope: GenerationContextScope = {},
   read?: AgentsInstructionOptions["read"],
 ): GenerationContextProfile {
-  const { instructionRoots, permission } = scope;
+  const { instructionRoots, permission, toolsDisabled } = scope;
   return {
     options,
     instructions: instructionRoots
@@ -46,6 +53,7 @@ export function createGenerationContextProfile(
       : undefined,
     instructionRoots,
     permission,
+    toolsDisabled,
   };
 }
 
@@ -58,6 +66,8 @@ export interface ContextProfileRequest {
   instructionRoots: AgentsInstructionRoots;
   /** The chat workspace's current effective permission. */
   permission: string;
+  /** Whether the selected model's current overrides disable tool calls. */
+  toolsDisabled: boolean;
 }
 
 /**
@@ -77,7 +87,8 @@ export async function rememberedContextOptions(
     options.modelId !== request.modelId ||
     options.contextWindow !== request.contextWindow ||
     options.supportsImages !== request.supportsImages ||
-    (profile.permission !== undefined && profile.permission !== request.permission)
+    (profile.permission !== undefined && profile.permission !== request.permission) ||
+    (profile.toolsDisabled ?? false) !== request.toolsDisabled
   ) {
     return undefined;
   }

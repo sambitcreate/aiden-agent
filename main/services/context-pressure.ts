@@ -227,6 +227,10 @@ export async function chatContextPressure(
   if (!messages) return null;
   const supportsImages = model.input.includes("image");
   const currentScope = await currentInstructionScope(chat.workspaceId);
+  const overrides = await configStore
+    .getProvider(providerId)
+    .then((provider) => provider?.modelMetadata?.[modelId]?.overrides)
+    .catch(() => undefined);
   const base =
     (await rememberedContextOptions(generationProfiles.get(chatId), {
       providerId,
@@ -235,15 +239,12 @@ export async function chatContextPressure(
       supportsImages,
       instructionRoots: currentScope.instructionRoots,
       permission: currentScope.permission,
+      toolsDisabled: overrides?.toolCall === false,
     })) ?? (await ambientContextOptions(chatId, model.contextWindow, supportsImages));
   if (!base) return null;
   // Keep the generation-accurate static context (tools + system prompt) while
   // overriding the fields a live model/provider change rewrites, including a
   // custom model's tool policy (tool calls disabled sends no tools).
-  const overrides = await configStore
-    .getProvider(providerId)
-    .then((provider) => provider?.modelMetadata?.[modelId]?.overrides)
-    .catch(() => undefined);
   const options = nextRequestContextOptions(base, {
     providerId,
     modelId,

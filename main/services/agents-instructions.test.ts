@@ -239,7 +239,9 @@ test("remembered profiles never re-read a workspace whose path or permission cha
     reads.push(root.canonicalPath);
     return f.read(root as { canonicalPath: string });
   });
-  const request = { providerId: "p", modelId: "m", contextWindow: 32_000, supportsImages: false, permission: "ask" };
+  const request = {
+    providerId: "p", modelId: "m", contextWindow: 32_000, supportsImages: false, permission: "ask", toolsDisabled: false,
+  };
   // The old workspace's guidance changes after the scope moved on.
   await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "OLD_SCOPE_EDITED_AND_LONGER");
   const moved = path.join(f.root, "other-workspace");
@@ -293,4 +295,40 @@ test("next-request options apply the selected model's tool policy to a tool-bear
       projectChatContextPressure([], withTools).staticTokens,
   );
   assert.equal(ambient.tools.length, 1, "the cached ambient profile is never mutated");
+});
+
+test("a profile captured under one tool policy is not reused after the policy flips", async () => {
+  const tool = {
+    name: "read_file",
+    label: "Read file",
+    description: "Read a workspace file. ".repeat(200),
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ content: [], details: undefined }),
+  } as unknown as AgentTool;
+  const roots = { globalRoot: "/nonexistent/aiden-global", workspaceRoot: undefined };
+  const request = {
+    providerId: "custom", modelId: "local", contextWindow: 32_000, supportsImages: false,
+    permission: "ask", instructionRoots: roots,
+  };
+  const ambient = { ...request, systemPrompt: "HOST", tools: [tool] };
+  // Captured while toolCall was false: the generation already dropped its tools.
+  const disabled = createGenerationContextProfile(
+    { ...ambient, tools: [] }, { permission: "ask", toolsDisabled: true },
+  );
+  const reused = await rememberedContextOptions(disabled, { ...request, toolsDisabled: true });
+  assert.equal(reused?.tools.length, 0);
+  // Re-enabling tool calls must not keep pricing the tool-less capture.
+  const enabled = { ...request, toolsDisabled: false };
+  assert.equal(await rememberedContextOptions(disabled, enabled), undefined);
+  const next = nextRequestContextOptions(
+    (await rememberedContextOptions(disabled, enabled)) ?? ambient, enabled,
+  );
+  assert.equal(next.tools.length, 1);
+  assert.ok(
+    projectChatContextPressure([], next).staticTokens >
+      projectChatContextPressure([], reused!).staticTokens + 500,
+  );
+  // The reverse flip also discards a capture that still holds tools.
+  const withTools = createGenerationContextProfile(ambient, { permission: "ask", toolsDisabled: false });
+  assert.equal(await rememberedContextOptions(withTools, { ...request, toolsDisabled: true }), undefined);
 });

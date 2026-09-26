@@ -2284,6 +2284,7 @@ export const llmClient = {
       rememberChatContextProfile(params.chatId, generationContextOptions, {
         instructionRoots: agentsInstructionRoots,
         permission,
+        toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
       });
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
@@ -2444,6 +2445,7 @@ export const llmClient = {
           rememberChatContextProfile(params.chatId, projectionOptions, {
             instructionRoots: agentsInstructionRoots,
             permission,
+            toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
           });
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
