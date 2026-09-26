@@ -9,6 +9,7 @@ import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
+import { agentCommandEnvironment } from "./agent-command-environment.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -308,7 +309,7 @@ export class TerminalService {
       this.options.spawnPty ?? spawn,
       {
         cwd,
-        env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+        env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
       },
     );
     if (ownerInvalidated()) {

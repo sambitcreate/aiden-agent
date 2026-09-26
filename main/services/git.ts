@@ -11,6 +11,7 @@ import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
+import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
   managedWorktreeRemovalManifestPresent,
@@ -538,7 +539,7 @@ function publicGitMessage(value: unknown, cwd: string): string {
 }
 
 function gitEnvironment(mutation: boolean): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+  const env = agentCommandEnvironment();
   for (const key of GIT_ROUTING_ENV) delete env[key];
   delete env.GIT_CONFIG_COUNT;
   delete env.GIT_CONFIG_PARAMETERS;
