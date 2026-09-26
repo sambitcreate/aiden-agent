@@ -821,6 +821,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
 - Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
 - Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.
+- 2026-09-21 PR #206 review: project instructions require friction in this tracked troubleshooting file. A separate lane note was easy to overlook; duplicate the native SDK/pretest limitation here and test the runner's four-note eviction plus 8,000-character projection at the event boundary.
+- `test:subagents` native pretest selects a Command Line Tools macOS 27 SDK that Xcode 26.6 cannot link; the build script replaces its child environment, so an outer SDK pin is ineffective. Focused TypeScript, mobile consumer, type-check, and lint validation remain separate from this native gate.
+- 2026-09-21 PR #206 Pullfrog review caught an omitted-provenance edge case: four retained short notes can be under the character cap after a fifth note is evicted. Track count eviction separately from character truncation and test both boundaries.
 - Lane form-fill-specialist: pure `-core.ts` modules cannot own electron-bound singletons — `FormFillArtifactStore` constructor deps like `onStatusChanged` must be wired in a thin electron-importing shim (`artifacts.ts`), not the testable core.
 - Approval row deselection travels the decision-payload path (`approvals.decide` → `takeDecisionPayload` in `beforeToolCall`), never tool arguments; validate each option field at the `chat:approve` IPC edge (`Number.isSafeInteger` predicates) rather than passing `unknown` through.
 - `ipc-contract.test.ts` scans `main/**/*.ts` automatically: handlers must use literal channel strings and `ipcMain.broadcast` for contract coverage; no manual registry edits.
@@ -984,6 +987,11 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+
+## 2026-09-25 — rich link previews
+
+- Fresh worktrees have no `node_modules`, so focused `tsx` tests fail immediately. Run `npm ci --ignore-scripts` from the lockfile before renderer verification.
+- Review status can pass while an actionable inline finding remains. Inspect unresolved threads explicitly; content equality is not sufficient handoff identity when an unpersisted partial can repeat older assistant text.
 # 2026-09-24 implementer run-grant worktree
 
 Fresh managed worktrees have no `node_modules`; `npm ci --no-audit --no-fund`
@@ -1117,3 +1125,4 @@ because their native file-mutator test binary had not been built. Run
 - Changing any `native/*` C source (even a test fixture like setsid-fixture.c) invalidates the prebuilt manifest hashes. Linux prebuilts need Docker.
 - Main and the PR both bumped the remote contract revision to 11 independently. Watch for revision collisions on long-lived branches.
 - Shell flags differ by platform: zsh -f skips rc files, but POSIX sh -f is noglob. Guard shell flags per platform and cover them with a behavioral glob test (Hermes P1 on #121).
+- 2026-09-26 PR #206 reconciliation: #207 on main superseded the runner-side four-note tail, so the merge took main's runner and kept only the projector gap (failed results with `summaryTruncated` lost the `report_truncated` notice because the gate predated failed summaries).

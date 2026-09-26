@@ -58,7 +58,7 @@ export interface SubagentTaskResult {
   label: string;
   status: SubagentTaskStatus;
   summary: string;
-  /** Present only when the completed-summary producer shortened the authored report. */
+  /** Present when the runner shortened a completed report or failed turn-limit partial findings. */
   summaryTruncated?: true;
   warning?: string;
 }
