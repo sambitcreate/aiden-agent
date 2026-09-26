@@ -456,7 +456,14 @@ final class AidenRemoteClientTests: XCTestCase {
         let fixture: AidenRemoteContractFixture = try botFixtureValue(at: [])
         let server = fixture.server
         XCTAssertTrue(server.supportsChatSummaries)
-        XCTAssertEqual(server.features, [AidenServer.chatSummariesFeature, AidenServer.chatTasksFeature, AidenServer.chatAgentsFeature])
+        XCTAssertEqual(server.features, [
+            AidenServer.chatSummariesFeature,
+            AidenServer.chatTasksFeature,
+            AidenServer.chatAgentsFeature,
+            AidenServer.chatRunInputFeature,
+            AidenServer.chatQuestionPromptsFeature,
+            AidenServer.chatSkillsFeature,
+        ])
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [

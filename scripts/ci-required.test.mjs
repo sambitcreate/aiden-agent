@@ -19,6 +19,7 @@ function needsFor(decisions = allTrue, overrides = {}) {
     "cli-playground": { result: "success" },
     e2e: { result: "success" },
     ios: { result: "success" },
+    "ios-simulator": { result: "success" },
     policy: { result: "success" },
     static: { result: "success" },
     unit: { result: "success" },

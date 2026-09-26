@@ -43,6 +43,20 @@ The headless Aiden Agent lives in `packages/cli` as a self-contained npm package
 
 For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs.
 
+## Pull requests, CI, and branches
+
+- Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
+- Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
+- Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.
+- Do not cancel CI runs on `main`. Main CI is the baseline every release is cut from.
+- Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in `.papercuts/troubleshooting.md`. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
+- Known merge-conflict hotspots need a recheck after every `main` merge:
+  - the root `package.json` `test` chain. Append new scripts and resolve conflicts by union, keeping every script from both sides.
+  - the Aiden Remote protocol revision. Claim the next revision after the one on `main` when the PR merges, not when it was written, and update the iOS, Android, and fixture contracts together.
+  - the vendored advisor sources under `packages/cli/src/vendor/advisor/`. When one of their `main/services/` originals changes, re-vendor the copy (keep its header comment) in the same PR; `packages/cli/tests/extensions.test.mjs` fails on drift.
+- Stacked PRs: GitHub closes any open PR whose base branch is deleted. Before deleting a branch by hand, check that no open PR uses it as `baseRefName` as well as `headRefName`. Merged branches are deleted automatically on merge, and GitHub retargets their stacked PRs.
+- Never delete a branch or worktree that holds uncommitted or unpushed work. Check `git status` and that the tip is on a remote first.
+
 ## Tests
 
 When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.

@@ -27,6 +27,11 @@ test.describe("Simulator tab", () => {
     const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
     const tab = (name: string) => tools().getByRole("tab", { name, exact: true });
 
+    // The onboarding success toast renders top-center over the Environment tab
+    // strip, and Sonner pauses its timer while the pointer rests on it.
+    await page.mouse.move(1, 1);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+
     for (const width of [900, 560]) {
       await aiden.app.evaluate(
         ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800),
