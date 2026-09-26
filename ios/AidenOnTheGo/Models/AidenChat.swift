@@ -970,6 +970,9 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var revision: String
     var titlePending: Bool? = nil
 
+    // Presentation-only receipt overlay; excluded from the canonical wire/cache encoding.
+    var localTitleOverride: String? = nil
+    var displayTitle: String { localTitleOverride ?? title }
     var isTitlePending: Bool { titlePending == true }
     var isBotChat: Bool { botId != nil }
 
@@ -1189,7 +1192,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.init(
             id: chat.id,
             workspaceId: chat.workspaceId,
-            title: chat.title,
+            title: chat.displayTitle,
             titlePending: chat.isTitlePending,
             createdAt: chat.createdAt,
             updatedAt: chat.updatedAt,

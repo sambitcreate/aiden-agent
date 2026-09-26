@@ -703,9 +703,14 @@ final class AidenWorkspaceChatsModel {
         guard let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
         let metadataWriteToken = cache.reserveChatWrite()
-        if chats.isEmpty, let cached = await cache.loadChats(instanceId: instanceId, workspaceId: workspaceId) {
+        if chats.isEmpty, let cached = await cache.admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId) {
             guard coordinator.isCurrent(context) else { return }
-            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: cached))
+            var presented: [AidenChat] = []
+            for row in AidenChat.regularWorkspaceChats(from: cached) {
+                if let current = await cache.presentedWorkspaceChat(instanceId: instanceId, workspaceId: workspaceId, chatId: row.id) { presented.append(current) }
+            }
+            guard coordinator.isCurrent(context) else { return }
+            chats = Self.sorted(presented)
         }
         guard !isLoading else { return }
         isLoading = true
@@ -713,8 +718,21 @@ final class AidenWorkspaceChatsModel {
         do {
             let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
             guard coordinator.isCurrent(context) else { return }
-            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken)
+            // Commit before publishing: a held list response may have lost to a
+            // detail owner, another list, or removal while HTTP was in flight.
+            do {
+                try await cache.saveChats(AidenChat.regularWorkspaceChats(from: remote), instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken, isAuthoritativeFetch: true)
+            } catch {
+                // Admission precedes IO; preserve the in-memory winner on disk failure.
+            }
+            let admitted = await cache.admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId)
+            guard coordinator.isCurrent(context) else { return }
+            var presented: [AidenChat] = []
+            for row in AidenChat.regularWorkspaceChats(from: admitted ?? []) {
+                if let current = await cache.presentedWorkspaceChat(instanceId: instanceId, workspaceId: workspaceId, chatId: row.id) { presented.append(current) }
+            }
+            guard coordinator.isCurrent(context) else { return }
+            chats = Self.sorted(presented)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
@@ -748,35 +766,75 @@ final class AidenWorkspaceChatsModel {
         }
     }
 
+    private func refreshRenameSnapshot(chatId: String, context: AidenRemoteRequestContext) async throws -> AidenChat {
+        let token = cache.reserveChatWrite()
+        let remote = try await coordinator.remoteClient(for: context).chat(id: chatId)
+        guard coordinator.isCurrent(context), remote.id == chatId, remote.workspaceId == workspaceId, !remote.isBotChat else { throw CancellationError() }
+        guard try await cache.saveFetchedChat(remote, instanceId: context.instanceId, writeToken: token) else { throw CancellationError() }
+        guard coordinator.isCurrent(context),
+              let current = await cache.admittedChat(instanceId: context.instanceId, chatId: chatId),
+              !(await cache.needsRenameRefresh(instanceId: context.instanceId, chatId: chatId)) else { throw CancellationError() }
+        return current
+    }
+
     func rename(_ chat: AidenChat, to title: String) async {
         let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, !isMutating, let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
-        var optimistic = chat
-        optimistic.title = cleaned
-        upsert(optimistic)
         do {
+            let canonical: AidenChat
+            let pendingRename = await cache.needsRenameRefresh(instanceId: instanceId, chatId: chat.id)
+            if pendingRename || chat.localTitleOverride != nil {
+                canonical = try await refreshRenameSnapshot(chatId: chat.id, context: context)
+            } else { canonical = chat }
+            guard coordinator.isCurrent(context) else { return }
+            let origin = cache.reserveChatWrite()
+            let generation = presentationGenerations[chat.id] ?? 0
             let updated = try await coordinator.remoteClient(for: context).updateChat(
-                id: chat.id,
-                revision: chat.revision,
-                title: cleaned
+                id: chat.id, revision: canonical.revision, title: cleaned
             )
+            guard coordinator.isCurrent(context), updated.id == chat.id,
+                  updated.workspaceId == workspaceId, !updated.isBotChat else { return }
+            let receiptCutoff = cache.reserveChatWrite()
+            guard let admitted = await cache.acceptRename(updated, instanceId: instanceId, origin: origin, cutoff: receiptCutoff) else {
+                if coordinator.isCurrent(context), generation == (presentationGenerations[chat.id] ?? 0) {
+                    chats.removeAll { $0.id == chat.id }
+                    presentationGenerations[chat.id, default: 0] &+= 1
+                    onChatRemoved(chat.id)
+                }
+                return
+            }
             guard coordinator.isCurrent(context) else { return }
-            guard let admitted = await persist(chat: updated, instanceId: instanceId, context: context), coordinator.isCurrent(context) else { return }
-            onChatUpdated(admitted)
+            guard await cache.reconcileWorkspaceChat(admitted, instanceId: instanceId, authority: origin, cutoff: receiptCutoff) else { return }
+            let publicationGeneration = presentationGenerations[chat.id] ?? 0
+            guard let presentation = await cache.presentedWorkspaceChat(instanceId: instanceId, workspaceId: workspaceId, chatId: chat.id) else { return }
+            guard coordinator.isCurrent(context), publicationGeneration == (presentationGenerations[chat.id] ?? 0), cache.isChatWriteRetained(origin, instanceId: instanceId, chatId: chat.id) else { return }
+            upsert(presentation)
+            onChatUpdated(presentation)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
+            // A failed read must not roll back a successful mutation or replay PATCH.
+            let refreshGeneration = presentationGenerations[chat.id] ?? 0
+            do {
+                let refreshed = try await refreshRenameSnapshot(chatId: chat.id, context: context)
+                guard coordinator.isCurrent(context), refreshGeneration == (presentationGenerations[chat.id] ?? 0) else { return }
+                guard await cache.reconcileWorkspaceChat(refreshed, instanceId: instanceId, authority: origin, cutoff: receiptCutoff) else { return }
+                guard coordinator.isCurrent(context), refreshGeneration == (presentationGenerations[chat.id] ?? 0), cache.isChatWriteRetained(origin, instanceId: instanceId, chatId: chat.id) else { return }
+                guard let presentation = await cache.presentedWorkspaceChat(instanceId: instanceId, workspaceId: workspaceId, chatId: chat.id) else { return }
+                guard coordinator.isCurrent(context), refreshGeneration == (presentationGenerations[chat.id] ?? 0), cache.isChatWriteRetained(origin, instanceId: instanceId, chatId: chat.id) else { return }
+                upsert(presentation)
+                onChatUpdated(presentation)
+            } catch {
+                if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            }
         } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context) else { return }
-            upsert(chat)
+            return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
-            upsert(chat)
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
-            await load()
         }
     }
 
@@ -789,7 +847,13 @@ final class AidenWorkspaceChatsModel {
         presentationGenerations[chat.id, default: 0] &+= 1
         chats.removeAll { $0.id == chat.id }
         do {
-            try await coordinator.remoteClient(for: context).removeChat(id: chat.id, revision: chat.revision)
+            let canonical: AidenChat
+            let pendingRename = await cache.needsRenameRefresh(instanceId: instanceId, chatId: chat.id)
+            if pendingRename || chat.localTitleOverride != nil {
+                canonical = try await refreshRenameSnapshot(chatId: chat.id, context: context)
+            } else { canonical = chat }
+            guard coordinator.isCurrent(context) else { return }
+            try await coordinator.remoteClient(for: context).removeChat(id: chat.id, revision: canonical.revision)
             guard coordinator.isCurrent(context) else { return }
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
@@ -1250,11 +1314,14 @@ final class AidenChatViewModel {
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             if cacheGeneration == transcriptGeneration, !isStarting {
-                chat = cached
+                let presented = await cache.presenting(cached, instanceId: instanceId)
+                guard !isRemoved, coordinator.isCurrent(context), cacheGeneration == transcriptGeneration, !isStarting else { return }
+                chat = presented
                 resolveModelSelection()
             }
         }
         let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
         do {
             async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
             async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
@@ -1262,7 +1329,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             catalog = remoteCatalog
             if generation == transcriptGeneration, !isStarting {
-                await acceptRemoteChat(remoteChat, context: context)
+                await acceptRemoteChat(remoteChat, context: context, writeToken: writeToken)
             }
         } catch {
             clearProgressStateIfCredentialRevoked(error)
@@ -1825,7 +1892,7 @@ final class AidenChatViewModel {
                 await liveActivities.start(
                     instanceID: instanceId,
                     chatID: chat.id,
-                    title: chat.title,
+                    title: chat.displayTitle,
                     streamID: response.streamId
                 )
             }
@@ -2322,7 +2389,7 @@ final class AidenChatViewModel {
                 await liveActivities.start(
                     instanceID: instanceId,
                     chatID: chat.id,
-                    title: chat.title,
+                    title: chat.displayTitle,
                     streamID: stream.streamId
                 )
             }
@@ -2690,6 +2757,7 @@ final class AidenChatViewModel {
     private func reconcileChat(context: AidenRemoteRequestContext) async -> Bool {
         guard !isStarting else { return false }
         let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
         do {
             let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return false }
@@ -2698,7 +2766,7 @@ final class AidenChatViewModel {
             // before its cache write yields to the main actor again.
             transcriptGeneration &+= 1
             let publicationGeneration = transcriptGeneration
-            guard await acceptRemoteChat(remote, context: context) else { return false }
+            guard await acceptRemoteChat(remote, context: context, writeToken: writeToken) else { return false }
             guard publicationGeneration == transcriptGeneration, coordinator.isCurrent(context) else { return false }
             clearRecoveryWarning()
             return true
@@ -2714,18 +2782,19 @@ final class AidenChatViewModel {
     private func acceptRemoteChat(
         _ remote: AidenChat,
         context: AidenRemoteRequestContext,
+        writeToken: UInt64,
         scheduleTitleRefresh: Bool = true
     ) async -> Bool {
         guard !isRemoved, coordinator.isCurrent(context), !isStarting else { return false }
         let generation = transcriptGeneration
-        let writeToken = cache.reserveChatWrite()
-        let accepted = (try? await cache.saveChat(remote, instanceId: instanceId, writeToken: writeToken)) ?? true
-        guard accepted else { return false }
+        _ = try? await cache.saveFetchedChat(remote, instanceId: instanceId, writeToken: writeToken)
+        guard let canonical = await cache.admittedChat(instanceId: instanceId, chatId: remote.id) else { return false }
+        let presented = await cache.presenting(canonical, instanceId: instanceId)
         guard !isRemoved, coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
-        chat = remote
+        chat = presented
         resolveModelSelection()
-        onChatUpdated(remote)
-        if scheduleTitleRefresh, remote.isTitlePending {
+        onChatUpdated(presented)
+        if scheduleTitleRefresh, presented.isTitlePending {
             schedulePendingTitleRefresh(context: context)
         }
         return true
@@ -2748,10 +2817,11 @@ final class AidenChatViewModel {
                     try await Task.sleep(for: .milliseconds(delay))
                     guard !isStarting else { continue }
                     let generation = transcriptGeneration
+                    let writeToken = cache.reserveChatWrite()
                     let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
                     guard !isRemoved, coordinator.isCurrent(context) else { return }
                     guard generation == transcriptGeneration, !isStarting else { continue }
-                    await acceptRemoteChat(remote, context: context, scheduleTitleRefresh: false)
+                    await acceptRemoteChat(remote, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
                     if !remote.isTitlePending { return }
                 } catch let error where aidenIsCancellation(error) {
                     return
@@ -2953,7 +3023,7 @@ struct AidenWorkspaceChatsView: View {
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(chat.title).lineLimit(1)
+                                Text(chat.displayTitle).lineLimit(1)
                                 AidenRelativeTimestampView(date: chat.updatedAt)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -3046,7 +3116,7 @@ struct AidenWorkspaceChatsView: View {
     }
 
     private func beginRename(_ chat: AidenChat) {
-        renameTitle = chat.title
+        renameTitle = chat.displayTitle
         renameChat = chat
     }
 }
@@ -3162,7 +3232,7 @@ struct AidenChatDetailView: View {
             guard isStreaming else { return }
             attachmentPicker.dismiss()
         }
-        .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
+        .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
