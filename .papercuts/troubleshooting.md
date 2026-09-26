@@ -1408,3 +1408,4 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-26 no-Xcode chat fix
 - A new worktree initially resolved the parent checkout's older node_modules, causing unrelated Pi API and bonjour-service type errors. Run `npm ci` in the new worktree before validation; the locked install restores a passing typecheck without changing dependencies.
 - Read-only subagent file tools could not access the nested `.worktrees` path. Independently verified the new-worktree source with foreground tools; the final independent review was explicitly limited to the supplied implementation description, not a source review.
+- PR #261: registering tests in package.json is insufficient for sharded CI. Also assign each new file in `scripts/ci-test-registry.json` and run `npm run test:ci-policy`; a missing assignment fails policy, build diagnostics, and all three desktop unit lanes before tests start.

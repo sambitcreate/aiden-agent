@@ -44,7 +44,11 @@ export async function resolveGitExecutable(
   if (deps.platform !== "darwin") return binary;
   const candidates = binary.includes("/")
     ? [path.resolve(cwd, binary)]
-    : (env.PATH ?? "/usr/bin:/bin").split(":").map((dir) => path.resolve(cwd, dir, binary));
+    : (env.PATH ?? "/usr/bin:/bin")
+        .split(":")
+        // Automatic metadata reads must never discover executables in the workspace.
+        .filter((dir) => path.isAbsolute(dir))
+        .map((dir) => path.join(dir, binary));
   for (const candidate of candidates) {
     const executable = await deps.executablePath(candidate);
     signal?.throwIfAborted();
@@ -60,6 +64,12 @@ export async function resolveGitExecutable(
     } catch {
       signal?.throwIfAborted();
     }
+    // CLT may be installed even when the selected developer directory is absent/stale.
+    const commandLineGit = await deps.executablePath(
+      "/Library/Developer/CommandLineTools/usr/bin/git",
+    );
+    signal?.throwIfAborted();
+    if (commandLineGit && commandLineGit !== "/usr/bin/git") return commandLineGit;
     // A GUI PATH may put Apple's shim before Homebrew. Keep looking for a real Git.
   }
   throw new Error("Git is not installed or unavailable. Install Git to use repository features; ordinary chat does not require it.");

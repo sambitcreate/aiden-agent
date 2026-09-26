@@ -60,3 +60,52 @@ test("cancellation during the non-installing probe remains cancellation", async 
   f.deps.developerDirectory = async () => { controller.abort(); throw new Error("aborted"); };
   await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps), { name: "AbortError" });
 });
+
+for (const unsafePath of ["", ".", "tools", "../tools"]) {
+  test(`ignores workspace-relative PATH entry ${JSON.stringify(unsafePath)}`, async () => {
+    const f = fixture({ "/opt/homebrew/bin/git": "/opt/homebrew/bin/git" });
+    const visited: string[] = [];
+    f.deps.executablePath = async (candidate) => {
+      visited.push(candidate);
+      // Every candidate is executable, including a malicious workspace Git.
+      return candidate;
+    };
+    assert.equal(
+      await resolveGitExecutable("git", "/workspace", { PATH: `${unsafePath}:/opt/homebrew/bin` }, undefined, f.deps),
+      "/opt/homebrew/bin/git",
+    );
+    assert.deepEqual(visited, ["/opt/homebrew/bin/git"]);
+  });
+}
+
+test("PATH with only relative components cannot execute workspace Git", async () => {
+  const f = fixture({ "/workspace/git": "/workspace/git" });
+  f.deps.executablePath = async () => assert.fail("must not inspect workspace-relative candidates");
+  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, f.deps), /Git is not installed/);
+});
+
+for (const selected of [undefined, "/removed/Xcode.app/Contents/Developer"]) {
+  test(`finds default CLT Git when selected directory is ${selected ?? "unavailable"}`, async () => {
+    const binary = "/Library/Developer/CommandLineTools/usr/bin/git";
+    const f = fixture({ "/usr/bin/git": "/usr/bin/git", [binary]: binary }, selected);
+    assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), binary);
+  });
+}
+
+test("default CLT fallback cannot return a symlink to Apple's shim", async () => {
+  const f = fixture({
+    "/usr/bin/git": "/usr/bin/git",
+    "/Library/Developer/CommandLineTools/usr/bin/git": "/usr/bin/git",
+  });
+  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), /Git is not installed/);
+});
+
+test("cancellation during default CLT fallback remains cancellation", async () => {
+  const controller = new AbortController();
+  const f = fixture({ "/usr/bin/git": "/usr/bin/git" });
+  f.deps.executablePath = async (candidate) => {
+    if (candidate.includes("CommandLineTools")) controller.abort();
+    return candidate;
+  };
+  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps), { name: "AbortError" });
+});
