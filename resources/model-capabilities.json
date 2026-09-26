@@ -30920,7 +30920,7 @@
         "cost": {
           "input": 0.5,
           "output": 1.5,
-          "cache_read": 0.275
+          "cache_read": 0.00903
         }
       },
       "xiaomi/mimo-v2.6-pro-ultraspeed": {
@@ -31139,7 +31139,7 @@
         "cost": {
           "input": 0.5,
           "output": 1.5,
-          "cache_read": 0.275
+          "cache_read": 0.00903
         }
       },
       "undi95/remm-slerp-l2-13b": {
@@ -70765,8 +70765,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.0301,
-          "output": 9.043,
+          "input": 1,
+          "output": 9,
           "cache_read": 0.3
         }
       },
@@ -106797,8 +106797,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.0301,
-          "output": 9.043,
+          "input": 1,
+          "output": 9,
           "cache_read": 0.3
         }
       },
