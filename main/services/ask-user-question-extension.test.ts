@@ -18,6 +18,14 @@ test("Ask User Question is limited to attended desktop workspace chat", () => {
   assert.equal(shouldEnableAskUserQuestionExtension(base), true);
   assert.equal(shouldEnableAskUserQuestionExtension({ ...base, rendererOwner: false }), false);
   assert.equal(
+    shouldEnableAskUserQuestionExtension({ ...base, rendererOwner: false, remoteOwner: true }),
+    true,
+  );
+  assert.equal(
+    shouldEnableAskUserQuestionExtension({ ...base, rendererOwner: false, remoteOwner: false }),
+    false,
+  );
+  assert.equal(
     shouldEnableAskUserQuestionExtension({ ...base, interactionSurface: "telegram" }),
     false,
   );

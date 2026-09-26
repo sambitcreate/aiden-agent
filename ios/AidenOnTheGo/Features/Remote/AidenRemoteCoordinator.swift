@@ -791,6 +791,8 @@ final class AidenRemoteCoordinator {
         var requested: [AidenRemoteCapability] = []
         if server.supportsChatTasks { requested.append(.tasksRead) }
         if server.supportsChatAgents { requested.append(.agentsRead) }
+        if server.supportsQuestionPrompts { requested.append(.questionsRespond) }
+        if server.supportsChatSkills { requested.append(.skillsInvoke) }
         guard !requested.isEmpty,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return

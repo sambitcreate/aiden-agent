@@ -11,10 +11,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -30,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
@@ -69,9 +72,6 @@ class AidenChatViewModel(
     private val _streamState = MutableStateFlow<AidenStreamState?>(null)
     val streamState: StateFlow<AidenStreamState?> = _streamState.asStateFlow()
 
-    val isStreaming: StateFlow<Boolean>
-        get() = MutableStateFlow(_streamState.value != null && !_streamState.value!!.isTerminal).asStateFlow()
-
     private val _liveText = MutableStateFlow("")
     val liveText: StateFlow<String> = _liveText.asStateFlow()
 
@@ -88,8 +88,23 @@ class AidenChatViewModel(
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    private val _isSubmittingRunInput = MutableStateFlow(false)
+    val isSubmittingRunInput: StateFlow<Boolean> = _isSubmittingRunInput.asStateFlow()
+
+    private val _runInputReceipt = MutableStateFlow<String?>(null)
+    val runInputReceipt: StateFlow<String?> = _runInputReceipt.asStateFlow()
+
+    private var runInputReceiptToken = 0L
+    private var lastRunInputAttempt: AidenRunInputPresentation.Attempt? = null
     private val _isRespondingToApproval = MutableStateFlow(false)
     val isRespondingToApproval: StateFlow<Boolean> = _isRespondingToApproval.asStateFlow()
+
+    private val _pendingQuestion = MutableStateFlow<AidenPendingQuestion?>(null)
+    val pendingQuestion: StateFlow<AidenPendingQuestion?> = _pendingQuestion.asStateFlow()
+
+    private val _isRespondingToQuestion = MutableStateFlow(false)
+    val isRespondingToQuestion: StateFlow<Boolean> = _isRespondingToQuestion.asStateFlow()
 
     private val _pendingAttachments = MutableStateFlow<List<AidenAttachmentReference>>(emptyList())
     val pendingAttachments: StateFlow<List<AidenAttachmentReference>> = _pendingAttachments.asStateFlow()
@@ -220,6 +235,17 @@ class AidenChatViewModel(
         return installation?.takeIf {
             it.instanceId == instanceId && it.deviceId == deviceId && activeClient() != null
         }
+    }
+
+    /**
+     * Quiet Open Chat: while this conversation is on screen its ambient
+     * notification stays quiet; blocking kinds still post. Mirrors iOS.
+     */
+    private var isChatForegrounded = false
+
+    fun setChatForegrounded(foregrounded: Boolean) {
+        isChatForegrounded = foregrounded
+        if (foregrounded) liveNotificationManager?.dismissNotification(chatId)
     }
 
     /** Attach the standalone chat progress stream while the detail screen is foregrounded. */
@@ -608,7 +634,17 @@ class AidenChatViewModel(
             state == AidenStreamState.QUEUED -> AgentRunActivityStatus.STARTING
             else -> AgentRunActivityStatus.THINKING
         }
+        when (AidenQuietOpenChat.decision(status, isChatForegrounded)) {
+            AidenQuietOpenChat.Decision.SUPPRESS,
+            AidenQuietOpenChat.Decision.DISMISS -> {
+                liveNotificationManager?.dismissNotification(chatId)
+                return
+            }
+            AidenQuietOpenChat.Decision.POST -> Unit
+        }
         val activity = when {
+            state == AidenStreamState.WAITING_FOR_APPROVAL && _pendingQuestion.value != null ->
+                "Aiden needs your input"
             state == AidenStreamState.WAITING_FOR_APPROVAL -> "Waiting for your approval"
             activeStep?.label?.isNotBlank() == true -> activeStep.label
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
@@ -630,6 +666,7 @@ class AidenChatViewModel(
         draftSession?.let { session ->
             draftStore.save(text, session)
         }
+        prefetchComposerSuggestionData()
     }
 
     fun selectProvider(providerId: String) {
@@ -734,7 +771,8 @@ class AidenChatViewModel(
             providerId = turnModel.providerId,
             modelId = turnModel.modelId,
             thinkingLevel = turnModel.thinkingLevel,
-            attachments = submittedAttachments
+            attachments = submittedAttachments,
+            skill = _selectedSkill.value
         )
 
         val previousUpdatedAt = currentChat.updatedAt
@@ -793,12 +831,14 @@ class AidenChatViewModel(
                     chatCache.saveActiveStream(stream, instanceId, chatId)
                 }
                 turnAttempts.reset()
+                _selectedSkill.value = null
 
                 _liveText.value = ""
                 _reasoning.value = ""
                 _tools.value = emptyList()
                 _activityTimeline.value = null
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.QUEUED
 
                 startStreaming(stream)
@@ -1033,6 +1073,7 @@ class AidenChatViewModel(
                     } else {
                         _streamState.value = state
                         _pendingApproval.value = null
+                        _pendingQuestion.value = null
                     }
                 }
             }
@@ -1067,19 +1108,25 @@ class AidenChatViewModel(
             AidenRemoteEventType.APPROVAL_REQUIRED -> {
                 restorePendingApproval(event.streamId)
             }
+            AidenRemoteEventType.QUESTION_REQUIRED -> {
+                restorePendingQuestion(event.streamId)
+            }
             AidenRemoteEventType.ERROR -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _presentedError.value = null
                 _streamState.value = AidenStreamState.ERROR
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.CANCELLED -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.CANCELLED
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.DONE -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.DONE
                 finishStream(event.streamId)
             }
@@ -1095,6 +1142,7 @@ class AidenChatViewModel(
             return
         }
         _pendingApproval.value = null
+        _pendingQuestion.value = null
         _streamState.value = status.state
     }
 
@@ -1128,19 +1176,89 @@ class AidenChatViewModel(
             if (approval != null) {
                 _pendingApproval.value = approval
                 _streamState.value = AidenStreamState.WAITING_FOR_APPROVAL
+                // A question prompt may be pending alongside the approval; a
+                // null snapshot only clears stale card state.
+                restorePendingQuestion(streamId, reconcilesOnNil = false)
             } else {
                 _pendingApproval.value = null
-                _streamState.value = AidenStreamState.RECONCILING
+                // A pending question shares waiting_for_approval; check its
+                // snapshot before declaring a reconcile gap.
+                restorePendingQuestion(streamId)
             }
         } catch (_: Exception) {
             if (activeClient() !== client || activeStreamId != streamId ||
                 snapshotGeneration != approvalSnapshotGeneration ||
                 _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             _pendingApproval.value = null
-            _streamState.value = AidenStreamState.RECONCILING
+            restorePendingQuestion(streamId)
         } finally {
             if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
         }
+    }
+
+    private var questionSnapshotGeneration = 0L
+
+    // Restores the pending `ask_user_question` prompt for this stream. The
+    // Mac projects the wait as `waiting_for_approval`, so this is also the
+    // fallback when the approval snapshot comes back empty.
+    internal suspend fun restorePendingQuestion(streamId: String, reconcilesOnNil: Boolean = true) {
+        val client = activeClient() ?: return
+        if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        if (!supportsQuestionPrompts()) {
+            _pendingQuestion.value = null
+            if (reconcilesOnNil && _pendingApproval.value == null) {
+                _streamState.value = AidenStreamState.RECONCILING
+            }
+            return
+        }
+        val snapshotGeneration = ++questionSnapshotGeneration
+        val expectedQuestion = _pendingQuestion.value
+        val expectedState = _streamState.value
+        try {
+            val snapshot = client.streamQuestion(streamId)
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != questionSnapshotGeneration ||
+                _pendingQuestion.value != expectedQuestion || _streamState.value != expectedState) return
+            val question = AidenPendingQuestionResolution.resolve(
+                snapshot.question,
+                streamId = streamId,
+                chatId = chatId,
+                canRespond = canRespondToQuestions()
+            )
+            if (question != null) {
+                _pendingQuestion.value = question
+                _streamState.value = AidenStreamState.WAITING_FOR_APPROVAL
+            } else {
+                _pendingQuestion.value = null
+                if (reconcilesOnNil && _pendingApproval.value == null) {
+                    _streamState.value = AidenStreamState.RECONCILING
+                }
+            }
+        } catch (_: Exception) {
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != questionSnapshotGeneration ||
+                _pendingQuestion.value != expectedQuestion || _streamState.value != expectedState) return
+            _pendingQuestion.value = null
+            if (reconcilesOnNil && _pendingApproval.value == null) {
+                _streamState.value = AidenStreamState.RECONCILING
+            }
+        }
+    }
+
+    private fun supportsQuestionPrompts(): Boolean =
+        coordinator.serverInfo.value?.supportsQuestionPrompts == true
+
+    private fun canRespondToQuestions(): Boolean {
+        val installation = coordinator.installationStore.activeInstallation
+        if (_chat.value == null || coordinator.activeInstanceId != instanceId ||
+            installation?.instanceId != instanceId || installation.deviceId != deviceId
+        ) {
+            return false
+        }
+        return installation.hasNegotiatedAccess(AidenRemoteCapability.QUESTIONS_RESPOND) &&
+            (_chat.value?.botId == null ||
+                (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+                 installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)))
     }
 
     val canControlCurrentRun: Boolean
@@ -1162,22 +1280,365 @@ class AidenChatViewModel(
         _isStopping.value = true
         viewModelScope.launch {
             try {
-                val status = client.cancelStream(streamId)
-                if (activeClient() !== client || activeStreamId != streamId ||
-                    _streamState.value?.isTerminal == true) return@launch
-                if (status.streamId != streamId || status.chatId != chatId) {
-                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                    return@launch
-                }
-                apply(status, streamId)
-            } catch (e: Exception) {
-                if (activeClient() === client && activeStreamId == streamId &&
-                    _streamState.value?.isTerminal != true) {
-                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                }
+                cancelStreamOnce(client, streamId)
             } finally {
                 _isStopping.value = false
             }
+        }
+    }
+
+    /** Suspends until the cancel request resolves. True when the server
+     * accepted the cancel for the displayed stream; false leaves the draft
+     * and stream untouched so callers like Redirect can bail safely. */
+    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String): Boolean {
+        return try {
+            val status = client.cancelStream(streamId)
+            if (activeClient() !== client || activeStreamId != streamId ||
+                _streamState.value?.isTerminal == true) return false
+            if (status.streamId != streamId || status.chatId != chatId) {
+                _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+                return false
+            }
+            apply(status, streamId)
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (activeClient() === client && activeStreamId == streamId &&
+                _streamState.value?.isTerminal != true) {
+                _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+            }
+            false
+        }
+    }
+
+    val supportsRunInput: Boolean
+        get() = coordinator.serverInfo.value?.supportsChatRunInput == true
+
+    private val isStreamingNow: Boolean
+        get() = _streamState.value != null && !_streamState.value!!.isTerminal
+
+    /** The busy composer shows Steer/Queue/Redirect only when the server
+     * negotiated the feature and the composer holds text. Old servers keep
+     * the Stop-only control. */
+    val showsRunInputOptions: Boolean
+        get() = AidenRunInputPresentation.offersRunInput(
+            isStreaming = isStreamingNow,
+            canControl = canControlCurrentRun,
+            supports = supportsRunInput,
+            hasDraft = _draft.value.trim().isNotEmpty()
+        )
+
+    val canSubmitRunInput: Boolean
+        get() = showsRunInputOptions && !_isSubmittingRunInput.value && !_isStopping.value
+
+    fun submitRunInput(mode: AidenStreamInputMode) {
+        val text = _draft.value.trim()
+        if (!canSubmitRunInput || text.isEmpty()) return
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        val key = if (AidenRunInputPresentation.reusesIdempotencyKey(
+                lastRunInputAttempt, streamId, mode, text
+            )) lastRunInputAttempt!!.key else UUID.randomUUID()
+        val attempt = AidenRunInputPresentation.Attempt(key, streamId, mode, text)
+        lastRunInputAttempt = attempt
+        _isSubmittingRunInput.value = true
+        viewModelScope.launch {
+            try {
+                val result = client.submitStreamInput(
+                    id = streamId,
+                    input = AidenStreamInputRequest(mode = mode, text = text),
+                    idempotencyKey = key
+                )
+                if (activeClient() !== client) return@launch
+                // The response must bind to the stream that was displayed when
+                // the submission left; a mismatched receipt is never trusted.
+                if (result.streamId != streamId || result.chatId != chatId) {
+                    _presentedError.value =
+                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                    return@launch
+                }
+                if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
+                if (AidenRunInputPresentation.consumesDraft(result)) {
+                    consumeRunInputDraft(text)
+                    AidenRunInputPresentation.receipt(result)?.let { showRunInputReceipt(it) }
+                    // The Mac persisted the message before queue admission;
+                    // pull it into the transcript without waiting for the
+                    // next turn.
+                    reconcileChat()
+                } else {
+                    _presentedError.value = AidenRunInputPresentation.rejectionMessage(result.reason)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() === client) {
+                    _presentedError.value =
+                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                }
+            } finally {
+                _isSubmittingRunInput.value = false
+            }
+        }
+    }
+
+    // MARK: - Slice G composer power
+
+    /** Skills require the negotiated grant in addition to the advertised
+     * feature; old servers hide the palette and sends stay ordinary text. */
+    val canUseSkills: Boolean
+        get() = coordinator.serverInfo.value?.supportsChatSkills == true &&
+            !isReadOnlyPresentation &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE) == true
+
+    /** Roster mentions reuse the negotiated progress read the subagent sheet
+     * already gates on. */
+    val canMentionAgents: Boolean get() = canReadAgentRoster
+
+    /** File mentions ride the existing bounded file-index grants; bot chats
+     * use the bot-conversation index, workspace chats the workspace index. */
+    val canMentionFiles: Boolean
+        get() = !isReadOnlyPresentation &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.FILES_READ) == true
+
+    private val _skillCatalog = MutableStateFlow<List<AidenRemoteSkillCatalogEntry>>(emptyList())
+    val skillCatalog: StateFlow<List<AidenRemoteSkillCatalogEntry>> = _skillCatalog.asStateFlow()
+    private val _selectedSkill = MutableStateFlow<AidenRemoteSkillCatalogEntry?>(null)
+    val selectedSkill: StateFlow<AidenRemoteSkillCatalogEntry?> = _selectedSkill.asStateFlow()
+    private val _mentionAgents = MutableStateFlow<List<AidenChatAgent>?>(null)
+    private val _mentionFiles = MutableStateFlow<List<AidenWorkspaceFileEntry>>(emptyList())
+    private var skillCatalogLoaded = false
+    private var skillCatalogRetryPending = true
+    private var mentionAgentsLoaded = false
+    private var mentionAgentsRetryPending = true
+    private var mentionFilesLoaded = false
+    private var mentionFilesRetryPending = true
+    private var skillCatalogJob: Job? = null
+    private var mentionAgentsJob: Job? = null
+    private var mentionFilesJob: Job? = null
+
+    /** The active trailing `/query` or `@query` token, or null while the draft
+     * tail is ordinary text. Skill triggers stay hidden during a run: stream
+     * inputs cannot carry a skill lease, so offering the palette mid-flight
+     * would imply the selection applies to the steer. */
+    private fun composerSuggestionQuery(draft: String, streaming: Boolean): AidenComposerSuggestionQuery? {
+        val query = AidenComposerSuggestionQuery.parse(draft) ?: return null
+        return when (query.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL ->
+                if (canUseSkills && !streaming) query else null
+            AidenComposerSuggestionQuery.Kind.MENTION ->
+                if (canMentionAgents || canMentionFiles) query else null
+        }
+    }
+
+    /** Composed palette state: the query derives from the draft tail and the
+     * rows from the fetched catalogs, so a single combined flow keeps
+     * collection at the composer edge instead of the screen. */
+    val composerSuggestions: StateFlow<List<AidenComposerSuggestion>> = combine(
+        combine(_draft, _streamState, _skillCatalog) { draft, stream, catalog -> Triple(draft, stream, catalog) },
+        combine(_agentRoster, _mentionAgents, _mentionFiles) { roster, agents, files -> Triple(roster, agents, files) },
+        coordinator.serverInfo
+    ) { (draft, streamState, catalog), (roster, mentionAgents, mentionFiles), _ ->
+        val streaming = streamState != null && !streamState.isTerminal
+        val query = composerSuggestionQuery(draft, streaming) ?: return@combine emptyList()
+        when (query.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL ->
+                catalog
+                    .filter { query.matches(it.name) }
+                    .sortedWith { a, b -> query.compare(a.name, b.name) }
+                    .take(AidenComposerSuggestion.MAX_VISIBLE_ROWS)
+                    .map { AidenComposerSuggestion.Skill(it) }
+            AidenComposerSuggestionQuery.Kind.MENTION -> {
+                val rows = mutableListOf<AidenComposerSuggestion>()
+                if (canMentionAgents) {
+                    (roster?.agents ?: mentionAgents.orEmpty())
+                        .filter { query.matches(it.label) }
+                        .sortedWith { a, b -> query.compare(a.label, b.label) }
+                        .forEach { rows.add(AidenComposerSuggestion.Agent(it)) }
+                }
+                if (canMentionFiles) {
+                    mentionFiles
+                        .filter {
+                            it.kind == AidenWorkspaceFileKind.FILE &&
+                                (query.matches(it.displayPath) || query.matches(it.name))
+                        }
+                        .sortedWith { a, b -> query.compare(a.displayPath, b.displayPath) }
+                        .forEach { rows.add(AidenComposerSuggestion.File(it)) }
+                }
+                rows.take(AidenComposerSuggestion.MAX_VISIBLE_ROWS)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Selects a palette skill, consuming the `/query` token. The lease is
+     * redeemed by the Mac at turn admission; the catalog row is never an
+     * authority by itself. */
+    fun selectSkillSuggestion(entry: AidenRemoteSkillCatalogEntry) {
+        val query = composerSuggestionQuery(_draft.value, isStreamingNow) ?: return
+        if (!entry.available || query.kind != AidenComposerSuggestionQuery.Kind.SKILL) return
+        _selectedSkill.value = entry
+        updateDraft(_draft.value.removeRange(query.tokenStart, _draft.value.length))
+    }
+
+    fun clearSelectedSkill() {
+        _selectedSkill.value = null
+    }
+
+    /** Replaces the trailing `@query` token with the chosen display text.
+     * Insertions are plain user text; the Mac assigns no client-side mention
+     * semantics beyond what the model already sees. */
+    fun selectMentionSuggestion(suggestion: AidenComposerSuggestion) {
+        val query = composerSuggestionQuery(_draft.value, isStreamingNow) ?: return
+        if (query.kind != AidenComposerSuggestionQuery.Kind.MENTION) return
+        val insertion = when (suggestion) {
+            is AidenComposerSuggestion.Agent -> "@${suggestion.agent.label} "
+            is AidenComposerSuggestion.File -> "@${suggestion.entry.displayPath} "
+            is AidenComposerSuggestion.Skill -> return
+        }
+        updateDraft(_draft.value.replaceRange(query.tokenStart, _draft.value.length, insertion))
+    }
+
+    /** Lazy per-open fetch: a trigger kind appearing for the first time kicks
+     * off its bounded read. Failures may retry on the next palette open; a
+     * completed read is reused for the chat's lifetime. */
+    private fun prefetchComposerSuggestionData() {
+        when (composerSuggestionQuery(_draft.value, isStreamingNow)?.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL -> ensureSkillCatalog()
+            AidenComposerSuggestionQuery.Kind.MENTION -> {
+                ensureMentionAgents()
+                ensureMentionFiles()
+            }
+            null -> {
+                skillCatalogRetryPending = true
+                mentionAgentsRetryPending = true
+                mentionFilesRetryPending = true
+            }
+        }
+    }
+
+    private fun ensureSkillCatalog() {
+        if (!skillCatalogRetryPending || skillCatalogLoaded || skillCatalogJob?.isActive == true) return
+        val client = activeClient() ?: return
+        skillCatalogRetryPending = false
+        skillCatalogJob = viewModelScope.launch {
+            try {
+                val catalog = client.chatSkills(chatId)
+                if (activeClient() === client) {
+                    _skillCatalog.value = catalog.skills
+                    skillCatalogLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    private fun ensureMentionAgents() {
+        if (!canMentionAgents || !mentionAgentsRetryPending || mentionAgentsLoaded ||
+            mentionAgentsJob?.isActive == true || _agentRoster.value != null) return
+        val client = activeClient() ?: return
+        mentionAgentsRetryPending = false
+        mentionAgentsJob = viewModelScope.launch {
+            try {
+                val roster = client.chatAgents(chatId)
+                if (activeClient() === client) {
+                    _mentionAgents.value = if (roster.availability == AidenChatProgressAvailability.READY) {
+                        roster.agents
+                    } else {
+                        emptyList()
+                    }
+                    mentionAgentsLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    private fun ensureMentionFiles() {
+        if (!canMentionFiles || !mentionFilesRetryPending || mentionFilesLoaded ||
+            mentionFilesJob?.isActive == true) return
+        val client = activeClient() ?: return
+        val currentChat = _chat.value ?: return
+        mentionFilesRetryPending = false
+        mentionFilesJob = viewModelScope.launch {
+            try {
+                val index = if (currentChat.isBotChat) {
+                    client.botConversationFiles(currentChat.id)
+                } else {
+                    client.workspaceFiles(currentChat.workspaceId)
+                }
+                if (activeClient() === client) {
+                    _mentionFiles.value = index.entries
+                    mentionFilesLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    /** Composer prefetch reads are advisory: they retry on the next palette
+     * open. Only an explicit revocation tears the pairing down, matching the
+     * progress-observation convention. */
+    private fun handleComposerPrefetchError(error: Throwable) {
+        if (isProgressCredentialRevoked(error) &&
+            coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+            coordinator.removeInstallation(instanceId)
+        }
+    }
+
+    /** Destructive: stop the current run, then send the composer contents as
+     * a new turn once the stream is confirmed terminal. The draft is only
+     * consumed by the new send; a failed cancel leaves it untouched. */
+    fun redirectRun() {
+        if (!canControlCurrentRun || _isStopping.value || _isSubmittingRunInput.value) return
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        _isStopping.value = true
+        viewModelScope.launch {
+            try {
+                if (!cancelStreamOnce(client, streamId)) return@launch
+                var waited = 0
+                while (isStreamingNow && activeStreamId == streamId &&
+                    activeClient() === client && waited < 50) {
+                    delay(100)
+                    waited++
+                }
+                if (activeClient() !== client) return@launch
+                if (isStreamingNow) {
+                    _presentedError.value =
+                        "The run is still stopping. Send your message once it finishes."
+                    return@launch
+                }
+                if (!canSend) {
+                    _presentedError.value =
+                        "The run stopped, but your message could not be sent. Check your connection and try again."
+                    return@launch
+                }
+                send()
+            } finally {
+                _isStopping.value = false
+            }
+        }
+    }
+
+    private fun consumeRunInputDraft(text: String) {
+        val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
+        if (remaining != _draft.value) {
+            _draft.value = remaining
+            draftSession?.let { draftStore.save(remaining, it) }
+        }
+    }
+
+    private fun showRunInputReceipt(text: String) {
+        runInputReceiptToken++
+        val token = runInputReceiptToken
+        _runInputReceipt.value = text
+        viewModelScope.launch {
+            delay(4000)
+            if (runInputReceiptToken == token) _runInputReceipt.value = null
         }
     }
 
@@ -1240,6 +1701,66 @@ class AidenChatViewModel(
             } finally {
                 _isRespondingToApproval.value = false
             }
+        }
+    }
+
+    // Resolves the pending question prompt. A `cancelled` request dismisses
+    // the whole prompt; otherwise `answers` carries one entry per addressed
+    // question and unaddressed questions are recorded as skipped.
+    fun respondToQuestion(
+        request: AidenQuestionRespondRequest,
+        promptId: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ) {
+        if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
+            _isRespondingToQuestion.value || _isStopping.value) return
+        val question = _pendingQuestion.value ?: return
+        if (question.id != promptId || !question.canRespond) return
+        if (!question.expiresAt.isAfter(Instant.now())) {
+            _pendingQuestion.value = null
+            return
+        }
+        if (!canRespondToQuestions()) {
+            _presentedError.value = "This paired device can review prompts but cannot respond."
+            refreshQuestionAccess()
+            return
+        }
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        _isRespondingToQuestion.value = true
+        _pendingQuestion.value = null
+        if (_pendingApproval.value == null) _streamState.value = AidenStreamState.RUNNING
+
+        viewModelScope.launch {
+            try {
+                val response = client.respondToQuestion(question.id, request, idempotencyKey)
+                if (activeClient() !== client || activeStreamId != streamId ||
+                    _streamState.value?.isTerminal == true) return@launch
+                if (response.promptId != question.id) {
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
+                }
+            } catch (e: Exception) {
+                if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
+                    _streamState.value?.isTerminal != true) {
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    // An ambiguous write may have succeeded; only the Mac can restore a card.
+                    if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
+                }
+            } finally {
+                _isRespondingToQuestion.value = false
+            }
+        }
+    }
+
+    private fun refreshQuestionAccess() {
+        val streamId = activeStreamId ?: return
+        _isRespondingToQuestion.value = true
+        _pendingQuestion.value = null
+        if (_pendingApproval.value == null) _streamState.value = AidenStreamState.RECONCILING
+        viewModelScope.launch {
+            try { restorePendingQuestion(streamId) }
+            finally { _isRespondingToQuestion.value = false }
         }
     }
 

@@ -202,4 +202,43 @@ class AidenInstallationStoreTest {
         assertTrue(updated.deviceCapabilities.contains(AidenRemoteCapability.TASKS_READ))
         assertTrue(updated.hasNegotiatedAccess(AidenRemoteCapability.TASKS_READ))
     }
+
+    @Test
+    fun testNegotiatedSkillsInvokeGrantPersists() {
+        val (store, installation) = pairedStore(
+            listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ)
+        )
+        store.updateServerCapabilities(
+            instanceId = installation.instanceId,
+            serverCapabilities = listOf(
+                AidenRemoteCapability.CHAT_READ,
+                AidenRemoteCapability.BOT_READ,
+                AidenRemoteCapability.SKILLS_INVOKE
+            ),
+            serverName = null,
+            deviceCapabilities = listOf(
+                AidenRemoteCapability.CHAT_READ,
+                AidenRemoteCapability.BOT_READ
+            )
+        )
+
+        // Negotiation adding skills:invoke is a progress-only change and must
+        // persist; otherwise the palette stays hidden until renegotiation.
+        store.updateDeviceCapabilities(
+            installation.instanceId,
+            listOf(
+                AidenRemoteCapability.CHAT_READ,
+                AidenRemoteCapability.BOT_READ,
+                AidenRemoteCapability.SKILLS_INVOKE
+            )
+        )
+        val updated = store.installations.value.single { it.instanceId == installation.instanceId }
+        assertTrue(updated.deviceCapabilities.contains(AidenRemoteCapability.SKILLS_INVOKE))
+        assertTrue(updated.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE))
+
+        // The grant survives a store reload.
+        val reloaded = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        val persisted = reloaded.installations.value.single { it.instanceId == installation.instanceId }
+        assertTrue(persisted.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE))
+    }
 }

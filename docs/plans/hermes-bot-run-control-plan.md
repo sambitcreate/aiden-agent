@@ -40,12 +40,26 @@ PR #205 owns managed-home remount recovery; this plan does not change those file
 - Run Telegram/onboarding/type/lint checks and two independent Sol medium reviews.
   Open focused PR, address hosted reviews and wait for required checks.
 
-## Slice 2: shared foreground admission (owned follow-up, not shipped)
+## Slice 2: shared foreground admission (shipped on feature/on-the-go-midflight-ops)
 
 PiAgentRuntimeHarness has queueSteer/queueFollowUp, but llm-client has no public
 admission path and its message_start projection only handles assistant messages.
 Calling those primitives directly would lose host-owned user transcript/projection
 semantics. Implement a main-owned admission boundary before adding consumers:
+
+> **Status (2026-09-24):** Implemented on `feature/on-the-go-midflight-ops`.
+> `llmClient.admitChatRunInput` fronts `chat-run-input-admission.ts` (probe →
+> durable user-message append → Pi queue admission), Remote
+> `POST /streams/{streamId}/inputs` (feature `chat-run-input-v1`, idempotent,
+> contract revision 12), desktop IPC `chat:admitRunInput`, and additive iOS/
+> Android DTOs + client methods. The busy iOS/Android composer now offers
+> Steer | Queue alongside Stop with confirm-gated Redirect when the server
+> advertises the feature (old servers keep Stop-only). Deliberate boundary:
+> the desktop renderer keeps its existing queue-while-busy/mid-run-steer UX —
+> the remote path deliberately goes through the same main-owned
+> persistence-plus-Pi-admission semantics via `chat:admitRunInput`, so no
+> consumer bypasses the host transcript boundary. The capability stays
+> server-advertised only because the full host path is verified.
 
 1. Negotiate an additive capability (`chat-run-input-v1`, subject to native review).
 2. Bind requests to chat, exact stream/run identity, authenticated principal,
@@ -64,6 +78,26 @@ semantics. Implement a main-owned admission boundary before adding consumers:
    along with runtime race/adversarial tests and two independent Sol reviews.
 
 Do not advertise Steer/Queue server capability until the full path works.
+
+## Slice 3: pending `ask_user_question` prompts (shipped on feature/on-the-go-midflight-ops)
+
+> **Status (2026-09-25):** Implemented on `feature/on-the-go-midflight-ops`.
+> Remote `GET /streams/{streamId}/question` + `POST /questions/{promptId}/respond`
+> (feature `chat-question-prompts-v1`, capability `questions:respond`,
+> contract revision 13) project the Mac-owned `AskUserQuestionCoordinator`
+> prompt to the paired device that owns the stream. The non-terminal
+> `question_required` event keeps the closed `waiting_for_approval` state
+> vocabulary so legacy clients degrade safely. Remote generation excludes
+> `ask_user_question` unless the paired device negotiated the grant. iOS and
+> Android render the same stacked prompt card (option/multi/custom answers,
+> skip = `cancelled: true`), fetch the authoritative snapshot on the event
+> and on reconnect, submit with stable idempotency keys, and reconcile
+> instead of resurrecting an uncertain response.
+
+- Responses are bound to device, stream, prompt, and expiry; replayed
+  responses return the original `{promptId, resolvedAt}` outcome.
+- Invalid or uncertain operations fail closed; clients never auto-retry a
+  possibly accepted answer.
 
 ## Later dependencies assessed
 

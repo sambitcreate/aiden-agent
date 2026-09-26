@@ -595,6 +595,8 @@ data class AidenChatMessage(
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    val isReadAloudEligible: Boolean get() = role == AidenChatRole.ASSISTANT && outcome == null &&
+        (timeline == null || timeline.status == AidenGenerationTimelineStatus.COMPLETED) && text.isNotBlank()
     val isWireSafe: Boolean
         get() = id.isNotEmpty() &&
                 id.length <= AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH &&
@@ -823,7 +825,8 @@ data class AidenTurnStart(
     val providerId: String? = null,
     val modelId: String? = null,
     val thinkingLevel: String? = null,
-    val attachmentIds: List<String>? = null
+    val attachmentIds: List<String>? = null,
+    val skill: AidenSkillInvocation? = null
 )
 
 @Serializable
@@ -875,6 +878,126 @@ data class AidenStreamPendingApproval(
 data class AidenStreamApprovalSnapshot(
     val approval: AidenStreamPendingApproval? = null
 )
+
+@Serializable
+enum class AidenStreamInputMode {
+    @SerialName("steer") STEER,
+    @SerialName("queue") QUEUE
+}
+
+@Serializable
+data class AidenStreamInputRequest(
+    val mode: AidenStreamInputMode,
+    val text: String
+)
+
+@Serializable
+enum class AidenStreamInputStatus {
+    @SerialName("admitted") ADMITTED,
+    @SerialName("rejected") REJECTED
+}
+
+@Serializable
+enum class AidenStreamInputQueue {
+    @SerialName("steer") STEER,
+    @SerialName("follow-up") FOLLOW_UP
+}
+
+@Serializable
+enum class AidenStreamInputRejectionReason {
+    @SerialName("run_not_active") RUN_NOT_ACTIVE,
+    @SerialName("cancelled") CANCELLED,
+    @SerialName("capacity") CAPACITY,
+    @SerialName("invalid") INVALID
+}
+
+@Serializable
+data class AidenStreamInputResult(
+    val streamId: String,
+    val chatId: String,
+    val turnId: String,
+    val mode: AidenStreamInputMode,
+    val status: AidenStreamInputStatus,
+    val queue: AidenStreamInputQueue? = null,
+    val reason: AidenStreamInputRejectionReason? = null,
+    val committed: Boolean,
+    val messageId: String? = null
+)
+
+/**
+ * Remote Slice 2 busy-composer presentation rules (iOS parity:
+ * AidenRunInputPresentation). A run input may only be offered while the
+ * displayed stream is controllable, the server negotiated
+ * `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+ * when the Mac durably committed the message; every other outcome keeps the
+ * draft untouched so a busy→idle race can never become an implicit Send.
+ */
+object AidenRunInputPresentation {
+    data class Attempt(
+        val key: UUID,
+        val streamId: String,
+        val mode: AidenStreamInputMode,
+        val text: String
+    )
+
+    fun offersRunInput(
+        isStreaming: Boolean,
+        canControl: Boolean,
+        supports: Boolean,
+        hasDraft: Boolean
+    ): Boolean = isStreaming && canControl && supports && hasDraft
+
+    fun consumesDraft(result: AidenStreamInputResult): Boolean =
+        result.status == AidenStreamInputStatus.ADMITTED || result.committed
+
+    fun consumedDraft(submitted: String, current: String): String {
+        // Char.isWhitespace covers Unicode space separators, matching iOS
+        // CharacterSet.whitespacesAndNewlines semantics.
+        if (current.trim { it.isWhitespace() } == submitted) return ""
+        if (current.startsWith(submitted)) {
+            return current.drop(submitted.length).trim { it.isWhitespace() }
+        }
+        return current
+    }
+
+    fun receipt(result: AidenStreamInputResult): String? = when (result.status) {
+        AidenStreamInputStatus.ADMITTED -> when (result.queue) {
+            AidenStreamInputQueue.STEER -> "Steering the current run"
+            AidenStreamInputQueue.FOLLOW_UP, null -> "Queued to run next"
+        }
+        AidenStreamInputStatus.REJECTED -> {
+            if (!result.committed) null else when (result.reason) {
+                AidenStreamInputRejectionReason.CANCELLED ->
+                    "Saved to the chat — the run was cancelled before it could use it"
+                AidenStreamInputRejectionReason.CAPACITY ->
+                    "Saved to the chat — the run queue was full"
+                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE,
+                AidenStreamInputRejectionReason.INVALID, null ->
+                    "Saved to the chat — the run ended before it could use it"
+            }
+        }
+    }
+
+    fun rejectionMessage(reason: AidenStreamInputRejectionReason?): String = when (reason) {
+        AidenStreamInputRejectionReason.RUN_NOT_ACTIVE ->
+            "The run already finished. Your draft is unchanged."
+        AidenStreamInputRejectionReason.CANCELLED ->
+            "The run was cancelled. Your draft is unchanged."
+        AidenStreamInputRejectionReason.CAPACITY ->
+            "The follow-up queue is full. Your draft is unchanged — try again in a moment."
+        AidenStreamInputRejectionReason.INVALID, null ->
+            "That input was not accepted. Your draft is unchanged."
+    }
+
+    /** A manual retry of the exact same submission replays the Mac's original
+     * outcome instead of risking a duplicate committed message. */
+    fun reusesIdempotencyKey(
+        last: Attempt?,
+        streamId: String,
+        mode: AidenStreamInputMode,
+        text: String
+    ): Boolean = last != null && last.streamId == streamId && last.mode == mode && last.text == text
+}
 
 @Serializable
 enum class AidenApprovalDecision {
@@ -989,7 +1112,13 @@ data class AidenUsageTotals(
     val currentStreak: Int,
     val longestStreak: Int,
     val tokens: AidenUsageTokens
-)
+) {
+    val hostedCostSummary: String get() {
+        if (unpricedHostedRequests > 0 && costedRequests == 0) return "Cost unavailable"
+        val tracked = java.text.NumberFormat.getCurrencyInstance().apply { currency = java.util.Currency.getInstance("USD") }.format(hostedCostUsd)
+        return if (unpricedHostedRequests > 0) "$tracked tracked; $unpricedHostedRequests requests unpriced" else tracked
+    }
+}
 
 @Serializable
 data class AidenUsageDay(
@@ -1193,14 +1322,16 @@ object AidenTurnRequestBuilder {
         providerId: String?,
         modelId: String?,
         thinkingLevel: String?,
-        attachments: List<AidenAttachmentReference>
+        attachments: List<AidenAttachmentReference>,
+        skill: AidenRemoteSkillCatalogEntry? = null
     ): AidenTurnStart {
         return AidenTurnStart(
             text = text,
             providerId = providerId,
             modelId = modelId,
             thinkingLevel = thinkingLevel,
-            attachmentIds = if (attachments.isEmpty()) null else attachments.map { it.id }
+            attachmentIds = if (attachments.isEmpty()) null else attachments.map { it.id },
+            skill = skill?.takeIf { it.available }?.let { AidenSkillInvocation(it) }
         )
     }
 }

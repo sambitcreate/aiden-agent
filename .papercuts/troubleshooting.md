@@ -1205,6 +1205,30 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-26: A timed-out `execFile(electron, …)` resolves with exit 0 because Chromium turns SIGTERM into a clean shutdown, so a hung fixture surfaces only as a missing result file. Use `killSignal: "SIGKILL"` so the rejection carries stderr.
 - 2026-09-26: Under Chromium's user-namespace sandbox, renderers are dumpable (`/proc/<pid>/mem` owned by the user); under the setuid sandbox they were not (owned by root). On Ubuntu runners an intentional `forcefullyCrashRenderer()` then pipes a full core to apport and `render-process-gone` stalls until it drains. The E2E step sets `kernel.core_pattern=core` and `ulimit -c 0`.
 
+- 2026-09-25 on-the-go slice D: the Android unit-test fixture is a checked-in copy at `android/app/src/test/resources/contract.json` — it does NOT track `protocol/aiden-remote/v1/fixtures/contract.json` automatically (iOS references the shared file directly via pbxproj). Every contract-revision bump must `cp` the canonical fixture into the Android copy; slice B's review and slice D both caught drift here.
+
+## 2026-09-24 — Gemini TTS review hardening
+
+- AbortSignal alone is not a terminal transition: the deliberately noncooperative provider test kept the job generating until the timeout callback itself marked failure. Test late resolutions as well as rejected aborts.
+- A bounded read is not full consumption. Marking a segment read after its first 64 KiB allowed eviction during continuation reads; retention now tracks contiguous bytes and rejects unread overflow atomically.
+- Generation completion precedes audible completion; wiring Settings preview directly to synthesis produced no audio. Use the same gesture-primed, job-owned controller and fence pending start/read/decode across Stop and navigation.
+- One authority child completed. UI child reached its turn limit without a reliable report; parent covered that gap. Final follow-up batch was refused at admission by the tree deadline, so fresh independent final sign-off remains open rather than retrying it.
+- Android chat/progress initially ran 56/57: failedSendRestoresDurableDraftAfterRestart raced Dispatchers.Main reset. No Android changes; chronology/progress isolation passed 20/20, then the same full selection passed 57/57 on confirmation. Preserve the flake evidence rather than treating the first run as green.
+- Physical iOS AidenChatTests ran on the available paired iPhone and passed 114/114; no simulator test run was used. Vite build passes with its chunk-size and Ghostty mixed-import warnings; release/package/live-Google gates were not run.
+
+- 2026-09-24 TTS dev launch: several C-helper build scripts replace the environment and discard DEVELOPER_DIR, selecting the malformed CLT SDK. Built those same helper sources/flags with an explicit full-Xcode xcrun environment, then ran build:electron and the renderer/Electron dev commands directly; no global xcode-select change.
+- This checkout had the Electron npm package but no app binary. Running its existing install.js restored Electron 43.1.1. Aiden Agent Dev now launches; startup separately reports unavailable Generative UI artifact recovery and blocked chat mutations. Do not reset or delete dev-profile data to hide that warning.
+- 2026-09-24 TTS dev profile diagnosis: the shared development artifact store contains newer designOwnership/designPublication record fields. This branch correctly rejects that schema; removing the fields could destroy ownership/publication semantics. With explicit user approval, launched a clean per-test --user-data-dir plus separate AIDEN_CONFIG_DIR instead. Existing profiles were not modified; fresh startup has no artifact-recovery warning. Ordinary npm run dev still uses the shared profile.
+- 2026-09-24 TTS saved-key lookup: built-in Google uses piCredentialStore, not secrets.getKeyStrict("google") (legacy/custom-provider map). A configured provider plus enabled Read Aloud still redirected to setup until that runtime binding was corrected. Added managed-store regression; 109 TTS tests and type/lint checks pass.
+- 2026-09-24 replay: retrieved-segment eviction destroys replay prefixes. Retain whole soundbites and evict only inactive jobs; keep attempt tombstones after byte eviction. Reusing job IDs also requires inactive renderer surfaces to ignore later events and replacement to emit playback cancellation without cancelling the retained synthesis record. Existing native /speech routes are STT, not TTS. Follow-up replay reviewer was not admitted due to tree deadline.
+
+
+- 2026-09-24 native TTS: Android mirrors `protocol/aiden-remote/v1/fixtures/contract.json` in test resources; update it byte-for-byte or the native contract gate fails. iOS uses the shared fixture directly. OpenAPI route allowlists also need the additive paths.
+- 2026-09-24 native TTS: the available physical Smbt16ProMax was locked, so xcodebuild compiled/signed but waited before XCTest launch. Terminated the wait; unsigned `build-for-testing` passed, but it is not physical playback/test acceptance. Unlock the phone before rerunning.
+- 2026-09-24 native TTS review: fresh backend/native reviewer batch was rejected before admission by the subagent tree deadline. No completed independent review/sign-off exists for these changes.
+
+- 2026-09-25 PR245: shared `contract.json` has no usage entry; usage-label tests must construct typed usage totals, not assume a fixture exists. Initial tests exposed this incorrect assumption and were corrected.
+- 2026-09-25 PR245 simulator: the reused iOS26.4 simulator launched the app but did not inject/connect XCTest on a second run (sample showed idle app, no XCTest). Terminated only that test runner/app; an isolated iPhone17 simulator completed 232 tests (5 skipped). Do not reset unrelated simulators or count the stalled run as a pass.
 ## 2026-09-25 — rich link previews
 
 - Fresh worktrees have no `node_modules`, so focused `tsx` tests fail immediately. Run `npm ci --ignore-scripts` from the lockfile before renderer verification.
@@ -1356,3 +1380,6 @@ because their native file-mutator test binary had not been built. Run
 - In 0.87 chord is nested, not hoisted, so declare it directly in `packages/cli`. Its exports are import-only, so `require.resolve` in the build's external check fails even when chord is installed. The check needs an ESM resolve fallback.
 - 0.87 pulls in `proxy-agent-negotiate`, which has an optional `import("kerberos")`. Add it to the CLI external allowlist.
 - 0.87 storage v1 journal headers use `v: 4`, not `version: 4`. Session import has to accept both.
+
+## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
+- A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.

@@ -901,6 +901,23 @@ class AidenRemoteClient(
         cancelStream(turnId)
     }
 
+    /** Remote Slice 2: mid-flight input bound to the displayed stream. Control
+     * writes never auto-retry; the stable request UUID makes manual retries
+     * replay the Mac's original admission outcome. */
+    suspend fun submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ): AidenStreamInputResult = executeRequest(
+        "/streams/$id/inputs",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = json.encodeToString(input),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
     suspend fun respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -921,6 +938,47 @@ class AidenRemoteClient(
         decision: AidenApprovalDecision,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenApprovalResponse = respondToApproval(approvalId, decision, idempotencyKey)
+
+    /** Authoritative pending-question snapshot for one stream. Returns
+     * `{question: null}` when no prompt is pending. */
+    suspend fun streamQuestion(id: String): AidenStreamQuestionSnapshot = executeRequest("/streams/$id/question") { bytes ->
+        AidenQuestionContractCodec.parseSnapshot(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
+    suspend fun pendingQuestion(chatId: String, streamId: String): AidenStreamPendingQuestion? =
+        streamQuestion(streamId).question
+
+    /** Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+     * the Bot's currently admitted skills; the catalog is presentation input
+     * only — the Mac re-validates every lease redemption at turn admission. */
+    suspend fun chatSkills(chatId: String): AidenRemoteSkillCatalog = executeRequest(
+        "/chats/$chatId/skills",
+        botScope = AidenBotPrivateResponseScope.Root("chatSkills")
+    ) { bytes ->
+        AidenSkillContractCodec.parseCatalog(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
+    /** Question responses never auto-retry; the stable request UUID makes a
+     * manual retry replay the Mac's original outcome. */
+    suspend fun respondToQuestion(
+        id: String,
+        response: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenQuestionRespondResponse = executeRequest(
+        "/questions/$id/respond",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = response.toJson().toString(),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        AidenQuestionContractCodec.parseRespondResponse(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
 
     fun streamEvents(
         id: String,
@@ -1463,6 +1521,22 @@ class AidenRemoteClient(
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
+
+    suspend fun readAloudStatus(chatId: String? = null): AidenReadAloudStatus = executeRequest(
+        if (chatId == null) "/read-aloud" else "/chats/$chatId/read-aloud"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun startReadAloud(chatId: String, request: AidenReadAloudStart): AidenReadAloudJob = executeRequest(
+        "/chats/$chatId/read-aloud", method = "POST", bodyJson = json.encodeToString(request), retryConnectionFailure = false
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun stopReadAloud(chatId: String, requestId: String): Unit = executeRequest(
+        "/chats/$chatId/read-aloud/stop", method = "POST", bodyJson = json.encodeToString(AidenReadAloudStop(requestId)), retryConnectionFailure = false
+    ) { Unit }
+
+    suspend fun readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int): AidenReadAloudAudio = executeRequest(
+        "/chats/$chatId/read-aloud/audio/$jobId/$segment/$offset"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
 
     suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))

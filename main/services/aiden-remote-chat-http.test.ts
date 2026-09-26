@@ -325,6 +325,8 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
       beginChatTurn: () => ({
         isActive: () => true,
         reserveAppendPayload: () => undefined,
+        reserveSkillPreparation: () => undefined,
+        prepareSkillInvocation: () => undefined,
         settleAsyncWork: () => undefined,
         onReleased: () => undefined,
         release: () => undefined,

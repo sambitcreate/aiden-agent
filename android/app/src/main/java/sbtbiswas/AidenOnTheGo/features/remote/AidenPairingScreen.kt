@@ -194,7 +194,7 @@ fun AidenPairingScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
+                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here. Read Aloud uses your desktop’s setup: enable it there. Pressing Play sends selected response text from your desktop to Google; charges may apply.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.secondary
             )

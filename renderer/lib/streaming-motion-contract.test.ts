@@ -67,7 +67,8 @@ test("streaming and persisted messages reserve the same action and timeline shel
   const bubble = source("../components/message-bubble.tsx");
   const list = source("../components/message-list.tsx");
   assert.doesNotMatch(bubble, /streaming-cursor/u);
-  assert.match(bubble, /streaming && !streamComplete \? "invisible" : ""/u);
+  assert.match(bubble, /<MessageActions[\s\S]*hidden=\{Boolean\(streaming && !streamComplete\)\}/u);
+  assert.match(source("../components/message-actions.tsx"), /hidden \? "invisible" : ""/u);
 
   const transientShell = between(
     list,

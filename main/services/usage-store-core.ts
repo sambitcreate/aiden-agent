@@ -11,6 +11,7 @@ export type UsageRequestSource =
   | "bot-avatar"
   | "vision"
   | "voice-transcription"
+  | "text-to-speech"
   | "scheduled"
   | "subagent"
   | "telegram"
@@ -81,6 +82,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "bot-avatar",
   "vision",
   "voice-transcription",
+  "text-to-speech",
   "scheduled",
   "subagent",
   "telegram",

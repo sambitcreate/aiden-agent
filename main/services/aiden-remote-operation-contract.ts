@@ -740,6 +740,23 @@ export class AidenIdempotencyLedger {
     return result as Promise<T>;
   }
 
+  /**
+   * Drop a scope entry whose wrapped action provably never ran. Only safe
+   * when the caller gates the action behind an external barrier that never
+   * opened (e.g. the two-phase durable persist in executeIdempotent failing
+   * before admission): nothing committed, so a retry must re-execute rather
+   * than replay a misleading rejection.
+   */
+  discardUnexecuted(scope: {
+    deviceId: string;
+    route: string;
+    resourceId: string;
+    key: string;
+  }): void {
+    const ledgerKey = createHash("sha256").update(canonical(scope)).digest("base64url");
+    this.entries.delete(ledgerKey);
+  }
+
   reconcile<T>(operationIdToFinalize: string, outcome: AidenIdempotencyOutcome<T>): void {
     assertOperationId(operationIdToFinalize);
     this.prune(this.now());

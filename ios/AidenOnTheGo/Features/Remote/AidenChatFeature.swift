@@ -1,3 +1,4 @@
+import AVFoundation
 import Accessibility
 import CryptoKit
 import ImageIO
@@ -282,14 +283,16 @@ enum AidenTurnRequestBuilder {
         providerId: String?,
         modelId: String?,
         thinkingLevel: String?,
-        attachments: [AidenAttachmentReference]
+        attachments: [AidenAttachmentReference],
+        skill: AidenSkillInvocation? = nil
     ) -> AidenTurnStart {
         AidenTurnStart(
             text: text,
             providerId: providerId,
             modelId: modelId,
             thinkingLevel: thinkingLevel,
-            attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id)
+            attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id),
+            skill: skill
         )
     }
 }
@@ -298,6 +301,85 @@ struct AidenChatModelSelection: Equatable {
     let providerId: String?
     let modelId: String?
     let thinkingLevel: String?
+}
+
+/// Slice G composer trigger parsing. The palette tracks only the trailing
+/// `/query` or `@query` token: the trigger must start the draft or follow
+/// whitespace, and the token ends at the next whitespace. Anything else —
+/// triggers inside a token, a completed mention, punctuation — is ordinary
+/// text and never opens a palette.
+struct AidenComposerSuggestionQuery: Equatable {
+    enum Kind: Equatable {
+        case skill
+        case mention
+    }
+
+    static let maximumQueryCharacters = 256
+
+    let kind: Kind
+    let query: String
+    /// Draft range covering the trigger through the query; replaced on select.
+    let tokenRange: Range<String.Index>
+
+    static func parse(draft: String) -> AidenComposerSuggestionQuery? {
+        let tokenStart = draft.lastIndex(where: { $0.isWhitespace })
+            .map { draft.index(after: $0) } ?? draft.startIndex
+        guard tokenStart < draft.endIndex else { return nil }
+        let trigger = draft[tokenStart]
+        let kind: Kind
+        switch trigger {
+        case "/": kind = .skill
+        case "@": kind = .mention
+        default: return nil
+        }
+        let query = String(draft[draft.index(after: tokenStart)...])
+        guard query.unicodeScalars.count <= maximumQueryCharacters else { return nil }
+        return AidenComposerSuggestionQuery(
+            kind: kind,
+            query: query,
+            tokenRange: tokenStart..<draft.endIndex
+        )
+    }
+
+    func matches(_ candidate: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        return candidate.localizedCaseInsensitiveContains(query)
+    }
+
+    /// Prefix matches rank ahead of substring matches, mirroring the desktop
+    /// palette ordering.
+    func ranksBefore(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsPrefix = lhs.localizedCaseInsensitiveHasPrefix(query)
+        let rhsPrefix = rhs.localizedCaseInsensitiveHasPrefix(query)
+        if lhsPrefix != rhsPrefix { return lhsPrefix }
+        return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+    }
+}
+
+private extension String {
+    func localizedCaseInsensitiveHasPrefix(_ prefix: String) -> Bool {
+        guard !prefix.isEmpty else { return true }
+        return range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
+    }
+}
+
+/// One row in the composer suggestion palette. Skills carry the opaque lease
+/// redeemed on turn start; agents and files insert plain display text — the
+/// client never resolves or expands them.
+enum AidenComposerSuggestion: Identifiable {
+    case skill(AidenRemoteSkillCatalogEntry)
+    case agent(AidenRemoteChatAgent)
+    case file(AidenWorkspaceFileEntry)
+
+    var id: String {
+        switch self {
+        case .skill(let entry): "skill-\(entry.invocationId)"
+        case .agent(let agent): "agent-\(agent.agentId)"
+        case .file(let entry): "file-\(entry.id)"
+        }
+    }
+
+    static let maximumVisibleRows = 100
 }
 
 enum AidenChatModelAuthority {
@@ -894,6 +976,23 @@ final class AidenChatViewModel {
 #endif
     }
 
+    let readAloud = AidenReadAloudPlayback()
+    var readAloudCandidateID: String? {
+        guard !isReadOnlyPresentation, !isStarting, streamState?.isTerminal != false,
+              coordinator.server?.features.contains("tts-v1") == true,
+              let last = chat.messages.last, last.role == .assistant,
+              last.isReadAloudEligible else { return nil }
+        return last.id
+    }
+    func toggleReadAloud(_ messageID: String) {
+        if readAloud.activeMessageID != nil { readAloud.stop(); return }
+        guard let context = try? coordinator.requestContext(for: instanceId),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        NotificationCenter.default.post(name: .aidenStopDictationForReadAloud, object: nil)
+        readAloud.start(client: client, chatID: chat.id, messageID: messageID,
+            current: { [weak coordinator] in coordinator?.isCurrent(context) == true })
+    }
+
     private let runtime: Runtime
     private var allowsMutations: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
@@ -948,8 +1047,15 @@ final class AidenChatViewModel {
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
+    private var questionSnapshotGeneration: UInt64 = 0
+    private(set) var pendingQuestion: AidenPendingQuestion?
+    private(set) var isRespondingToQuestion = false
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
+    private(set) var isSubmittingRunInput = false
+    private(set) var runInputReceipt: String?
+    @ObservationIgnored private var runInputReceiptTask: Task<Void, Never>?
+    @ObservationIgnored private var lastRunInputAttempt: AidenRunInputPresentation.Attempt?
     private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
         didSet {
             if pendingAttachments != oldValue { composerGeneration &+= 1 }
@@ -968,6 +1074,7 @@ final class AidenChatViewModel {
             guard draft != oldValue else { return }
             draftGeneration &+= 1
             composerGeneration &+= 1
+            prefetchComposerSuggestionData()
             guard !suppressesDraftPersistence else { return }
             scheduleDraftPersistence()
         }
@@ -1086,6 +1193,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
+        runInputReceiptTask?.cancel()
         uploadTask?.cancel()
     }
 
@@ -1098,6 +1206,8 @@ final class AidenChatViewModel {
         cancelAttachmentPreparation()
         uploadTask?.cancel()
         pendingAttachments = []
+        runInputReceiptTask?.cancel()
+        runInputReceipt = nil
         transcriptGeneration &+= 1
         streamTask?.cancel()
         terminalReconciliationTask?.cancel()
@@ -1196,12 +1306,38 @@ final class AidenChatViewModel {
             || (turnModelSelection.providerId != nil && turnModelSelection.modelId != nil)
     }
 
+    /// Quiet Open Chat: while this conversation is on screen its ambient
+    /// surfaces stay quiet; blocking kinds (approvals, errors) still publish.
+    @ObservationIgnored private var isChatForegrounded = false
+
+    private var isAmbientSurfaceQuiet: Bool {
+        isChatForegrounded && UIApplication.shared.applicationState == .active
+    }
+
+    func setChatForegrounded(_ foregrounded: Bool) {
+        isChatForegrounded = foregrounded
+        // Foreground-enter quiets the ambient surface: the Live Activity marks
+        // stale (matching Android dismissing its posted notification) and
+        // recovers on the next published update.
+        if foregrounded, let streamID = activeStreamID {
+            Task { await liveActivities.markStale(instanceID: instanceId, streamID: streamID) }
+        }
+    }
+
     func setHapticsActive(_ active: Bool) {
         if active {
             coordinator.haptics.activate(scope: hapticScope)
         } else {
             coordinator.haptics.deactivate(scope: hapticScope)
         }
+    }
+
+    private func publishLiveActivityStatus(streamID: String, state: AidenStreamState) async {
+        guard AidenQuietOpenChat.publishesStatus(
+            state,
+            isChatForegrounded: isAmbientSurfaceQuiet
+        ) else { return }
+        await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: state)
     }
 
     func load(observeProgress: Bool = true) async {
@@ -1718,13 +1854,15 @@ final class AidenChatViewModel {
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = pendingAttachments
+        let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
         let request = AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
             thinkingLevel: modelSelection.thinkingLevel,
-            attachments: submittedAttachments
+            attachments: submittedAttachments,
+            skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
         )
         let previousUpdatedAt = chat.updatedAt
         let optimisticID = "local-\(UUID().uuidString.lowercased())"
@@ -1844,11 +1982,13 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             turnAttempts.reset()
             chat = acceptedChat
+            selectedSkill = nil
             liveText = ""
             reasoning = ""
             tools = []
             activityTimeline = nil
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .queued
             coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
@@ -2173,38 +2313,379 @@ final class AidenChatViewModel {
             && installation.hasNegotiatedAccess(to: .botWrite))
     }
 
-    func stop() async {
+    @discardableResult
+    func stop() async -> Bool {
         guard canControlCurrentRun, !isStopping, !isReadOnlyPresentation,
-              !isRemoved, let expectedStreamID = activeStreamID,
+              !isRemoved, let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return false }
+        // Reserve before the cache read yields so simultaneous taps cannot both
+        // dispatch, and keep the current run visible until the Mac confirms Stop.
+        isStopping = true
+        defer { isStopping = false }
+        return await cancelStreamOnce(streamID: streamID, context: context)
+    }
+
+    /// Shared cancel core for Stop and Redirect. Callers hold `isStopping` so
+    /// the composer controls stay inert for the whole operation.
+    private func cancelStreamOnce(
+        streamID expectedStreamID: String,
+        context: AidenRemoteRequestContext
+    ) async -> Bool {
+        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id),
+              !isRemoved, coordinator.isCurrent(context), canControlCurrentRun,
+              activeStreamID == expectedStreamID, stream.streamId == expectedStreamID,
+              stream.deviceId == context.deviceId, streamState?.isTerminal != true else { return false }
+        do {
+            let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
+                  streamState?.isTerminal != true else { return false }
+            guard status.streamId == stream.streamId, status.chatId == chat.id else {
+                presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
+                return false
+            }
+            await apply(status, streamID: stream.streamId, context: context, feedbackPolicy: .restoredStream)
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            // Cancellation does not prove that the Mac stopped or rejected the
+            // run. Preserve any status or approval received while awaiting it.
+            return false
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
+                  streamState?.isTerminal != true else { return false }
+            presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return false
+        }
+    }
+
+    var supportsRunInput: Bool {
+        guard !isReadOnlyFixture else { return false }
+        return coordinator.server?.supportsChatRunInput == true
+    }
+
+    /// The busy composer shows Steer/Queue/Redirect only when the server
+    /// negotiated the feature and the composer holds text. Old servers keep
+    /// the Stop-only control.
+    var showsRunInputOptions: Bool {
+        AidenRunInputPresentation.offersRunInput(
+            isStreaming: isStreaming,
+            canControl: canControlCurrentRun,
+            supports: supportsRunInput,
+            hasDraft: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
+    var canSubmitRunInput: Bool {
+        showsRunInputOptions && !isSubmittingRunInput && !isStopping
+    }
+
+    func submitRunInput(_ mode: AidenStreamInputMode) async {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSubmitRunInput, !text.isEmpty,
+              let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        let key: UUID
+        if AidenRunInputPresentation.reusesIdempotencyKey(
+            last: lastRunInputAttempt, streamId: streamID, mode: mode, text: text
+        ), let last = lastRunInputAttempt {
+            key = last.key
+        } else {
+            key = UUID()
+        }
+        let attempt = AidenRunInputPresentation.Attempt(
+            key: key, streamId: streamID, mode: mode, text: text
+        )
+        lastRunInputAttempt = attempt
+        isSubmittingRunInput = true
+        defer { isSubmittingRunInput = false }
+        do {
+            let result = try await coordinator.remoteClient(for: context).submitStreamInput(
+                id: streamID,
+                input: AidenStreamInputRequest(mode: mode, text: text),
+                idempotencyKey: key
+            )
+            guard coordinator.isCurrent(context) else { return }
+            // The response must bind to the stream that was displayed when the
+            // submission left; a mismatched receipt is never trusted.
+            guard result.streamId == streamID, result.chatId == chat.id else {
+                presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+                return
+            }
+            if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
+            if AidenRunInputPresentation.consumesDraft(result) {
+                consumeRunInputDraft(text)
+                if let receipt = AidenRunInputPresentation.receipt(for: result) {
+                    showRunInputReceipt(receipt)
+                }
+                coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "run-input:\(key.uuidString)")
+                // The Mac persisted the message before queue admission; pull it
+                // into the transcript without waiting for the next turn.
+                _ = await reconcileChat(context: context)
+            } else {
+                presentedError = AidenRunInputPresentation.rejectionMessage(result.reason)
+                coordinator.haptics.play(.error, scope: hapticScope)
+            }
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context) else { return }
+            presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+        }
+    }
+
+    // MARK: - Slice G composer power
+
+    /// Skills require the negotiated grant in addition to the advertised
+    /// feature; old servers hide the palette and sends stay ordinary text.
+    var canUseSkills: Bool {
+        guard !isReadOnlyFixture,
+              coordinator.server?.supportsChatSkills == true,
+              let installation = coordinator.installationStore.activeInstallation else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .skillsInvoke)
+    }
+
+    /// Roster mentions reuse the negotiated progress read the subagent sheet
+    /// already gates on.
+    var canMentionAgents: Bool { canReadAgentRoster }
+
+    /// File mentions ride the existing bounded file-index grants; bot chats
+    /// use the bot-conversation index, workspace chats the workspace index.
+    var canMentionFiles: Bool {
+        guard !isReadOnlyFixture,
+              let installation = coordinator.installationStore.activeInstallation else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .filesRead)
+    }
+
+    private(set) var skillCatalog: [AidenRemoteSkillCatalogEntry] = []
+    private(set) var selectedSkill: AidenRemoteSkillCatalogEntry?
+    private var skillCatalogLoaded = false
+    private var skillCatalogRetryPending = true
+    private var mentionAgents: [AidenRemoteChatAgent]?
+    private var mentionAgentsLoaded = false
+    private var mentionAgentsRetryPending = true
+    private var mentionFiles: [AidenWorkspaceFileEntry] = []
+    private var mentionFilesLoaded = false
+    private var mentionFilesRetryPending = true
+    @ObservationIgnored private var skillCatalogTask: Task<Void, Never>?
+    @ObservationIgnored private var mentionAgentsTask: Task<Void, Never>?
+    @ObservationIgnored private var mentionFilesTask: Task<Void, Never>?
+
+    /// The active trailing `/query` or `@query` token, or nil while the draft
+    /// tail is ordinary text. Skill triggers stay hidden during a run: stream
+    /// inputs cannot carry a skill lease, so offering the palette mid-flight
+    /// would imply the selection applies to the steer.
+    var composerSuggestionQuery: AidenComposerSuggestionQuery? {
+        guard let query = AidenComposerSuggestionQuery.parse(draft: draft) else { return nil }
+        switch query.kind {
+        case .skill: return canUseSkills && !isStreaming ? query : nil
+        case .mention: return (canMentionAgents || canMentionFiles) ? query : nil
+        }
+    }
+
+    var composerSuggestions: [AidenComposerSuggestion] {
+        guard let query = composerSuggestionQuery else { return [] }
+        switch query.kind {
+        case .skill:
+            let matches = skillCatalog.filter { query.matches($0.name) }
+            let ranked = matches.sorted { query.ranksBefore($0.name, $1.name) }
+            return ranked.prefix(AidenComposerSuggestion.maximumVisibleRows).map { .skill($0) }
+        case .mention:
+            var rows: [AidenComposerSuggestion] = []
+            if canMentionAgents {
+                let agents = (agentRoster?.agents ?? mentionAgents ?? [])
+                    .filter { query.matches($0.label) }
+                    .sorted { query.ranksBefore($0.label, $1.label) }
+                rows.append(contentsOf: agents.map { .agent($0) })
+            }
+            if canMentionFiles {
+                let files = mentionFiles
+                    .filter {
+                        $0.kind == .file
+                            && (query.matches($0.displayPath) || query.matches($0.name))
+                    }
+                    .sorted { query.ranksBefore($0.displayPath, $1.displayPath) }
+                rows.append(contentsOf: files.map { .file($0) })
+            }
+            return Array(rows.prefix(AidenComposerSuggestion.maximumVisibleRows))
+        }
+    }
+
+    /// Selects a palette skill, consuming the `/query` token. The lease is
+    /// redeemed by the Mac at turn admission; the catalog row is never an
+    /// authority by itself.
+    func selectSkillSuggestion(_ entry: AidenRemoteSkillCatalogEntry) {
+        guard entry.available,
+              let query = composerSuggestionQuery, query.kind == .skill else { return }
+        selectedSkill = entry
+        draft.removeSubrange(query.tokenRange)
+    }
+
+    func clearSelectedSkill() {
+        selectedSkill = nil
+    }
+
+    /// Replaces the trailing `@query` token with the chosen display text.
+    /// Insertions are plain user text; the Mac assigns no client-side mention
+    /// semantics beyond what the model already sees.
+    func selectMentionSuggestion(_ suggestion: AidenComposerSuggestion) {
+        guard let query = composerSuggestionQuery, query.kind == .mention else { return }
+        let insertion: String
+        switch suggestion {
+        case .agent(let agent):
+            insertion = "@\(agent.label) "
+        case .file(let entry):
+            insertion = "@\(entry.displayPath) "
+        case .skill:
+            return
+        }
+        draft.replaceSubrange(query.tokenRange, with: insertion)
+    }
+
+    /// Lazy per-open fetch: a trigger kind appearing for the first time kicks
+    /// off its bounded read. Failures may retry on the next palette open; a
+    /// completed read is reused for the chat's lifetime.
+    private func prefetchComposerSuggestionData() {
+        switch composerSuggestionQuery?.kind {
+        case .skill:
+            ensureSkillCatalog()
+        case .mention:
+            ensureMentionAgents()
+            ensureMentionFiles()
+        case nil:
+            // A fresh palette open may retry a failed read.
+            skillCatalogRetryPending = true
+            mentionAgentsRetryPending = true
+            mentionFilesRetryPending = true
+        }
+    }
+
+    private func ensureSkillCatalog() {
+        guard skillCatalogRetryPending, !skillCatalogLoaded, skillCatalogTask == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        skillCatalogRetryPending = false
+        skillCatalogTask = Task { [weak self] in
+            guard let self else { return }
+            defer { skillCatalogTask = nil }
+            do {
+                let catalog = try await coordinator.remoteClient(for: context).chatSkills(chatId: chat.id)
+                guard coordinator.isCurrent(context) else { return }
+                skillCatalog = catalog.skills
+                skillCatalogLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+    }
+
+    private func ensureMentionAgents() {
+        guard canMentionAgents, mentionAgentsRetryPending, !mentionAgentsLoaded,
+              mentionAgentsTask == nil, agentRoster == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        mentionAgentsRetryPending = false
+        mentionAgentsTask = Task { [weak self] in
+            guard let self else { return }
+            defer { mentionAgentsTask = nil }
+            do {
+                let roster = try await coordinator.remoteClient(for: context).agentRoster(chatId: chat.id)
+                guard coordinator.isCurrent(context) else { return }
+                mentionAgents = roster.isAvailable ? roster.agents : []
+                mentionAgentsLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+    }
+
+    private func ensureMentionFiles() {
+        guard canMentionFiles, mentionFilesRetryPending, !mentionFilesLoaded,
+              mentionFilesTask == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        mentionFilesRetryPending = false
+        mentionFilesTask = Task { [weak self] in
+            guard let self else { return }
+            defer { mentionFilesTask = nil }
+            do {
+                let client = try coordinator.remoteClient(for: context)
+                let index = chat.isBotChat
+                    ? try await client.botConversationFiles(chatId: chat.id)
+                    : try await client.workspaceFiles(workspaceId: chat.workspaceId)
+                guard coordinator.isCurrent(context) else { return }
+                mentionFiles = index.entries
+                mentionFilesLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+    }
+
+    /// Destructive: stop the current run, then send the composer contents as a
+    /// new turn once the stream is confirmed terminal. The draft is only
+    /// consumed by the new send; a failed cancel leaves it untouched.
+    /// `isStopping` stays held for the whole operation so the composer controls
+    /// remain inert while the run winds down.
+    func redirectRun() async {
+        guard canControlCurrentRun, !isStopping, !isSubmittingRunInput, !isReadOnlyPresentation, !isRemoved,
+              let streamID = activeStreamID,
               let context = try? coordinator.requestContext(for: instanceId) else { return }
         // Reserve before the cache read yields so simultaneous taps cannot both
         // dispatch, and keep the current run visible until the Mac confirms Stop.
         isStopping = true
         defer { isStopping = false }
-        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id),
-              !isRemoved, coordinator.isCurrent(context), canControlCurrentRun,
-              activeStreamID == expectedStreamID, stream.streamId == expectedStreamID,
-              stream.deviceId == context.deviceId, streamState?.isTerminal != true else { return }
+        guard await cancelStreamOnce(streamID: streamID, context: context) else { return }
         do {
-            let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
-                  streamState?.isTerminal != true else { return }
-            guard status.streamId == stream.streamId, status.chatId == chat.id else {
-                presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
-                return
+            var waited = 0
+            while isStreaming && activeStreamID == streamID && waited < 50 {
+                try await Task.sleep(for: .milliseconds(100))
+                waited += 1
+                guard coordinator.isCurrent(context) else { return }
             }
-            await apply(status, streamID: stream.streamId, context: context, feedbackPolicy: .restoredStream)
-            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
-        } catch let error where aidenIsCancellation(error) {
-            // Cancellation does not prove that the Mac stopped or rejected the
-            // run. Preserve any status or approval received while awaiting it.
-            return
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
-                  streamState?.isTerminal != true else { return }
-            presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
-            coordinator.haptics.play(.error, scope: hapticScope)
+            return
+        }
+        guard coordinator.isCurrent(context) else { return }
+        guard !isStreaming else {
+            presentedError = String(localized: "The run is still stopping. Send your message once it finishes.")
+            return
+        }
+        guard canSend else {
+            presentedError = String(localized: "The run stopped, but your message could not be sent. Check your connection and try again.")
+            return
+        }
+        await send()
+    }
+
+    private func consumeRunInputDraft(_ text: String) {
+        let remaining = AidenRunInputPresentation.consumedDraft(submitted: text, current: draft)
+        guard remaining != draft else { return }
+        draftPersistenceTask?.cancel()
+        suppressesDraftPersistence = true
+        draft = remaining
+        suppressesDraftPersistence = false
+        let clearedDraftGeneration = draftGeneration
+        if let draftSession {
+            Task { [weak self] in
+                guard let self, draftGeneration == clearedDraftGeneration, draft == remaining else { return }
+                _ = try? await draftStore.save(remaining, session: draftSession)
+            }
+        }
+    }
+
+    private func showRunInputReceipt(_ text: String) {
+        runInputReceiptTask?.cancel()
+        runInputReceipt = text
+        runInputReceiptTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.runInputReceipt = nil
         }
     }
 
@@ -2268,6 +2749,55 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
             if pendingApproval == nil {
                 await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+        }
+    }
+
+    /// Resolves the pending question prompt. A `cancelled` request dismisses
+    /// the whole prompt; otherwise `answers` carries one entry per addressed
+    /// question and unaddressed questions are recorded as skipped.
+    func respondToQuestion(
+        _ request: AidenQuestionRespondRequest,
+        promptID: String,
+        idempotencyKey: UUID
+    ) async {
+        guard !isReadOnlyPresentation, isConnected, !isRespondingToQuestion, !isStopping,
+              let question = pendingQuestion, question.id == promptID, question.canRespond else { return }
+        guard question.expiresAt > Date() else {
+            pendingQuestion = nil
+            return
+        }
+        guard let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isRespondingToQuestion = true
+        defer { isRespondingToQuestion = false }
+        pendingQuestion = nil
+        if pendingApproval == nil { streamState = .running }
+        do {
+            let response = try await coordinator.remoteClient(for: context).respondToQuestion(
+                id: question.id,
+                request: request,
+                idempotencyKey: idempotencyKey
+            )
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard response.promptId == question.id else {
+                presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your Mac.")
+                if pendingQuestion == nil {
+                    await restorePendingQuestion(streamID: streamID, context: context)
+                }
+                return
+            }
+            coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "question-response:\(question.id)")
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your Mac.")
+            // Never resurrect the captured card or retry a possibly accepted answer.
+            if pendingQuestion == nil {
+                await restorePendingQuestion(streamID: streamID, context: context)
             }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -2476,8 +3006,16 @@ final class AidenChatViewModel {
     ) async {
         guard !isRemoved, coordinator.isCurrent(context),
               activeStreamID == event.streamId,
-              event.shouldApply,
-              let payload = event.payload else { return }
+              event.shouldApply else { return }
+        if event.type == .questionRequired {
+            await restorePendingQuestion(
+                streamID: event.streamId,
+                context: context,
+                announce: feedbackPolicy.allowsFeedback
+            )
+            return
+        }
+        guard let payload = event.payload else { return }
         switch event.type {
         case .snapshot:
             streamState = .reconciling
@@ -2500,26 +3038,37 @@ final class AidenChatViewModel {
                     break
                 }
                 streamState = state
-                if state != .waitingForApproval { pendingApproval = nil }
-                await liveActivities.updateStatus(instanceID: instanceId, streamID: event.streamId, state: state)
+                if state != .waitingForApproval {
+                    pendingApproval = nil
+                    pendingQuestion = nil
+                }
+                await publishLiveActivityStatus(streamID: event.streamId, state: state)
             }
         case .textDelta:
             liveText += payload.text ?? ""
             streamState = .running
-            await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
+            }
         case .reasoningDelta:
             reasoning += payload.text ?? ""
-            await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
+            }
         case .toolStarted:
             if let id = payload.toolId, let name = payload.name {
                 tools.append(AidenLiveTool(id: id, name: name, status: nil))
             }
-            await liveActivities.toolStarted(name: payload.name, instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.toolStarted(name: payload.name, instanceID: instanceId, streamID: event.streamId)
+            }
         case .toolFinished:
             if let id = payload.toolId, let index = tools.firstIndex(where: { $0.id == id }) {
                 tools[index].status = payload.status
             }
-            await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
+            }
         case .timeline:
             if let timeline = payload.timeline { activityTimeline = timeline }
         case .approvalRequired:
@@ -2530,6 +3079,7 @@ final class AidenChatViewModel {
             )
         case .error:
             pendingApproval = nil
+            pendingQuestion = nil
             // The terminal chat reconciliation renders the durable, fixed-copy
             // outcome inline. Avoid covering that actionable state with a
             // second generic modal alert.
@@ -2552,6 +3102,7 @@ final class AidenChatViewModel {
             await finishStream(expectedStreamID: event.streamId, context: context)
         case .cancelled:
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .cancelled
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -2562,6 +3113,7 @@ final class AidenChatViewModel {
             await finishStream(expectedStreamID: event.streamId, context: context)
         case .done:
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .done
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -2597,6 +3149,7 @@ final class AidenChatViewModel {
             return
         }
         pendingApproval = nil
+        pendingQuestion = nil
         streamState = status.state
         if feedbackPolicy.allowsFeedback,
            status.state == .error || status.state == .interrupted {
@@ -2606,7 +3159,7 @@ final class AidenChatViewModel {
                 dedupeKey: "turn-terminal:\(streamID):error"
             )
         }
-        await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
+        await publishLiveActivityStatus(streamID: streamID, state: status.state)
     }
 
     func restorePendingApproval(
@@ -2640,11 +3193,12 @@ final class AidenChatViewModel {
                 capabilities: approvalCapabilities(for: context)
             ) else {
                 pendingApproval = nil
-                streamState = .reconciling
-                await liveActivities.updateStatus(
-                    instanceID: instanceId,
+                // A pending question prompt shares the waiting_for_approval
+                // status; check its snapshot before declaring a reconcile gap.
+                await restorePendingQuestion(
                     streamID: streamID,
-                    state: .reconciling
+                    context: context,
+                    announce: announce
                 )
                 return
             }
@@ -2658,14 +3212,94 @@ final class AidenChatViewModel {
                 )
             }
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            // A question prompt may be pending alongside the approval; a nil
+            // snapshot simply clears stale card state without touching status.
+            await restorePendingQuestion(
+                streamID: streamID,
+                context: context,
+                reconcilesOnNil: false
+            )
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
                   snapshotGeneration == approvalSnapshotGeneration,
                   pendingApproval == expectedApproval, streamState == expectedState else { return }
             pendingApproval = nil
-            streamState = .reconciling
-            await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+            await restorePendingQuestion(
+                streamID: streamID,
+                context: context,
+                reconcilesOnNil: true,
+                marksStaleOnFailure: true
+            )
+        }
+    }
+
+    /// Restores the pending `ask_user_question` prompt for this stream. The
+    /// Mac projects the wait as `waiting_for_approval`, so this is also the
+    /// fallback when the approval snapshot comes back empty.
+    func restorePendingQuestion(
+        streamID: String,
+        context: AidenRemoteRequestContext,
+        announce: Bool = false,
+        reconcilesOnNil: Bool = true,
+        marksStaleOnFailure: Bool = false
+    ) async {
+        guard coordinator.isCurrent(context), activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        guard supportsQuestionPrompts(for: context) else {
+            pendingQuestion = nil
+            if reconcilesOnNil && pendingApproval == nil {
+                streamState = .reconciling
+                await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
+            }
+            return
+        }
+        questionSnapshotGeneration &+= 1
+        let snapshotGeneration = questionSnapshotGeneration
+        let expectedQuestion = pendingQuestion
+        let expectedState = streamState
+        do {
+            let snapshot = try await coordinator.remoteClient(for: context).streamQuestion(id: streamID)
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == questionSnapshotGeneration,
+                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard let question = AidenPendingQuestionResolution.resolve(
+                snapshot.question,
+                streamId: streamID,
+                chatId: chat.id,
+                canRespond: canRespondToQuestions(for: context)
+            ) else {
+                pendingQuestion = nil
+                if reconcilesOnNil && pendingApproval == nil {
+                    streamState = .reconciling
+                    await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
+                }
+                return
+            }
+            pendingQuestion = question
+            streamState = .waitingForApproval
+            await publishLiveActivityStatus(streamID: streamID, state: .waitingForApproval)
+            if announce {
+                coordinator.haptics.play(
+                    .warning,
+                    scope: hapticScope,
+                    dedupeKey: "question-required:\(question.id)"
+                )
+            }
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == questionSnapshotGeneration,
+                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            pendingQuestion = nil
+            if reconcilesOnNil && pendingApproval == nil {
+                streamState = .reconciling
+                if marksStaleOnFailure {
+                    await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                } else {
+                    await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
+                }
+            }
         }
     }
 
@@ -2684,6 +3318,29 @@ final class AidenChatViewModel {
                     && installation.hasNegotiatedAccess(to: .botWrite))),
             canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
         )
+    }
+
+    /// The question snapshot route exists only when the Mac advertises the
+    /// feature; without it the stream stays approval-only and older snapshots
+    /// are never requested.
+    private func supportsQuestionPrompts(
+        for context: AidenRemoteRequestContext
+    ) -> Bool {
+        coordinator.isCurrent(context) && coordinator.server?.supportsQuestionPrompts == true
+    }
+
+    private func canRespondToQuestions(
+        for context: AidenRemoteRequestContext
+    ) -> Bool {
+        guard coordinator.isCurrent(context),
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == context.instanceId,
+              installation.deviceId == context.deviceId else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .questionsRespond)
+            && (chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+                && installation.hasNegotiatedAccess(to: .botWrite)))
     }
 
     @discardableResult
@@ -2882,6 +3539,7 @@ final class AidenChatViewModel {
         tools = []
         activityTimeline = nil
         pendingApproval = nil
+        pendingQuestion = nil
         activeStreamID = nil
     }
 }
@@ -3180,6 +3838,7 @@ struct AidenChatDetailView: View {
             model.startProgressObservation()
         }
         .task(id: botToolsSessionIdentity) {
+            model.readAloud.stop()
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
@@ -3204,12 +3863,12 @@ struct AidenChatDetailView: View {
             AidenChatProgressSheet(kind: progressSheet, model: model)
         }
         .alert("Aiden On The Go", isPresented: Binding(
-            get: { model.presentedError != nil },
-            set: { if !$0 { model.presentedError = nil } }
+            get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
+            set: { if !$0 { model.presentedError = nil; model.readAloud.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { model.presentedError = nil }
+            Button("OK", role: .cancel) { model.presentedError = nil; model.readAloud.errorMessage = nil }
         } message: {
-            Text(model.presentedError ?? "The operation could not be completed.")
+            Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
         }
         .alert("Set Up Image Understanding", isPresented: $model.needsBotVisionSetup) {
             if let botID = model.chat.botId {
@@ -3221,16 +3880,23 @@ struct AidenChatDetailView: View {
         }
         .onAppear {
             model.setHapticsActive(true)
+            model.setChatForegrounded(true)
+        }
+        .onChange(of: model.readAloudCandidateID) { _, candidate in
+            if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.startProgressObservation()
             } else {
+                model.readAloud.stop()
                 model.stopProgressObservation()
             }
         }
         .onDisappear {
+            model.readAloud.stop()
             model.setHapticsActive(false)
+            model.setChatForegrounded(false)
             model.stopProgressObservation()
             attachmentPicker.reset()
         }
@@ -3343,9 +4009,18 @@ struct AidenChatDetailView: View {
             alignment: .leading,
             spacing: presentationStyle == .botMessages ? 3 : 18
         ) {
-            ForEach(Array(model.chat.messages.enumerated()), id: \.element.id) { index, message in
-                messageRow(message, at: index)
-            }
+            // Settled rows live in a child view that tracks only `chat`, so
+            // per-token liveText updates never re-evaluate finished messages.
+            // `chat` is a value snapshot: comparing model.chat would read the
+            // same live property on both sides of == and never differ.
+            AidenSettledMessageRows(
+                model: model,
+                chat: model.chat,
+                presentationStyle: presentationStyle,
+                readAloudCandidateID: model.readAloudCandidateID,
+                readAloudActiveID: model.readAloud.activeMessageID
+            )
+            .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
@@ -3356,21 +4031,6 @@ struct AidenChatDetailView: View {
         }
         .padding(.horizontal)
         .padding(.top, 20)
-    }
-
-    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
-        let previous = index > 0 ? model.chat.messages[index - 1] : nil
-        let isBotMessage = presentationStyle == .botMessages
-        let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
-
-        return AidenMessageView(
-            message: message,
-            presentationStyle: presentationStyle,
-            loadAttachmentImage: { attachment in
-                await model.attachmentImageData(for: attachment)
-            }
-        )
-        .padding(.top, topPadding)
     }
 
     private var composer: some View {
@@ -3733,11 +4393,65 @@ private struct AidenComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
-private struct AidenMessageView: View {
+private struct AidenSettledMessageRows: View, Equatable {
+    let model: AidenChatViewModel
+    let chat: AidenChat
+    let presentationStyle: AidenChatPresentationStyle
+    /// Value snapshots of the Read Aloud state the rows render, so a playback
+    /// change re-evaluates the rows even though `model` compares equal.
+    let readAloudCandidateID: String?
+    let readAloudActiveID: String?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // `model` is a shared reference (same pointer on both sides of every
+        // comparison), so equality must cover the value-typed snapshots the
+        // body renders — `chat`, the Read Aloud state — and the presentation style.
+        lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
+            lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
+            lhs.readAloudActiveID == rhs.readAloudActiveID
+    }
+
+    var body: some View {
+        ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
+            messageRow(message, at: index)
+        }
+    }
+
+    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
+        let previous = index > 0 ? chat.messages[index - 1] : nil
+        let isBotMessage = presentationStyle == .botMessages
+        let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
+
+        return AidenMessageView(
+            message: message,
+            presentationStyle: presentationStyle,
+            loadAttachmentImage: { attachment in
+                await model.attachmentImageData(for: attachment)
+            },
+            readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
+            readAloudActive: readAloudActiveID == message.id
+        )
+        .equatable()
+        .padding(.top, topPadding)
+    }
+}
+
+private struct AidenMessageView: View, Equatable {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
+    var readAloudAction: (() -> Void)? = nil
+    var readAloudActive = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The loader closure captures the stable view-model; identity churn on
+        // it must not force settled rows to re-render on every streamed token.
+        // The Read Aloud action is compared by presence for the same reason.
+        lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle &&
+            (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
+            lhs.readAloudActive == rhs.readAloudActive
+    }
 
     private var botReply: AidenBotReplyProjection? {
         guard presentationStyle == .botMessages, message.role == .assistant else { return nil }
@@ -3770,6 +4484,21 @@ private struct AidenMessageView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 4) {
+            if let readAloudAction {
+                HStack(spacing: 16) {
+                    Button { UIPasteboard.general.string = AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) } label: {
+                        Image(systemName: "doc.on.doc")
+                    }.accessibilityLabel("Copy response")
+                    Button(action: readAloudAction) {
+                        Image(systemName: readAloudActive ? "stop.fill" : "speaker.wave.2")
+                    }.accessibilityLabel(readAloudActive ? "Stop reading aloud" : "Read response aloud")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .frame(minHeight: 44)
+            }
+        }
         .contextMenu {
             if let copyText = AidenMessageActionContent.copyText(
                 for: message,
@@ -3794,6 +4523,7 @@ private struct AidenMessageView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
+
     }
 
     private var messageContent: some View {
@@ -5114,6 +5844,23 @@ private struct AidenLiveResponseView: View {
                 .id(approval.id)
             }
 
+            if let question = model.pendingQuestion {
+                AidenQuestionCard(
+                    prompt: question,
+                    onSubmit: { request in
+                        Task {
+                            await model.respondToQuestion(
+                                request,
+                                promptID: question.id,
+                                idempotencyKey: UUID()
+                            )
+                        }
+                    }
+                )
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
+                .id(question.id)
+            }
+
             if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
@@ -5277,6 +6024,218 @@ private struct AidenApprovalCard: View {
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
                     }
+                }
+            }
+        }
+        .padding(12)
+        .background(palette.raised, in: shape)
+        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Interactive `ask_user_question` card. Each question offers its option list
+/// plus a custom-answer field; a non-empty custom draft wins over selections.
+/// Submit requires at least one addressed question; skipping the card resolves
+/// the whole prompt as cancelled.
+private struct AidenQuestionCard: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    let prompt: AidenPendingQuestion
+    let onSubmit: (AidenQuestionRespondRequest) -> Void
+
+    @State private var selections: [Int: Set<String>] = [:]
+    @State private var customDrafts: [Int: String] = [:]
+    @State private var customOpen: Set<Int> = []
+
+    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    private var answers: [AidenQuestionAnswer] {
+        AidenQuestionAnswerDraft.answers(
+            for: prompt.questions,
+            selections: selections,
+            customAnswers: customDrafts
+        )
+    }
+
+    private func toggle(_ label: String, questionIndex: Int, multiSelect: Bool) {
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections,
+            questionIndex: questionIndex,
+            label: label,
+            multiSelect: multiSelect
+        )
+    }
+
+    private func binding(for index: Int) -> Binding<String> {
+        Binding(
+            get: { customDrafts[index] ?? "" },
+            set: { customDrafts[index] = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 32, height: 32)
+                    .background(palette.accent.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Aiden needs your input")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+
+                    Text(prompt.questions.count > 1
+                         ? String(localized: "Answer what you can — unanswered questions are skipped.")
+                         : String(localized: "Choose an option or type your own answer."))
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text(question.header)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(palette.canvas, in: Capsule())
+                        if question.multiSelect {
+                            Text("Select all that apply")
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondary)
+                        }
+                    }
+                    .accessibilityHidden(true)
+
+                    Text(question.question)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(question.options, id: \.label) { option in
+                        let selected = selections[index]?.contains(option.label) == true
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                                toggle(option.label, questionIndex: index, multiSelect: question.multiSelect)
+                            }
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: question.multiSelect
+                                      ? (selected ? "checkmark.square.fill" : "square")
+                                      : (selected ? "checkmark.circle.fill" : "circle"))
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(selected ? palette.accent : palette.secondary)
+                                    .frame(width: 20)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label)
+                                        .font(.callout)
+                                        .foregroundStyle(palette.foreground)
+                                    Text(option.description)
+                                        .font(.caption)
+                                        .foregroundStyle(palette.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selected ? palette.accent.opacity(0.10) : palette.canvas,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                        .accessibilityLabel(option.label)
+                        .accessibilityValue(selected
+                            ? String(localized: "Selected")
+                            : String(localized: "Not selected"))
+                        .accessibilityHint(option.description)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+
+                    if customOpen.contains(index) {
+                        TextField(
+                            String(localized: "Type your answer"),
+                            text: binding(for: index),
+                            axis: .vertical
+                        )
+                            .font(.callout)
+                            .lineLimit(1...4)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .accessibilityLabel(String(localized: "Custom answer"))
+                            .accessibilityHint(String(localized: "Overrides the selected options for this question"))
+                    } else {
+                        Button {
+                            customOpen.insert(index)
+                        } label: {
+                            Label("Type something.", systemImage: "text.cursor")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(palette.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint(String(localized: "Shows a field for a custom answer"))
+                    }
+                }
+                .accessibilityElement(children: .contain)
+            }
+
+            if !prompt.canRespond {
+                Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+
+                    Button {
+                        onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
+                    } label: {
+                        Text("Skip")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.foreground)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .aidenApprovalActionGlass()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 5)
+                    .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
+
+                    Button {
+                        onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
+                    } label: {
+                        Text("Submit")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.canvas)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .aidenApprovalActionGlass(tint: palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 5)
+                    .disabled(answers.isEmpty)
+                    .opacity(answers.isEmpty ? 0.5 : 1)
+                    .accessibilityHint(answers.isEmpty
+                        ? String(localized: "Select an option or type an answer first")
+                        : String(localized: "Sends your answers to your Mac"))
                 }
             }
         }
@@ -5528,6 +6487,7 @@ private struct AidenComposerView: View {
     let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
+    @State private var redirectConfirmPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -5558,6 +6518,45 @@ private struct AidenComposerView: View {
                 }
                 .accessibilityLabel("Attachments")
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if let selectedSkill = model.selectedSkill {
+                HStack(spacing: 6) {
+                    Image(systemName: "slash.circle")
+                        .font(.caption.weight(.medium))
+                    Text("/\(selectedSkill.name)")
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Button {
+                        model.clearSelectedSkill()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .accessibilityLabel("Remove skill \(selectedSkill.name)")
+                }
+                .foregroundStyle(palette.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(palette.secondary.opacity(0.12), in: Capsule())
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Skill \(selectedSkill.name) selected")
+            }
+
+            if !model.composerSuggestions.isEmpty {
+                AidenComposerSuggestionList(
+                    suggestions: model.composerSuggestions,
+                    onSelect: { suggestion in
+                        switch suggestion {
+                        case .skill(let entry):
+                            model.selectSkillSuggestion(entry)
+                        case .agent, .file:
+                            model.selectMentionSuggestion(suggestion)
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             TextField("Message Aiden", text: $model.draft, axis: .vertical)
@@ -5706,6 +6705,7 @@ private struct AidenComposerView: View {
                 Button {
                     Task {
                         guard !model.isReadOnlyPresentation else { return }
+                        model.readAloud.stop()
                         await voiceInput.toggle(
                             currentDraft: model.draft,
                             updateDraft: { model.draft = $0 },
@@ -5730,6 +6730,46 @@ private struct AidenComposerView: View {
                 .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
+                    if model.showsRunInputOptions {
+                        Menu {
+                            Button {
+                                Task { await model.submitRunInput(.steer) }
+                            } label: {
+                                Label("Steer now", systemImage: "arrow.triangle.turn.up.right.circle")
+                            }
+                            Button {
+                                Task { await model.submitRunInput(.queue) }
+                            } label: {
+                                Label("Queue to run next", systemImage: "text.append")
+                            }
+                            Divider()
+                            Button(role: .destructive) {
+                                redirectConfirmPresented = true
+                            } label: {
+                                Label("Redirect…", systemImage: "arrow.uturn.right")
+                            }
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.headline.bold())
+                                .frame(width: 30, height: 30)
+                                .background(runInputButtonBackground, in: Circle())
+                                .foregroundStyle(runInputButtonForeground)
+                                .frame(width: 44, height: 44)
+                        }
+                        .disabled(!model.canSubmitRunInput)
+                        .accessibilityLabel("Run input options")
+                        .accessibilityHint("Steer, queue, or redirect the current run")
+                        .confirmationDialog(
+                            "Stop this run and send your message as a new request?",
+                            isPresented: $redirectConfirmPresented,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Stop and send", role: .destructive) {
+                                Task { await model.redirectRun() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        }
+                    }
                     Button { Task { await model.stop() } } label: {
                         Image(systemName: "stop.fill")
                             .frame(width: 30, height: 30)
@@ -5758,6 +6798,13 @@ private struct AidenComposerView: View {
                 }
             }
 
+            if let receipt = model.runInputReceipt {
+                Text(receipt)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .transition(.opacity)
+            }
+
             if let error = voiceInput.errorMessage, !voiceInput.isListening {
                 Text(error)
                     .font(.caption)
@@ -5781,11 +6828,15 @@ private struct AidenComposerView: View {
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
+            model.readAloud.stop()
             await voiceInput.toggle(
                 currentDraft: model.draft,
                 updateDraft: { model.draft = $0 },
                 macTranscriber: model.transcribeMacSpeech
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
+            voiceInput.cancelDiscardingRecording()
         }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
@@ -5810,6 +6861,15 @@ private struct AidenComposerView: View {
 
     private var sendButtonForeground: Color {
         model.canSend ? palette.canvas : palette.secondary
+    }
+
+    private var runInputButtonBackground: Color {
+        if model.canSubmitRunInput { return palette.accent }
+        return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
+    }
+
+    private var runInputButtonForeground: Color {
+        model.canSubmitRunInput ? palette.canvas : palette.secondary
     }
 
     private var selectedModelAccessibilityValue: String {
@@ -5898,5 +6958,227 @@ private struct AidenComposerGlassModifier: ViewModifier {
 private extension View {
     func aidenComposerGlass(enabled: Bool = true) -> some View {
         modifier(AidenComposerGlassModifier(enabled: enabled))
+    }
+}
+
+/// Compact composer palette for `/` skills and `@` roster/file mentions. The
+/// panel is presentation only: skills hand the Mac an opaque lease, mentions
+/// insert display text. It inherits the composer glass surface rather than
+/// introducing a second floating container.
+private struct AidenComposerSuggestionList: View {
+    @Environment(\.aidenPalette) private var palette
+    let suggestions: [AidenComposerSuggestion]
+    let onSelect: (AidenComposerSuggestion) -> Void
+
+    private let maximumRows = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(suggestions.prefix(maximumRows))) { suggestion in
+                Button {
+                    onSelect(suggestion)
+                } label: {
+                    row(for: suggestion)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDisabled(suggestion))
+                if suggestion.id != suggestions.prefix(maximumRows).last?.id {
+                    Divider().opacity(0.35)
+                }
+            }
+        }
+        .background(palette.raised.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func isDisabled(_ suggestion: AidenComposerSuggestion) -> Bool {
+        if case .skill(let entry) = suggestion { return !entry.available }
+        return false
+    }
+
+    @ViewBuilder
+    private func row(for suggestion: AidenComposerSuggestion) -> some View {
+        switch suggestion {
+        case .skill(let entry):
+            HStack(spacing: 8) {
+                Image(systemName: "slash.circle")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("/\(entry.name)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(entry.available ? palette.foreground : palette.secondary)
+                        .lineLimit(1)
+                    Text(entry.available ? entry.description : (entry.unavailableReason ?? ""))
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Text(entry.source.rawValue)
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                entry.available
+                    ? "Skill \(entry.name)"
+                    : "Skill \(entry.name), unavailable"
+            )
+        case .agent(let agent):
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.square")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                Text(agent.label)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(palette.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("agent")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Mention agent \(agent.label)")
+        case .file(let entry):
+            HStack(spacing: 8) {
+                Image(systemName: "doc")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                Text(entry.displayPath)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(palette.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("file")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Mention file \(entry.displayPath)")
+        }
+    }
+}
+
+extension Notification.Name {
+    static let aidenStopDictationForReadAloud = Notification.Name("AidenStopDictationForReadAloud")
+}
+
+@MainActor @Observable
+final class AidenReadAloudPlayback {
+    private(set) var activeMessageID: String?
+    var errorMessage: String?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var cancelRemote: (() -> Void)?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    func stop() {
+        generation += 1
+        task?.cancel(); task = nil
+        player?.stop(); player = nil
+        let wasActive = activeMessageID != nil
+        activeMessageID = nil
+        cancelRemote?(); cancelRemote = nil
+        for token in observers { NotificationCenter.default.removeObserver(token) }
+        observers.removeAll()
+        if wasActive { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+    }
+
+    func start(client: AidenRemoteClient, chatID: String, messageID: String, current: @escaping @MainActor () -> Bool) {
+        stop()
+        let epoch = generation
+        let requestID = UUID().uuidString
+        activeMessageID = messageID; errorMessage = nil
+        cancelRemote = { Task { try? await client.stopReadAloud(chatId: chatID, requestId: requestID) } }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.stop() }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+                Task { @MainActor in self?.stop() }
+            }
+        })
+        task = Task { [weak self] in
+            guard let self else { return }
+            @MainActor func check() throws {
+                guard !Task.isCancelled, self.generation == epoch, current() else { throw CancellationError() }
+            }
+            defer { if self.generation == epoch { self.stop() } }
+            do {
+                try check()
+                let status = try await client.readAloudStatus(chatId: chatID)
+                try check()
+                guard status.enabled, status.ready else {
+                    self.errorMessage = AidenReadAloudStatus.setupGuidance; return
+                }
+                guard let source = status.source, source.chatId == chatID, source.messageId == messageID else { throw AidenReadAloudFailure.unavailable }
+                var job = try await client.startReadAloud(chatId: chatID, request: .init(requestId: requestID, source: source, settingsRevision: status.settingsRevision))
+                try check()
+                let jobID = job.jobId
+                var stalledPolls = 0
+                while job.phase != "completed" {
+                    guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.phase != "cancelled", stalledPolls < AidenReadAloudJob.maximumStalledPolls else {
+                        throw AidenReadAloudFailure.unavailable
+                    }
+                    if job.phase == "failed" {
+                        self.errorMessage = job.error?.message ?? "Read Aloud could not generate this response. Check the desktop settings."
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(500)); try check()
+                    let update = try await client.readAloudStatus(chatId: chatID)
+                    try check()
+                    guard update.ready, update.source?.sourceRevision == source.sourceRevision, let next = update.job else { throw AidenReadAloudFailure.unavailable }
+                    stalledPolls = AidenReadAloudJob.nextStalledPollCount(previousReady: job.readySegments, currentReady: next.readySegments, stalled: stalledPolls)
+                    job = next
+                }
+                guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.readySegments == job.totalSegments else { throw AidenReadAloudFailure.invalidAudio }
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
+                try AVAudioSession.sharedInstance().setActive(true)
+                var totalBytes = 0
+                for segment in 0..<job.totalSegments {
+                    var data = Data(); var expectedTotal: Int?
+                    while true {
+                        let chunk = try await client.readAloudAudio(chatId: chatID, jobId: jobID, segment: segment, offset: data.count)
+                        try check()
+                        data.append(try chunk.validatedBytes(offset: data.count, expectedTotal: expectedTotal))
+                        expectedTotal = chunk.segmentBytes
+                        if chunk.complete { break }
+                    }
+                    totalBytes += data.count
+                    guard totalBytes <= 32 * 1_024 * 1_024 else { throw AidenReadAloudFailure.invalidAudio }
+                    let audio = try AVAudioPlayer(data: data)
+                    self.player = audio
+                    guard audio.play() else { throw AidenReadAloudFailure.invalidAudio }
+                    var ticks = 0
+                    while audio.isPlaying {
+                        try await Task.sleep(for: .milliseconds(200)); try check()
+                        ticks += 1
+                        if ticks % 10 == 0 {
+                            let update = try await client.readAloudStatus(chatId: chatID)
+                            try check()
+                            guard update.ready, update.source?.sourceRevision == source.sourceRevision, update.job?.jobId == jobID, update.job?.phase == "completed" else { throw AidenReadAloudFailure.unavailable }
+                        }
+                    }
+                    self.player = nil
+                }
+            } catch is CancellationError {
+                // Navigation, backgrounding and replacement never retry synthesis.
+            } catch {
+                if self.generation == epoch && current() { self.errorMessage = error.localizedDescription }
+            }
+        }
     }
 }

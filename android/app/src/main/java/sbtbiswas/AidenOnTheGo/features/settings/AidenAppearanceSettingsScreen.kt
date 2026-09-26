@@ -31,6 +31,11 @@ import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.config.*
+import sbtbiswas.AidenOnTheGo.models.AidenReadAloudStatus
+import sbtbiswas.AidenOnTheGo.models.READ_ALOUD_SETUP_GUIDANCE
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
 import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -51,6 +56,24 @@ fun AidenAppearanceSettingsScreen(
     val voiceMode by voiceInputStore.mode.collectAsState()
     var speechStatus by remember { mutableStateOf<AidenSpeechStatus?>(null) }
     var speechError by remember { mutableStateOf<String?>(null) }
+    var readAloudStatus by remember(remoteClient) { mutableStateOf<AidenReadAloudStatus?>(null) }
+    var readAloudError by remember(remoteClient) { mutableStateOf<String?>(null) }
+    // TODO: mobile configuration is deferred; only the desktop may enable TTS.
+    suspend fun refreshReadAloud() {
+        readAloudStatus = runCatching { remoteClient?.readAloudStatus() }
+            .onSuccess { readAloudError = null }
+            .onFailure { readAloudError = "Read Aloud is unavailable. Connect to an updated desktop app." }
+            .getOrNull()
+    }
+    LaunchedEffect(remoteClient) { refreshReadAloud() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, remoteClient) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) scope.launch { refreshReadAloud() }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     var memorySettings by remember { mutableStateOf<AidenMemorySettings?>(null) }
     var memoryError by remember { mutableStateOf<String?>(null) }
     var memorySaving by remember { mutableStateOf(false) }
@@ -123,6 +146,19 @@ fun AidenAppearanceSettingsScreen(
             }
             Spacer(modifier = Modifier.height(22.dp))
         }
+
+        Text("Read Aloud", style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold, color = palette.foreground)
+        Spacer(Modifier.height(8.dp))
+        Surface(color = palette.raised, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(if (readAloudStatus?.ready == true) "Ready on your Mac" else "Set up on your Mac", color = palette.foreground)
+                Text(READ_ALOUD_SETUP_GUIDANCE, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                readAloudError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.secondary) }
+                TextButton(onClick = { scope.launch { refreshReadAloud() } }) { Text("Refresh status") }
+            }
+        }
+        Spacer(Modifier.height(22.dp))
 
         Text(
             text = "Memory",

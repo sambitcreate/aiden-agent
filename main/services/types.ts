@@ -729,6 +729,8 @@ export interface AppSettings {
   telegramActiveProfile?: string;
   /** Provision and route private-chat topics to explicit Aiden workspace targets. */
   telegramThreadedMode?: boolean;
+  /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
+  tts?: import("../../renderer/shared/tts.js").TtsSettingsV1;
 }
 
 export interface TelegramProfileSettings {

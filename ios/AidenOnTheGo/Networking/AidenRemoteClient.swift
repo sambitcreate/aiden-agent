@@ -73,6 +73,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSummariesFeature = "chat-summaries-v1"
     static let chatTasksFeature = "chat-tasks-v1"
     static let chatAgentsFeature = "chat-agents-v1"
+    static let chatRunInputFeature = "chat-run-input-v1"
+    static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
+    static let chatSkillsFeature = "chat-skills-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -204,6 +207,18 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatAgents: Bool {
         features.contains(Self.chatAgentsFeature)
+    }
+
+    var supportsChatRunInput: Bool {
+        features.contains(Self.chatRunInputFeature)
+    }
+
+    var supportsQuestionPrompts: Bool {
+        features.contains(Self.chatQuestionPromptsFeature)
+    }
+
+    var supportsChatSkills: Bool {
+        features.contains(Self.chatSkillsFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -719,7 +734,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     func updateDeviceCapabilities(
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
-        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        let allowed = Set([
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+        ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {
@@ -763,6 +780,13 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteClientError.invalidResponse
         }
         return value
+    }
+
+    /// Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+    /// the Bot's currently admitted skills; the catalog is presentation input
+    /// only — the Mac re-validates every lease redemption at turn admission.
+    func chatSkills(chatId: String) async throws -> AidenRemoteSkillCatalog {
+        try await send(method: "GET", path: ["chats", chatId, "skills"])
     }
 
     func updateDeviceIdentity(name: String) async throws {
@@ -1770,6 +1794,22 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    /// Remote Slice 2: submits mid-flight input bound to the displayed stream.
+    /// The Mac persists the user message before Pi queue admission; callers
+    /// must pass a stable request UUID so retries replay the original outcome.
+    func submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenStreamInputResult {
+        try await send(
+            method: "POST",
+            path: ["streams", id, "inputs"],
+            body: input,
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+    }
+
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -1779,6 +1819,27 @@ final class AidenRemoteClient: @unchecked Sendable {
             method: "POST",
             path: ["approvals", id, "respond"],
             body: ApprovalRequest(decision: decision),
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+    }
+
+    /// Aiden On The Go pending-question snapshot. The stream-level route is
+    /// additive; a `nil` question means the prompt resolved or expired.
+    func streamQuestion(id: String) async throws -> AidenStreamQuestionSnapshot {
+        try await send(method: "GET", path: ["streams", id, "question"])
+    }
+
+    /// Resolves one pending prompt owned by this device. Callers must pass a
+    /// stable request UUID so a transport retry replays the original outcome.
+    func respondToQuestion(
+        id: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenQuestionRespondResponse {
+        try await send(
+            method: "POST",
+            path: ["questions", id, "respond"],
+            body: request,
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }
@@ -2260,5 +2321,88 @@ final class AidenRemoteClient: @unchecked Sendable {
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }
+    }
+}
+
+
+// Playback-only contract. TODO: mobile enablement/configuration is a future feature.
+struct AidenReadAloudSource: Codable, Sendable {
+    let chatId: String
+    let messageId: String
+    let sourceRevision: String
+}
+struct AidenReadAloudStart: Encodable, Sendable {
+    let requestId: String
+    let source: AidenReadAloudSource
+    let settingsRevision: String
+}
+struct AidenReadAloudStop: Encodable, Sendable { let requestId: String }
+struct AidenReadAloudAcknowledgement: Decodable { let ok: Bool }
+struct AidenReadAloudError: Codable, Sendable { let message: String }
+struct AidenReadAloudJob: Codable, Sendable {
+    // Server gives each segment 60 seconds; allow 120 seconds without progress.
+    static let maximumStalledPolls = 240
+    static func nextStalledPollCount(previousReady: Int, currentReady: Int, stalled: Int) -> Int {
+        currentReady > previousReady ? 0 : stalled + 1
+    }
+    let jobId: String
+    let chatId: String?
+    let phase: String
+    let totalSegments: Int
+    let readySegments: Int
+    let error: AidenReadAloudError?
+    var isValid: Bool {
+        !jobId.isEmpty && jobId.utf8.count <= 128 && totalSegments > 0 && totalSegments <= 256 &&
+        readySegments >= 0 && readySegments <= totalSegments &&
+        ["preparing", "generating", "buffering", "paused", "completed", "cancelled", "failed"].contains(phase)
+    }
+}
+struct AidenReadAloudStatus: Codable, Sendable {
+    let enabled: Bool
+    let ready: Bool
+    let settingsRevision: String
+    let source: AidenReadAloudSource?
+    let job: AidenReadAloudJob?
+    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+}
+struct AidenReadAloudAudio: Codable, Sendable {
+    let bytesBase64: String
+    let mimeType: String
+    let sampleRate: Int
+    let channels: Int
+    let segmentBytes: Int
+    let nextOffset: Int
+    let complete: Bool
+    func validatedBytes(offset: Int, expectedTotal: Int?) throws -> Data {
+        guard bytesBase64.utf8.count <= 87_384, let data = Data(base64Encoded: bytesBase64),
+              !data.isEmpty, data.count <= 65_536, mimeType == "audio/wav",
+              sampleRate == 24_000, channels == 1, segmentBytes > 0, segmentBytes <= 8 * 1_024 * 1_024,
+              expectedTotal == nil || expectedTotal == segmentBytes,
+              nextOffset == offset + data.count, nextOffset <= segmentBytes,
+              complete == (nextOffset == segmentBytes) else { throw AidenReadAloudFailure.invalidAudio }
+        return data
+    }
+}
+enum AidenReadAloudFailure: LocalizedError {
+    case invalidAudio, unavailable
+    var errorDescription: String? {
+        switch self {
+        case .invalidAudio: return "Read Aloud received invalid audio. It will not retry generation automatically."
+        case .unavailable: return "This soundbite is unavailable. It will not be generated again automatically."
+        }
+    }
+}
+extension AidenRemoteClient {
+    func readAloudStatus(chatId: String? = nil) async throws -> AidenReadAloudStatus {
+        try await send(method: "GET", path: chatId.map { ["chats", $0, "read-aloud"] } ?? ["read-aloud"])
+    }
+    func startReadAloud(chatId: String, request: AidenReadAloudStart) async throws -> AidenReadAloudJob {
+        try await send(method: "POST", path: ["chats", chatId, "read-aloud"], body: request)
+    }
+    func stopReadAloud(chatId: String, requestId: String) async throws {
+        let _: AidenReadAloudAcknowledgement = try await send(method: "POST", path: ["chats", chatId, "read-aloud", "stop"], body: AidenReadAloudStop(requestId: requestId))
+    }
+    func readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int) async throws -> AidenReadAloudAudio {
+        try await send(method: "GET", path: ["chats", chatId, "read-aloud", "audio", jobId, String(segment), String(offset)], maximumResponseBytes: 100_000)
     }
 }

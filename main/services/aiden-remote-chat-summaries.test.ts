@@ -304,7 +304,7 @@ test("summary query enforces chat:read, defaults, and hard bounds over HTTP", as
   const serverProjection = await (await fetch(`${base}/server`, {
     headers,
   })).json() as { features?: string[] };
-  assert.deepEqual(serverProjection.features, ["chat-summaries-v1"]);
+  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-skills-v1"]);
 });
 
 test("pathological synthetic history keeps summary responses bounded without payload reads", async () => {

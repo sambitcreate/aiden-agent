@@ -7,6 +7,62 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
+        for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
+            let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
+                outcome: .init(status: status, category: nil, attempts: nil, retryExhausted: nil), createdAt: Date())
+            XCTAssertFalse(message.isReadAloudEligible)
+        }
+        XCTAssertTrue(AidenChatMessage(id: "a", role: .assistant, text: "answer", createdAt: Date()).isReadAloudEligible)
+        XCTAssertFalse(AidenChatMessage(id: "u", role: .user, text: "question", createdAt: Date()).isReadAloudEligible)
+    }
+    func testReadAloudProgressWatchdogAllowsLongJobsButBoundsStalls() {
+        var stalled = 0
+        for poll in 1...3_000 {
+            stalled = AidenReadAloudJob.nextStalledPollCount(previousReady: (poll - 1) / 100, currentReady: poll / 100, stalled: stalled)
+            XCTAssertLessThan(stalled, AidenReadAloudJob.maximumStalledPolls)
+        }
+        for _ in 0..<AidenReadAloudJob.maximumStalledPolls {
+            stalled = AidenReadAloudJob.nextStalledPollCount(previousReady: 30, currentReady: 30, stalled: stalled)
+        }
+        XCTAssertEqual(stalled, AidenReadAloudJob.maximumStalledPolls)
+    }
+    func testUnpricedSpeechDoesNotDisplayFreeHostedCost() {
+        func totals(costed: Int) -> AidenUsageTotals {
+            .init(requests: 2, completedRequests: 1, failedRequests: 1, cancelledRequests: 0,
+                reportedTokenRequests: 1, unmeteredRequests: 1, localRequests: 0, costedRequests: costed,
+                unpricedHostedRequests: 1, hostedCostUsd: costed == 0 ? 0 : 0.2, activeDays: 1,
+                currentStreak: 1, longestStreak: 1,
+                tokens: .init(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, reasoning: 0, total: 0))
+        }
+        XCTAssertEqual(totals(costed: 0).hostedCostSummary, "Cost unavailable")
+        XCTAssertTrue(totals(costed: 1).hostedCostSummary.contains("1 requests unpriced"))
+    }
+    func testReadAloudSharedFixtureAndBoundedAudio() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        struct Fixture: Decodable { let readAloudStatus: AidenReadAloudStatus; let readAloudAudio: AidenReadAloudAudio }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertTrue(fixture.readAloudStatus.enabled)
+        XCTAssertTrue(fixture.readAloudStatus.ready)
+        XCTAssertEqual(fixture.readAloudStatus.source?.chatId, "chat-1")
+        XCTAssertEqual(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: nil), Data([1, 2]))
+        XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 1, expectedTotal: nil))
+        XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: 99))
+        XCTAssertTrue(AidenReadAloudStatus.setupGuidance.contains("desktop"))
+    }
+    func testReadAloudRejectsInvalidAudioAndUnknownJobPhases() throws {
+        let invalid = AidenReadAloudAudio(bytesBase64: "AQI=", mimeType: "audio/wav", sampleRate: 24000, channels: 1,
+            segmentBytes: 2, nextOffset: 2, complete: false)
+        XCTAssertThrowsError(try invalid.validatedBytes(offset: 0, expectedTotal: nil))
+        XCTAssertFalse(AidenReadAloudJob(jobId: "job", chatId: "chat", phase: "unknown", totalSegments: 1, readySegments: 1, error: nil).isValid)
+        XCTAssertFalse(AidenReadAloudJob(jobId: "job", chatId: "chat", phase: "completed", totalSegments: 257, readySegments: 257, error: nil).isValid)
+    }
+    @MainActor func testReadAloudStopIsIdempotent() {
+        let player = AidenReadAloudPlayback()
+        player.stop(); player.stop()
+        XCTAssertNil(player.activeMessageID)
+    }
+
     func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
         let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
         XCTAssertTrue(file.isValid(toolName: "write_file"))
@@ -185,6 +241,55 @@ final class AidenChatTests: XCTestCase {
 
         XCTAssertTrue(AidenProgressPresentation.showsAgentChip(invalid))
         XCTAssertFalse(AidenProgressPresentation.showsAgentChip(unsupported))
+    }
+
+    @MainActor
+    func testProgressChipsKeepFullSizeTargetsAndRenderChromeFallbacks() throws {
+        let progress = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatTaskProgress.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[{"id":1,"subject":"Done","status":"completed"},{"id":2,"subject":"Working","status":"in_progress","activeForm":"Working"}]}"#.utf8
+            )
+        )
+        let roster = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[{"agentId":"agent-1","depth":1,"revision":1,"role":"scout","label":"Scouting","taskPreview":"Survey","state":"running","startedAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","modelId":"model","turns":1,"tools":1,"tokens":10}]}"#.utf8
+            )
+        )
+
+        let controls = AidenChatProgressControls(
+            taskProgress: progress,
+            agentRoster: roster,
+            canReadTasks: true,
+            canReadAgents: true,
+            taskIsStale: false,
+            agentIsStale: false,
+            openTasks: {},
+            openAgents: {}
+        )
+        let host = UIHostingController(rootView: controls.frame(width: 320))
+        let size = host.sizeThatFits(in: CGSize(width: 320, height: 200))
+        // Chip buttons keep a 44pt hit target even though the capsule
+        // visual stays compact; the row adds its 6pt bottom padding on top.
+        XCTAssertGreaterThanOrEqual(size.height, 50)
+
+        // The Reduce Transparency chrome path renders the same chip title and
+        // icon through the deterministic override rather than the read-only
+        // system environment.
+        for reduceTransparency in [true, false] {
+            let renderer = ImageRenderer(content:
+                AidenProgressChipLabel(
+                    systemImage: "checklist",
+                    title: "Step 1 of 2 · Working",
+                    stale: false,
+                    reduceTransparency: reduceTransparency
+                )
+                .frame(width: 320)
+            )
+            renderer.scale = 2
+            XCTAssertNotNil(renderer.cgImage)
+        }
     }
 
     @MainActor
@@ -4558,6 +4663,108 @@ final class AidenChatTests: XCTestCase {
         ).attachmentIds)
     }
 
+    func testTurnRequestBuilderCarriesTheOpaqueSkillLease() throws {
+        let entry = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteSkillCatalogEntry.self,
+            from: Data(#"""
+            {
+                "invocationId": "sk1_\#(String(repeating: "a", count: 43))",
+                "name": "review-code",
+                "description": "Review the current changes.",
+                "source": "workspace",
+                "available": true
+            }
+            """#.utf8)
+        )
+        let request = AidenTurnRequestBuilder.make(
+            text: "Review this",
+            providerId: nil,
+            modelId: nil,
+            thinkingLevel: nil,
+            attachments: [],
+            skill: AidenSkillInvocation(entry: entry)
+        )
+
+        XCTAssertEqual(request.skill?.version, 1)
+        XCTAssertEqual(request.skill?.invocationId, entry.invocationId)
+        XCTAssertEqual(request.skill?.displayName, "review-code")
+        XCTAssertEqual(request.skill?.source, .workspace)
+
+        let encoded = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(object.keys),
+            ["text", "skill"]
+        )
+        let skill = try XCTUnwrap(object["skill"] as? [String: Any])
+        XCTAssertEqual(
+            Set(skill.keys),
+            ["version", "invocationId", "displayName", "source"]
+        )
+        XCTAssertEqual(skill["version"] as? Int, 1)
+
+        XCTAssertNil(AidenTurnRequestBuilder.make(
+            text: "Plain",
+            providerId: nil,
+            modelId: nil,
+            thinkingLevel: nil,
+            attachments: []
+        ).skill)
+    }
+
+    func testComposerSuggestionQueryParsesOnlyTrailingTriggerTokens() {
+        let skill = AidenComposerSuggestionQuery.parse(draft: "/rev")
+        XCTAssertEqual(skill?.kind, .skill)
+        XCTAssertEqual(skill?.query, "rev")
+        if let skill {
+            XCTAssertEqual(String("/rev"[skill.tokenRange]), "/rev")
+        } else {
+            XCTFail("Expected a skill trigger")
+        }
+
+        // A trigger mid-draft still opens while its token trails the text.
+        let midTrigger = AidenComposerSuggestionQuery.parse(draft: "please /rev")
+        XCTAssertEqual(midTrigger?.kind, .skill)
+        XCTAssertEqual(midTrigger?.query, "rev")
+        if let midTrigger {
+            XCTAssertEqual(String("please /rev"[midTrigger.tokenRange]), "/rev")
+        }
+        // A completed token (whitespace after it) closes the palette.
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "please run /review now"))
+
+        let trailingMention = AidenComposerSuggestionQuery.parse(draft: "hey @Sub")
+        XCTAssertEqual(trailingMention?.kind, .mention)
+        XCTAssertEqual(trailingMention?.query, "Sub")
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "hey @Sub ag"))
+
+        // Triggers inside a token are ordinary text.
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "a/b"))
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "email me@x"))
+        // An empty query is still an open palette request.
+        XCTAssertEqual(AidenComposerSuggestionQuery.parse(draft: "/")?.query, "")
+        XCTAssertEqual(AidenComposerSuggestionQuery.parse(draft: "@")?.query, "")
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "done "))
+        XCTAssertNil(
+            AidenComposerSuggestionQuery.parse(
+                draft: "/" + String(repeating: "x", count: 300)
+            )
+        )
+        // The whitespace class is the Unicode White_Space property — the same
+        // set the Android parser pins explicitly. NEL and figure space open a
+        // trigger; information separators do not.
+        XCTAssertEqual(
+            AidenComposerSuggestionQuery.parse(draft: "run\u{85}/rev")?.kind,
+            .skill
+        )
+        XCTAssertEqual(
+            AidenComposerSuggestionQuery.parse(draft: "see\u{2007}/rev")?.kind,
+            .skill
+        )
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "see\u{1C}/rev"))
+    }
+
 #if DEBUG
     @MainActor
     func testBotChatViewModelRejectsProviderAndModelPickerMutations() {
@@ -6135,6 +6342,294 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .notDetermined), .requestingPermission)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
+    }
+
+    // MARK: - Remote Slice 2 busy-composer run input
+
+    private func runInputResult(
+        status: AidenStreamInputStatus,
+        queue: AidenStreamInputQueue? = nil,
+        reason: AidenStreamInputRejectionReason? = nil,
+        committed: Bool = false
+    ) -> AidenStreamInputResult {
+        AidenStreamInputResult(
+            streamId: "stream-1",
+            chatId: "chat-1",
+            turnId: "turn-1",
+            mode: .steer,
+            status: status,
+            queue: queue,
+            reason: reason,
+            committed: committed,
+            messageId: committed ? "message-1" : nil
+        )
+    }
+
+    func testRunInputOptionsRequireBusyControlledSupportedDraft() {
+        XCTAssertTrue(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: true, hasDraft: true
+        ))
+        // Old servers keep the Stop-only control.
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: false, hasDraft: true
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: false, canControl: true, supports: true, hasDraft: true
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: false, supports: true, hasDraft: true
+        ))
+        // An empty composer can never offer a submission.
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: true, hasDraft: false
+        ))
+    }
+
+    func testRunInputDraftConsumedOnlyForCommittedOutcomes() {
+        XCTAssertTrue(AidenRunInputPresentation.consumesDraft(runInputResult(status: .admitted)))
+        XCTAssertTrue(AidenRunInputPresentation.consumesDraft(
+            runInputResult(status: .rejected, reason: .runNotActive, committed: true)
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.consumesDraft(
+            runInputResult(status: .rejected, reason: .capacity, committed: false)
+        ))
+    }
+
+    func testRunInputConsumedDraftPreservesInFlightTyping() {
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "fix it"),
+            ""
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "fix it\nplease"),
+            "please"
+        )
+        // A diverged draft (user replaced the text entirely) is left alone.
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "different"),
+            "different"
+        )
+    }
+
+    func testRunInputReceiptsCoverAdmittedAndCommittedRejections() {
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(for: runInputResult(status: .admitted, queue: .steer)),
+            "Steering the current run"
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(for: runInputResult(status: .admitted, queue: .followUp)),
+            "Queued to run next"
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(
+                for: runInputResult(status: .rejected, reason: .runNotActive, committed: true)
+            ),
+            "Saved to the chat — the run ended before it could use it"
+        )
+        XCTAssertNil(AidenRunInputPresentation.receipt(
+            for: runInputResult(status: .rejected, reason: .capacity, committed: false)
+        ))
+    }
+
+    func testRunInputRejectionMessagesKeepDraftSemantics() {
+        for reason in [AidenStreamInputRejectionReason.runNotActive, .cancelled, .capacity, .invalid] {
+            XCTAssertTrue(
+                AidenRunInputPresentation.rejectionMessage(reason).contains("unchanged"),
+                "\(reason) must promise draft retention"
+            )
+        }
+        XCTAssertTrue(AidenRunInputPresentation.rejectionMessage(nil).contains("unchanged"))
+    }
+
+    func testRunInputIdempotencyKeyReusesOnlyIdenticalAttempts() {
+        let attempt = AidenRunInputPresentation.Attempt(
+            key: UUID(), streamId: "stream-1", mode: .steer, text: "hold on"
+        )
+        XCTAssertTrue(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .steer, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .queue, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .steer, text: "different"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-2", mode: .steer, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: nil, streamId: "stream-1", mode: .steer, text: "hold on"
+        ))
+    }
+}
+
+extension AidenChatTests {
+    private func questionFixture(
+        multiSelect: Bool = false,
+        options: [AidenRemoteQuestionOption]? = nil
+    ) -> AidenRemoteQuestion {
+        AidenRemoteQuestion(
+            question: "Which tolerance?",
+            header: "Chamfer",
+            multiSelect: multiSelect,
+            options: options ?? [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm", description: "Heavy."),
+            ]
+        )
+    }
+
+    func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
+        let questions = [questionFixture(), questionFixture(multiSelect: true)]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [0: ["0.5 mm"], 1: ["0.5 mm", "1.0 mm"]],
+            customAnswers: [:]
+        )
+        XCTAssertEqual(answers, [
+            .option(questionIndex: 0, answer: "0.5 mm"),
+            .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
+    }
+
+    func testQuestionAnswerDraftCustomTextWinsAndTrims() {
+        let questions = [questionFixture()]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [0: ["0.5 mm"]],
+            customAnswers: [0: "  make it 2 mm  "]
+        )
+        XCTAssertEqual(answers, [.custom(questionIndex: 0, answer: "make it 2 mm")])
+    }
+
+    func testQuestionAnswerDraftSkipsUnaddressedQuestions() {
+        let questions = [questionFixture(), questionFixture()]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [1: ["1.0 mm"]],
+            customAnswers: [0: "   "]
+        )
+        XCTAssertEqual(answers, [.option(questionIndex: 1, answer: "1.0 mm")])
+    }
+
+    func testQuestionToggleReplacesSingleSelectAndAccumulatesMulti() {
+        var selections = AidenQuestionAnswerDraft.toggled(
+            selections: [:], questionIndex: 0, label: "0.5 mm", multiSelect: false
+        )
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "1.0 mm", multiSelect: false
+        )
+        XCTAssertEqual(selections[0], ["1.0 mm"])
+
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "0.5 mm", multiSelect: true
+        )
+        XCTAssertEqual(selections[0], ["1.0 mm", "0.5 mm"])
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "1.0 mm", multiSelect: true
+        )
+        XCTAssertEqual(selections[0], ["0.5 mm"])
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "0.5 mm", multiSelect: true
+        )
+        XCTAssertNil(selections[0])
+    }
+
+    func testPendingQuestionResolutionBindsIdentityAndExpiry() throws {
+        let pending = try AidenRemoteJSONDecoder.decode(
+            AidenStreamPendingQuestion.self,
+            from: Data(#"""
+            {
+              "promptId": "q-1", "streamId": "stream-1", "chatId": "chat-1",
+              "toolCallId": "tool-1", "expiresAt": "2026-08-18T19:06:10.000Z",
+              "questions": [{
+                "question": "Which tolerance?", "header": "Chamfer",
+                "multiSelect": false,
+                "options": [
+                  {"label": "0.5 mm", "description": "Standard."},
+                  {"label": "1.0 mm", "description": "Heavy."}
+                ]
+              }]
+            }
+            """#.utf8)
+        )
+        let resolved = AidenPendingQuestionResolution.resolve(
+            pending, streamId: "stream-1", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+        )
+        XCTAssertEqual(resolved?.id, "q-1")
+        XCTAssertEqual(resolved?.questions.count, 1)
+        XCTAssertTrue(resolved?.canRespond == true)
+
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            pending, streamId: "other", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+        ))
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            pending, streamId: "stream-1", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:07:00.000Z")!
+        ))
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            nil, streamId: "stream-1", chatId: "chat-1"
+        ))
+    }
+
+    func testPendingQuestionDecodeFailsClosedOnGrammarViolations() {
+        let base = #"""
+        {
+          "promptId": "q-1", "streamId": "stream-1", "chatId": "chat-1",
+          "toolCallId": "tool-1", "expiresAt": "2026-08-18T19:06:10.000Z",
+          "questions": QUESTIONS
+        }
+        """#
+        let oneOption = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"A","description":"d"}]}]"#
+        let duplicateLabels = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"A","description":"d"},{"label":"A","description":"e"}]}]"#
+        let reservedLabel = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"Other","description":"d"},{"label":"A","description":"e"}]}]"#
+        for questions in [oneOption, duplicateLabels, reservedLabel] {
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(
+                    AidenStreamPendingQuestion.self,
+                    from: Data(base.replacingOccurrences(of: "QUESTIONS", with: questions).utf8)
+                ),
+                "question grammar violation must fail closed"
+            )
+        }
+    }
+}
+
+final class AidenQuietOpenChatTests: XCTestCase {
+    func testBackgroundChatPublishesEveryStatus() {
+        for state in [
+            AidenStreamState.queued, .running, .waitingForApproval, .reconciling,
+            .done, .error, .cancelled, .interrupted,
+        ] {
+            XCTAssertTrue(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: false),
+                "\(state) must publish while the chat is not foregrounded"
+            )
+        }
+        XCTAssertTrue(AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: false))
+    }
+
+    func testForegroundChatSuppressesAmbientProgress() {
+        for state in [AidenStreamState.queued, .reconciling, .running] {
+            XCTAssertFalse(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: true),
+                "\(state) is ambient churn and must be suppressed"
+            )
+        }
+        XCTAssertFalse(AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: true))
+    }
+
+    func testForegroundChatStillPublishesBlockingAndTerminalStates() {
+        for state in [
+            AidenStreamState.waitingForApproval, .done, .cancelled, .error, .interrupted,
+        ] {
+            XCTAssertTrue(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: true),
+                "\(state) needs attention or clears the surface and must publish"
+            )
+        }
     }
 }
 
