@@ -463,7 +463,7 @@
         "renderer/components/remote-connection-popover.test.tsx",
         "renderer/components/settings/about-settings.test.tsx",
         "renderer/components/settings/gemini-voice-setup.test.tsx",
-        "renderer/components/settings/tts-settings.test.ts",
+        "renderer/components/settings/tts-settings.test.tsx",
         "renderer/components/settings/mcp-preset-icons.test.ts",
         "renderer/components/settings/mcp-settings.test.tsx",
         "renderer/components/settings/memory-settings.test.tsx",
