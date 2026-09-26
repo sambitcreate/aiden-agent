@@ -20,8 +20,24 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteStreamEvent,
+  parseAidenRemoteStreamInputRequest,
   type AidenRemoteCapability,
+  type AidenRemotePendingQuestion,
+  type AidenRemoteQuestionRespondRequest,
+  type AidenRemoteRunInputMode,
+  type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
+import {
+  ASK_USER_QUESTION_VERSION,
+  parseAskUserQuestions,
+  parseAskUserQuestionResponse,
+  type AskUserQuestionResponseV1,
+  type AskUserQuestionV1,
+} from "../../renderer/shared/ask-user-question.js";
+import type {
+  ChatRunInputAdmissionRequest,
+  ChatRunInputAdmissionResult,
+} from "./chat-run-input-admission.js";
 import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
@@ -34,6 +50,7 @@ const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
+const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
 const MAX_ACTIVITY_PROJECTION_CHATS = 200;
 export const MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES = 16 * 1_024 * 1_024;
 
@@ -145,6 +162,17 @@ interface ApprovalRecord {
   toolName: string;
   canAllow: boolean;
   details?: ToolApprovalDetails;
+  expiresAt: number;
+  expiry: ReturnType<typeof setTimeout>;
+}
+
+interface QuestionRecord {
+  streamId: string;
+  deviceId: string;
+  ownerDocumentId: string;
+  chatId: string;
+  toolCallId: string;
+  questions: AskUserQuestionV1[];
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
 }
@@ -404,6 +432,7 @@ export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
   private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
   private readonly approvals = new Map<string, ApprovalRecord>();
+  private readonly questions = new Map<string, QuestionRecord>();
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
   private persistRunning = false;
@@ -415,6 +444,22 @@ export class AidenRemoteStreamService {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
       approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
+      /**
+       * Host-owned foreground admission (Remote Slice 2). When absent the
+       * `/streams/{id}/inputs` route is unadvertised and returns not_found.
+       */
+      submitInput?(
+        input: ChatRunInputAdmissionRequest & { chatId: string },
+      ): Promise<ChatRunInputAdmissionResult>;
+      /**
+       * Host-owned questionnaire settlement. When absent the
+       * `/questions/{id}/respond` route is unadvertised and returns not_found.
+       */
+      respondQuestion?(
+        promptId: string,
+        response: AskUserQuestionResponseV1,
+        ownerDocumentId: string,
+      ): boolean;
       notifyChatChanged?: (chatId: string) => void;
       notifyApprovalChanged?: (chatId: string) => void;
       snapshot?: AidenRemoteStreamSnapshot;
@@ -449,7 +494,12 @@ export class AidenRemoteStreamService {
       admit = resolve;
       reject = rejectPromise;
     });
+    // Replays never invoke the wrapper: keep a sink so a rejected gate cannot
+    // surface as an unhandled rejection.
+    void durable.catch(() => undefined);
+    let actionGated = false;
     const pending = this.idempotency.execute(scope, input, async () => {
+      actionGated = true;
       await durable;
       return action();
     });
@@ -459,6 +509,11 @@ export class AidenRemoteStreamService {
     } catch (error) {
       reject(error);
       await pending.catch(() => undefined);
+      // Only discard when this call created the entry: the wrapper ran but the
+      // action provably never did (admit() was never called), so nothing could
+      // have committed. Replays and concurrent in-flight entries keep their
+      // recorded outcome intact.
+      if (actionGated) this.idempotency.discardUnexecuted(scope);
       throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this stream request.", 500);
     }
     let result: T | undefined;
@@ -593,6 +648,16 @@ export class AidenRemoteStreamService {
         this.resolveApproval(approvalId, "deny");
       }
     }
+    for (const [promptId, question] of this.questions) {
+      if (question.expiresAt <= now) {
+        this.resolveQuestion(promptId, {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId,
+          cancelled: true,
+          answers: [],
+        });
+      }
+    }
     for (const [streamId, stream] of this.streams) {
       if (terminal(stream.state) && stream.updatedAt + TERMINAL_RETENTION_MS <= now) {
         stream.owner.invalidate();
@@ -629,6 +694,9 @@ export class AidenRemoteStreamService {
     this.approvals.delete(approvalId);
     const stream = this.streams.get(approval.streamId);
     const nextApproval = stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
+    const nextQuestion = !nextApproval && stream
+      ? this.pendingQuestionForStream(stream.streamId)
+      : undefined;
     if (stream && !terminal(stream.state)) {
       if (!resolved) {
         this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
@@ -644,11 +712,89 @@ export class AidenRemoteStreamService {
           false,
           "waiting_for_approval",
         );
+      } else if (nextQuestion) {
+        // A question may share the stream's waiting_for_approval state;
+        // resolving the approval must not drop the surviving prompt.
+        this.append(
+          stream,
+          "question_required",
+          {
+            promptId: nextQuestion.promptId,
+            questions: nextQuestion.questions,
+            expiresAt: nextQuestion.expiresAt,
+          },
+          false,
+          "waiting_for_approval",
+        );
       } else {
         this.append(stream, "status", { state: "running" }, false, "running");
       }
     }
     this.options.notifyApprovalChanged?.(approval.chatId);
+    return resolved;
+  }
+
+  private pendingQuestionForStream(streamId: string): AidenRemotePendingQuestion | undefined {
+    const found = [...this.questions.entries()].find(([, entry]) => entry.streamId === streamId);
+    if (!found) return undefined;
+    const [promptId, entry] = found;
+    return {
+      promptId,
+      streamId: entry.streamId,
+      chatId: entry.chatId,
+      toolCallId: entry.toolCallId,
+      questions: structuredClone(entry.questions),
+      expiresAt: new Date(entry.expiresAt).toISOString(),
+    };
+  }
+
+  private resolveQuestion(promptId: string, response: AskUserQuestionResponseV1): boolean {
+    const question = this.questions.get(promptId);
+    if (!question) return false;
+    clearTimeout(question.expiry);
+    const resolved = this.options.respondQuestion
+      ? this.options.respondQuestion(promptId, response, question.ownerDocumentId)
+      : false;
+    this.questions.delete(promptId);
+    const stream = this.streams.get(question.streamId);
+    const nextQuestion = stream ? this.pendingQuestionForStream(stream.streamId) : undefined;
+    const nextApproval = !nextQuestion && stream
+      ? this.pendingApprovalForStream(stream.streamId)
+      : undefined;
+    if (stream && !terminal(stream.state)) {
+      if (!resolved) {
+        this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
+      } else if (nextQuestion) {
+        this.append(
+          stream,
+          "question_required",
+          {
+            promptId: nextQuestion.promptId,
+            questions: nextQuestion.questions,
+            expiresAt: nextQuestion.expiresAt,
+          },
+          false,
+          "waiting_for_approval",
+        );
+      } else if (nextApproval) {
+        // An approval may share the stream's waiting_for_approval state;
+        // resolving the question must not drop the surviving prompt.
+        this.append(
+          stream,
+          "approval_required",
+          {
+            approvalId: nextApproval.approvalId,
+            summary: nextApproval.summary,
+            expiresAt: nextApproval.expiresAt,
+          },
+          false,
+          "waiting_for_approval",
+        );
+      } else {
+        this.append(stream, "status", { state: "running" }, false, "running");
+      }
+    }
+    this.options.notifyApprovalChanged?.(question.chatId);
     return resolved;
   }
 
@@ -730,6 +876,13 @@ export class AidenRemoteStreamService {
           clearTimeout(approval.expiry);
           this.approvals.delete(approvalId);
           this.options.notifyApprovalChanged?.(approval.chatId);
+        }
+      }
+      for (const [promptId, question] of this.questions) {
+        if (question.streamId === stream.streamId) {
+          clearTimeout(question.expiry);
+          this.questions.delete(promptId);
+          this.options.notifyApprovalChanged?.(question.chatId);
         }
       }
       this.options.notifyChatChanged?.(stream.chatId);
@@ -874,6 +1027,60 @@ export class AidenRemoteStreamService {
         {
           approvalId,
           summary,
+          expiresAt: new Date(expiresAt).toISOString(),
+        },
+        false,
+        "waiting_for_approval",
+      );
+      this.options.notifyApprovalChanged?.(stream.chatId);
+      return;
+    }
+    if (channel === "chat:questionnaire") {
+      // The publish payload is produced by the main-owned questionnaire
+      // coordinator. Remote stream ids do not share the renderer "s-" prefix,
+      // so the full prompt parser cannot run here; bind the prompt to this
+      // stream and re-validate the bounded question grammar instead.
+      const promptId = boundedText(payload.promptId, 128);
+      const questions = parseAskUserQuestions(payload.questions);
+      if (
+        !promptId ||
+        !questions ||
+        payload.streamId !== stream.streamId ||
+        !boundedText(payload.toolCallId, 128)
+      ) {
+        throw new Error("The questionnaire prompt is not bound to this stream.");
+      }
+      if (this.questions.has(promptId) || this.pendingQuestionForStream(stream.streamId)) {
+        throw new Error("A questionnaire is already pending on this stream.");
+      }
+      const expiresAt = this.options.now() + QUESTION_LIFETIME_MS;
+      const expiry = setTimeout(() => {
+        const current = this.questions.get(promptId);
+        if (!current || current.expiresAt !== expiresAt) return;
+        this.resolveQuestion(promptId, {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId,
+          cancelled: true,
+          answers: [],
+        });
+      }, QUESTION_LIFETIME_MS);
+      expiry.unref?.();
+      this.questions.set(promptId, {
+        streamId: stream.streamId,
+        deviceId: stream.deviceId,
+        ownerDocumentId: stream.owner.owner.documentId,
+        chatId: stream.chatId,
+        toolCallId: boundedText(payload.toolCallId, 128),
+        questions,
+        expiresAt,
+        expiry,
+      });
+      this.append(
+        stream,
+        "question_required",
+        {
+          promptId,
+          questions: structuredClone(questions),
           expiresAt: new Date(expiresAt).toISOString(),
         },
         false,
@@ -1104,6 +1311,101 @@ export class AidenRemoteStreamService {
       : undefined;
   }
 
+  pendingQuestion(deviceId: string, streamId: string): AidenRemotePendingQuestion | null {
+    const stream = this.requireStream(deviceId, streamId);
+    return this.pendingQuestionForStream(stream.streamId) ?? null;
+  }
+
+  questionChatId(deviceId: string, promptId: string): string {
+    this.prune();
+    const question = this.questions.get(promptId);
+    if (
+      !question ||
+      question.deviceId !== deviceId ||
+      question.expiresAt <= this.options.now()
+    ) {
+      throw new AidenRemoteServiceError(
+        "question_expired",
+        "This question is no longer available.",
+        409,
+      );
+    }
+    return question.chatId;
+  }
+
+  supportsQuestionPrompts(): boolean {
+    return this.options.respondQuestion !== undefined;
+  }
+
+  /**
+   * `runAccess` wraps the router's chat-access mutation around the fresh
+   * resolution and stays inside the ledger action so a settled outcome still
+   * replays after the question record is resolved away. Required so no
+   * caller can silently skip authorization (tests pass a passthrough).
+   */
+  async respondQuestion(
+    deviceId: string,
+    promptId: string,
+    input: AidenRemoteQuestionRespondRequest,
+    key: string,
+    runAccess: (
+      chatId: string,
+      action: () => Promise<{ promptId: string; resolvedAt: string }>,
+    ) => Promise<{ promptId: string; resolvedAt: string }>,
+  ): Promise<{ promptId: string; resolvedAt: string }> {
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /questions/{id}/respond", resourceId: promptId, key },
+        { promptId, cancelled: input.cancelled, answers: input.answers },
+        async () => {
+          this.prune();
+          const question = this.questions.get(promptId);
+          if (!question || question.deviceId !== deviceId || question.expiresAt <= this.options.now()) {
+            throw new AidenRemoteServiceError(
+              "question_expired",
+              "This question is no longer available.",
+              409,
+            );
+          }
+          const response = parseAskUserQuestionResponse(
+            {
+              version: ASK_USER_QUESTION_VERSION,
+              promptId,
+              cancelled: input.cancelled,
+              answers: input.answers,
+            },
+            {
+              version: ASK_USER_QUESTION_VERSION,
+              promptId,
+              streamId: question.streamId,
+              toolCallId: question.toolCallId,
+              questions: question.questions,
+            },
+          );
+          if (!response) {
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "The question response is invalid.",
+              400,
+            );
+          }
+          return runAccess(question.chatId, async () => {
+            if (!this.resolveQuestion(promptId, response)) {
+              throw new AidenRemoteServiceError(
+                "question_already_resolved",
+                "This question was already resolved.",
+                409,
+              );
+            }
+            return { promptId, resolvedAt: new Date(this.options.now()).toISOString() };
+          });
+        },
+      );
+    } catch (error) {
+      return this.mapIdempotencyError(error);
+    }
+  }
+
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null {
     this.prune();
     for (const stream of this.streams.values()) {
@@ -1144,10 +1446,135 @@ export class AidenRemoteStreamService {
               this.approvals.delete(approvalId);
               this.options.notifyApprovalChanged?.(approval.chatId);
             }
+            for (const [promptId, question] of [...this.questions]) {
+              if (question.streamId !== stream.streamId) continue;
+              clearTimeout(question.expiry);
+              this.options.respondQuestion?.(
+                promptId,
+                {
+                  version: ASK_USER_QUESTION_VERSION,
+                  promptId,
+                  cancelled: true,
+                  answers: [],
+                },
+                question.ownerDocumentId,
+              );
+              this.questions.delete(promptId);
+              this.options.notifyApprovalChanged?.(question.chatId);
+            }
             this.options.cancel(streamId, stream.owner.owner.documentId);
             this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
           }
           return this.status(deviceId, streamId);
+        },
+      );
+    } catch (error) {
+      return this.mapIdempotencyError(error);
+    }
+  }
+
+  /** True only while the host wires the main-owned run-input admission path. */
+  supportsRunInput(): boolean {
+    return this.options.submitInput !== undefined;
+  }
+
+  /**
+   * Feature-gated shared foreground admission (Remote Slice 2). Domain
+   * rejections resolve as `status: "rejected"` so the durable idempotency
+   * ledger replays the original admission outcome for a retried request UUID.
+   * `runAccess` wraps fresh admissions in the router's chat-access validation;
+   * it stays inside the ledger action so a settled outcome still replays after
+   * the stream record is evicted or the chat becomes unavailable. Required so
+   * no caller can silently skip authorization (tests pass a passthrough).
+   */
+  async submitInput(
+    deviceId: string,
+    streamId: string,
+    rawInput: unknown,
+    key: string,
+    runAccess: (
+      chatId: string,
+      action: () => Promise<AidenRemoteStreamInputResult>,
+    ) => Promise<AidenRemoteStreamInputResult>,
+  ): Promise<AidenRemoteStreamInputResult> {
+    let parsed: { mode: AidenRemoteRunInputMode; text: string };
+    try {
+      parsed = parseAidenRemoteStreamInputRequest(rawInput);
+    } catch {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The stream input request is invalid.",
+        400,
+      );
+    }
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key },
+        { streamId, mode: parsed.mode, text: parsed.text },
+        async () => {
+          const stream = this.requireStream(deviceId, streamId);
+          const execute = async (): Promise<AidenRemoteStreamInputResult> => {
+            const base = {
+              streamId: stream.streamId,
+              chatId: stream.chatId,
+              turnId: stream.turnId,
+              mode: parsed.mode,
+            } as const;
+            if (terminal(stream.state)) {
+              return {
+                ...base,
+                status: "rejected" as const,
+                reason: "run_not_active" as const,
+                committed: false,
+              };
+            }
+            if (stream.cancelRequested) {
+              return {
+                ...base,
+                status: "rejected" as const,
+                reason: "cancelled" as const,
+                committed: false,
+              };
+            }
+            if (!this.options.submitInput) {
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "This endpoint is unavailable.",
+                404,
+              );
+            }
+            const admission = await this.options.submitInput({
+              streamId: stream.streamId,
+              chatId: stream.chatId,
+              mode: parsed.mode,
+              text: parsed.text,
+              ownerDocumentId: stream.owner.owner.documentId,
+            });
+            // A queued input while a prompt is pending does not resume the
+            // run — emitting running would clobber waiting_for_approval and
+            // hide the outstanding approval/question from clients.
+            if (
+              admission.admitted &&
+              !this.pendingApprovalForStream(stream.streamId) &&
+              !this.pendingQuestionForStream(stream.streamId)
+            ) {
+              this.append(stream, "status", { state: "running" }, false, "running");
+            }
+            if (admission.committed) {
+              this.options.notifyChatChanged?.(stream.chatId);
+            }
+            return {
+              ...base,
+              status: admission.admitted ? ("admitted" as const) : ("rejected" as const),
+              ...(admission.queue === undefined ? {} : { queue: admission.queue }),
+              ...(admission.reason === undefined ? {} : { reason: admission.reason }),
+              committed: admission.committed,
+              ...(admission.messageId === undefined
+                ? {}
+                : { messageId: admission.messageId }),
+            };
+          };
+          return runAccess(stream.chatId, execute);
         },
       );
     } catch (error) {
@@ -1162,6 +1589,17 @@ export class AidenRemoteStreamService {
       this.options.approve(approvalId, "deny", approval.ownerDocumentId);
       this.approvals.delete(approvalId);
       this.options.notifyApprovalChanged?.(approval.chatId);
+    }
+    for (const [promptId, question] of this.questions) {
+      if (question.deviceId !== deviceId) continue;
+      clearTimeout(question.expiry);
+      this.options.respondQuestion?.(
+        promptId,
+        { version: ASK_USER_QUESTION_VERSION, promptId, cancelled: true, answers: [] },
+        question.ownerDocumentId,
+      );
+      this.questions.delete(promptId);
+      this.options.notifyApprovalChanged?.(question.chatId);
     }
     for (const [streamId, stream] of this.streams) {
       if (stream.deviceId !== deviceId) continue;
@@ -1188,6 +1626,10 @@ export class AidenRemoteStreamService {
     approvalId: string,
     decision: "allow" | "deny",
     key: string,
+    runAccess: (
+      chatId: string,
+      action: () => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
+    ) => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
   ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
     try {
       return await this.executeIdempotent(
@@ -1206,10 +1648,12 @@ export class AidenRemoteStreamService {
               403,
             );
           }
-          if (!this.resolveApproval(approvalId, decision)) {
-            throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
-          }
-          return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+          return runAccess(approval.chatId, async () => {
+            if (!this.resolveApproval(approvalId, decision)) {
+              throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
+            }
+            return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+          });
         },
       );
     } catch (error) {

@@ -19,10 +19,9 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -121,18 +120,21 @@ fun AidenChatDetailScreen(
 
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
+    var workspaceFileReference by remember(chatId) { mutableStateOf<String?>(null) }
     val streamState by viewModel.streamState.collectAsState()
     val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
-    val liveText by viewModel.liveText.collectAsState()
-    val reasoning by viewModel.reasoning.collectAsState()
-    val tools by viewModel.tools.collectAsState()
-    val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isStopping by viewModel.isStopping.collectAsState()
+    val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
+    val runInputReceipt by viewModel.runInputReceipt.collectAsState()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
+    val pendingQuestion by viewModel.pendingQuestion.collectAsState()
+    val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
+    val selectedSkill by viewModel.selectedSkill.collectAsState()
+    val composerSuggestions by viewModel.composerSuggestions.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
     val taskProgress by viewModel.taskProgress.collectAsState()
@@ -146,16 +148,43 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
+    var followLatest by remember(listState) {
+        mutableStateOf(
+            AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        )
+    }
+    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
+    val readAloudClient by coordinator.client.collectAsState()
+    val readAloud = remember(readAloudClient, chatId) {
+        AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
+            readAloudClient != null && coordinator.client.value === readAloudClient
+        }
+    }
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
+    var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+    val currentChat by rememberUpdatedState(chat)
+    val currentlyStreaming by rememberUpdatedState(isStreaming)
+
+    LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
+        if (isStreaming || (readAloud.activeMessageId != null && readAloud.activeMessageId != chat?.messages?.lastOrNull()?.id)) readAloud.stop()
+    }
+    DisposableEffect(readAloud, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) readAloud.stop() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); readAloud.stop() }
+    }
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -173,6 +202,8 @@ fun AidenChatDetailScreen(
             when (event) {
                 Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
                 Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
+                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(true)
+                Lifecycle.Event.ON_PAUSE -> viewModel.setChatForegrounded(false)
                 else -> Unit
             }
         }
@@ -180,8 +211,12 @@ fun AidenChatDetailScreen(
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             viewModel.startProgressObservation()
         }
+        viewModel.setChatForegrounded(
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.setChatForegrounded(false)
             viewModel.stopProgressObservation()
         }
     }
@@ -235,6 +270,7 @@ fun AidenChatDetailScreen(
     }
 
     fun startVoiceInput() {
+        readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
             currentDraft = currentDraft,
@@ -279,6 +315,11 @@ fun AidenChatDetailScreen(
         }
     }
 
+    // The destructive confirm must not outlive the run it would interrupt.
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) showRedirectConfirm = false
+    }
+
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(10),
         onResult = preparePickedUris
@@ -289,9 +330,63 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    val isScrolledUp by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+    LaunchedEffect(listState) {
+        var lastItemCount = -1
+        var wasScrolling = false
+        snapshotFlow {
+            val itemCount = AidenChatScroll.reverseLayoutItemCount(
+                currentChat?.messages?.size ?: 0,
+                currentlyStreaming
+            )
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            ) to itemCount
+        }.collect { (viewport, itemCount) ->
+            val (scrolling, index, offset) = viewport
+            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
+            lastItemCount = itemCount
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
+                    contentChanged,
+                    itemCount,
+                    consumedItemCount
+                )
+            ) {
+                return@collect
+            }
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            }
+        }
+    }
+
+    // Keyed by listState too: a chat switch with an equal item count must still
+    // consume the new list's insertion epoch.
+    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
+        val itemCount = AidenChatScroll.reverseLayoutItemCount(
+            chat?.messages?.size ?: 0,
+            isStreaming
+        )
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
+            listState.scrollToItem(AidenChatScroll.latestItemIndex())
+            followLatest = true
+        }
+        consumedItemCount = itemCount
+    }
+
+    workspaceFileReference?.let { reference ->
+        val workspaceId = chat?.workspaceId
+        if (workspaceId != null && chat?.isBotChat != true) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { workspaceFileReference = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+                sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen(
+                    workspaceId, coordinator, onNavigateBack = { workspaceFileReference = null }, initialReference = reference)
+            }
         }
     }
 
@@ -441,13 +536,33 @@ fun AidenChatDetailScreen(
                     }
                 }
 
-                // Error Banner
+                // Pending Question Banner
                 AnimatedVisibility(
-                    visible = presentedError != null,
+                    visible = pendingQuestion != null,
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
-                    presentedError?.let { err ->
+                    pendingQuestion?.let { question ->
+                        key(question.id) {
+                            AidenQuestionCard(
+                                prompt = question,
+                                enabled = connectionState == AidenConnectionState.CONNECTED &&
+                                    !isRespondingToQuestion && !isStopping,
+                                onSubmit = { request ->
+                                    viewModel.respondToQuestion(request, question.id)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Error Banner
+                AnimatedVisibility(
+                    visible = presentedError != null || readAloud.error != null,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
+                ) {
+                    (presentedError ?: readAloud.error)?.let { err ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -493,6 +608,20 @@ fun AidenChatDetailScreen(
                     canStop = viewModel.canControlCurrentRun && !isStopping,
                     canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
+                    showsRunInputOptions = viewModel.showsRunInputOptions,
+                    canSubmitRunInput = viewModel.canSubmitRunInput,
+                    onSubmitRunInput = { mode -> viewModel.submitRunInput(mode) },
+                    onRedirectRequest = { showRedirectConfirm = true },
+                    runInputReceipt = runInputReceipt,
+                    selectedSkill = selectedSkill,
+                    onClearSkill = { viewModel.clearSelectedSkill() },
+                    composerSuggestions = composerSuggestions,
+                    onSelectSuggestion = { suggestion ->
+                        when (suggestion) {
+                            is AidenComposerSuggestion.Skill -> viewModel.selectSkillSuggestion(suggestion.entry)
+                            else -> viewModel.selectMentionSuggestion(suggestion)
+                        }
+                    },
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
                     onToggleVoice = {
@@ -555,6 +684,22 @@ fun AidenChatDetailScreen(
         val rawMessages = chat?.messages ?: emptyList()
         val isBotChat = chat?.isBotChat == true
 
+        // Stable row inputs keep settled transcript rows skippable while the
+        // streaming card recomposes on every token.
+        val reversedMessages = remember(rawMessages) { rawMessages.asReversed() }
+        val loadAttachmentImage = remember(viewModel) { viewModel::attachmentImageData }
+        val onCopyMessage = remember(context) { { text: String -> copyToClipboard(context, text) } }
+        val onShareMessage = remember(context) { { text: String -> shareText(context, text) } }
+        val onReplyMessage = remember(viewModel) { { text: String -> viewModel.updateDraft("> $text\n") } }
+        val onOpenMessageUrl = remember(uriHandler, isBotChat) {
+            { url: String ->
+                if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
+                else if (android.net.Uri.parse(url).scheme?.lowercase() in listOf("https", "http", "mailto")) {
+                    try { uriHandler.openUri(url) } catch (_: Exception) {}
+                }
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -577,6 +722,12 @@ fun AidenChatDetailScreen(
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
                     item(key = "live_stream") {
+                        // Per-token state is collected inside the item so each
+                        // update recomposes only this card, not the screen.
+                        val liveText by viewModel.liveText.collectAsState()
+                        val reasoning by viewModel.reasoning.collectAsState()
+                        val tools by viewModel.tools.collectAsState()
+                        val activityTimeline by viewModel.activityTimeline.collectAsState()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -588,7 +739,6 @@ fun AidenChatDetailScreen(
                     }
                 }
 
-                val reversedMessages = rawMessages.asReversed()
                 itemsIndexed(
                     items = reversedMessages,
                     key = { _, msg -> msg.id }
@@ -601,23 +751,33 @@ fun AidenChatDetailScreen(
                             message = message,
                             position = pos,
                             palette = palette,
-                            loadAttachmentImage = viewModel::attachmentImageData,
-                            onCopy = { text -> copyToClipboard(context, text) },
-                            onShare = { text -> shareText(context, text) },
-                            onReply = { text -> viewModel.updateDraft("> $text\n") }
+                            loadAttachmentImage = loadAttachmentImage,
+                            onCopy = onCopyMessage,
+                            onShare = onShareMessage,
+                            onReply = onReplyMessage
                         )
                     } else {
+                        val readAloudEligible = !isStreaming &&
+                            serverInfo?.features?.contains("tts-v1") == true &&
+                            chat?.messages?.lastOrNull()?.id == message.id &&
+                            message.isReadAloudEligible
+                        // Remembered per message so settled rows stay skippable.
+                        val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
+                            { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
+                        }
                         AssistantMessageRow(
                             message = message,
                             position = pos,
                             isLastInCluster = isLastInCluster,
                             isBotChat = isBotChat,
                             palette = palette,
-                            loadAttachmentImage = viewModel::attachmentImageData,
-                            onCopy = { text -> copyToClipboard(context, text) },
-                            onShare = { text -> shareText(context, text) },
-                            onReply = { text -> viewModel.updateDraft("> $text\n") },
-                            onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+                            loadAttachmentImage = loadAttachmentImage,
+                            onCopy = onCopyMessage,
+                            onShare = onShareMessage,
+                            onReply = onReplyMessage,
+                            onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
+                            readAloudActive = readAloud.activeMessageId == message.id,
+                            onOpenUrl = onOpenMessageUrl
                         )
                     }
                 }
@@ -625,10 +785,12 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = isScrolledUp,
+                visible = !followLatest,
                 onClick = {
+                    followLatest = true
                     scope.launch {
-                        listState.animateScrollToItem(0)
+                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+                        followLatest = true
                     }
                 },
                 modifier = Modifier
@@ -666,6 +828,35 @@ fun AidenChatDetailScreen(
     }
     selectedAgent?.let { agent ->
         AidenAgentDetailSheet(agent = agent, onDismiss = { selectedAgent = null })
+    }
+
+    if (showRedirectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRedirectConfirm = false },
+            title = { Text("Redirect this run?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Stop this run and send your message as a new request.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.secondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRedirectConfirm = false
+                        viewModel.redirectRun()
+                    }
+                ) {
+                    Text("Stop and send", color = palette.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRedirectConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -779,6 +970,8 @@ private fun AssistantMessageRow(
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onReply: (String) -> Unit,
+    onReadAloud: (() -> Unit)? = null,
+    readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit
 ) {
     val projection = if (isBotChat) {
@@ -933,6 +1126,19 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        if (onReadAloud != null) {
+            Row {
+                IconButton(onClick = { onCopy(displayText) }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = palette.secondary)
+                }
+                IconButton(onClick = onReadAloud) {
+                    Icon(if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
+                        contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
+                        tint = palette.secondary)
+                }
+            }
+        }
+
     }
 }
 

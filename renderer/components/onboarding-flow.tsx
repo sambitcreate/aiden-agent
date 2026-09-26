@@ -228,7 +228,7 @@ const featureBentos: FeatureBento[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
+    description: "Browse, search, edit, and safely save workspace text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
     size: "standard",
@@ -995,6 +995,12 @@ export function OnboardingFlow() {
                     </Text>
                   </div>
                 </div>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5" data-onboarding-tts-privacy>
+                  Read aloud is separate and off by default. Configure it later in Settings → Text to Speech.
+                  Pressing the speaker sends the latest response text to Google, even for local-model replies;
+                  Google charges may apply. Paired phones and tablets use this same desktop setup;
+                  they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
+                </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices
                     .filter((item) =>

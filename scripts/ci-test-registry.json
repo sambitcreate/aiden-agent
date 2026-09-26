@@ -45,6 +45,7 @@
         "main/services/chat-message-contract.test.ts",
         "main/services/chat-pull-request-service.test.ts",
         "main/services/chat-pull-request-store.test.ts",
+        "main/services/chat-run-input-admission.test.ts",
         "main/services/chat-session-copy.test.ts",
         "main/services/chat-store-core.test.ts",
         "main/services/chat-title-policy.test.ts",
@@ -67,6 +68,8 @@
         "main/services/dictation-key-state.test.ts",
         "main/services/dictation-keycode.test.ts",
         "main/services/dictation-paste.test.ts",
+        "main/services/durable-jobs/service.test.ts",
+        "main/services/durable-jobs/store.test.ts",
         "main/services/external-editors.test.ts",
         "main/services/foundation-models-connection-core.test.ts",
         "main/services/foundation-models-connection.test.ts",
@@ -97,6 +100,7 @@
         "main/services/mcp-server-instructions.test.ts",
         "main/services/mcp-status.test.ts",
         "main/services/memory-context.test.ts",
+        "main/services/memory-shared.test.ts",
         "main/services/memory-store.test.ts",
         "main/services/memory-surface-matrix.test.ts",
         "main/services/model-runtime-core.test.ts",
@@ -440,6 +444,13 @@
         "main/services/telegram/telegram-thread-store.test.ts",
         "main/services/telegram/telegram-turn.test.ts",
         "main/services/telegram/telegram-workspace-core.test.ts",
+        "main/services/tts/audio-store.test.ts",
+        "main/services/tts/authority-contract.test.ts",
+        "main/services/tts/gemini-provider.loopback.test.ts",
+        "main/services/tts/gemini-wire.test.ts",
+        "main/services/tts/service.test.ts",
+        "main/services/tts/source.test.ts",
+        "main/services/tts/speech-text.test.ts",
         "renderer/components/activity-feed.test.tsx",
         "renderer/components/ask-user-question-composer.test.ts",
         "renderer/components/assistant/assistant-ui.test.tsx",
@@ -459,6 +470,7 @@
         "renderer/components/remote-connection-popover.test.tsx",
         "renderer/components/settings/about-settings.test.tsx",
         "renderer/components/settings/gemini-voice-setup.test.tsx",
+        "renderer/components/settings/tts-settings.test.tsx",
         "renderer/components/settings/mcp-preset-icons.test.ts",
         "renderer/components/settings/mcp-settings.test.tsx",
         "renderer/components/settings/memory-settings.test.tsx",
@@ -524,6 +536,7 @@
         "renderer/lib/remote-pairing-lifecycle.test.ts",
         "renderer/lib/rich-link.test.ts",
         "renderer/lib/scheduled-mcp-access-contract.test.ts",
+        "renderer/lib/scroll-follow.test.ts",
         "renderer/lib/scrollbar-gutter-contract.test.ts",
         "renderer/lib/streaming-motion-contract.test.ts",
         "renderer/lib/settings-section.test.ts",
@@ -538,6 +551,8 @@
         "renderer/lib/telegram-workspace-options.test.ts",
         "renderer/lib/text-entry-focus-contract.test.ts",
         "renderer/lib/truncate-path.test.ts",
+        "renderer/lib/tts-client.test.ts",
+        "renderer/lib/tts-player.test.ts",
         "renderer/lib/usage-profile-data.test.ts",
         "renderer/lib/voice-recorder-core.test.ts",
         "renderer/lib/wav-audio.test.ts",
@@ -564,6 +579,7 @@
         "renderer/shared/subagent-management-v2.test.ts",
         "renderer/shared/subagent-runs-v2.test.ts",
         "renderer/shared/todo.test.ts",
+        "renderer/shared/tts.test.ts",
         "renderer/shared/voice-models.test.ts",
         "scripts/aiden-remote-lan-transport-spike.test.mjs",
         "scripts/apple-developer-tools.test.mjs",
@@ -577,6 +593,7 @@
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/prepare-macos-package-output.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
+        "scripts/native-helpers.test.mjs",
         "scripts/sign-macos.test.mjs",
         "scripts/subagent-packaged-soak.test.mjs",
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
@@ -588,7 +605,8 @@
       ],
       "preserved": [
         "generative-ui-chromium",
-        "ios-release-policy"
+        "ios-release-policy",
+        "cli-package"
       ]
     }
   ],
@@ -850,6 +868,19 @@
         "test:computer-use:native"
       ],
       "reason": "Preserve Rust fmt, locked tests, and clippy with warnings denied."
+    },
+    {
+      "id": "cli-package",
+      "kind": "cli",
+      "sourceScripts": [
+        "test:cli"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:cli"
+      ],
+      "reason": "Install, bundle, and test the standalone packages/cli workspace in one command."
     }
   ]
 }

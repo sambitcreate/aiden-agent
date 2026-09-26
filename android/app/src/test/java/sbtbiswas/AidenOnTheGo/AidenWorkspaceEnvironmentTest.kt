@@ -9,6 +9,69 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
+    @Test fun cachedDocumentDoesNotDisableLiveTreePaging() {
+        val cachedDocument = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = true, connected = true)
+        assertTrue(cachedDocument.canLoadPage)
+        assertFalse(cachedDocument.canEditDocument)
+        val cachedIndex = AidenWorkspaceFileAvailability(indexOffline = true, documentOffline = false, connected = true)
+        assertFalse(cachedIndex.canLoadPage)
+        assertTrue(cachedIndex.canEditDocument)
+        val retainedClientWhileOffline = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = false, connected = false)
+        assertFalse(retainedClientWhileOffline.canLoadPage)
+        assertFalse(retainedClientWhileOffline.canEditDocument)
+    }
+
+    @Test fun lazyTreeSearchAndPreviewStayBounded() {
+        val entries = listOf(
+            AidenWorkspaceFileEntry("dir", "src", "src", AidenWorkspaceFileKind.DIRECTORY),
+            AidenWorkspaceFileEntry("file", "src/main.kt", "main.kt", AidenWorkspaceFileKind.FILE))
+        assertEquals(listOf("dir"), AidenWorkspaceFileTree.visible(entries, emptySet(), "").map { it.id })
+        assertEquals(2, AidenWorkspaceFileTree.visible(entries, setOf("src"), "").size)
+        assertEquals(2, AidenWorkspaceFileTree.visible(entries, emptySet(), "main").size)
+        assertTrue(AidenWorkspaceFileTree.visible(entries, emptySet(), "missing").isEmpty())
+        assertEquals(2_001, AidenWorkspaceSourcePreview.lines("line\n".repeat(10_000)).size)
+        assertTrue(AidenWorkspaceSourcePreview.lines("x".repeat(10_000))[0].endsWith("[line clipped]"))
+    }
+
+    @Test fun workspaceLinksRejectEscapesAndSchemes() {
+        assertEquals("src/hello world.kt", AidenWorkspaceFileLink.path("./src/hello%20world.kt"))
+        listOf("../secret", "./../secret", "./%2e%2e/secret", "./%2Fsecret", "file:///secret", "/secret", "~/secret", "https://example.com", "./a%00b", "./a\\b", "./a#L2", "./a?x=y", "./a//b").forEach {
+            assertNull(it, AidenWorkspaceFileLink.path(it))
+        }
+    }
+
+    @Test fun workspaceMarkdownLinksHaveClickableAnnotations() {
+        val palette = sbtbiswas.AidenOnTheGo.config.AidenPalette("000000", "000000", "000000", "ffffff", "ffffff", "ffffff", "ffffff", "ffffff", "ffffff")
+        val value = sbtbiswas.AidenOnTheGo.features.chat.buildAidenFormattedMessage("Open [source](./src/App.kt) and [blocked](./../secret)", palette, false)
+        val links = value.getStringAnnotations("LINK", 0, value.length)
+        assertEquals(listOf("./src/App.kt"), links.map { it.item })
+        assertTrue(value.text.contains("Open source"))
+    }
+
+    @Test fun lazyPageContractRejectsMalformedScope() {
+        val page = AidenWorkspaceFileIndex("page", emptyList(), false, 4_000, 20, directoryPath = "")
+        assertEquals(page, AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) { AidenWorkspaceEnvironmentValidation.validatedPage(page.copy(nextCursor = "../secret")) }
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) { AidenWorkspaceEnvironmentValidation.validatedPage(page.copy(directoryPath = "../secret")) }
+    }
+
+    @Test fun sharedLazyPageFixtureDecodes() {
+        val fixture = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(fixture) as kotlinx.serialization.json.JsonObject
+        val page = kotlinx.serialization.json.Json.decodeFromString<AidenWorkspaceFileIndex>(root.getValue("filePage").toString())
+        assertEquals(AidenWorkspaceFileKind.DIRECTORY, AidenWorkspaceEnvironmentValidation.validatedPage(page).entries.first().kind)
+    }
+
+    @Test fun relativeLinksCacheWithoutIndexAndSurvivePartialRefresh() {
+        val cache = sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache(tempFolder.newFolder())
+        val document = AidenWorkspaceFileDocument(validFileId, "src/App.kt", "cached", "v1", false)
+        cache.store(document, "mac", "workspace")
+        cache.store(AidenWorkspaceFileIndex("fresh", emptyList(), false, 4_000, 20, directoryPath = ""), "mac", "workspace")
+        assertEquals(document, cache.document("./src/App.kt", "mac", "workspace"))
+        assertNull(cache.document("./src/App.kt", "other", "workspace"))
+        assertNull(cache.document("./../src/App.kt", "mac", "workspace"))
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 
@@ -90,6 +153,37 @@ class AidenWorkspaceEnvironmentTest {
         assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
             AidenWorkspaceEnvironmentValidation.validated(truncatedDoc, validFileId)
         }
+    }
+
+    @Test
+    fun testLazySaveAcceptsRotatedHandleAndRebindsTreeEntry() {
+        val rotatedId = "file_" + "r".repeat(43)
+        val otherId = "file_" + "o".repeat(43)
+        val saved = AidenWorkspaceFileDocument(
+            id = rotatedId, displayPath = "src/main.kt", content = "x", version = "v2", truncated = false
+        )
+        assertEquals(saved, AidenWorkspaceEnvironmentValidation.validatedSave(saved, "src/main.kt"))
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            AidenWorkspaceEnvironmentValidation.validatedSave(saved, "src/other.kt")
+        }
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            AidenWorkspaceEnvironmentValidation.validatedSave(saved.copy(id = "../escape"), "src/main.kt")
+        }
+
+        val index = AidenWorkspaceFileIndex(
+            snapshotId = "files-1",
+            entries = listOf(
+                AidenWorkspaceFileEntry(validFileId, "src/main.kt", "main.kt", AidenWorkspaceFileKind.FILE, 1, "Kotlin"),
+                AidenWorkspaceFileEntry(otherId, "src/other.kt", "other.kt", AidenWorkspaceFileKind.FILE)
+            ),
+            truncated = false, maxEntries = 4_000, maxDepth = 20, directoryPath = ""
+        )
+        val rebound = AidenWorkspaceFileTree.rebind(index, validFileId, rotatedId)
+        assertEquals(listOf(rotatedId, otherId), rebound.entries.map { it.id })
+        assertEquals("Kotlin", rebound.entries.first().language)
+        assertEquals("", rebound.directoryPath)
+        assertSame(index, AidenWorkspaceFileTree.rebind(index, validFileId, validFileId))
+        assertSame(index, AidenWorkspaceFileTree.rebind(index, "file_" + "z".repeat(43), rotatedId))
     }
 
     @Test

@@ -1,5 +1,13 @@
 import type { CompactionEngine } from "../shared/compaction";
-// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
+import type {
+  TtsJobSnapshot,
+  TtsSafeError,
+  TtsServiceEvent,
+  TtsSettingsV1,
+  TtsSourceRef,
+} from "../shared/tts";
+
+type TtsSettings = TtsSettingsV1;// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
   AppSettings,
@@ -112,6 +120,10 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type {
+  ChatRunInputAdmissionResult,
+  ChatRunInputMode,
+} from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import {
   parseSubagentHistoryDetailV1,
@@ -1234,6 +1246,19 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
   return invoke<boolean>("chat:cancel", streamId, "user_stop");
 }
 
+/**
+ * Shared foreground admission for mid-flight input. Same Mac-owned boundary
+ * as Remote `POST /streams/{id}/inputs`; the renderer document must own the
+ * generation. Desktop callers keep their local queue UX — this surface exists
+ * for parity tests and future steer/queue work.
+ */
+export function admitChatRunInput(
+  streamId: string,
+  input: { mode: ChatRunInputMode; text: string },
+): Promise<ChatRunInputAdmissionResult> {
+  return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
+}
+
 export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
   const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
   if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
@@ -1495,3 +1520,73 @@ export function startGeneration(
     },
   };
 }
+
+// --- Text to Speech (Read aloud) ---
+
+export interface TtsAudioReadResult {
+  bytes: Uint8Array;
+  mimeType: "audio/wav" | "audio/l16";
+  sampleRate: number;
+  channels: number;
+  segmentBytes: number;
+  nextOffset: number;
+  complete: boolean;
+}
+
+export const ttsApi = {
+  status: (chatId?: string) =>
+    invoke<{
+      settings: TtsSettings;
+      settingsRevision: string;
+      credentialReady: boolean;
+      credentialSourceLabel: string;
+      synthesisReady: boolean;
+      latestSource: {
+        source: TtsSourceRef | null;
+        reason: string;
+      };
+      job: TtsJobSnapshot | null;
+    }>("tts:status", chatId ? { chatId } : {}),
+  getSettings: () =>
+    invoke<{ settings: TtsSettings; settingsRevision: string }>("tts:settings:get"),
+  updateSettings: (expectedRevision: string, patch: unknown) =>
+    invoke<{ settings: TtsSettings; settingsRevision: string }>(
+      "tts:settings:update",
+      { expectedRevision, patch },
+    ),
+  setDedicatedCredential: (apiKey: string) =>
+    invoke<{ ok: true }>("tts:credential:set", { apiKey }),
+  clearDedicatedCredential: () => invoke<{ ok: true }>("tts:credential:clear"),
+  starterVoices: () =>
+    invoke<Array<{ providerVoiceId: string; name: string; kind: "prebuilt" }>>(
+      "tts:voices:starter",
+    ),
+  listVoices: (pageToken?: string) =>
+    invoke<{
+      voices: Array<{ providerVoiceId: string; name: string; kind: "prebuilt" | "prompted" | "replicated" }>;
+      nextPageToken: string | null;
+    }>("tts:voices:list", pageToken ? { pageToken } : undefined),
+  preview: () =>
+    invoke<
+      | { ok: true; snapshot: TtsJobSnapshot }
+      | { ok: false; error: TtsSafeError }
+    >("tts:preview"),
+  start: (request: { requestId: string; source: TtsSourceRef; settingsRevision: string }) =>
+    invoke<
+      | { ok: true; snapshot: TtsJobSnapshot }
+      | { ok: false; error: TtsSafeError }
+    >("tts:start", request),
+  readAudio: (jobId: string, segment: number, offset: number, maxBytes: number) =>
+    invoke<TtsAudioReadResult | null>("tts:audio:read", {
+      jobId,
+      segment,
+      offset,
+      maxBytes,
+    }),
+  pause: () => invoke<TtsJobSnapshot | null>("tts:pause"),
+  resume: () => invoke<TtsJobSnapshot | null>("tts:resume"),
+  stop: () => invoke<{ ok: true }>("tts:stop"),
+  clearCache: () => invoke<{ ok: true }>("tts:cache:clear"),
+  onEvent: (handler: (event: TtsServiceEvent) => void) =>
+    onNotification<TtsServiceEvent>("tts:event", handler),
+};

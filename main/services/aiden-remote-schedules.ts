@@ -92,17 +92,33 @@ function timestamp(value: number | undefined): string | undefined {
   return value === undefined ? undefined : new Date(value).toISOString();
 }
 
-function redactSummary(value: string): string {
+function redactSummary(value: string, limit = 20_000): string {
   return [...value
-    .replace(/\/(?:Users|home)\/[^\s"'`]+/gu, "[local path]")
-    .replace(/\b(?:sk|key|token|secret|bearer)[-_][A-Za-z0-9._-]{12,}\b/giu, "[redacted]")]
-    .slice(0, 20_000)
+    .replace(/\/(?:Users|home|private|var|opt|srv|mnt)\/[^\s"'`]+/gu, "[local path]")
+    .replace(/\b[A-Za-z]:\\Users\\[^\s"'`]+/gu, "[local path]")
+    .replace(/file:\/\/[^\s"'`]+/gu, "[local path]")
+    .replace(/\b(?:sk|key|token|secret|bearer|api[_-]?key|password)[-_:=\s]*[A-Za-z0-9._~+/-]{12,}\b/giu, "[redacted]")
+    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}\b/gu, "[redacted]")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gu, "[redacted]")
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu, "[redacted]")
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/gu, "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu, "[redacted]")]
+    .slice(0, limit)
     .join("");
 }
 
-function mapRun(run: ScheduledRun) {
+/** toISOString throws past ±8.64e15 ms — a finite-but-corrupt row still poisons. */
+const ISO_EPOCH_MAX = 8.64e15;
+
+function isWellFormedRun(run: ScheduledRun): boolean {
+  return Number.isFinite(run.startedAt) && Number.isFinite(run.finishedAt)
+    && Math.abs(run.startedAt) <= ISO_EPOCH_MAX && Math.abs(run.finishedAt) <= ISO_EPOCH_MAX
+    && run.finishedAt >= run.startedAt;
+}
+
+function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
   const failed = run.result === "error" || run.result === "blocked";
-  const summary = redactSummary(run.error ?? run.output);
+  const summary = redactSummary(run.error ?? run.output, summaryLimit);
   return {
     id: run.id,
     taskId: run.taskId,
@@ -402,8 +418,53 @@ export class AidenRemoteScheduleService {
   }
 
   async runs(taskId: string) {
-    try { return { runs: (await this.options.application.runs(safeTaskId(taskId))).map(mapRun) }; }
-    catch (error) { mapError(error); }
+    try {
+      const stored = await this.options.application.runs(safeTaskId(taskId));
+      // A corrupt row (non-finite/out-of-range timestamps, finished before it
+      // started) must not poison the whole endpoint.
+      const valid = stored.filter(isWellFormedRun);
+      // Bound the aggregate so 50 worst-case UTF-8 summaries cannot cross the
+      // router's 1 MB response cap (up to 4 bytes per code point).
+      const perRun = Math.min(20_000, Math.max(500, Math.floor(200_000 / Math.max(1, valid.length))));
+      return { runs: valid.map((run) => mapRun(run, perRun)) };
+    } catch (error) { mapError(error); }
+  }
+
+  /**
+   * Completed runs across every task at or after an epoch-ms cursor — the
+   * polling feed paired devices turn into local notifications. The cursor is
+   * inclusive so sibling runs sharing a millisecond are never skipped; clients
+   * dedupe by run id, so boundary redelivery is harmless. When the window
+   * overflows the 100-item cap the OLDEST runs are kept (returned
+   * newest-first for display): the client cursor then only advances past
+   * delivered items and the remainder arrives on the next poll rather than
+   * being silently dropped. `now` lets clients baseline without trusting the
+   * phone clock. Summaries are bounded per-item so the feed stays under the
+   * router's 1 MB response cap.
+   */
+  async notifications(since?: number) {
+    const tasks = await this.options.application.list();
+    const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> = [];
+    for (const task of tasks) {
+      let taskName: string;
+      let runs: ScheduledRun[];
+      try {
+        taskName = [...task.name].slice(0, 120).join("");
+        runs = await this.options.application.runs(task.id);
+      } catch {
+        // A task deleted/corrupt between list() and here must not poison the feed.
+        continue;
+      }
+      for (const run of runs) {
+        if (since !== undefined && run.finishedAt < since) continue;
+        if (run.result === "silent") continue;
+        // A corrupt stored row must not poison the whole feed.
+        if (!isWellFormedRun(run)) continue;
+        notifications.push({ ...mapRun(run, 2_000), taskName, notify: task.notify });
+      }
+    }
+    notifications.sort((a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt));
+    return { notifications: notifications.slice(0, 100).reverse(), now: this.now() };
   }
 
   preview(value: unknown) {

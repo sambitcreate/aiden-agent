@@ -393,6 +393,7 @@ export class AidenRemoteBotFileService {
       folderPath: string;
       displayPath: string;
       signal: AbortSignal;
+      identity: { device: string; inode: string };
     }) => Promise<T>,
   ): Promise<T> {
     let stored: AidenOpaqueHandleClaims;
@@ -420,6 +421,7 @@ export class AidenRemoteBotFileService {
           folderPath: authority.workingDirectory,
           displayPath,
           signal: authority.signal,
+          identity: { device: current.filesystemDevice, inode: current.filesystemInode },
         });
       } catch (error) {
         if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
@@ -440,7 +442,8 @@ export class AidenRemoteBotFileService {
         return projectedDocument(
           fileId,
           input.displayPath,
-          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal),
+          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal,
+            { exclusiveIdentity: input.identity }),
         );
       } catch {
         throw new AidenRemoteServiceError(

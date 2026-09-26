@@ -1,3 +1,4 @@
+import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -15,10 +16,15 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
+  AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
+  AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
+  AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
+  parseAidenRemoteQuestionRespondRequest,
   type AidenRemoteCapability,
+  type AidenRemoteProgressCapability,
   type AidenRemoteBotConversationQuery,
   type AidenRemoteChatAgentRoster,
   type AidenRemoteChatTaskProgress,
@@ -122,7 +128,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -154,14 +160,21 @@ export interface AidenRemoteRouterDependencies {
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
-  >;
-  files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+    "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
+  > &
+    Partial<
+      Pick<
+        AidenRemoteStreamService,
+        "submitInput" | "supportsRunInput" | "pendingQuestion" | "respondQuestion" | "supportsQuestionPrompts"
+      >
+    >;
+  files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-  schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+  readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
   speech?: Pick<
     AidenRemoteSpeechService,
     "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe"
@@ -247,6 +260,7 @@ export type AidenRemoteRouteLabel =
   | "scheduledTasks"
   | "memorySettings"
   | "usage"
+  | "readAloud"
   | "speech"
   | "chats"
   | "chatSummaries"
@@ -254,6 +268,7 @@ export type AidenRemoteRouteLabel =
   | "chatMove"
   | "chatTasks"
   | "chatAgents"
+  | "chatSkills"
   | "chatProgressEvents"
   | "chatAttachment"
   | "turns"
@@ -262,7 +277,10 @@ export type AidenRemoteRouteLabel =
   | "streamApproval"
   | "streamEvents"
   | "streamCancel"
+  | "streamInputs"
+  | "streamQuestion"
   | "approvalRespond"
+  | "questionRespond"
   | "simulators"
   | "simulatorHub"
   | "unknown";
@@ -305,6 +323,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
+  readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
   speech: ["/speech", "/speech/transcriptions", "/speech/models/:modelId/download", "/speech/models/:modelId"],
   chats: ["/chats"],
   chatSummaries: ["/chat-summaries"],
@@ -312,6 +331,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatMove: ["/chats/:id/move"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
+  chatSkills: ["/chats/:id/skills"],
   chatProgressEvents: ["/chats/:id/progress/events"],
   chatAttachment: [
     "/chats/:id/attachments",
@@ -322,9 +342,12 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   models: ["/models"],
   stream: ["/streams/:streamId"],
   streamApproval: ["/streams/:streamId/approval"],
+  streamQuestion: ["/streams/:streamId/question"],
   streamEvents: ["/streams/:streamId/events"],
   streamCancel: ["/streams/:streamId/cancel"],
+  streamInputs: ["/streams/:streamId/inputs"],
   approvalRespond: ["/approvals/:approvalId/respond"],
+  questionRespond: ["/questions/:promptId/respond"],
   simulators: ["/simulators", "/simulators/:action"],
   simulatorHub: ["/simulators/hub/:path"],
   unknown: [],
@@ -549,7 +572,7 @@ function negotiatedDeviceCapabilities(
     [...device.capabilities].filter((capability) =>
       (capability !== "bot:read" && capability !== "bot:write" ||
         device.acceptsBotCapabilities === true) &&
-      (capability !== "tasks:read" && capability !== "agents:read" ||
+      (!(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
         device.acceptsProgressCapabilities === true) &&
       (capability !== "simulators:control" ||
         device.type === "mac" || device.type === "linux"),
@@ -605,13 +628,20 @@ async function authenticateCredential(
   return { ...device, capabilities };
 }
 
-type BotChatResource = "chat" | "stream" | "approval";
+type BotChatResource = "chat" | "stream" | "approval" | "question";
 
 function unavailableBotChatResource(resource: BotChatResource): AidenRemoteServiceError {
   if (resource === "approval") {
     return new AidenRemoteServiceError(
       "approval_expired",
       "This approval is no longer available.",
+      409,
+    );
+  }
+  if (resource === "question") {
+    return new AidenRemoteServiceError(
+      "question_expired",
+      "This question prompt is no longer available.",
       409,
     );
   }
@@ -863,6 +893,24 @@ function usageQuery(query: string): UsageDateRange {
   return range as UsageDateRange;
 }
 
+function scheduledNotificationsQuery(query: string): { since?: number } {
+  if (!query) return {};
+  const separator = query.indexOf("=");
+  if (
+    separator <= 0 ||
+    query.slice(0, separator) !== "since" ||
+    query.indexOf("&") >= 0 ||
+    !/^(?:0|[1-9]\d{0,15})$/u.test(query.slice(separator + 1))
+  ) {
+    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+  }
+  const parsed = Number(query.slice(separator + 1));
+  if (!Number.isSafeInteger(parsed)) {
+    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+  }
+  return { since: parsed };
+}
+
 function scheduledScriptsQuery(query: string): { workspaceId?: string } {
   if (!query) return {};
   const separator = query.indexOf("=");
@@ -998,7 +1046,7 @@ function requireDeviceCapabilities(
 
 function requireNegotiatedProgressCapability(
   device: AidenRemoteRouterAuthenticatedDevice,
-  capability: "tasks:read" | "agents:read",
+  capability: AidenRemoteProgressCapability,
 ): void {
   if (
     device.acceptsProgressCapabilities === true &&
@@ -1015,8 +1063,14 @@ function requireNegotiatedProgressCapability(
 
 function progressCapabilitySupported(
   dependencies: AidenRemoteRouterDependencies,
-  capability: "tasks:read" | "agents:read",
+  capability: AidenRemoteProgressCapability,
 ): boolean {
+  if (capability === "questions:respond") {
+    return dependencies.streams?.supportsQuestionPrompts?.() === true;
+  }
+  if (capability === "skills:invoke") {
+    return typeof dependencies.chats?.chatSkillCatalog === "function";
+  }
   if (!dependencies.chats || !dependencies.chatProgress?.openEvents) return false;
   return capability === "tasks:read"
     ? Boolean(dependencies.chatProgress.taskSnapshot)
@@ -1239,6 +1293,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
               : []),
@@ -1247,6 +1302,15 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(progressCapabilitySupported(dependencies, "agents:read")
               ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE]
+              : []),
+            ...(dependencies.streams?.supportsRunInput?.() === true
+              ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE]
+              : []),
+            ...(dependencies.streams?.supportsQuestionPrompts?.() === true
+              ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE]
+              : []),
+            ...(progressCapabilitySupported(dependencies, "skills:invoke")
+              ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -1818,12 +1882,21 @@ export function createAidenRemoteRequestHandler(
       }
       const workspaceFilesMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files$/u.exec(path);
       if (workspaceFilesMatch && request.method === "GET") {
-        requireNoQuery(query);
+        const params = new URLSearchParams(query);
+        if (query && (params.get("tree") !== "1" || [...params.keys()].some(key =>
+          !["tree", "directory", "cursor"].includes(key) || params.getAll(key).length !== 1) ||
+          (params.has("directory") && !/^file_[A-Za-z0-9_-]{43}$/u.test(params.get("directory")!)) ||
+          (params.has("cursor") && !/^cur_[A-Za-z0-9_-]{43}$/u.test(params.get("cursor")!)))) {
+          throw new AidenRemoteServiceError("invalid_request", "The file page request is invalid.", 400);
+        }
         route = "workspaceFiles";
         const device = await authenticate(request, dependencies.devices, "files:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
+        if (query && !dependencies.files.children) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, query
+          ? await dependencies.files.children!(device.id, workspaceFilesMatch[1]!, params.get("directory") ?? undefined, params.get("cursor") ?? undefined)
+          : await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
         return;
       }
       const workspaceFileMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
@@ -2013,6 +2086,14 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, await dependencies.schedules.mcpServers());
         return;
       }
+      if (path === "/scheduled-tasks/notifications" && request.method === "GET") {
+        route = "scheduledTasks";
+        const device = await authenticate(request, dependencies.devices, "schedule:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.schedules.notifications(scheduledNotificationsQuery(query).since));
+        return;
+      }
       if (path === "/scheduled-tasks/settings" && request.method === "GET") {
         requireNoQuery(query);
         route = "scheduledTasks";
@@ -2174,6 +2255,37 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.usage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.usage.summary(usageQuery(query)));
+        return;
+      }
+      const readAloudChatMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud$/u.exec(path);
+      const readAloudStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/stop$/u.exec(path);
+      const readAloudAudioMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/audio\/([A-Za-z0-9-]{1,128})\/(\d{1,5})\/(\d{1,9})$/u.exec(path);
+      const readAloudMatch = readAloudChatMatch ?? readAloudStopMatch ?? readAloudAudioMatch;
+      if ((path === "/read-aloud" && request.method === "GET") || readAloudMatch) {
+        requireNoQuery(query);
+        route = "readAloud";
+        const method = request.method;
+        const device = await authenticate(request, dependencies.devices, method === "GET" ? "chat:read" : "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const service = dependencies.readAloud;
+        if (!service || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Read Aloud requires an updated desktop app.", 404);
+        if (!readAloudMatch) { writeJson(response, 200, await service.status()); return; }
+        const chatId = readAloudMatch[1]!;
+        await requireChatAccess(dependencies.chats, device, chatId, method === "GET" ? "read" : "write");
+        const chats = dependencies.chats;
+        const authority = {
+          deviceId: device.id, chatId,
+          current: () => { try { dependencies.devices.acquireDeviceAuthorization(device.id, false)(); return true; } catch { return false; } },
+          authorize: async () => { await requireChatAccess(chats, device, chatId, "write"); },
+        };
+        if (method === "GET" && readAloudAudioMatch) {
+          writeJson(response, 200, await service.read(authority, readAloudAudioMatch[2]!, Number(readAloudAudioMatch[3]), Number(readAloudAudioMatch[4])));
+        } else if (method === "GET" && readAloudChatMatch) {
+          writeJson(response, 200, await service.status(authority));
+        } else if (method === "POST" && !readAloudAudioMatch) {
+          const body = await readJsonBody(request, 4096);
+          writeJson(response, 200, readAloudStopMatch ? service.stop(authority, body) : await service.start(authority, body));
+        } else throw new AidenRemoteServiceError("not_found", "Read Aloud configuration is available only on the desktop.", 404);
         return;
       }
       if (path === "/speech" && request.method === "GET") {
@@ -2373,6 +2485,24 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const chatSkillsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/skills$/u.exec(path);
+      if (chatSkillsMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chatSkills";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (typeof dependencies.chats?.chatSkillCatalog !== "function") {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireNegotiatedProgressCapability(device, "skills:invoke");
+        await requireChatAccess(dependencies.chats, device, chatSkillsMatch[1]!, "read");
+        writeJson(
+          response,
+          200,
+          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!),
+        );
+        return;
+      }
       const chatProgressEventsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/progress\/events$/u.exec(path);
       if (chatProgressEventsMatch && request.method === "GET") {
         route = "chatProgressEvents";
@@ -2543,6 +2673,29 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, { approval });
         return;
       }
+      const streamQuestionMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/question$/u.exec(path);
+      if (streamQuestionMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "streamQuestion";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (
+          !dependencies.streams?.pendingQuestion ||
+          dependencies.streams.supportsQuestionPrompts?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = dependencies.streams.streamChatId(device.id, streamQuestionMatch[1]!);
+        await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
+        writeJson(response, 200, {
+          question: dependencies.streams.pendingQuestion(
+            device.id,
+            streamQuestionMatch[1]!,
+          ),
+        });
+        return;
+      }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);
       if (cancelMatch && request.method === "POST") {
         requireNoQuery(query);
@@ -2560,6 +2713,74 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const streamInputsMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/inputs$/u.exec(path);
+      if (streamInputsMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "streamInputs";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const body = await readJsonBody(request);
+        if (
+          !dependencies.streams?.submitInput ||
+          dependencies.streams.supportsRunInput?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        writeJson(
+          response,
+          200,
+          await dependencies.streams.submitInput(
+            device.id,
+            streamInputsMatch[1]!,
+            body,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "stream", action),
+          ),
+        );
+        return;
+      }
+      const questionMatch = /^\/questions\/([A-Za-z0-9._:-]{1,128})\/respond$/u.exec(path);
+      if (questionMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "questionRespond";
+        const body = await readJsonBody(request);
+        let input;
+        try {
+          input = parseAidenRemoteQuestionRespondRequest(body);
+        } catch {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The question response is invalid.",
+            400,
+          );
+        }
+        const device = await authenticate(request, dependencies.devices, "questions:respond");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        if (
+          !dependencies.streams?.respondQuestion ||
+          dependencies.streams.supportsQuestionPrompts?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        writeJson(
+          response,
+          200,
+          await dependencies.streams.respondQuestion(
+            device.id,
+            questionMatch[1]!,
+            input,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "question", action),
+          ),
+        );
+        return;
+      }
       const approvalMatch = /^\/approvals\/([A-Za-z0-9._:-]{1,128})\/respond$/u.exec(path);
       if (approvalMatch && request.method === "POST") {
         requireNoQuery(query);
@@ -2570,31 +2791,26 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        const chatId = dependencies.streams.approvalChatId(device.id, approvalMatch[1]!);
         writeJson(
           response,
           200,
-          await runChatMutation(
-            dependencies.chats,
-            device,
-            chatId,
-            "approval",
-            () => {
-              const requiredCapability =
-                dependencies.streams!.approvalRequiredCapability(
-                  device.id,
-                  approvalMatch[1]!,
-                );
-              if (decision === "allow" && requiredCapability) {
-                requireDeviceCapabilities(device, [requiredCapability]);
-              }
-              return dependencies.streams!.respondApproval(
-                device.id,
-                approvalMatch[1]!,
-                decision,
-                key,
-              );
-            },
+          await dependencies.streams.respondApproval(
+            device.id,
+            approvalMatch[1]!,
+            decision,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "approval", async () => {
+                const requiredCapability =
+                  dependencies.streams!.approvalRequiredCapability(
+                    device.id,
+                    approvalMatch[1]!,
+                  );
+                if (decision === "allow" && requiredCapability) {
+                  requireDeviceCapabilities(device, [requiredCapability]);
+                }
+                return action();
+              }),
           ),
         );
         return;

@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
@@ -43,8 +45,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -191,14 +196,20 @@ private fun AidenProgressChip(
 ) {
     val palette = AidenTheme.palette
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = CircleShape,
         modifier = Modifier
             .heightIn(min = AidenUi.MinimumTouchTarget)
+            .shadow(
+                elevation = 2.dp,
+                shape = CircleShape,
+                ambientColor = Color.Black.copy(alpha = 0.08f),
+                spotColor = Color.Black.copy(alpha = 0.08f)
+            )
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
                 role = Role.Button
-                contentDescription = "$description: $label"
+                contentDescription = "$description: $label${supportingLabel?.let { ", $it" } ?: ""}"
             }
     ) {
         Column(
@@ -242,6 +253,44 @@ fun AidenTaskProgressSheet(
 private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val palette = AidenTheme.palette
     val tasks = progress.tasks.filter { it.status != AidenChatTaskStatus.DELETED }
+    val listState = rememberLazyListState()
+    var didPinToEnd by remember(listState) { mutableStateOf(false) }
+    var followLatest by remember(listState) { mutableStateOf(true) }
+    val taskFollowKey = AidenChatScroll.taskListFollowKey(tasks)
+    LaunchedEffect(listState) {
+        var wasScrolling = false
+        snapshotFlow {
+            // Live layout state only: `tasks` captured here would go stale after updates.
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            listState.isScrollInProgress to AidenChatScroll.isFollowingTaskListEnd(
+                lastVisibleItemIndex = last?.index ?: -1,
+                lastVisibleItemEndOffset = last?.let { it.offset + it.size } ?: 0,
+                viewportContentEndOffset = layout.viewportEndOffset - layout.afterContentPadding,
+                totalItemCount = layout.totalItemsCount,
+            )
+        }.collect { (scrolling, atEnd) ->
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = atEnd
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = atEnd
+            }
+        }
+    }
+    LaunchedEffect(progress.epoch, taskFollowKey) {
+        if (AidenChatScroll.shouldPinTaskList(didPinToEnd, tasks.size)) {
+            listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
+            didPinToEnd = true
+            followLatest = true
+            return@LaunchedEffect
+        }
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest) && tasks.isNotEmpty()) {
+            listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
+            followLatest = true
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
         Text("Task progress", style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
@@ -252,6 +301,7 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
         )
         Spacer(modifier = Modifier.height(14.dp))
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)

@@ -9,6 +9,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileDocument
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileEntry
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileIndex
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileKind
+import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileLink
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.io.File
 import java.security.MessageDigest
@@ -71,7 +72,7 @@ class AidenWorkspaceEnvironmentCache(private val directory: File) {
     fun store(index: AidenWorkspaceFileIndex, instanceId: String, workspaceId: String) {
         val retained = load(instanceId, workspaceId)?.documents ?: emptyMap()
         val validIds = index.entries.filter { it.kind == AidenWorkspaceFileKind.FILE }.map { it.id }.toSet()
-        val filteredDocs = retained.filter { validIds.contains(it.key) }
+        val filteredDocs = if (index.directoryPath != null) retained else retained.filter { validIds.contains(it.key) }
         persist(
             Snapshot(
                 index = index,
@@ -85,11 +86,18 @@ class AidenWorkspaceEnvironmentCache(private val directory: File) {
 
     @Synchronized
     fun store(document: AidenWorkspaceFileDocument, instanceId: String, workspaceId: String) {
-        val snapshot = load(instanceId, workspaceId) ?: return
-        val map = snapshot.documents.toMutableMap()
+        val snapshot = load(instanceId, workspaceId) ?: Snapshot(
+            AidenWorkspaceFileIndex("cached-files", emptyList(), false, 4_000, 20, directoryPath = ""))
+        val map = snapshot.documents.filterValues { it.displayPath != document.displayPath }.toMutableMap()
         map[document.id] = document
         val updated = snapshot.copy(documents = map, updatedAt = Instant.now())
         persist(updated, instanceId, workspaceId)
+    }
+
+    @Synchronized
+    fun document(reference: String, instanceId: String, workspaceId: String): AidenWorkspaceFileDocument? {
+        val path = AidenWorkspaceFileLink.path(reference) ?: return null
+        return load(instanceId, workspaceId)?.documents?.values?.firstOrNull { it.displayPath == path }
     }
 
     @Synchronized

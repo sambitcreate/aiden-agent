@@ -22,6 +22,7 @@ import {
   Smartphone,
   TabletSmartphone,
   AudioWaveform,
+  Volume2,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -30,6 +31,7 @@ import { McpSettings } from "../components/settings/mcp-settings";
 import { WebSearchSettings } from "../components/settings/web-search-settings";
 import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
+import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
@@ -72,6 +74,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   simulator: <TabletSmartphone className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
+  tts: <Volume2 className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
   about: <Info className="size-5" />,
@@ -99,6 +102,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   scheduledTasks: ScheduledTasksSettings,
   geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
+  tts: TtsSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
@@ -118,6 +122,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   scheduledTasks: "Manage when Aiden works in the background.",
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
+  tts: "Read Aiden’s latest response aloud with Google Gemini.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme and choose when Aiden uses its light or dark look.",
   about: "App information, updates, and diagnostics.",

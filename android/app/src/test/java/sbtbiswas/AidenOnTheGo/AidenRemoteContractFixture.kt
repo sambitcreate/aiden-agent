@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.protocol.*
@@ -196,6 +197,21 @@ data class AidenBotLegacyNonNegotiatingFixture(
 )
 
 @Serializable
+data class AidenStreamInputFixture(
+    val request: AidenStreamInputRequest,
+    val response: AidenStreamInputResult
+)
+
+/** Raw question wire objects; tests decode them through the strict codec so
+ * the shared fixture exercises the same bounds as the live SSE path. */
+@Serializable
+data class AidenQuestionFixture(
+    val pending: JsonObject,
+    val respondRequest: JsonObject,
+    val respondResponse: JsonObject
+)
+
+@Serializable
 data class AidenRemoteContractFixture(
     val contractRevision: Int,
     val protocolVersion: Int,
@@ -237,6 +253,14 @@ data class AidenRemoteContractFixture(
     val agentRoster: AidenChatAgentRoster? = null,
     val deviceCapabilitiesUpdate: AidenDeviceCapabilitiesUpdateFixture? = null,
     val chatProgressEvents: List<AidenRemoteStreamEvent> = emptyList(),
+    val streamInput: AidenStreamInputFixture? = null,
+    val streamStatus: AidenStreamStatus? = null,
+    val question: AidenQuestionFixture? = null,
+    /** Raw catalog wire object; tests decode it through the strict codec so
+     * the shared fixture exercises the same bounds as the live route. */
+    val chatSkills: JsonObject? = null,
+    val events: List<JsonObject> = emptyList(),
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
+    val scheduleRunNotification: AidenScheduledRunNotification? = null,
     val error: AidenRemoteErrorEnvelope? = null
 )

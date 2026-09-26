@@ -202,7 +202,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .build:
-            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. When Bots are available on your paired desktop, use them as reusable helpers and tap the Aiden logo to switch.")
+            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired desktop, use them as reusable helpers and tap the Aiden logo to switch.")
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
         case .control:
@@ -581,6 +581,9 @@ struct AidenPairingView: View {
                 pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your desktop, go to Settings → Aiden On The Go.")
                 pairingStep(number: 2, title: "Connect your phone", detail: "Choose where you’ll use Aiden, then select Connect a device. Review what Aiden will enable.")
                 pairingStep(number: 3, title: "Scan to finish", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
+                Text("Read Aloud uses your desktop’s settings. Enable it on the desktop; selected response text is sent to Google only when you press Play. Charges may apply.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
 
                 VStack(alignment: .leading, spacing: 10) {
                     Label("Only devices you connect can access Aiden", systemImage: "key.fill")

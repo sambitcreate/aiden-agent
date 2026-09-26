@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/.git
+**/.gradle
+**/build
+**/.memory
+**/.papercuts
+**/.env*
+**/auth.json
+**/credentials
+ios
+android
+release
+.tmp

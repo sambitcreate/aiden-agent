@@ -901,6 +901,23 @@ class AidenRemoteClient(
         cancelStream(turnId)
     }
 
+    /** Remote Slice 2: mid-flight input bound to the displayed stream. Control
+     * writes never auto-retry; the stable request UUID makes manual retries
+     * replay the Mac's original admission outcome. */
+    suspend fun submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ): AidenStreamInputResult = executeRequest(
+        "/streams/$id/inputs",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = json.encodeToString(input),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
     suspend fun respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -921,6 +938,47 @@ class AidenRemoteClient(
         decision: AidenApprovalDecision,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenApprovalResponse = respondToApproval(approvalId, decision, idempotencyKey)
+
+    /** Authoritative pending-question snapshot for one stream. Returns
+     * `{question: null}` when no prompt is pending. */
+    suspend fun streamQuestion(id: String): AidenStreamQuestionSnapshot = executeRequest("/streams/$id/question") { bytes ->
+        AidenQuestionContractCodec.parseSnapshot(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
+    suspend fun pendingQuestion(chatId: String, streamId: String): AidenStreamPendingQuestion? =
+        streamQuestion(streamId).question
+
+    /** Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+     * the Bot's currently admitted skills; the catalog is presentation input
+     * only — the Mac re-validates every lease redemption at turn admission. */
+    suspend fun chatSkills(chatId: String): AidenRemoteSkillCatalog = executeRequest(
+        "/chats/$chatId/skills",
+        botScope = AidenBotPrivateResponseScope.Root("chatSkills")
+    ) { bytes ->
+        AidenSkillContractCodec.parseCatalog(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
+    /** Question responses never auto-retry; the stable request UUID makes a
+     * manual retry replay the Mac's original outcome. */
+    suspend fun respondToQuestion(
+        id: String,
+        response: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenQuestionRespondResponse = executeRequest(
+        "/questions/$id/respond",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = response.toJson().toString(),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        AidenQuestionContractCodec.parseRespondResponse(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
 
     fun streamEvents(
         id: String,
@@ -1414,6 +1472,18 @@ class AidenRemoteClient(
         AidenScheduledTaskValidation.runs(resp.runs, taskId)
     }
 
+    suspend fun scheduledRunNotifications(since: Instant? = null): AidenScheduledRunNotificationFeed {
+        val query = since?.let { "?since=${it.toEpochMilli()}" } ?: ""
+        return executeRequest("/scheduled-tasks/notifications$query") { bytes ->
+            val resp = json.decodeFromString<ScheduledRunNotificationListResponse>(String(bytes, Charsets.UTF_8))
+            if (resp.now < 0) throw AidenRemoteClientException.InvalidResponse()
+            AidenScheduledRunNotificationFeed(
+                AidenScheduledTaskValidation.notifications(resp.notifications),
+                Instant.ofEpochMilli(resp.now)
+            )
+        }
+    }
+
     suspend fun previewSchedule(cron: String, timezone: String, count: Int = 3): List<Instant> = executeRequest(
         "/scheduled-tasks/preview",
         method = "POST",
@@ -1451,6 +1521,22 @@ class AidenRemoteClient(
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
+
+    suspend fun readAloudStatus(chatId: String? = null): AidenReadAloudStatus = executeRequest(
+        if (chatId == null) "/read-aloud" else "/chats/$chatId/read-aloud"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun startReadAloud(chatId: String, request: AidenReadAloudStart): AidenReadAloudJob = executeRequest(
+        "/chats/$chatId/read-aloud", method = "POST", bodyJson = json.encodeToString(request), retryConnectionFailure = false
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun stopReadAloud(chatId: String, requestId: String): Unit = executeRequest(
+        "/chats/$chatId/read-aloud/stop", method = "POST", bodyJson = json.encodeToString(AidenReadAloudStop(requestId)), retryConnectionFailure = false
+    ) { Unit }
+
+    suspend fun readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int): AidenReadAloudAudio = executeRequest(
+        "/chats/$chatId/read-aloud/audio/$jobId/$segment/$offset"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
 
     suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
@@ -1498,6 +1584,42 @@ class AidenRemoteClient(
         AidenWorkspaceEnvironmentValidation.validated(index)
     }
 
+    suspend fun workspaceLinkedFile(workspaceId: String, reference: String): AidenWorkspaceFileDocument {
+        val path = AidenWorkspaceFileLink.path(reference) ?: throw AidenRemoteClientException.InvalidResponse()
+        val parts = path.split("/")
+        var directory: String? = null
+        var requests = 0
+        for (index in parts.indices) {
+            val target = parts.take(index + 1).joinToString("/")
+            var cursor: String? = null
+            var found: AidenWorkspaceFileEntry?
+            do {
+                if (++requests > 40) throw AidenRemoteClientException.InvalidResponse()
+                val page = workspaceFilePage(workspaceId, directory, cursor)
+                found = page.entries.firstOrNull { it.displayPath == target }
+                cursor = page.nextCursor
+            } while (found == null && cursor != null)
+            val entry = found ?: throw AidenRemoteClientException.InvalidResponse()
+            if (index == parts.lastIndex) {
+                if (entry.kind != AidenWorkspaceFileKind.FILE) throw AidenRemoteClientException.InvalidResponse()
+                return workspaceFile(workspaceId, entry.id)
+            }
+            if (entry.kind != AidenWorkspaceFileKind.DIRECTORY) throw AidenRemoteClientException.InvalidResponse()
+            directory = entry.id
+        }
+        throw AidenRemoteClientException.InvalidResponse()
+    }
+
+    suspend fun workspaceFilePage(workspaceId: String, directoryId: String? = null, cursor: String? = null): AidenWorkspaceFileIndex {
+        require(directoryId == null || AidenWorkspaceEnvironmentValidation.opaqueFileID(directoryId))
+        require(cursor == null || cursor.matches(Regex("^cur_[A-Za-z0-9_-]{43}$")))
+        val suffix = "?tree=1" + (directoryId?.let { "&directory=$it" } ?: "") + (cursor?.let { "&cursor=$it" } ?: "")
+        return executeRequest("/workspaces/$workspaceId/files$suffix", maximumResponseBytes = 2 * 1_024 * 1_024) { bytes ->
+            val index = json.decodeFromString<AidenWorkspaceFileIndex>(String(bytes, Charsets.UTF_8))
+            AidenWorkspaceEnvironmentValidation.validatedPage(index)
+        }
+    }
+
     suspend fun fileIndex(workspaceId: String): AidenWorkspaceFileIndex = workspaceFiles(workspaceId)
 
     suspend fun workspaceFile(workspaceId: String, fileId: String): AidenWorkspaceFileDocument = executeRequest(
@@ -1512,6 +1634,7 @@ class AidenRemoteClient(
     suspend fun writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
+        displayPath: String,
         content: String,
         expectedVersion: String
     ): AidenWorkspaceFileDocument = executeRequest(
@@ -1520,11 +1643,11 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenWorkspaceFileWriteRequest(content = content, expectedVersion = expectedVersion))
     ) { bytes ->
         val doc = json.decodeFromString<AidenWorkspaceFileDocument>(String(bytes, Charsets.UTF_8))
-        AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
+        AidenWorkspaceEnvironmentValidation.validatedSave(doc, displayPath)
     }
 
-    suspend fun writeFile(workspaceId: String, fileId: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
-        writeWorkspaceFile(workspaceId, fileId, content, expectedVersion)
+    suspend fun writeFile(workspaceId: String, fileId: String, displayPath: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
+        writeWorkspaceFile(workspaceId, fileId, displayPath, content, expectedVersion)
 
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"
@@ -1788,6 +1911,12 @@ class AidenRemoteClient(
 
     @Serializable
     private data class ScheduledRunListResponse(val runs: List<AidenScheduledRun>)
+
+    @Serializable
+    private data class ScheduledRunNotificationListResponse(
+        val notifications: List<AidenScheduledRunNotification>,
+        val now: Long
+    )
 
     @Serializable
     private data class ScheduledScriptListResponse(val scripts: List<AidenScheduledScript>)

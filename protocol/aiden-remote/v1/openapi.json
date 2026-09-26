@@ -959,6 +959,43 @@
         }
       }
     },
+    "/chats/{chatId}/skills": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatSkills",
+        "description": "Bounded invocable-skill catalog for one chat, identical to the desktop slash palette projection: opaque invocation leases plus safe display metadata. Bot chats are narrowed to the Bot's currently admitted skills. Requires the negotiated skills:invoke grant in addition to chat:read.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "skills:invoke"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical chat skill catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSkillCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/progress/events": {
       "parameters": [
         {
@@ -1875,6 +1912,38 @@
         }
       }
     },
+    "/streams/{streamId}/question": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getStreamQuestion",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/StreamId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current bounded question prompt for this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamQuestionSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/streams/{streamId}/cancel": {
       "parameters": [
         {
@@ -1900,6 +1969,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StreamStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/streams/{streamId}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "submitStreamInput",
+        "description": "Shared foreground admission for mid-flight user input (advertised as the chat-run-input-v1 server feature). The Mac host derives the chat from the stream, revalidates ownership and run state, persists the user message before returning an accepted receipt, and binds the admission to the Idempotency-Key request UUID. Domain rejections return 200 with status=rejected so the client draft stays unconsumed; committed=true means the message is durable transcript history and must not be resent.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/StreamId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Admission outcome for the requested input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamInputResult"
                 }
               }
             }
@@ -1984,6 +2099,57 @@
                     }
                   },
                   "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/questions/{promptId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondQuestion",
+        "description": "Resolve a pending question prompt owned by this device. The host only offers the ask_user_question tool to turns started by devices that negotiated questions:respond.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "questions:respond",
+        "parameters": [
+          {
+            "name": "promptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionRespondResponse"
                 }
               }
             }
@@ -2162,11 +2328,14 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/WorkspaceId"
-          }
+          },
+          { "name": "tree", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "Opt into nonrecursive directory pages. Required when directory or cursor is supplied." },
+          { "name": "directory", "in": "query", "schema": { "type": "string", "pattern": "^file_[A-Za-z0-9_-]{43}$" }, "description": "Opaque directory handle from a file page; omitted for workspace root." },
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" }, "description": "Expiring device/workspace/directory-bound continuation. An evicted snapshot returns handle_expired." }
         ],
         "responses": {
           "200": {
-            "description": "Bounded recursive file index",
+            "description": "Legacy bounded recursive file index, or at most 200 direct children when tree=1. Page responses include directoryPath; nextCursor indicates more captured children. truncated reports omitted/scan-limited entries, not pagination.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3079,6 +3248,61 @@
         }
       }
     },
+    "/scheduled-tasks/notifications": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listScheduledTaskNotifications",
+        "x-aiden-capability": "schedule:read",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed scheduled-task runs across all tasks, newest first (max 100; when the window overflows, the oldest runs are kept and the remainder arrives on the next poll)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "notifications",
+                    "now"
+                  ],
+                  "properties": {
+                    "notifications": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ScheduleRunNotification"
+                      }
+                    },
+                    "now": {
+                      "type": "integer",
+                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/scheduled-tasks/preview": {
       "parameters": [
         {
@@ -3629,6 +3853,218 @@
           }
         }
       }
+    },
+    "/read-aloud": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getReadAloudSettingsStatus",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getChatReadAloudStatus",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "startChatReadAloud",
+        "x-aiden-capability": "chat:write",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudJob",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAloudStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud/stop": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "stopChatReadAloud",
+        "x-aiden-capability": "chat:write",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudStopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudStopped"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAloudStop"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "chatId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "name": "jobId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "name": "segment",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        {
+          "name": "offset",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          }
+        }
+      ],
+      "get": {
+        "operationId": "readChatReadAloudAudio",
+        "x-aiden-capability": "chat:read",
+        "description": "Requires tts-v1. Playback only; settings and credentials remain desktop-owned. No automatic synthesis retry.",
+        "responses": {
+          "200": {
+            "description": "ReadAloudAudio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAloudAudio"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4028,7 +4464,9 @@
                 "bot:read",
                 "bot:write",
                 "tasks:read",
-                "agents:read"
+                "agents:read",
+                "questions:respond",
+                "skills:invoke"
               ]
             },
             "uniqueItems": true
@@ -4118,6 +4556,8 @@
                 "bot:write",
                 "tasks:read",
                 "agents:read",
+                "questions:respond",
+                "skills:invoke",
                 "simulators:control"
               ]
             },
@@ -4145,6 +4585,8 @@
                 "bot:write",
                 "tasks:read",
                 "agents:read",
+                "questions:respond",
+                "skills:invoke",
                 "simulators:control"
               ]
             },
@@ -4257,6 +4699,8 @@
               "enum": [
                 "tasks:read",
                 "agents:read",
+                "questions:respond",
+                "skills:invoke",
                 "simulators:control"
               ]
             },
@@ -4293,6 +4737,8 @@
                 "bot:write",
                 "tasks:read",
                 "agents:read",
+                "questions:respond",
+                "skills:invoke",
                 "simulators:control"
               ]
             },
@@ -6884,6 +7330,95 @@
               "type": "string",
               "pattern": "^att_[A-Za-z0-9_-]{43}$"
             }
+          },
+          "skill": {
+            "$ref": "#/components/schemas/SkillInvocation",
+            "description": "Optional explicit skill invocation lease from GET /chats/{chatId}/skills. The Mac resolves, expands, and binds it to the appended user message exactly like a desktop slash selection; requires the negotiated skills:invoke grant."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SkillInvocation": {
+        "type": "object",
+        "required": [
+          "version",
+          "invocationId",
+          "displayName",
+          "source"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "invocationId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "source": {
+            "enum": [
+              "configured",
+              "workspace",
+              "global"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatSkillCatalogEntry": {
+        "type": "object",
+        "required": [
+          "invocationId",
+          "name",
+          "description",
+          "source",
+          "available"
+        ],
+        "properties": {
+          "invocationId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "source": {
+            "enum": [
+              "configured",
+              "workspace",
+              "global"
+            ]
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatSkillCatalog": {
+        "type": "object",
+        "required": [
+          "skills"
+        ],
+        "properties": {
+          "skills": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/ChatSkillCatalogEntry"
+            }
           }
         },
         "additionalProperties": false
@@ -7013,6 +7548,87 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StreamInputRequest": {
+        "type": "object",
+        "required": [
+          "mode",
+          "text"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ],
+            "description": "steer injects guidance into the active turn; queue follows up after the current turn."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200000
+          }
+        },
+        "additionalProperties": false
+      },
+      "StreamInputResult": {
+        "type": "object",
+        "required": [
+          "streamId",
+          "chatId",
+          "turnId",
+          "mode",
+          "status",
+          "committed"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ]
+          },
+          "status": {
+            "enum": [
+              "admitted",
+              "rejected"
+            ]
+          },
+          "queue": {
+            "enum": [
+              "steer",
+              "follow-up"
+            ],
+            "description": "Runtime queue that accepted the input; present only when status=admitted."
+          },
+          "reason": {
+            "enum": [
+              "run_not_active",
+              "cancelled",
+              "capacity",
+              "invalid"
+            ],
+            "description": "Rejection reason; present only when status=rejected."
+          },
+          "committed": {
+            "type": "boolean",
+            "description": "True once the user message is durable in the chat transcript; a rejected-but-committed input must not be resent."
+          },
+          "messageId": {
+            "type": "string",
+            "description": "Transcript identity of the committed user message."
           }
         },
         "additionalProperties": false
@@ -7314,6 +7930,52 @@
                     "summary": {
                       "type": "string",
                       "maxLength": 2000
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "question_required"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "promptId",
+                    "questions",
+                    "expiresAt"
+                  ],
+                  "properties": {
+                    "promptId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "questions": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 4,
+                      "items": {
+                        "$ref": "#/components/schemas/PendingQuestionItem"
+                      }
                     },
                     "expiresAt": {
                       "type": "string",
@@ -7679,6 +8341,8 @@
           "maxDepth"
         ],
         "properties": {
+          "directoryPath": { "type": "string", "maxLength": 4096, "description": "Workspace-relative directory, empty for root. Present only for tree pages." },
+          "nextCursor": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" },
           "snapshotId": {
             "type": "string"
           },
@@ -8443,6 +9107,55 @@
         },
         "additionalProperties": false
       },
+      "ScheduleRunNotification": {
+        "type": "object",
+        "required": [
+          "id",
+          "taskId",
+          "taskName",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "notify"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "taskName": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "status": {
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "notify": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "ScheduleSettings": {
         "type": "object",
         "required": [
@@ -8588,6 +9301,9 @@
           "stream_gone",
           "approval_already_resolved",
           "approval_expired",
+          "question_already_resolved",
+          "question_expired",
+          "skill_unavailable",
           "operation_in_progress",
           "operation_stale",
           "git_capability_denied",
@@ -8665,6 +9381,453 @@
             "additionalProperties": false
           }
         },
+        "additionalProperties": false
+      },
+      "PendingQuestionOption": {
+        "type": "object",
+        "required": [
+          "label",
+          "description"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      },
+      "PendingQuestionItem": {
+        "type": "object",
+        "required": [
+          "question",
+          "header",
+          "multiSelect",
+          "options"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "header": {
+            "type": "string",
+            "maxLength": 16
+          },
+          "multiSelect": {
+            "type": "boolean"
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/PendingQuestionOption"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PendingQuestion": {
+        "type": "object",
+        "required": [
+          "promptId",
+          "streamId",
+          "chatId",
+          "toolCallId",
+          "questions",
+          "expiresAt"
+        ],
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "streamId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/PendingQuestionItem"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StreamQuestionSnapshot": {
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PendingQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuestionAnswer": {
+        "type": "object",
+        "required": [
+          "questionIndex",
+          "kind"
+        ],
+        "properties": {
+          "questionIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "kind": {
+            "enum": [
+              "option",
+              "custom",
+              "multi"
+            ]
+          },
+          "answer": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "Required for option and custom kinds; option answers must equal one offered option label."
+          },
+          "selected": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "description": "Required for the multi kind; every entry must equal an offered option label."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuestionRespondRequest": {
+        "type": "object",
+        "required": [
+          "cancelled",
+          "answers"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean",
+            "description": "True when the user dismissed the prompt without answering."
+          },
+          "answers": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/QuestionAnswer"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuestionRespondResponse": {
+        "type": "object",
+        "required": [
+          "promptId",
+          "resolvedAt"
+        ],
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReadAloudSource": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId",
+          "sourceRevision"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStart": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReadAloudSource"
+          },
+          "settingsRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "requestId",
+          "source",
+          "settingsRevision"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudJob": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "chatId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "read-aloud",
+              "preview"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "generating",
+              "buffering",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "totalSegments": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "readySegments": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256
+          },
+          "omissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "generationMayHaveBeenBilled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "generationMayHaveBeenBilled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "jobId",
+          "chatId",
+          "kind",
+          "phase",
+          "totalSegments",
+          "readySegments",
+          "omissions",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "settingsRevision": {
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadAloudSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadAloudJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "ready",
+          "settingsRevision",
+          "source",
+          "job"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStop": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudStopped": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "ReadAloudAudio": {
+        "type": "object",
+        "properties": {
+          "bytesBase64": {
+            "type": "string",
+            "maxLength": 87384,
+            "contentEncoding": "base64"
+          },
+          "mimeType": {
+            "type": "string",
+            "const": "audio/wav"
+          },
+          "sampleRate": {
+            "type": "integer",
+            "const": 24000
+          },
+          "channels": {
+            "type": "integer",
+            "const": 1
+          },
+          "segmentBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          },
+          "nextOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bytesBase64",
+          "mimeType",
+          "sampleRate",
+          "channels",
+          "segmentBytes",
+          "nextOffset",
+          "complete"
+        ],
         "additionalProperties": false
       }
     }

@@ -113,6 +113,8 @@ struct AidenChatProgressControls: View {
                                 stale: taskIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text(taskAccessibilityLabel(taskProgress)))
                         .accessibilityHint(Text("Opens task progress"))
                         .buttonStyle(.plain)
@@ -127,6 +129,8 @@ struct AidenChatProgressControls: View {
                                 stale: taskIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text("Task progress unavailable"))
                         .accessibilityHint(Text("Opens task progress details"))
                         .buttonStyle(.plain)
@@ -139,6 +143,8 @@ struct AidenChatProgressControls: View {
                                 stale: agentIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text(agentAccessibilityLabel(agentRoster)))
                         .accessibilityHint(Text("Opens delegated agents"))
                         .buttonStyle(.plain)
@@ -202,12 +208,15 @@ struct AidenChatProgressControls: View {
     }
 }
 
-private struct AidenProgressChipLabel: View {
+struct AidenProgressChipLabel: View {
     @Environment(\.aidenPalette) private var palette
 
     let systemImage: String
     let title: String
     let stale: Bool
+    /// Deterministic chrome override for tests and hosted previews; nil
+    /// follows the system Reduce Transparency setting.
+    var reduceTransparency: Bool? = nil
 
     var body: some View {
         Label {
@@ -227,8 +236,11 @@ private struct AidenProgressChipLabel: View {
         .foregroundStyle(palette.foreground)
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
-        .background(palette.raised, in: Capsule())
-        .contentShape(Capsule())
+        .aidenChromeGlass(
+            isInteractive: true,
+            in: Capsule(),
+            reduceTransparency: reduceTransparency
+        )
     }
 }
 
@@ -246,6 +258,7 @@ struct AidenChatProgressSheet: View {
     let kind: AidenProgressSheet
     let model: AidenChatViewModel
     @State private var selectedTurnId: String?
+    @State private var isScrolledAwayFromTaskLatest = false
 
     var body: some View {
         NavigationStack {
@@ -274,20 +287,60 @@ struct AidenChatProgressSheet: View {
         if !model.canReadTaskProgress {
             AidenProgressUnavailableView(text: "Task progress is unavailable for this connection.")
         } else if let progress = model.taskProgress, progress.isAvailable {
-            List {
-                Section {
-                    ForEach(AidenProgressPresentation.visibleTasks(progress)) { task in
-                        AidenTaskProgressRow(task: task)
+            let tasks = AidenProgressPresentation.visibleTasks(progress)
+            ScrollViewReader { proxy in
+                List {
+                    Section {
+                        ForEach(tasks) { task in
+                            AidenTaskProgressRow(task: task)
+                                .id(task.id)
+                        }
+                    } header: {
+                        Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(tasks.count) completed")
+                    } footer: {
+                        if model.isTaskProgressStale {
+                            Text("Last known progress")
+                        }
                     }
-                } header: {
-                    Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(AidenProgressPresentation.visibleTasks(progress).count) completed")
-                } footer: {
-                    if model.isTaskProgressStale {
-                        Text("Last known progress")
+                }
+                .listStyle(.insetGrouped)
+                .defaultScrollAnchor(AidenChatScrollPolicy.initialTranscriptAnchor, for: .initialOffset)
+                .defaultScrollAnchor(
+                    AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromTaskLatest),
+                    for: .sizeChanges
+                )
+                .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
+                    AidenScrollFollowGeometry(
+                        isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
+                            contentOffsetY: geometry.contentOffset.y,
+                            containerHeight: geometry.containerSize.height,
+                            contentHeight: geometry.contentSize.height,
+                            bottomInset: geometry.contentInsets.bottom
+                        ),
+                        contentHeight: geometry.contentSize.height
+                    )
+                } action: { previous, next in
+                    isScrolledAwayFromTaskLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                        wasScrolledAway: isScrolledAwayFromTaskLatest,
+                        isAwayFromLatest: next.isAwayFromLatest,
+                        contentGrew: next.contentHeight > previous.contentHeight
+                    )
+                }
+                .onAppear {
+                    if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
+                        proxy.scrollTo(anchorID, anchor: .bottom)
+                    }
+                    isScrolledAwayFromTaskLatest = false
+                }
+                .onChange(of: AidenChatScrollPolicy.taskListFollowKey(tasks)) { _, _ in
+                    guard AidenChatScrollPolicy.shouldPinTaskListAfterGrowth(wasFollowingLatest: !isScrolledAwayFromTaskLatest) else {
+                        return
+                    }
+                    if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
+                        proxy.scrollTo(anchorID, anchor: .bottom)
                     }
                 }
             }
-            .listStyle(.insetGrouped)
         } else {
             AidenProgressUnavailableView(text: taskUnavailableMessage)
         }

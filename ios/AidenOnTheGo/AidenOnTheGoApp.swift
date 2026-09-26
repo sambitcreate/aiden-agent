@@ -91,6 +91,7 @@ struct AidenOnTheGoApp: App {
     init() {
         aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         AidenMetricDiagnosticSubscriber.shared.start()
+        AidenScheduledRunNotifier.installPresentationDelegate()
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         let configuration = AidenBotFirstPrototypeConfiguration.current
@@ -107,6 +108,7 @@ struct AidenOnTheGoApp: App {
     init() {
         aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         AidenMetricDiagnosticSubscriber.shared.start()
+        AidenScheduledRunNotifier.installPresentationDelegate()
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         _haptics = State(initialValue: haptics)

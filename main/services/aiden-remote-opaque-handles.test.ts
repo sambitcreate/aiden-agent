@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -60,6 +60,10 @@ test("filesystem inspection canonicalizes roots and rejects symlink escapes", as
     assert.equal(safe.canonicalPath.startsWith(`${safe.canonicalRootPath}${path.sep}`), true);
     await symlink(path.join(outside, "secret.txt"), path.join(root, "escape.txt"));
     await assert.rejects(() => inspectAidenFilesystemIdentity(root, path.join(root, "escape.txt")), (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root");
+    await link(path.join(outside, "secret.txt"), path.join(root, "hardlink.txt"));
+    await assert.rejects(() => inspectAidenFilesystemIdentity(root, path.join(root, "hardlink.txt")), (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root");
+    const directoryIdentity = await inspectAidenFilesystemIdentity(root, root);
+    assert.equal(directoryIdentity.kind, "directory");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

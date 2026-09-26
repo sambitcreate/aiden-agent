@@ -39,7 +39,7 @@ export function mcpApiKeyHeaderValue(key: string, prefix?: string): string {
  * The MCP SDK surfaces Figma's plaintext DCR 403 as a JSON parse failure.
  * Keep the original error as `cause` for logs while giving Settings a readable line.
  */
-export function explainMcpOAuthFailure(error: unknown): Error & { cause?: Error } {
+export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknown } {
   const message = error instanceof Error ? error.message : String(error);
   if (
     /HTTP 403/i.test(message) &&
