@@ -2122,6 +2122,7 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   });
   assert.equal(limited.status, "failed");
   assert.match(limited.warning ?? "", /output limit/);
+  assert.equal(limited.summary, "", "other hard-limit failures never expose partial output");
   assert.equal(outputControl.cancelCount, 1);
 
   const turnControl = fakeChild(async ({ emit }) => {
@@ -2154,6 +2155,42 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.doesNotMatch(turnLimited.summary, /secret-value-here/u);
   assert.match(turnLimited.summary, /REDACTED/u);
   assert.equal(turnControl.cancelCount, 1);
+
+});
+
+test("oversized turn-limit findings stay failed and carry summary truncation provenance", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    for (let index = 1; index <= 5; index += 1) {
+      const message = assistant(`note-${index}: ${String(index).repeat(2_500)}`);
+      await emit({ type: "turn_start" } as AgentEvent);
+      await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
+    }
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const result = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "oversized-partial-turns",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Oversized notes", task: "Investigate." },
+    policy: { maxTurns: 5 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.warning ?? "", /incomplete, unverified partial findings/u);
+  assert.equal(result.summaryTruncated, true, "the projector needs this flag to show report_truncated");
+  assert.equal(result.summary.length, MAX_SUBAGENT_SUMMARY_CHARS);
+  assert.match(result.summary, /^note-1:/u);
+  assert.match(result.summary, /5$/u);
+  assert.equal(control.cancelCount, 1);
 });
 
 test("turn-limit partial findings exclude text from aborted assistant messages", async () => {
