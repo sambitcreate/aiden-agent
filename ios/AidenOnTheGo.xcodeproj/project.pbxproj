@@ -30,7 +30,7 @@
 		A0D900000000000000000003 /* AidenWorkspaceEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */; };
 		A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000011 /* AidenScheduledTask.swift */; };
 		A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000012 /* AidenScheduledTasksView.swift */; };
-		A0DC00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DC00000000000000000011 /* AidenScheduledRunNotifier.swift */; };
+		A0DD00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */; };
 		A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */; };
 		A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000014 /* AidenRemoteContractV1.json */; };
 		A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000015 /* AidenManualPairingVectorV1.json */; };
@@ -149,7 +149,7 @@
 		A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceEnvironmentTests.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000011 /* AidenScheduledTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTask.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000012 /* AidenScheduledTasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTasksView.swift; sourceTree = "<group>"; };
-		A0DC00000000000000000011 /* AidenScheduledRunNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledRunNotifier.swift; sourceTree = "<group>"; };
+		A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledRunNotifier.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTaskTests.swift; sourceTree = "<group>"; };
 		351C0F1600000000000000A1 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Shared.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AidenOnTheGo.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -390,7 +390,7 @@
 				B07A00000000000000000011 /* AidenBotChatToolsView.swift */,
 				B07400000000000000000011 /* AidenProductShellView.swift */,
 				A0DA00000000000000000012 /* AidenScheduledTasksView.swift */,
-				A0DC00000000000000000011 /* AidenScheduledRunNotifier.swift */,
+				A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */,
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
 				A0D600000000000000000014 /* AidenRemoteCoordinator.swift */,
 				A0D600000000000000000015 /* AidenPairingView.swift */,
@@ -725,7 +725,7 @@
 				A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */,
 				A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */,
 				A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */,
-				A0DC00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */,
+				A0DD00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */,
 				A0D900000000000000000001 /* AidenWorkspaceEnvironment.swift in Sources */,
 				A0D900000000000000000002 /* AidenWorkspaceEnvironmentView.swift in Sources */,
 				A0D000000000000000000001 /* AidenRemoteContract.swift in Sources */,
