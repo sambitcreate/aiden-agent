@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
   ASK_USER_QUESTION_VERSION,
@@ -7,6 +7,19 @@ import {
   type AskUserQuestionPromptV1,
   type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
+import { Button } from "./ui";
+
+const OPTION_LETTERS = ["A", "B", "C", "D"] as const;
+
+function optionLetter(index: number): string | undefined {
+  return OPTION_LETTERS[index];
+}
+
+function optionIndexFromKey(key: string): number | undefined {
+  if (/^[1-4]$/u.test(key)) return Number(key) - 1;
+  if (/^[a-d]$/iu.test(key)) return key.toLowerCase().charCodeAt(0) - 97;
+  return undefined;
+}
 
 export function AskUserQuestionComposer({
   prompt,
@@ -21,29 +34,27 @@ export function AskUserQuestionComposer({
   const [answers, setAnswers] = React.useState<ReadonlyMap<number, AskUserQuestionAnswerV1>>(
     () => new Map(),
   );
-  const [customOpen, setCustomOpen] = React.useState(false);
   const [customDrafts, setCustomDrafts] = React.useState<ReadonlyMap<number, string>>(
     () => new Map(),
   );
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
-  const customRef = React.useRef<HTMLTextAreaElement | null>(null);
   const question = prompt.questions[activeIndex]!;
   const answer = answers.get(activeIndex);
-  const customDraft = customDrafts.get(activeIndex) ?? "";
+  const customDraft =
+    customDrafts.get(activeIndex) ?? (answer?.kind === "custom" ? answer.answer : "");
 
   React.useEffect(() => {
     setActiveIndex(0);
     setAnswers(new Map());
     setCustomDrafts(new Map());
-    setCustomOpen(false);
   }, [prompt.promptId]);
 
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      (customOpen ? customRef.current : firstOptionRef.current)?.focus({ preventScroll: true });
+      firstOptionRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeIndex, customOpen]);
+  }, [activeIndex]);
 
   const response = React.useCallback(
     (cancelled: boolean, resolvedAnswers = answers) =>
@@ -63,7 +74,6 @@ export function AskUserQuestionComposer({
   const moveTo = React.useCallback(
     (index: number) => {
       if (submitting || index < 0 || index >= prompt.questions.length) return;
-      setCustomOpen(false);
       setActiveIndex(index);
     },
     [prompt.questions.length, submitting],
@@ -75,14 +85,18 @@ export function AskUserQuestionComposer({
       if (nextAnswer) next.set(activeIndex, nextAnswer);
       else next.delete(activeIndex);
       setAnswers(next);
-      setCustomOpen(false);
+      if (nextAnswer?.kind !== "custom") {
+        const drafts = new Map(customDrafts);
+        drafts.delete(activeIndex);
+        setCustomDrafts(drafts);
+      }
       if (activeIndex < prompt.questions.length - 1) {
         setActiveIndex(activeIndex + 1);
       } else {
         void onRespond(response(false, next));
       }
     },
-    [activeIndex, answers, onRespond, prompt.questions.length, response],
+    [activeIndex, answers, customDrafts, onRespond, prompt.questions.length, response],
   );
 
   const commitCustom = React.useCallback(() => {
@@ -109,20 +123,28 @@ export function AskUserQuestionComposer({
   };
 
   const handleCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (submitting || customOpen || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (/^[1-4]$/u.test(event.key)) {
-      const option = question.options[Number(event.key) - 1];
-      if (!option) return;
-      event.preventDefault();
-      if (question.multiSelect) toggleMulti(option.label);
-      else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
+    if (submitting || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (
+      event.target instanceof HTMLTextAreaElement ||
+      event.target instanceof HTMLInputElement
+    ) {
+      return;
     }
+    const optionIndex = optionIndexFromKey(event.key);
+    if (optionIndex === undefined) return;
+    const option = question.options[optionIndex];
+    if (!option) return;
+    event.preventDefault();
+    if (question.multiSelect) toggleMulti(option.label);
+    else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
   };
+
+  const continueLabel = activeIndex === prompt.questions.length - 1 ? "Submit" : "Next";
 
   return (
     <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column">
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className="ask-user-question-shell min-h-76 rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}
@@ -138,36 +160,40 @@ export function AskUserQuestionComposer({
             className="flex shrink-0 items-center gap-1 text-secondary"
             aria-label="Question navigation"
           >
-            <button
-              type="button"
-              className="ask-user-question-icon"
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
               aria-label="Previous question"
               disabled={submitting || activeIndex === 0}
               onClick={() => moveTo(activeIndex - 1)}
             >
               <ChevronLeft />
-            </button>
+            </Button>
             <span className="min-w-16 text-center text-regular tabular-nums" aria-live="polite">
               {activeIndex + 1} of {prompt.questions.length}
             </span>
-            <button
-              type="button"
-              className="ask-user-question-icon"
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
               aria-label="Next question"
               disabled={submitting || activeIndex === prompt.questions.length - 1}
               onClick={() => moveTo(activeIndex + 1)}
             >
               <ChevronRight />
-            </button>
-            <button
-              type="button"
-              className="ask-user-question-icon ml-1"
+            </Button>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              className="ml-1"
               aria-label="Close questionnaire"
               disabled={submitting}
               onClick={() => void onRespond(response(true))}
             >
               <X />
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -180,6 +206,7 @@ export function AskUserQuestionComposer({
             const selected =
               (answer?.kind === "option" && answer.answer === option.label) ||
               (answer?.kind === "multi" && answer.selected.includes(option.label));
+            const letter = optionLetter(optionIndex) ?? String(optionIndex + 1);
             return (
               <button
                 key={option.label}
@@ -190,15 +217,15 @@ export function AskUserQuestionComposer({
                 disabled={submitting}
                 className={cn(
                   "ask-user-question-option group flex min-h-16 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left",
-                  selected && "is-selected",
+                  selected && "is-selected bg-list-selection",
                 )}
                 onClick={() => {
                   if (question.multiSelect) toggleMulti(option.label);
                   else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
                 }}
               >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45 text-regular text-secondary">
-                  {selected ? <Check className="size-4" /> : optionIndex + 1}
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular font-medium text-secondary">
+                  {letter}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-strong font-medium text-primary">{option.label}</span>
@@ -216,75 +243,55 @@ export function AskUserQuestionComposer({
 
         <div className="mt-3 flex min-h-12 items-end gap-3">
           <div className="min-w-0 flex-1">
-            {customOpen ? (
-              <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
-                <Pencil className="mb-2 size-4 shrink-0 text-secondary" />
-                <textarea
-                  ref={customRef}
-                  value={customDraft}
-                  rows={1}
-                  maxLength={4_000}
-                  aria-label={`Custom answer for ${question.question}`}
-                  className="max-h-28 min-h-8 min-w-0 flex-1 resize-none bg-transparent py-1 text-regular text-primary placeholder:text-secondary"
-                  placeholder="Tell Aiden what to do instead"
+            <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
+              <textarea
+                value={customDraft}
+                rows={1}
+                maxLength={4_000}
+                aria-label="Other answer"
+                className="max-h-28 min-h-8 min-w-0 flex-1 resize-none bg-transparent py-1 text-regular text-primary placeholder:text-secondary"
+                placeholder="Other answer"
+                disabled={submitting}
+                onChange={(event) => {
+                  const next = new Map(customDrafts);
+                  next.set(activeIndex, event.target.value);
+                  setCustomDrafts(next);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    commitCustom();
+                  }
+                }}
+              />
+              {customDraft.trim() ? (
+                <Button
+                  variant="filled"
+                  size="small"
                   disabled={submitting}
-                  onChange={(event) => {
-                    const next = new Map(customDrafts);
-                    next.set(activeIndex, event.target.value);
-                    setCustomDrafts(next);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      commitCustom();
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setCustomOpen(false);
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="ask-user-question-pill"
-                  disabled={submitting || !customDraft.trim()}
                   onClick={commitCustom}
                 >
-                  {activeIndex === prompt.questions.length - 1 ? "Submit" : "Next"}
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="ask-user-question-custom flex min-h-11 max-w-full items-center gap-3 rounded-2xl px-3 text-left text-secondary"
-                disabled={submitting}
-                onClick={() => setCustomOpen(true)}
-              >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45">
-                  <Pencil className="size-4" />
-                </span>
-                <span className="truncate text-regular">Type your own answer</span>
-              </button>
-            )}
+                  {continueLabel}
+                </Button>
+              ) : null}
+            </div>
           </div>
-          {question.multiSelect && answer?.kind === "multi" && answer.selected.length > 0 ? (
-            <button
-              type="button"
-              className="ask-user-question-pill"
+          {question.multiSelect &&
+          !customDraft.trim() &&
+          answer?.kind === "multi" &&
+          answer.selected.length > 0 ? (
+            <Button
+              variant="filled"
+              size="small"
               disabled={submitting}
               onClick={() => commit(answer)}
             >
-              {activeIndex === prompt.questions.length - 1 ? "Submit" : "Next"}
-            </button>
+              {continueLabel}
+            </Button>
           ) : null}
-          <button
-            type="button"
-            className="ask-user-question-pill"
-            disabled={submitting}
-            onClick={() => commit()}
-          >
+          <Button variant="muted" size="small" disabled={submitting} onClick={() => commit()}>
             {submitting ? "Sending…" : "Skip"}
-          </button>
+          </Button>
         </div>
       </section>
     </div>
