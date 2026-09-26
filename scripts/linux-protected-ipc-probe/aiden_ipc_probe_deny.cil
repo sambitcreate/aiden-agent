@@ -1,0 +1,2 @@
+; Only the socket object SID is denied. FD creator permission remains allowed.
+(deny unconfined_domain_type aiden_ipc_protected_socket_t (unix_stream_socket (read write)))

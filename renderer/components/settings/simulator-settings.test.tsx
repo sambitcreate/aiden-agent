@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceServiceState, DeviceToolchainState } from "../../shared/devices.js";
-import { SETTINGS_DESTINATIONS, SETTINGS_SECTIONS } from "../../shared/settings-section.js";
+import {
+  availableSettingsDestinations,
+  SETTINGS_DESTINATIONS,
+  SETTINGS_SECTIONS,
+} from "../../shared/settings-section.js";
 import {
   SimulatorSettings,
   SimulatorSettingsView,
@@ -63,14 +67,12 @@ test("Simulator is an Agent settings destination hidden without the devices capa
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "simulator");
   assert.equal(destination?.group, "Agent");
   assert.ok(destination?.keywords.includes("ios"));
-  const settingsView = read("../../main/settings-view.tsx");
-  assert.match(settingsView, /capabilities\.devices \? NAV : NAV\.filter\(\(item\) => item\.id !== "simulator"\)/u);
-  assert.match(settingsView, /simulator: SimulatorSettings/u);
-  assert.match(
-    read("../command-palette.tsx"),
-    /destination\.id !== "simulator" \|\| capabilities\.devices/u,
-    "the command palette hides Simulator without the capability",
-  );
+  // The settings nav and the command palette both filter through this helper.
+  const hasSimulator = (devices: boolean) =>
+    availableSettingsDestinations({ computerUse: true, devices }).some((entry) => entry.id === "simulator");
+  assert.equal(hasSimulator(false), false);
+  assert.equal(hasSimulator(true), true);
+  assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
   assert.match(
     read("../../../main/services/llm-client.ts"),
     /devicesEnabled\(\)\s*\? SETTINGS_SECTIONS\s*: SETTINGS_SECTIONS\.filter\(\(section\) => section !== "simulator"\)/u,

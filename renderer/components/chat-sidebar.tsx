@@ -84,6 +84,7 @@ import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   parseSidebarPreferences,
   projectSidebarWorkspaces,
@@ -713,16 +714,15 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const capabilities = useAppCapabilities();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
   const { workspaces, activeId, select, isReady: workspaceRegistryReady } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
   const activeChatIds = useActiveChatIds();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useAllRegularChats(workspaces.length > 0);
-  const foundationModels = useFoundationModelsConnection();
+  const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
   const initialPreferences = React.useMemo(
     () => parseSidebarPreferences(localStorage.getItem(SIDEBAR_PREFERENCES_KEY)),
@@ -1275,7 +1275,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
           >
             Rename
           </ContextMenuItem>
-          {foundationModels.data !== null ? (
+          {capabilities.appleFoundationModels && foundationModels.data !== null ? (
             <ContextMenuItem
               disabled={!appleRenameReady || renamingWithAppleId !== null}
               aria-label={
@@ -1417,12 +1417,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             selected={pathname === "/scheduled"}
             onClick={() => navigate({ to: "/scheduled" })}
           />
-          <SidebarListItem
-            icon={<BotSidebarIcon />}
-            title="Bots"
-            selected={pathname.startsWith("/bots")}
-            onClick={() => navigate({ to: "/bots" })}
-          />
+          {capabilities.bots ? (
+            <SidebarListItem
+              icon={<BotSidebarIcon />}
+              title="Bots"
+              selected={pathname.startsWith("/bots")}
+              onClick={() => navigate({ to: "/bots" })}
+            />
+          ) : null}
         </div>
 
         <SidebarList>
@@ -1541,7 +1543,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                               <DropdownMenuItem
                                 onSelect={() => void revealWorkspace(group.workspace)}
                               >
-                                Show in Finder
+                                Show in file manager
                               </DropdownMenuItem>
                             ) : null}
                             {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}

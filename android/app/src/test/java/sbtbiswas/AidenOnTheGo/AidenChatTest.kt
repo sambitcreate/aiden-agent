@@ -933,7 +933,7 @@ class AidenChatTest {
             }
         )
         assertEquals(
-            "1 web search, 1 Mac action, compacted context, 1 tool call",
+            "1 web search, 1 Computer Use action, compacted context, 1 tool call",
             AidenAgentActivityPresentation.summary(multiTimeline)
         )
 
@@ -1111,8 +1111,8 @@ class AidenChatTest {
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
         assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
         assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
-        assertTrue(AidenApprovalPresentation.requiresMacConfirmation(approval))
-        assertFalse(AidenApprovalPresentation.requiresMacConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
+        assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
         assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
     }
 
@@ -1152,7 +1152,7 @@ class AidenChatTest {
         assertTrue(readOnlySchedule!!.canRespond)
         assertFalse(readOnlySchedule.hasRequiredWriteCapability)
         assertFalse(readOnlySchedule.canAllow)
-        assertFalse(AidenApprovalPresentation.requiresMacConfirmation(readOnlySchedule))
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(readOnlySchedule))
 
         val cannotRespond = AidenPendingApprovalResolution.resolve(
             valid,

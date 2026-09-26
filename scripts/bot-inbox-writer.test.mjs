@@ -81,7 +81,7 @@ async function runWriter(root, overrides = {}, input = Buffer.alloc(0)) {
 }
 
 test("native Bot inbox writer rejects the wrong managed-home inode before creation", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-identity-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { inode: "1" });
@@ -116,7 +116,7 @@ test("native Bot inbox writer preserves early rejection when stdin gets EPIPE", 
 });
 
 test("native Bot inbox writer rejects extra stdin bytes and removes the leaf", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-length-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { size: "3" }, Buffer.from([0, 1, 2, 3]));
@@ -130,7 +130,7 @@ test("native Bot inbox writer rejects extra stdin bytes and removes the leaf", a
 });
 
 test("native Bot inbox writer rejects values above Telegram's 20 MB ceiling", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-limit-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { size: String(20 * 1024 * 1024 + 1) });

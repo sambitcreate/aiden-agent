@@ -6,7 +6,8 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { app, safeStorage, logger } from "../platform.js";
+import { app, logger } from "../platform.js";
+import { secureStorage } from "./secure-storage.js";
 import { parseMcpOAuthSession, type McpOAuthSession } from "./mcp-oauth-session.js";
 import {
   deleteSecretKeyEntry,
@@ -129,7 +130,7 @@ export const mcpOAuthStore = {
     if (!b64) return {};
     let session: McpOAuthSession;
     try {
-      const json = await safeStorage.decryptString(Buffer.from(b64, "base64"));
+      const json = secureStorage.decryptString(Buffer.from(b64, "base64"));
       session = parseMcpOAuthSession(JSON.parse(json));
     } catch (error) {
       logger.error("mcp-oauth", `Failed to decrypt OAuth session for ${serverId}`, error);
@@ -145,10 +146,10 @@ export const mcpOAuthStore = {
     session: McpOAuthSession,
     isCurrent: MutationGuard = () => true,
   ): Promise<void> {
-    if (!(await safeStorage.isEncryptionAvailable())) {
-      throw new Error("Secure storage is unavailable on this system; cannot save the sign-in.");
+    if (!secureStorage.isEncryptionAvailable()) {
+      throw new Error(`${secureStorage.unavailableMessage()} Cannot save the sign-in.`);
     }
-    const encrypted = await safeStorage.encryptString(JSON.stringify(session));
+    const encrypted = secureStorage.encryptString(JSON.stringify(session));
     await mutate(async () => {
       assertMutationCurrent(isCurrent);
       const map = await readMap();
