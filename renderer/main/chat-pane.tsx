@@ -2034,6 +2034,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+
   return (
     <>
       <ScrollArea
@@ -2100,7 +2102,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
-        scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
+        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
+        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={
           <>
             <EventPresence

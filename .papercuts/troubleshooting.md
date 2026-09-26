@@ -988,3 +988,56 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - Pi's managed initial user input is not re-emitted, but Steer input is. The queued-user projection must be written before Pi's awaited `message_end` listener returns, and its Pi journal append must include the visible chat-message marker in the same transaction. Otherwise the next generation's visible-history sync duplicates the guidance.
 - This host defaults to Command Line Tools, where `simctl` is unavailable. Set `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and use an iPhone simulator for iOS tests; no physical-device unlock is needed.
 - Pullfrog follow-up: Pi's `reset()` silently drops steer input it never emitted, and the queued-user projection runs inside Pi's serialized `message_end` delivery, so a stalled ChatStore write would block `cancelAndSettle`. Route the projection through `waitForManagedPromise` (quarantine it as detached durability on Stop) and ask the harness for undelivered accepted input before `reset()`. That collection must be synchronous: awaiting the quarantined write before the terminal re-creates an indefinite "Stopping"; report it as a separate `late` promise and return failed late saves on `chat:guidance-returned`. Also keep that cancelled projection in `pendingDurabilitySettlement()` after it settles: the detached-durability set drops settled entries, so a save landing before `runManaged()` returns would otherwise commit the turn without the guidance in Pi and the next sync would append it after the assistant. The renderer restores it from the terminal payload through both the attached `startGeneration` listener and the detached terminal sync.
+- 2026-09-24 compaction budget repair: generic `generation-degraded` and `context_management` entries hid the local guard cause and token budget. Emit fixed reason/stage plus aggregate counts at the coordinator; keep raw provider and summary text out of diagnostics. VCC workers previously returned fixed error messages without typed codes, so preserve the closed code for useful failure logs.
+- 2026-09-24 build: bare `xcrun` selected Command Line Tools MacOSX27.0 SDK and failed linking `libSystem.tbd` (`arm64e.x1-macos` unknown architecture), despite `xcode-select -p` reporting Xcode. The Bot inbox helper's `execFile` uses a fixed environment and drops a scoped `DEVELOPER_DIR`, so retrying the full build with Xcode beta set in the parent still fails. Verify the renderer/Electron build separately until this native build seam is repaired.
+- 2026-09-25 PR #244 review: `pi-compaction-core.test.ts` recovery cases use the real VCC worker at `build/main/pi-vcc-worker.js`; in a fresh worktree they fail with "VCC compilation worker failed" until `npm run build:electron` has run. Pi's `findCutPoint` also retains the message that crosses `keepRecentTokens`, so an oversized fixture placed just before a tiny tail ends up retained rather than summarized.
+## 2026-09-24 — production todo diagnosis
+
+- The diagnostic log records subagent failures but not their admission reason or the task status they affect. Correlating the private Pi journal showed a final review request rejected at the tree deadline and task 12 still `in_progress`. A bounded, content-free task transition diagnostic would make this easier to diagnose without exposing chat text.
+- The isolated worktree had no `node_modules`, so the first focused test and type-check attempts failed before execution. `npm ci --ignore-scripts` restored the locked JavaScript toolchain; reruns passed.
+- The focused todo suite missed an older source-shape assertion in the renderer preflight suite. Hosted CI and two review bots caught it; update that contract and run preflight when changing the shared `ScrollArea`.
+## 2026-09-25 — Simulator devices Phases 0–2
+
+- Worktree-isolated sessions refuse Bash with `$(...)`, computed binaries, or `cd … && <heredoc>`; put scratch scripts in the session scratchpad and run `bash <file>`, and use Edit/Write for source changes. BSD `sed -i ''` multi-line substitutions fail silently.
+- A `show: false` Electron window never resolved a WebCodecs `isConfigSupported` probe; use a visible window with an `app.exit` timeout and write results to a file.
+- `agent-device snapshot` returns `SESSION_NOT_FOUND` until `agent-device open <bundleId> --session <s>` runs; the first open also builds the Apple runner (~4s here).
+- The repo has no Prettier dependency or config; `npx prettier` fetches an unpinned release and reformats to 80 columns. Do not run it — revert with `git checkout -- <file>` and reapply the edit.
+- E2E fixtures had no per-test app environment; `appEnvironment` option and `relaunch(afterClose, appEnvironment)` now exist for experimental flags.
+- A WebSocket test client hung waiting for the first frame: Node can deliver it inside the `upgrade` event's `head` buffer. Decode `head` when it is non-empty before listening for `data`.
+- `tsc` targets a lib older than ES2022: `Array.prototype.at` and `new Error(message, { cause })` fail type-check even though `tsx` runs them. Use index access, and assign `cause` with `declare readonly cause: unknown` as `managed-worktree-file-io.ts` does.
+- Handler modules import `../platform.js` (Electron), so they cannot be unit-tested under `tsx`. Put the IPC registration behind an injected `handle`/`owner`/`service` seam in a services file, and keep the handler as Electron wiring only.
+- Writes to `/Users/…/aiden-macos/.memory/` are refused in a worktree session; edit the worktree's own `.memory/` copy.
+
+## 2026-09-25 — Simulator devices Phase 3
+
+- E2E: right after a chat reply, the streaming-reveal layer briefly duplicates the response text, so `getByText` hits a strict-mode violation. Wait for `.streaming-reveal` to reach count 0 first.
+- `tests/e2e/*.mjs` get no ESLint Node globals. Import `Buffer`, `URL`, and the timers from `node:*` explicitly.
+- Hub E2E without a production seam: seed `userData/devices/tools/expo-device-hub/<v>/…/cli.mjs` (it imports the fake), `.install-complete`, and `consent.json`, then put a fake `xcrun` on PATH through `appEnvironment`.
+- Playwright `request.allHeaders()` showed no `Origin` on the `file://` renderer's stream fetch. Don't assert `Origin: file://`.
+- `local-device-host.test.ts` `waitFor` (200 `setImmediate` turns) flaked under the loaded CI lane. It is now bounded by 5s of wall time.
+- `cd … && python3 - <<'EOF'` passed the worktree guard this time, where a plain heredoc had been refused.
+- A manual test on a real simulator failed with "stream refused access". expo-device-hub routes WebSockets by exact path, so the input socket is `/vendor/serve-sim/helper/ws?device=<udid>`, not the per-device `wsUrl` in serve-sim's config. The fake hub had copied our wrong assumption, so the E2E passed anyway. Check fakes against the real hub's routing (`cli.mjs` `webSocketRoutes`).
+- `npm run dev` port 4143 was taken by another worktree's dev server. Run vite on another port and set `AIDEN_RENDERER_URL` to match (the device proxy allowlists that origin). The E2E uses the built renderer, so run `npm run build` after renderer changes.
+
+## 2026-09-25 — Simulator devices Phases 3.5–4
+
+- The faux LM Studio matched scenarios against the latest user message. pi-ai sends tool-result images to OpenAI-compatible APIs as an extra user message ("Attached image(s) from tool result:"), so image-returning tools ended the scenario early. The fixture now skips that carrier.
+- The Environment tabpanel stays mounted and reports visible after **Close environment panel**. Assert on the `Environment work surface` complementary region and the tab's `aria-selected` instead.
+- A fake agent-device must detach its daemon: the host awaits `devices --json` with a timeout and only polls `daemon.json`. Kill the daemon in `finally` from `agent-state/daemon.json` so a failed run leaves nothing behind.
+- `String.prototype.replaceAll` also fails `tsc` under the old lib; use `split().join()`.
+- `assert.throws(fn, /regex/)` matches against `String(error)`, which includes `Error: `. Anchor as `/^Error: …$/u`, not `/^…$/u`.
+- A fixed `consent.json.<pid>.tmp` let two saves racing each other rename a partial file. Chain the saves and use a unique temp name.
+
+## 2026-09-25 — Simulator devices Phase 5 (paired Macs)
+
+- The desktop protocol test compared the shared mobile fixture with the full capability list. A desktop-only capability must stay out of that fixture, because iOS checks fixture capabilities against its `v1Known` list. Compare with the vocabulary minus the desktop-only members instead.
+- `openapi.json` mixes inline and expanded arrays, so `json.dumps` rewrote about 2,600 lines. Edit it by inserting text at object boundaries.
+- `PeerTransport` maps 401/403 to `authentication_required`, not `request_failed` with a status. Tests that fake an auth failure must use that code.
+- Raw-socket WebSocket tests can read the refusal status line directly. `createAidenRemoteUpgradeHandler` writes `HTTP/1.1 403 Refused`, not `Forbidden`.
+
+## 2026-09-25 — Simulator devices Phase 6 (3D frames)
+
+- three.js geometry, `Texture`, `Raycaster` and `PerspectiveCamera` all run under Node, so projection and UV tests need no WebGL. Only `WebGLRenderer` needs a browser; keep it in `phone-viewer.ts`, which is loaded lazily.
+- `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
+- Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
+- The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.

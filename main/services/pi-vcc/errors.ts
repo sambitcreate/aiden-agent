@@ -17,6 +17,12 @@ const compileMessages = {
 } as const;
 export type VccFailureCode = keyof typeof compileMessages;
 
+export function parseVccFailureCode(value: unknown): VccFailureCode {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(compileMessages, value)
+    ? value as VccFailureCode
+    : "worker_failed";
+}
+
 const recallMessages: Partial<Record<VccFailureCode, string>> = {
   history_limit: "Chat history exceeds the bounded local recall processing limit.",
   missing_query: "Missing recall query. Provide keywords or a history reference.",
@@ -29,10 +35,7 @@ const recallMessages: Partial<Record<VccFailureCode, string>> = {
 };
 
 export function vccErrorMessage(operation: VccOperation, code: unknown): string {
-  const known =
-    typeof code === "string" && Object.prototype.hasOwnProperty.call(compileMessages, code)
-      ? (code as VccFailureCode)
-      : "worker_failed";
+  const known = parseVccFailureCode(code);
   return operation === "recall"
     ? (recallMessages[known] ?? recallMessages.worker_failed!)
     : compileMessages[known];
