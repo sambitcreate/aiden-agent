@@ -237,6 +237,7 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /refresh:\s*\n(?:\s*#.*\n)*\s*if: github\.ref == 'refs\/heads\/main'\n/u);
   assert.match(workflow, /publish:\s*\n\s*needs: refresh\s*\n\s*if: github\.ref == 'refs\/heads\/main' && /u);
   assert.match(workflow, /git merge-base --is-ancestor "\$BASE_SHA" FETCH_HEAD/u);
+  assert.match(workflow, /publish:[\s\S]*\n {4}environment: model-catalog\n[\s\S]*CATALOG_DEPLOY_KEY/u);
   assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" HEAD:main/u);
 });
 

@@ -117,7 +117,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Pushes use the CATALOG_DEPLOY_KEY deploy key, which the main ruleset
-    # allows to bypass required checks; the job token stays read-only.
+    # allows to bypass required checks; the job token stays read-only. The key
+    # is a model-catalog environment secret, and that environment only accepts
+    # deployments from main, so branch-edited workflow YAML cannot read it.
+    environment: model-catalog
     permissions:
       contents: read
     steps:
