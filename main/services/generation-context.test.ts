@@ -9,10 +9,12 @@ import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, Ty
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
+  chatContextPressureFromProjection,
   compactGenerationContext,
   createGenerationContextTransform,
   limitComputerUseImages,
   limitBrowserSnapshotImages,
+  projectChatContextPressure,
   projectNextContextUsage,
   projectMessagesForModel,
 } from "./generation-context.js";
@@ -675,4 +677,285 @@ test("never rejects when compaction inputs or observers fail", async () => {
   assert.equal(transformed[0]?.role, "user");
   assert.match(JSON.stringify(transformed), /larger-context model/u);
   assert.equal(observerCalls, 2);
+});
+
+test("the composer DTO mirrors the runtime projection and limits", () => {
+  const anchored = assistant("anchored");
+  anchored.usage.input = 50_000;
+  anchored.usage.totalTokens = 60_000;
+  const messages = [user("old"), anchored, user("current")];
+  const pressure = projectChatContextPressure(messages, options);
+  const projection = projectNextContextUsage(messages, options);
+  // The DTO helper and the projection-first builder agree.
+  assert.deepEqual(
+    { ...chatContextPressureFromProjection(projection, options, pressure.computedAt) },
+    pressure,
+  );
+
+  assert.equal(pressure.contextTokens, projection.contextTokens);
+  assert.equal(pressure.messageTokens, projection.messageTokens);
+  assert.equal(pressure.staticTokens, projection.staticTokens);
+  assert.equal(pressure.shouldCompact, projection.shouldCompact);
+  assert.equal(pressure.contextWindow, options.contextWindow);
+  // Usable-input pressure is what matches the compaction threshold.
+  assert.ok(pressure.inputBudgetTokens < pressure.contextWindow);
+  assert.equal(
+    pressure.inputBudgetTokens + pressure.reservedTokens,
+    pressure.contextWindow,
+  );
+  assert.ok(pressure.percentOfUsableInput > pressure.percentOfWindow);
+  assert.equal(pressure.source, "provider-anchored");
+  assert.equal(pressure.providerUsageTokens, projection.providerUsageTokens);
+  assert.equal(
+    pressure.addedAfterUsageAnchorTokens,
+    projection.addedAfterUsageAnchorTokens,
+  );
+  assert.equal(
+    pressure.compressibleHistoryMessages,
+    projection.compressibleHistoryMessages,
+  );
+});
+
+test("unanchored projections read as estimates and still trip compaction", () => {
+  const pressure = projectChatContextPressure([user("x".repeat(200_000))], {
+    contextWindow: 4_096,
+    systemPrompt: "system",
+    tools: [],
+  });
+  assert.equal(pressure.source, "estimated");
+  assert.equal(pressure.providerUsageTokens, undefined);
+  assert.equal(pressure.addedAfterUsageAnchorTokens, undefined);
+  assert.equal(pressure.shouldCompact, true);
+  // Over-budget requests report honest >100% pressure — never clamped.
+  assert.ok(pressure.percentOfUsableInput > 100);
+});
+
+test("a projection after compaction reports the post-compaction truth", () => {
+  const big = [
+    user("old ".repeat(8_000)),
+    assistant("old-call"),
+    toolResult("old-call", "y".repeat(40_000)),
+    user("current"),
+  ];
+  const before = projectChatContextPressure(big, { ...options, contextWindow: 8_000 });
+  assert.equal(before.shouldCompact, true);
+
+  const compacted = compactGenerationContext(big, { ...options, contextWindow: 8_000 });
+  const after = projectChatContextPressure(compacted.messages, {
+    ...options,
+    contextWindow: 8_000,
+  });
+  assert.ok(after.contextTokens < before.contextTokens);
+  assert.ok(after.percentOfUsableInput < before.percentOfUsableInput);
+});
+
+test("model changes rescale capacity without touching the conversation", () => {
+  const messages = [user("hello"), assistant("answer", "chat")];
+  const small = projectChatContextPressure(messages, {
+    ...options,
+    contextWindow: 4_096,
+  });
+  const large = projectChatContextPressure(messages, options);
+  assert.equal(small.contextTokens, large.contextTokens);
+  assert.ok(small.percentOfUsableInput > large.percentOfUsableInput);
+  assert.ok(large.reservedTokens > small.reservedTokens);
+});
+
+// Pi keeps later system messages in place for mid-conversation-capable models
+// (supportsMidConvoSystemMessages), so every AGENTS.md revision is sent even
+// though the replayed prompt only carries the latest one.
+function agentsPatch(body: string): AgentMessage {
+  return {
+    role: "system",
+    content: "",
+    sections: { "agents-instructions-test": body },
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+test("retained AGENTS.md revisions count toward pressure and compaction for mid-conversation models", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  const messages: AgentMessage[] = [
+    head,
+    user("first"),
+    agentsPatch("A".repeat(8_000)),
+    user("second"),
+    agentsPatch("B".repeat(8_000)),
+    user("x".repeat(36_000)),
+  ];
+  const base = {
+    ...options,
+    contextWindow: 16_000,
+    systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  const folded = projectNextContextUsage(messages, base);
+  const retained = projectNextContextUsage(messages, { ...base, retainsSystemUpdates: true });
+  // The superseded 8,000-character revision (plus update framing) is extra.
+  const extra = retained.messageTokens - folded.messageTokens;
+  assert.ok(extra >= 2_000 && extra < 2_100, `extra=${extra}`);
+  assert.equal(folded.shouldCompact, false);
+  assert.equal(retained.shouldCompact, true);
+
+  // Without later system messages both representations price the same request.
+  const headOnly = [head, user("hello")];
+  assert.equal(
+    projectNextContextUsage(headOnly, { ...base, retainsSystemUpdates: true }).contextTokens,
+    projectNextContextUsage(headOnly, base).contextTokens,
+  );
+
+  // Compaction sees the same over-budget transcript and replays the prompt into
+  // one head, which removes the retained revisions from the outbound request.
+  const compacted = compactGenerationContext(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(compacted.compacted, true);
+  assert.ok(compacted.estimatedTokensBefore > compactGenerationContext(messages, base).estimatedTokensBefore);
+  assert.equal(compacted.messages.filter((message) => message.role === "system").length, 1);
+  assert.ok(compacted.estimatedTokensAfter <= compacted.inputBudgetTokens);
+});
+
+function usageAssistant(input: number, text = "done"): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-5.3-codex-spark",
+    usage: {
+      input,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: input,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function agentsRemoval(): AgentMessage {
+  return {
+    role: "system",
+    content: "",
+    sections: { "agents-instructions-test": null },
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+test("retained AGENTS.md revisions after a stale usage anchor count toward anchored pressure and compaction", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  // A valid 95k anchor, then revisions the provider has not reported on yet: a
+  // zero-usage response leaves the anchor where it was.
+  const messages: AgentMessage[] = [
+    head,
+    user("first"),
+    agentsPatch("P".repeat(16_384)),
+    usageAssistant(95_000),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsPatch("B".repeat(8_192)),
+    agentsRemoval(),
+    user("next"),
+  ];
+  const base = {
+    ...options,
+    contextWindow: 120_000,
+    systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  const folded = projectNextContextUsage(messages, base);
+  const retained = projectNextContextUsage(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(folded.usageAnchorIndex, 3);
+  assert.equal(retained.usageAnchorIndex, 3);
+  assert.ok(folded.contextTokens < 96_000, `folded=${folded.contextTokens}`);
+  assert.equal(folded.shouldCompact, false);
+  // Both post-anchor revisions (16 KiB + 8 KiB) and the removal are sent; the
+  // revision before the anchor is already inside the provider's 95k.
+  const extra = retained.contextTokens - folded.contextTokens;
+  assert.ok(extra >= 6_144 && extra < 6_300, `extra=${extra}`);
+  assert.equal(retained.shouldCompact, true);
+
+  // The compaction decision uses the same anchored tail.
+  const foldedCompaction = compactGenerationContext(messages, base);
+  const retainedCompaction = compactGenerationContext(messages, { ...base, retainsSystemUpdates: true });
+  assert.equal(foldedCompaction.compacted, false);
+  assert.ok(
+    retainedCompaction.estimatedTokensBefore - foldedCompaction.estimatedTokensBefore >= 6_144,
+    `before=${retainedCompaction.estimatedTokensBefore} folded=${foldedCompaction.estimatedTokensBefore}`,
+  );
+  assert.ok(retainedCompaction.estimatedTokensBefore > retainedCompaction.inputBudgetTokens);
+
+  // A single post-anchor revision (Pullfrog's case) is enough to cross 97.5k.
+  const single: AgentMessage[] = [
+    head,
+    user("first"),
+    usageAssistant(95_000),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsRemoval(),
+    user("next"),
+  ];
+  const singleBase = {
+    ...base,
+    systemPrompt: getCurrentSystemPrompt(single as Parameters<typeof getCurrentSystemPrompt>[0]),
+  };
+  assert.equal(projectNextContextUsage(single, singleBase).shouldCompact, false);
+  assert.equal(projectNextContextUsage(single, { ...singleBase, retainsSystemUpdates: true }).shouldCompact, true);
+});
+
+test("an AGENTS.md revision still active after a stale anchor is priced once near the threshold", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  // The provider has reported neither revision. The active 8 KiB revision is
+  // also in the replayed static prompt, so only the superseded 16 KiB one and
+  // the update framing are extra in totals that add static context.
+  const transcript = (usage: number): AgentMessage[] => [
+    head,
+    user("first"),
+    usageAssistant(usage),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsPatch("B".repeat(8_192)),
+    user("next"),
+  ];
+  const project = (usage: number, retainsSystemUpdates: boolean) => {
+    const messages = transcript(usage);
+    const base = {
+      ...options,
+      contextWindow: 120_000,
+      systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+      retainsSystemUpdates,
+    };
+    return { messages, base, projection: projectNextContextUsage(messages, base) };
+  };
+
+  // Threshold is 97,616. Both revisions are sent once (about 6.2k over the
+  // usage); pricing the active one again would add about 2k more.
+  const near = project(90_000, true);
+  const sentOnce = near.projection.contextTokens - 90_000;
+  assert.ok(sentOnce >= 6_144 && sentOnce < 6_400, `sentOnce=${sentOnce}`);
+  assert.equal(near.projection.shouldCompact, false);
+  // The static-inclusive anchored term prices only what the static prompt lacks.
+  assert.ok(
+    near.projection.addedAfterUsageAnchorTokens >= 4_096 &&
+      near.projection.addedAfterUsageAnchorTokens < 4_200,
+    `tail=${near.projection.addedAfterUsageAnchorTokens}`,
+  );
+  const nearCompaction = compactGenerationContext(near.messages, near.base);
+  assert.equal(nearCompaction.compacted, false);
+  assert.ok(nearCompaction.estimatedTokensBefore < 97_616, `before=${nearCompaction.estimatedTokensBefore}`);
+
+  // Still more than the folded model, and a slightly larger anchor crosses.
+  assert.ok(near.projection.contextTokens > project(90_000, false).projection.contextTokens);
+  const over = project(92_000, true);
+  assert.equal(over.projection.shouldCompact, true);
+
+  // Compaction candidates price the same request: keeping both revisions is
+  // over budget, so the prompt is replayed into one head. That head carries the
+  // active revision the 92k usage never saw.
+  const overCompaction = compactGenerationContext(over.messages, over.base);
+  assert.equal(overCompaction.compacted, true);
+  assert.equal(overCompaction.messages.filter((message) => message.role === "system").length, 1);
+  assert.ok(
+    overCompaction.estimatedTokensAfter >= 92_000 + 2_048,
+    `after=${overCompaction.estimatedTokensAfter}`,
+  );
+  assert.ok(overCompaction.estimatedTokensAfter <= overCompaction.inputBudgetTokens);
 });

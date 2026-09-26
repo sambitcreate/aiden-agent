@@ -75,6 +75,8 @@ export interface ChatApplicationDependencies {
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
+  /** Release ambient per-chat caches (context-pressure projections). */
+  releaseChatContext?: (chatId: string) => void;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -328,6 +330,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
+        deps.releaseChatContext?.(chatId);
         if (releaseAdmission) {
           finishAttachmentDeletion?.();
           finishDeletion();

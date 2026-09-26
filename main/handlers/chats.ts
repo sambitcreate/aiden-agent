@@ -46,6 +46,7 @@ import {
 } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import {
+  parseChatContextPressureRequest,
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
@@ -66,6 +67,10 @@ import { hostPlatformCapabilities } from "../services/host-platform-capabilities
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
+import {
+  chatContextPressure,
+  invalidateChatContextJournal,
+} from "../services/context-pressure.js";
 import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 
@@ -168,13 +173,45 @@ export function registerChatHistoryHandlers(): void {
     chatApplicationService.waitUntilIdle(asString(id, "id")),
   );
 
+  // Next-request context projection for the composer meter. Read-only; returns
+  // null when the chat has no model or its journal cannot be opened.
+  ipcMain.handle("chats:contextPressure", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Context pressure requires the active application document."),
+    );
+    const parsed = parseChatContextPressureRequest(input);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return chatContextPressure(parsed.chatId, {
+      draftText: parsed.draftText,
+      providerId: parsed.providerId,
+      modelId: parsed.modelId,
+      attachments: parsed.attachments,
+    });
+  });
+
   ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {
     if (engine !== undefined && !isCompactionEngine(engine)) throw new Error("Invalid compaction engine.");
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Compaction requires the active application document."),
     );
-    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId, engine);
+    const chatId = asString(id, "id");
+    const result = await compactDesktopChat(contextLifecycleService, chatId, owner.documentId, engine);
+    if (result.compacted) {
+      // The meter must reflect the compaction immediately: drop the journaled
+      // snapshot and push a fresh next-request projection to the requester.
+      invalidateChatContextJournal(chatId);
+      try {
+        const pressure = await chatContextPressure(chatId);
+        if (!owner.isDestroyed()) {
+          owner.send("chat:context-pressure", { chatId, pressure });
+        }
+      } catch {
+        // A stale or unreadable journal never turns compaction into an error.
+      }
+    }
+    return result;
   });
   ipcMain.handle("chats:cancelCompact", (event, id: unknown) => {
     const owner = rendererDocumentOwner(

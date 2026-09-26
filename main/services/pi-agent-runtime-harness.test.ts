@@ -80,6 +80,7 @@ async function managedTestHarness(
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
+    onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -145,6 +146,7 @@ async function managedTestHarness(
     },
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
+    ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
     durability: {
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
@@ -2526,6 +2528,45 @@ test("terminal responses skip between-turn pressure and settle through the termi
   } finally {
     PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
     PiCompactionCoordinator.prototype.check = originalCheck;
+  }
+});
+
+test("context projection observers see the coordinator's projection and cannot fault the run", async () => {
+  const checked: Array<Parameters<PiCompactionCoordinator["checkContextPressure"]>[0]> = [];
+  const observed: Array<{ contextTokens: number; contextWindow: number }> = [];
+  const originalCheckContextPressure = PiCompactionCoordinator.prototype.checkContextPressure;
+  PiCompactionCoordinator.prototype.checkContextPressure = function (projection) {
+    checked.push(projection);
+    return originalCheckContextPressure.call(this, projection);
+  };
+  try {
+    const { harness } = await managedTestHarness([fauxAssistantMessage("done")], {
+      contextWindow: 8_192,
+      generationContextTransform: true,
+      onContextProjection: (projection, options) => {
+        observed.push({
+          contextTokens: projection.contextTokens,
+          contextWindow: options.contextWindow,
+        });
+        throw new Error("meter observer failed");
+      },
+    });
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "measure the next request", timestamp: 1 },
+    });
+
+    assert.equal(outcome.kind, "completed");
+    assert.ok(checked.length >= 1);
+    // Every projection the compaction rule consults reaches the meter first;
+    // a post-preflight message swap may add one refreshed reading.
+    assert.equal(observed[0]?.contextTokens, checked[0]?.contextTokens);
+    for (const projection of checked) {
+      assert.ok(observed.some((entry) => entry.contextTokens === projection?.contextTokens));
+    }
+    assert.ok(observed.every((entry) => entry.contextWindow === 8_192));
+  } finally {
+    PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
   }
 });
 

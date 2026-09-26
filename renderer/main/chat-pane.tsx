@@ -36,6 +36,9 @@ import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { ContextMeter } from "../components/context-meter";
+import { ContextPressureFeed } from "../lib/context-pressure-feed";
+import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
   SubagentWorkspaceWriteApproval,
@@ -107,6 +110,7 @@ import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remot
 import {
   hasActiveThinkingStep,
   hasActiveToolStep,
+  isToolStep,
   latestActiveAgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
@@ -334,6 +338,60 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   const modelInfo = useModelInfo(providerId, providerModels, selectedProvider);
   const visionSupported = model ? modelInfo.data?.[model]?.vision : undefined;
+
+  // Composer context meter: the runtime's next-request projection, refreshed
+  // on the ambient triggers (open, model change, settle, draft typing) and
+  // pushed live during a generation via chat:context-pressure.
+  const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
+  const [contextCompactPending, setContextCompactPending] = React.useState(false);
+  const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
+  const contextCompactedTimerRef = React.useRef<number | null>(null);
+  type ContextDraft = { draftText?: string; attachments?: Attachment[] };
+  const contextFetchRef = React.useRef<
+    (chatId: string, visibleDraft?: ContextDraft) => Promise<ChatContextPressureV1 | null>
+  >(async () => null);
+  contextFetchRef.current = (targetChatId, visibleDraft) =>
+    chatsApi.contextPressure(targetChatId, { ...visibleDraft, providerId, modelId: model });
+  const [contextFeed] = React.useState(
+    () =>
+      new ContextPressureFeed<ContextDraft>({
+        fetch: (targetChatId, visibleDraft) => contextFetchRef.current(targetChatId, visibleDraft),
+        publish: setContextPressure,
+      }),
+  );
+  // ChatPane stays mounted across chat navigation (see chat-transition tests),
+  // so drop the previous chat's reading, compaction chrome and pending timers
+  // before the new chat paints; the feed voids in-flight ambient responses.
+  React.useLayoutEffect(() => {
+    contextFeed.showChat(draft ? null : chatId);
+    setContextCompactPending(false);
+    setContextCompactedFlash(false);
+    if (contextCompactedTimerRef.current !== null) {
+      window.clearTimeout(contextCompactedTimerRef.current);
+      contextCompactedTimerRef.current = null;
+    }
+  }, [contextFeed, chatId, draft]);
+  React.useEffect(
+    () => chatsApi.onContextPressure((eventChatId, pressure) => contextFeed.pushed(eventChatId, pressure)),
+    [contextFeed],
+  );
+  React.useEffect(
+    () => () => {
+      contextFeed.dispose();
+      if (contextCompactedTimerRef.current !== null) {
+        window.clearTimeout(contextCompactedTimerRef.current);
+      }
+    },
+    [contextFeed],
+  );
+  const onDraftContextChange = React.useCallback(
+    (value: string, draftAttachments: Attachment[]) => {
+      const draftText = value.trim() ? value : undefined;
+      const attachments = draftAttachments.length ? draftAttachments : undefined;
+      contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
+    },
+    [contextFeed],
+  );
   const googleThinkingSupported =
     providerId === GOOGLE_PROVIDER_ID &&
     Boolean(model) &&
@@ -707,6 +765,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
+  const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // While a turn runs the harness pushes the authoritative in-turn projection;
+  // ambient journal reads (and the draft reset's debounced refresh) would lag
+  // behind and overwrite it. The meter resumes ambient reads once it settles.
+  React.useLayoutEffect(() => {
+    contextFeed.setLive(contextLiveGeneration);
+  }, [contextFeed, contextLiveGeneration]);
+  // Permission/folder changes clear the stale reading. The feed keeps the
+  // scope across chat switches, so this only needs to run when it changes.
+  React.useLayoutEffect(() => {
+    contextFeed.setScope(
+      `${effectiveWorkspace?.permission ?? ""}\u0000${effectiveWorkspace?.folderPath ?? ""}`,
+    );
+  }, [contextFeed, effectiveWorkspace?.permission, effectiveWorkspace?.folderPath]);
+  React.useEffect(() => {
+    if (!contextLiveGeneration) void contextFeed.refresh();
+    // Workspace path and permission shape the next request's system prompt
+    // and AGENTS.md scope, so a change re-prices the meter.
+  }, [
+    contextFeed,
+    chatId,
+    draft,
+    providerId,
+    model,
+    chat.data?.updatedAt,
+    contextLiveGeneration,
+    effectiveWorkspace?.permission,
+    effectiveWorkspace?.folderPath,
+  ]);
   const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
 
   React.useEffect(() => {
@@ -1021,6 +1108,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
+          },
+          onContextPressure: (pressure) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              setContextPressure(pressure);
+            }
           },
           ...(environmentPanel.subagentsEnabled
             ? {
@@ -2513,7 +2605,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCloneChat={() => copyChat()}
                 onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
                 onExportChat={exportChat}
-                onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
+                onCompactChat={
+                  draft
+                    ? undefined
+                    : async (engine) => {
+                        const compactChatId = chatId;
+                        setContextCompactPending(true);
+                        try {
+                          const result = await chatsApi.compact(compactChatId, engine);
+                          // The pane may now show another chat; its meter
+                          // chrome belongs to that chat, not this compaction.
+                          if (result.compacted && chatIdRef.current === compactChatId) {
+                            setContextCompactedFlash(true);
+                            if (contextCompactedTimerRef.current !== null) {
+                              window.clearTimeout(contextCompactedTimerRef.current);
+                            }
+                            contextCompactedTimerRef.current = window.setTimeout(() => {
+                              contextCompactedTimerRef.current = null;
+                              setContextCompactedFlash(false);
+                            }, 6_000);
+                          }
+                          return result;
+                        } finally {
+                          if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+                        }
+                      }
+                }
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
@@ -2559,6 +2676,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     />
                   ) : undefined
                 }
+                contextMeter={
+                  draft ? undefined : (
+                    <ContextMeter
+                      pressure={contextPressure}
+                      compacting={
+                        contextCompactPending ||
+                        (displayedGenerationTimeline?.steps.some(
+                          (step) =>
+                            isToolStep(step) &&
+                            step.toolName === "compact_context" &&
+                            (step.status === "pending" || step.status === "running"),
+                        ) ?? false)
+                      }
+                      recentlyCompacted={contextCompactedFlash}
+                    />
+                  )
+                }
+                onDraftChange={onDraftContextChange}
                 modelPicker={
                   <ModelPicker
                     providers={settings.data ? (providers.data ?? []) : []}

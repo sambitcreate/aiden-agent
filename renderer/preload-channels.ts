@@ -65,6 +65,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "assistant-live:event",
   "chat:approval",
   "chat:artifact",
+  "chat:context-pressure",
   "chat:delta",
   "chat:done",
   "chat:error",

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentContext } from "@earendil-works/pi-agent-core";
+import { createInitialSystemMessage, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import { createSubagentFileMutatorClient } from "./subagents/subagent-file-mutator-io.js";
 import type { SubagentWorkspaceRootIdentity } from "./subagents/subagent-file-mutation-core.js";
 
@@ -101,6 +102,100 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
           timestamp: Date.now(),
         }],
       };
+    },
+  };
+}
+
+export interface AgentsInstructionRoots {
+  globalRoot: string;
+  workspaceRoot?: string;
+}
+
+/**
+ * Cheap change detector for the root AGENTS.md files a generation would read,
+ * so an estimate built from them can be cached until either file changes.
+ */
+export async function agentsInstructionFingerprint(roots: AgentsInstructionRoots): Promise<string> {
+  const parts = await Promise.all(
+    [roots.globalRoot, roots.workspaceRoot].map(async (root) => {
+      if (!root) return "";
+      try {
+        const stat = await fs.lstat(path.join(root, "AGENTS.md"));
+        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return "-";
+      }
+    }),
+  );
+  return parts.join("|");
+}
+
+/**
+ * Read-only estimate of the prompt a desktop generation sends after appending
+ * AGENTS.md guidance, for surfaces (the composer context meter) that price the
+ * next request without starting one. It reuses the refresher so the block has
+ * the runtime's exact shape and length. Instructions the runtime would refuse
+ * (symlinked, oversized, unreadable) leave the host prompt unchanged: the real
+ * request fails closed on them rather than sending them.
+ */
+export async function withAgentsInstructionsEstimate(
+  systemPrompt: string,
+  roots: AgentsInstructionRoots,
+  read?: AgentsInstructionOptions["read"],
+): Promise<string> {
+  try {
+    const refresher = await createAgentsInstructionRefresher({
+      ...roots,
+      revalidate: async () => {},
+      ...(read ? { read } : {}),
+    });
+    // Pi 0.87 carries the prompt in the transcript: the refresher appends a
+    // section patch, and the effective prompt is the replayed system text.
+    const head = createInitialSystemMessage(systemPrompt, []);
+    const prepared = await refresher.apply({ messages: head ? [head] : [], tools: [] });
+    return getCurrentSystemPrompt(prepared.messages);
+  } catch {
+    return systemPrompt;
+  }
+}
+
+// The refresher's block: a random UUID nonce closes it, and the records inside
+// are JSON strings, so user text can never forge the closing tag.
+// Pi renders a section after the base prompt with a blank-line separator, or
+// alone when the base prompt is empty.
+const AGENTS_INSTRUCTION_BLOCK = /(?:^|\n\n)<agents-instructions-([0-9a-f-]{36})>[\s\S]*?<\/agents-instructions-\1>/g;
+
+/** Remove a refresher-appended AGENTS.md block from a system prompt. */
+export function withoutAgentsInstructions(systemPrompt: string): string {
+  return systemPrompt.replace(AGENTS_INSTRUCTION_BLOCK, "");
+}
+
+/**
+ * Keeps a prompt captured from a real generation aligned with the AGENTS.md
+ * files the next request will read. Create it when the prompt is captured:
+ * while the files are unchanged the captured prompt is returned as-is (no
+ * file reads); after an edit the stale block is replaced with a fresh
+ * estimate, cached until the files or the captured prompt change again.
+ */
+export function createAgentsInstructionTracker(
+  roots: AgentsInstructionRoots,
+  read?: AgentsInstructionOptions["read"],
+) {
+  const baseline = agentsInstructionFingerprint(roots);
+  let refreshed: { key: string; systemPrompt: string } | undefined;
+  return {
+    async current(systemPrompt: string): Promise<string> {
+      const fingerprint = await agentsInstructionFingerprint(roots);
+      if (fingerprint === (await baseline)) return systemPrompt;
+      const key = `${fingerprint}\u0000${systemPrompt}`;
+      if (refreshed?.key === key) return refreshed.systemPrompt;
+      const estimate = await withAgentsInstructionsEstimate(
+        withoutAgentsInstructions(systemPrompt),
+        roots,
+        read,
+      );
+      refreshed = { key, systemPrompt: estimate };
+      return estimate;
     },
   };
 }

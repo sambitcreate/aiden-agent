@@ -101,6 +101,15 @@ export function chatUserTextWithAttachments(
   return [textPrefix, content].filter(Boolean).join("\n\n");
 }
 
+/** Shape a not-yet-sent draft exactly as the next request will carry it. */
+export function draftUserPiMessage(
+  content: string,
+  attachments: ChatStartParams["messages"][number]["attachments"],
+  supportsImages: boolean,
+): Message {
+  return userMessage(content, attachments, supportsImages, Date.now());
+}
+
 /** Rehydrate Aiden chat history using the generation's exact Pi image gate. */
 export function toPiMessages(
   params: ChatStartParams,

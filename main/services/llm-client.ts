@@ -26,7 +26,6 @@ import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
-  BROWSER_AGENT_GUIDANCE,
   BROWSER_MUTATION_TOOL_NAMES,
   browserToolApprovalSummary,
   browserLocalFileRequest,
@@ -43,7 +42,6 @@ import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
 import {
-  DEVICE_AGENT_GUIDANCE,
   DEVICE_APPROVAL_TOOL_NAMES,
   canUseDeviceTools,
   createDeviceAgentTools,
@@ -103,7 +101,8 @@ import {
 } from "./bot-tool-authority.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
-import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
+import { type SkillRegistrySnapshot } from "./skill-registry.js";
+import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   assistantTurnTextSeparator,
@@ -177,7 +176,6 @@ import {
 import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
 import { chatMessageToPiMessage, chatUserTextWithAttachments } from "./generation-messages.js";
 import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
-import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import {
   beginPiVisibleTurnLease,
   piCompactionSessionStore,
@@ -200,8 +198,14 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  chatContextPressureFromProjection,
   createGenerationContextTransform,
+  modelRetainsSystemUpdates,
 } from "./generation-context.js";
+import {
+  invalidateChatContextJournal,
+  rememberChatContextProfile,
+} from "./context-pressure.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
@@ -256,7 +260,6 @@ import {
   subagentChildWebEnabled,
 } from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
-import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./subagents/role-catalog.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
@@ -655,57 +658,6 @@ function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): v
   }
 }
 
-async function buildSystemPrompt(
-  folderPath: string | undefined,
-  branch: string | undefined,
-  permission: GenerationPermission,
-  subagentsAvailable: boolean,
-  skillsAvailable = true,
-  skillSnapshot?: SkillRegistrySnapshot,
-  availableToolNames?: ReadonlySet<string>,
-): Promise<string> {
-  const base = PI_CHAT_SYSTEM_PROMPT;
-  const skillsText =
-    skillsAvailable && skillSnapshot
-      ? formatAvailableSkills(skillSnapshot, availableToolNames)
-      : undefined;
-  const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
-  const browserSuffix = availableToolNames?.has("browser_open")
-    ? `\n\n${BROWSER_AGENT_GUIDANCE}`
-    : "";
-  const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
-  if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
-  }
-  const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
-  const capability =
-    permission === "read-only"
-      ? "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
-      : "You have tools to read, search, list, and edit files and to run shell commands in this folder. ";
-  const workflow =
-    permission === "read-only"
-      ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
-      : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
-  const delegation = subagentsAvailable
-    ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
-    : "";
-  return (
-    `${base}\n\n` +
-    `You are working inside the folder: ${folderPath}.${git} ` +
-    capability +
-    workflow +
-    (permission === "ask"
-      ? "The user must approve each file write and shell command before it runs."
-      : permission === "full"
-        ? "You may make changes and run commands directly."
-        : "") +
-    delegation +
-    skillsSuffix +
-    browserSuffix +
-    deviceSuffix
-  );
-}
-
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -789,10 +741,15 @@ async function prepareGeneration(
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   // Bot and Assistant prompts retain their exact, separately granted sources.
-  const agentsInstructions = !botBound && !assistantMode
-    ? await createAgentsInstructionRefresher({
+  const agentsInstructionRoots = !botBound && !assistantMode
+    ? {
         globalRoot: aidenConfigDir(),
         workspaceRoot: permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
+      }
+    : undefined;
+  const agentsInstructions = agentsInstructionRoots
+    ? await createAgentsInstructionRefresher({
+        ...agentsInstructionRoots,
         revalidate: async (requestSignal) => {
           signal.throwIfAborted();
           requestSignal?.throwIfAborted();
@@ -1560,6 +1517,7 @@ async function prepareGeneration(
   return {
     runtime: { ...runtime, model },
     agentsInstructions,
+    agentsInstructionRoots,
     browserDiscovery,
     browserSelection,
     browserFileApprovals,
@@ -1886,6 +1844,7 @@ export const llmClient = {
     const {
       runtime,
       agentsInstructions,
+      agentsInstructionRoots,
       browserDiscovery,
       browserSelection,
       browserFileApprovals,
@@ -2342,6 +2301,7 @@ export const llmClient = {
         supportsImages,
         providerId: model.provider,
         modelId: model.id,
+        retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
@@ -2495,6 +2455,13 @@ export const llmClient = {
           tools: runtimeTools,
         });
       }
+      // Register once the transcript carries AGENTS.md, so the profile's
+      // instruction baseline matches the prompt it captured.
+      rememberChatContextProfile(params.chatId, generationContextOptions, {
+        instructionRoots: agentsInstructionRoots,
+        permission,
+        toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
+      });
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       candidate = new PiAgentRuntimeHarness({
@@ -2510,6 +2477,20 @@ export const llmClient = {
             "pi",
             `Pi runtime fault (${source}${extensionId ? `:${extensionId}` : ""}) for stream ${streamId}.`,
           );
+        },
+        onContextProjection: (projection, projectionOptions) => {
+          // The harness keeps these options current with host-disclosed tool
+          // and prompt updates, so ambient reads reuse the live profile.
+          rememberChatContextProfile(params.chatId, projectionOptions, {
+            instructionRoots: agentsInstructionRoots,
+            permission,
+            toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
+          });
+          sendGeneration(streamId, "chat:context-pressure", {
+            streamId,
+            chatId: params.chatId,
+            pressure: chatContextPressureFromProjection(projection, projectionOptions),
+          });
         },
         ...buildAgentRuntimeOptions(params.chatId, runtime),
         convertToLlm,
@@ -3684,6 +3665,7 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
           active.delete(streamId);

@@ -1,0 +1,140 @@
+import {
+  createAgentsInstructionTracker,
+  type AgentsInstructionOptions,
+  type AgentsInstructionRoots,
+} from "./agents-instructions.js";
+import type { GenerationContextOptions } from "./generation-context.js";
+import {
+  applyCustomModelToolPolicy,
+  type CustomModelOptions,
+} from "../../renderer/shared/custom-model-options.js";
+
+/**
+ * The exact GenerationContextOptions the last generation for a chat resolved
+ * (system prompt + tool schemas after host-disclosed updates). The options
+ * object is mutated in place by the generation path, so a stored reference
+ * stays live for the rest of the session.
+ */
+export interface GenerationContextProfile {
+  options: GenerationContextOptions;
+  /** Present when the generation appended AGENTS.md guidance to its prompt. */
+  instructions?: ReturnType<typeof createAgentsInstructionTracker>;
+  instructionRoots?: AgentsInstructionRoots;
+  /** Effective workspace permission; `ask` and `full` build different prompts. */
+  permission?: string;
+  /**
+   * The model's tool policy when captured. Captured options hold the tools
+   * after that policy ran (`toolCall: false` leaves none), so they cannot be
+   * re-priced for a different policy.
+   */
+  toolsDisabled?: boolean;
+}
+
+export interface GenerationContextScope {
+  instructionRoots?: AgentsInstructionRoots;
+  permission?: string;
+  toolsDisabled?: boolean;
+}
+
+/**
+ * Register right after the runtime applied AGENTS.md to `options`, so the
+ * tracker's baseline is the file state that prompt was built from.
+ */
+export function createGenerationContextProfile(
+  options: GenerationContextOptions,
+  scope: GenerationContextScope = {},
+  read?: AgentsInstructionOptions["read"],
+): GenerationContextProfile {
+  const { instructionRoots, permission, toolsDisabled } = scope;
+  return {
+    options,
+    instructions: instructionRoots
+      ? createAgentsInstructionTracker(instructionRoots, read)
+      : undefined,
+    instructionRoots,
+    permission,
+    toolsDisabled,
+  };
+}
+
+export interface ContextProfileRequest {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  supportsImages: boolean;
+  /** AGENTS.md roots a generation started now would read. */
+  instructionRoots: AgentsInstructionRoots;
+  /** The chat workspace's current effective permission. */
+  permission: string;
+  /** Whether the selected model's current overrides disable tool calls. */
+  toolsDisabled: boolean;
+}
+
+/**
+ * Reuse a remembered profile only while it describes the next request: same
+ * model shape, workspace permission and currently authorized AGENTS.md scope.
+ * A workspace path or permission change discards it (without touching the old roots), so
+ * the caller rebuilds from the current ambient scope instead.
+ */
+export async function rememberedContextOptions(
+  profile: GenerationContextProfile | undefined,
+  request: ContextProfileRequest,
+): Promise<GenerationContextOptions | undefined> {
+  if (!profile) return undefined;
+  const { options } = profile;
+  if (
+    options.providerId !== request.providerId ||
+    options.modelId !== request.modelId ||
+    options.contextWindow !== request.contextWindow ||
+    options.supportsImages !== request.supportsImages ||
+    (profile.permission !== undefined && profile.permission !== request.permission) ||
+    (profile.toolsDisabled ?? false) !== request.toolsDisabled
+  ) {
+    return undefined;
+  }
+  if (!profile.instructions || !profile.instructionRoots) return options;
+  if (
+    profile.instructionRoots.globalRoot !== request.instructionRoots.globalRoot ||
+    profile.instructionRoots.workspaceRoot !== request.instructionRoots.workspaceRoot
+  ) {
+    return undefined;
+  }
+  // The next request re-reads AGENTS.md; price an edit made since.
+  return {
+    ...options,
+    systemPrompt: await profile.instructions.current(options.systemPrompt),
+  };
+}
+
+export interface NextRequestModel {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  supportsImages: boolean;
+  /** The selected model receives later transcript system messages in place. */
+  retainsSystemUpdates?: boolean;
+  /** The selected model's saved overrides (e.g. tool calls disabled). */
+  overrides?: CustomModelOptions;
+}
+
+/**
+ * Price `base` (remembered or ambient static context) for the model the next
+ * request will use: identity and limits come from the live selection, and the
+ * model's tool policy strips tools exactly as the generation path does.
+ */
+export function nextRequestContextOptions(
+  base: GenerationContextOptions,
+  model: NextRequestModel,
+): GenerationContextOptions {
+  return applyCustomModelToolPolicy(
+    {
+      ...base,
+      contextWindow: model.contextWindow,
+      supportsImages: model.supportsImages,
+      providerId: model.providerId,
+      modelId: model.modelId,
+      retainsSystemUpdates: model.retainsSystemUpdates ?? false,
+    },
+    model.overrides,
+  );
+}

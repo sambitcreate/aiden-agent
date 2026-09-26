@@ -876,6 +876,68 @@ test("pre-prompt pressure ignores usage from before the latest checkpoint", asyn
   );
 });
 
+test("retained system updates after the usage anchor count toward pre-prompt and post-turn pressure", async () => {
+  const { faux, models, model } = compactionFixture();
+  const retainingModel = {
+    ...model,
+    compat: { ...(model as { compat?: object }).compat, supportsMidConvoSystemMessages: true },
+  } as Model<Api>;
+  const agentsRevision = (body: string, timestamp: number) =>
+    ({
+      role: "system",
+      content: "",
+      sections: { "agents-instructions-test": body },
+      timestamp,
+    }) as unknown as Parameters<PiSessionPort["appendMessage"]>[0];
+
+  async function pressure(
+    pressureModel: Model<Api>,
+    zeroUsageTail: boolean,
+  ): Promise<{ preCompacted: boolean; postCompacted: boolean }> {
+    faux.setResponses(
+      Array.from({ length: 4 }, () => fauxAssistantMessage(structuredSummary("retained updates"))),
+    );
+    const build = async (id: string) => {
+      const session = await memorySession(id);
+      await session.appendMessage(user(`old ${"x".repeat(1_200)}`, 10));
+      // Threshold is 900 (window 1,000, reserve 100); the anchor sits under it.
+      await session.appendMessage(assistant(pressureModel, { input: 700, output: 0, timestamp: 20 }));
+      await session.appendMessage(agentsRevision("A".repeat(1_000), 30));
+      let last: AssistantMessage | undefined;
+      if (zeroUsageTail) {
+        last = assistant(pressureModel, { input: 0, output: 0, timestamp: 40 });
+        await session.appendMessage(last);
+      }
+      await session.appendMessage(agentsRevision("B".repeat(1_000), 50));
+      await session.appendMessage(user("current", 60));
+      return { session, last };
+    };
+    const coordinator = (session: PiSessionPort) =>
+      new PiCompactionCoordinator({
+        session,
+        models,
+        model: pressureModel,
+        thinkingLevel: "off",
+        settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+      });
+    const pre = await build(`retained-pre-${zeroUsageTail}-${pressureModel === model}`);
+    const preCompacted = (await coordinator(pre.session).checkContextPressure()).compacted;
+    let postCompacted = preCompacted;
+    if (pre.last) {
+      const post = await build(`retained-post-${pressureModel === model}`);
+      postCompacted = (await coordinator(post.session).check(post.last!)).compacted;
+    }
+    return { preCompacted, postCompacted };
+  }
+
+  // Direct usage from the previous assistant, then two revisions.
+  assert.deepEqual(await pressure(model, false), { preCompacted: false, postCompacted: false });
+  assert.deepEqual(await pressure(retainingModel, false), { preCompacted: true, postCompacted: true });
+  // A zero-usage response leaves the 700-token anchor stale before both revisions.
+  assert.deepEqual(await pressure(model, true), { preCompacted: false, postCompacted: false });
+  assert.deepEqual(await pressure(retainingModel, true), { preCompacted: true, postCompacted: true });
+});
+
 test("feasible default compaction settings keep Pi's fixed 16384 token reserve", async () => {
   const { faux, models, model } = compactionFixture();
   const fixedModel = {

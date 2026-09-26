@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CHAT_SESSION_ID_LIMITS,
+  parseChatContextPressureRequest,
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
@@ -50,4 +51,107 @@ test("copied chat metadata uses the renderer notification contract", () => {
   assert.match(broadcast, /chatId: copied\.id/u);
   assert.match(broadcast, /title: copied\.title/u);
   assert.doesNotMatch(broadcast, /\bid: copied\.id/u);
+});
+
+test("context pressure requests accept a bounded optional draft", () => {
+  assert.deepEqual(parseChatContextPressureRequest({ chatId: "chat-1" }), {
+    chatId: "chat-1",
+    draftText: undefined,
+  });
+  assert.deepEqual(parseChatContextPressureRequest({ chatId: "chat-1", draftText: "hello" }), {
+    chatId: "chat-1",
+    draftText: "hello",
+  });
+  assert.throws(() => parseChatContextPressureRequest({}));
+  assert.throws(() => parseChatContextPressureRequest({ chatId: "chat-1", extra: 1 }));
+  assert.throws(() => parseChatContextPressureRequest({ chatId: "chat-1", draftText: 42 }));
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      draftText: "x".repeat(65_537),
+    }),
+  );
+  // A live composer selection + pending attachments ride along so the
+  // projection prices what the next send will actually carry.
+  assert.deepEqual(
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      draftText: "sum this",
+      providerId: "openai",
+      modelId: "gpt-5",
+      attachments: [
+        { id: "a1", name: "notes.txt", kind: "text", mimeType: "text/plain", textLength: 120 },
+        { id: "a2", name: "shot.png", kind: "image", mimeType: "image/png" },
+      ],
+    }),
+    {
+      chatId: "chat-1",
+      draftText: "sum this",
+      providerId: "openai",
+      modelId: "gpt-5",
+      attachments: [
+        { id: "a1", name: "notes.txt", kind: "text", mimeType: "text/plain", textLength: 120 },
+        { id: "a2", name: "shot.png", kind: "image", mimeType: "image/png" },
+      ],
+    },
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }),
+  );
+  // An empty live selection must not shadow the chat's saved provider/model.
+  assert.deepEqual(
+    parseChatContextPressureRequest({ chatId: "chat-1", providerId: "", modelId: "" }),
+    { chatId: "chat-1", draftText: undefined },
+  );
+  assert.deepEqual(
+    parseChatContextPressureRequest({ chatId: "chat-1", providerId: "openai", modelId: "" }),
+    { chatId: "chat-1", draftText: undefined, providerId: "openai" },
+  );
+  // Each text length is individually allowed, but the draft as a whole is
+  // bounded by the same 16 MiB aggregate the composer enforces.
+  const textAttachment = (id: string, textLength: number) => ({
+    id,
+    name: `${id}.txt`,
+    kind: "text",
+    mimeType: "text/plain",
+    textLength,
+  });
+  const halfBudget = 8 * 1024 * 1024;
+  assert.equal(
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [textAttachment("a", halfBudget), textAttachment("b", halfBudget)],
+    }).attachments?.length,
+    2,
+  );
+  assert.throws(
+    () =>
+      parseChatContextPressureRequest({
+        chatId: "chat-1",
+        attachments: Array.from({ length: 20 }, (_, index) =>
+          textAttachment(`a${index}`, 16 * 1024 * 1024),
+        ),
+      }),
+    /Invalid attachments/u,
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [textAttachment("a", halfBudget), textAttachment("b", halfBudget + 1)],
+    }),
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [{ id: "a1", name: "x", kind: "file", mimeType: "text/plain" }],
+    }),
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [
+        { id: "a1", name: "x", kind: "text", mimeType: "text/plain", textLength: -1 },
+      ],
+    }),
+  );
 });

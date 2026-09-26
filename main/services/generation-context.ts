@@ -1,4 +1,12 @@
-import { getCurrentSystemMessage, type ToolResultMessage, type UserMessage } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemMessage,
+  getCurrentSystemPrompt,
+  getSystemMessageText,
+  renderSystemMessageUpdate,
+  type SystemMessage,
+  type ToolResultMessage,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   estimateContextTokens,
@@ -7,6 +15,7 @@ import {
   type AgentMessage,
   type AgentTool,
 } from "@earendil-works/pi-agent-core";
+import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
@@ -26,6 +35,17 @@ export interface GenerationContextOptions {
   modelId?: string;
   /** Project model-neutral journal images only when this request can accept them. */
   supportsImages?: boolean;
+  /**
+   * The model receives later transcript system messages in place (Pi
+   * `supportsMidConvoSystemMessages`) instead of one replayed prompt.
+   */
+  retainsSystemUpdates?: boolean;
+}
+
+/** Whether Pi sends this model's later system messages in place. */
+export function modelRetainsSystemUpdates(model: { compat?: unknown }): boolean {
+  const compat = model.compat as { supportsMidConvoSystemMessages?: boolean } | undefined;
+  return compat?.supportsMidConvoSystemMessages === true;
 }
 
 export interface GenerationContextCompaction {
@@ -95,6 +115,118 @@ function messageTokens(messages: AgentMessage[]): number {
   return messages.reduce(
     (total, message) => total + (message.role === "system" ? 0 : estimateTokens(message)),
     0,
+  );
+}
+
+/**
+ * Static context prices the replayed system prompt once. A model that keeps
+ * later system messages receives each one in place instead, including
+ * superseded section revisions (e.g. an older AGENTS.md) and Pi's update
+ * framing. Price what that transcript sends beyond the replayed prompt.
+ */
+function retainedSystemUpdateTokens(messages: readonly AgentMessage[]): number {
+  const system = messages.filter((message): message is SystemMessage => message.role === "system");
+  if (system.length === 0) return 0;
+  const leading = messages[0]?.role === "system" ? (messages[0] as SystemMessage) : undefined;
+  let sentChars = 0;
+  for (const message of system) {
+    if (message !== leading) sentChars += renderSystemMessageUpdate(message).length;
+  }
+  const replayedChars =
+    getCurrentSystemPrompt(system).length - (leading ? getSystemMessageText(leading).length : 0);
+  return Math.max(0, Math.ceil((sentChars - replayedChars) / 4));
+}
+
+/**
+ * Provider usage covers everything up to its anchor. For a model that keeps
+ * later system messages, each one after the anchor is sent in full, so an
+ * anchored tail must price it (Pi's own estimate and messageTokens price
+ * system messages at zero).
+ */
+export function retainedTailSystemTokens(
+  messages: readonly AgentMessage[],
+  options: Pick<GenerationContextOptions, "retainsSystemUpdates">,
+): number {
+  if (!options.retainsSystemUpdates) return 0;
+  let tokens = 0;
+  for (const message of messages) {
+    if (message.role === "system") {
+      tokens += Math.ceil(renderSystemMessageUpdate(message as SystemMessage).length / 4);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Characters of the replayed prompt that come from system messages after
+ * `anchorIndex`: their appended content, plus the sections they last set that
+ * are still active. Pi replays content by appending and sections by replacing.
+ */
+function postAnchorPromptChars(messages: readonly AgentMessage[], anchorIndex: number): number {
+  let chars = 0;
+  const activeSections = new Map<string, { index: number; chars: number }>();
+  messages.forEach((message, index) => {
+    if (message.role !== "system") return;
+    const system = message as SystemMessage;
+    if (index > anchorIndex) {
+      chars += getSystemMessageText({ ...system, sections: undefined }).length;
+    }
+    for (const [name, value] of Object.entries(system.sections ?? {})) {
+      if (value === null) activeSections.delete(name);
+      else activeSections.set(name, { index, chars: value.length });
+    }
+  });
+  for (const section of activeSections.values()) {
+    if (section.index > anchorIndex) chars += section.chars;
+  }
+  return chars;
+}
+
+/**
+ * The post-anchor surcharge for a total that also adds `staticTokens`. The
+ * static prompt already prices the replayed prompt, including content and
+ * still-active sections set after the anchor, so only the rest of what the
+ * retained updates send (superseded or removed revisions and Pi's update
+ * framing) is added here.
+ */
+function retainedTailSystemTokensBeyondPrompt(
+  messages: readonly AgentMessage[],
+  anchorIndex: number,
+  options: GenerationContextOptions,
+): number {
+  if (!options.retainsSystemUpdates) return 0;
+  let sentChars = 0;
+  for (const message of messages.slice(anchorIndex + 1)) {
+    if (message.role === "system") {
+      sentChars += renderSystemMessageUpdate(message as SystemMessage).length;
+    }
+  }
+  return Math.max(0, Math.ceil((sentChars - postAnchorPromptChars(messages, anchorIndex)) / 4));
+}
+
+/**
+ * Message tokens after a provider usage anchor, for a total that adds them to
+ * both the anchor's usage and `staticTokens`.
+ */
+function staticAnchoredTailTokens(
+  messages: AgentMessage[],
+  anchorIndex: number,
+  options: GenerationContextOptions,
+): number {
+  return (
+    messageTokens(messages.slice(anchorIndex + 1)) +
+    retainedTailSystemTokensBeyondPrompt(messages, anchorIndex, options)
+  );
+}
+
+/** Message tokens for a whole outbound transcript under the model's system-message handling. */
+function transcriptMessageTokens(
+  messages: AgentMessage[],
+  options: GenerationContextOptions,
+): number {
+  return (
+    messageTokens(messages) +
+    (options.retainsSystemUpdates ? retainedSystemUpdateTokens(messages) : 0)
   );
 }
 
@@ -263,7 +395,7 @@ export function projectNextContextUsage(
 ): NextContextUsageProjection {
   const projected = projectRequestMessages(messages, options.supportsImages !== false);
   const staticTokens = estimateStaticContextTokens(options);
-  const estimatedMessages = messageTokens(projected);
+  const estimatedMessages = transcriptMessageTokens(projected, options);
   const providerEstimate = estimateContextTokens(projected);
   const candidateAnchorIndex = providerEstimate.lastUsageIndex;
   const candidateAnchor =
@@ -277,12 +409,21 @@ export function projectNextContextUsage(
       ? candidateAnchorIndex
       : null;
   const trailing =
-    anchorIndex === null ? estimatedMessages : messageTokens(projected.slice(anchorIndex + 1));
+    anchorIndex === null
+      ? estimatedMessages
+      : staticAnchoredTailTokens(projected, anchorIndex, options);
+  // Pi's anchored estimate (usage plus trailing messages) adds no static
+  // prompt, so every retained post-anchor update is priced in full.
+  const providerAnchoredTokens =
+    anchorIndex === null
+      ? 0
+      : providerEstimate.tokens +
+        retainedTailSystemTokens(projected.slice(anchorIndex + 1), options);
   const providerUsageTokens = anchorIndex === null ? 0 : providerEstimate.usageTokens;
   const contextTokens = Math.ceil(
     Math.max(
       staticTokens + estimatedMessages,
-      anchorIndex === null ? 0 : providerEstimate.tokens,
+      providerAnchoredTokens,
       providerUsageTokens > 0 ? providerUsageTokens + staticTokens + trailing : 0,
     ),
   );
@@ -302,6 +443,59 @@ export function projectNextContextUsage(
       ...DEFAULT_COMPACTION_SETTINGS,
       reserveTokens: limits.reserveTokens,
     }),
+  };
+}
+
+/**
+ * Renderer-safe view of {@link projectNextContextUsage} plus the limits the
+ * compaction threshold actually uses. `percentOfUsableInput` is the headline
+ * pressure: it is 100 at the exact point `shouldCompact` trips.
+ */
+export function projectChatContextPressure(
+  messages: readonly AgentMessage[],
+  options: GenerationContextOptions,
+  computedAt = Date.now(),
+): ChatContextPressureV1 {
+  return chatContextPressureFromProjection(
+    projectNextContextUsage(messages, options),
+    options,
+    computedAt,
+  );
+}
+
+/** DTO for a projection the caller already computed (e.g. the runtime harness). */
+export function chatContextPressureFromProjection(
+  projection: NextContextUsageProjection,
+  options: GenerationContextOptions,
+  computedAt = Date.now(),
+): ChatContextPressureV1 {
+  const limits = contextLimits(options);
+  const anchored = projection.usageAnchorIndex !== null;
+  return {
+    contextTokens: projection.contextTokens,
+    contextWindow: limits.contextWindow,
+    inputBudgetTokens: limits.inputBudgetTokens,
+    reservedTokens: limits.reserveTokens,
+    percentOfWindow:
+      limits.contextWindow > 0
+        ? (projection.contextTokens / limits.contextWindow) * 100
+        : 0,
+    percentOfUsableInput:
+      limits.inputBudgetTokens > 0
+        ? (projection.contextTokens / limits.inputBudgetTokens) * 100
+        : projection.contextTokens > 0
+          ? 100
+          : 0,
+    shouldCompact: projection.shouldCompact,
+    messageTokens: projection.messageTokens,
+    staticTokens: projection.staticTokens,
+    compressibleHistoryMessages: projection.compressibleHistoryMessages,
+    source: anchored ? "provider-anchored" : "estimated",
+    computedAt,
+    ...(anchored ? { providerUsageTokens: projection.providerUsageTokens } : {}),
+    ...(anchored
+      ? { addedAfterUsageAnchorTokens: projection.addedAfterUsageAnchorTokens }
+      : {}),
   };
 }
 
@@ -448,7 +642,7 @@ export function compactGenerationContext(
   const retained = projectRequestMessages(messages, options.supportsImages !== false);
   const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } =
     contextLimits(options);
-  const estimatedMessageTokensBefore = messageTokens(retained);
+  const estimatedMessageTokensBefore = transcriptMessageTokens(retained, options);
   const providerEstimate = estimateContextTokens(retained);
   const candidateUsageAnchor =
     providerEstimate.lastUsageIndex === null
@@ -460,7 +654,11 @@ export function compactGenerationContext(
     options.modelId !== undefined &&
     candidateUsageAnchor.provider === options.providerId &&
     candidateUsageAnchor.model === options.modelId;
-  const providerAwareTokens = usageAnchorIsCurrent ? providerEstimate.tokens : 0;
+  const providerAwareTokens =
+    usageAnchorIsCurrent && providerEstimate.lastUsageIndex !== null
+      ? providerEstimate.tokens +
+        retainedTailSystemTokens(retained.slice(providerEstimate.lastUsageIndex + 1), options)
+      : 0;
   const estimatedTokensBefore = Math.max(
     providerAwareTokens,
     estimatedMessageTokensBefore + staticTokens,
@@ -470,15 +668,27 @@ export function compactGenerationContext(
     !usageAnchorIsCurrent || providerEstimate.lastUsageIndex === null
       ? 0
       : messageTokens(retained.slice(0, providerEstimate.lastUsageIndex + 1));
+  // The anchor's usage covered the prompt as it stood then. For a retaining
+  // model, content and still-active sections set after the anchor are in the
+  // current static prompt but not in that usage, so they are not part of the
+  // prefix measurement.
+  const anchorStaticTokens =
+    options.retainsSystemUpdates && providerEstimate.lastUsageIndex !== null
+      ? Math.max(
+          0,
+          staticTokens -
+            Math.ceil(postAnchorPromptChars(retained, providerEstimate.lastUsageIndex) / 4),
+        )
+      : staticTokens;
   const providerPrefixRatio =
     usageAnchorIsCurrent && providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
       ? Math.max(
           1,
-          (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens,
+          (providerEstimate.usageTokens - anchorStaticTokens) / estimatedPrefixTokens,
         )
       : 1;
   const estimatedTotalTokens = (candidate: AgentMessage[]) => {
-    const estimatedMessages = messageTokens(candidate);
+    const estimatedMessages = transcriptMessageTokens(candidate, options);
     const heuristicTotal = staticTokens + estimatedMessages;
     if (!usageAnchor) return Math.ceil(heuristicTotal);
 
@@ -491,7 +701,7 @@ export function compactGenerationContext(
     const retainedPrefixTokens = messageTokens(
       candidate.slice(0, anchorIndex + 1),
     );
-    const trailingTokens = messageTokens(candidate.slice(anchorIndex + 1));
+    const trailingTokens = staticAnchoredTailTokens(candidate, anchorIndex, options);
     return Math.ceil(
       Math.max(
         heuristicTotal,
