@@ -12,6 +12,7 @@ export const REQUIRED_JOB_RULES = Object.freeze({
   e2e: Object.freeze({ area: "desktop" }),
   apple: Object.freeze({ area: "apple" }),
   ios: Object.freeze({ area: "ios" }),
+  "ios-simulator": Object.freeze({ area: "ios" }),
   android: Object.freeze({ area: "android" }),
   "cli-linux": Object.freeze({ area: "desktop" }),
   "cli-playground": Object.freeze({ area: "desktop" }),

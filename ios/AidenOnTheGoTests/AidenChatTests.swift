@@ -254,7 +254,7 @@ final class AidenChatTests: XCTestCase {
         let roster = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatAgentRoster.self,
             from: Data(
-                #"{"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[{"agentId":"agent-1","depth":1,"revision":1,"role":"scout","label":"Scouting","taskPreview":"Survey","state":"running","startedAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","modelId":"model","turns":1,"tools":1,"tokens":10}]}"#.utf8
+                #"{"version":1,"chatId":"chat-1","turnId":"turn-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[{"agentId":"agent-1","depth":1,"revision":1,"role":"scout","label":"Scouting","taskPreview":"Survey","state":"running","startedAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","modelId":"model","turns":1,"tools":1,"tokens":10}]}"#.utf8
             )
         )
 
@@ -7750,7 +7750,7 @@ extension AidenChatTests {
         )
         let resolved = AidenPendingQuestionResolution.resolve(
             pending, streamId: "stream-1", chatId: "chat-1",
-            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00Z")!
         )
         XCTAssertEqual(resolved?.id, "q-1")
         XCTAssertEqual(resolved?.questions.count, 1)
@@ -7758,11 +7758,11 @@ extension AidenChatTests {
 
         XCTAssertNil(AidenPendingQuestionResolution.resolve(
             pending, streamId: "other", chatId: "chat-1",
-            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00Z")!
         ))
         XCTAssertNil(AidenPendingQuestionResolution.resolve(
             pending, streamId: "stream-1", chatId: "chat-1",
-            now: ISO8601DateFormatter().date(from: "2026-08-18T19:07:00.000Z")!
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:07:00Z")!
         ))
         XCTAssertNil(AidenPendingQuestionResolution.resolve(
             nil, streamId: "stream-1", chatId: "chat-1"
