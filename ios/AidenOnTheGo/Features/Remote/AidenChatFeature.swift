@@ -3071,6 +3071,8 @@ struct AidenChatDetailView: View {
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
+    @State private var workspaceFileReference: String?
+    @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
     @State private var isScrolledAwayFromLatest = false
     @State private var attachmentPicker = AidenAttachmentPickerState()
@@ -3181,6 +3183,21 @@ struct AidenChatDetailView: View {
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            let raw = url.relativeString
+            if AidenWorkspaceFileLink.path(raw) != nil, model.chat.botId == nil, workspace?.hasFolder == true {
+                workspaceFileReference = raw
+                showsWorkspaceFile = true
+                return .handled
+            }
+            if url.isFileURL || raw.hasPrefix("/") || raw.hasPrefix("./") || raw.hasPrefix("../") || raw.hasPrefix("~/") { return .discarded }
+            return .systemAction
+        })
+        .sheet(isPresented: $showsWorkspaceFile) {
+            if let coordinator, let workspace {
+                NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, initialReference: workspaceFileReference) }
+            }
         }
         .sheet(item: $botSheet) { botSheetContent($0) }
         .sheet(item: $progressSheet) { progressSheet in
