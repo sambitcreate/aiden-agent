@@ -203,6 +203,23 @@ test("shell resolution falls back to the first executable candidate", async () =
   assert.equal(spawnedShell, "/bin/sh");
 });
 
+test("terminal inherits the macOS user CLI directories from a GUI launch", async () => {
+  if (process.platform !== "darwin") return;
+  const owner = ownerState();
+  let childPath = "";
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    shellCandidates: () => ["/bin/sh"],
+    spawnPty: ((_file: string, _args: string[], options: { env: Record<string, string> }) => {
+      childPath = options.env.PATH;
+      return fakePty().pty;
+    }) as typeof spawn,
+  });
+  await service.create("workspace-1", "/tmp", owner.owner);
+  assert.ok(childPath.split(":").includes(path.join(process.env.HOME!, ".local", "bin")));
+  assert.ok(childPath.split(":").includes("/opt/homebrew/bin"));
+});
+
 test("shell resolution rejects descriptively when no candidate is executable", async () => {
   const owner = ownerState();
   const service = new TerminalService({

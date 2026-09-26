@@ -6,6 +6,7 @@
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
 import { spawn } from "node:child_process";
+import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   constants as fsConstants,
   realpathSync,
@@ -1630,7 +1631,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         const child = spawn(command, {
           cwd: root,
           detached: process.platform !== "win32",
-          env: runCommandEnv(options),
+          env: runCommandEnv(options, agentCommandEnvironment()),
           shell: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
