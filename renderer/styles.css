@@ -2059,7 +2059,7 @@ textarea {
   box-shadow: var(--elevation-control);
   transition: box-shadow 150ms ease-out;
 }
-.appearance-mode-option:hover .appearance-mode-preview { box-shadow: var(--elevation-control-hover); }
+.appearance-mode-option:hover:not(:disabled) .appearance-mode-preview { box-shadow: var(--elevation-control-hover); }
 .appearance-mode-scene { position: relative; display: block; flex: 1; min-width: 0; background: var(--preview-bg); }
 .appearance-mode-preview-toolbar { position: absolute; left: 8%; top: 13%; width: 38%; height: 5px; border-radius: 99px; background: var(--preview-muted); }
 .appearance-mode-preview-sidebar { position: absolute; inset: 29% auto 0 8%; width: 30%; border-radius: 8px 0 0; background: var(--preview-sidebar); }
@@ -2185,16 +2185,13 @@ textarea {
   font-size: var(--text-small);
 }
 
-@media (max-width: 520px) {
+@container settings-content (max-width: 540px) {
   .appearance-mode-picker {
     gap: 8px;
   }
   .appearance-mode-option-label svg {
     display: none;
   }
-}
-
-@container settings-content (max-width: 540px) {
   .appearance-theme-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

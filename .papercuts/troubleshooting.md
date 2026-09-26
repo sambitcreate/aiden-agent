@@ -1050,3 +1050,4 @@ because their native file-mutator test binary had not been built. Run
 - `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
 - Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
 - The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
+- PR #199 update: the worktree guard rejects `npx playwright ... -g "a|b"` and `&&`-chained `npm run build; npx playwright`; run build and playwright as separate plain commands.

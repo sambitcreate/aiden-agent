@@ -173,6 +173,85 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
   await expect(workspaceRow()).toHaveText(workspaceName);
 });
 
+test("theme tiles select a preset for both schemes, persist it, and reflow to the content width", async ({
+  aiden,
+}) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
+  };
+  const readPresets = () =>
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(channel: string): Promise<{
+                light: { preset: string };
+                dark: { preset: string };
+              }>;
+            };
+          };
+        }
+      ).aidenAPI;
+      const appearance = await ipc.invoke("settings:getAppearance");
+      return { light: appearance.light.preset, dark: appearance.dark.preset };
+    });
+  const themes = () => page.getByRole("radiogroup", { name: "Themes", exact: true });
+  const tile = (name: string) => themes().getByRole("radio", { name, exact: true });
+
+  await openAppearance();
+  await expect(themes().getByRole("radio")).toHaveCount(9);
+  await expect(page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio")).toHaveCount(3);
+
+  await tile("Dusk").click();
+  await expect(tile("Dusk")).toHaveAttribute("aria-checked", "true");
+  await expect(themes().locator('[aria-checked="true"]')).toHaveCount(1);
+  await expect(page.getByText("Current theme: Dusk", { exact: true })).toBeVisible();
+  await expect.poll(readPresets).toEqual({ light: "dusk", dark: "dusk" });
+
+  // Roving focus: arrow keys move focus and selection together.
+  await tile("Dusk").press("ArrowRight");
+  await expect(tile("Midnight")).toBeFocused();
+  await expect(tile("Midnight")).toHaveAttribute("aria-checked", "true");
+  await expect.poll(readPresets).toEqual({ light: "midnight", dark: "midnight" });
+
+  page = await aiden.relaunch();
+  await openAppearance();
+  await expect(tile("Midnight")).toHaveAttribute("aria-checked", "true");
+
+  const resizeWindow = (width: number) =>
+    aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900),
+      width,
+    );
+  const tileColumns = () =>
+    themes().evaluate(
+      (grid) =>
+        new Set(
+          [...grid.querySelectorAll('[role="radio"]')].map((radio) =>
+            Math.round(radio.getBoundingClientRect().left),
+          ),
+        ).size,
+    );
+  const modeIcon = () =>
+    page
+      .getByRole("radiogroup", { name: "Theme mode", exact: true })
+      .getByRole("radio", { name: "System", exact: true })
+      .locator("svg");
+  await resizeWindow(1280);
+  await expect.poll(tileColumns).toBe(3);
+  await expect(modeIcon()).toBeVisible();
+  await resizeWindow(390);
+  await expect.poll(tileColumns).toBe(2);
+  await expect(modeIcon()).toBeHidden();
+});
+
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({
   aiden,
 }) => {
