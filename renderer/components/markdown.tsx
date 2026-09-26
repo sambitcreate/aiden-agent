@@ -9,10 +9,13 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { cn } from "../lib/ui-utils";
+import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE } from "../lib/rich-link";
 import { CodeBlock } from "./code-block";
+import { RichLink } from "./rich-link";
 
 interface MarkdownProps {
   content: string;
+  richLinks?: boolean;
 }
 
 export const MARKDOWN_CLASSNAME = cn(
@@ -34,6 +37,39 @@ export const MARKDOWN_CLASSNAME = cn(
   "[&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-1",
 );
 
+interface MarkdownNode {
+  type?: string;
+  url?: string;
+  data?: {
+    hProperties?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  children?: MarkdownNode[];
+}
+
+function remarkRichLinkLimit() {
+  return (tree: MarkdownNode) => {
+    let richLinkCount = 0;
+    const visit = (node: MarkdownNode) => {
+      if (
+        node.type === "link" &&
+        typeof node.url === "string" &&
+        richLinkCount < MAX_RICH_LINKS_PER_MESSAGE &&
+        describeRichLink(node.url)
+      ) {
+        richLinkCount += 1;
+        node.data = node.data ?? {};
+        node.data.hProperties = {
+          ...node.data.hProperties,
+          "data-rich-link": "true",
+        };
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
 const components: Components = {
   // Unwrap <pre> — CodeBlock renders its own container/scroller.
   pre: ({ children }) => <>{children}</>,
@@ -48,12 +84,34 @@ const components: Components = {
       <code className="rounded-md bg-well px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>
     );
   },
+  a: ({ node, children, href, ...props }) => {
+    void node;
+    const {
+      "data-rich-link": richLink,
+      ...anchorProps
+    } = props as typeof props & { "data-rich-link"?: string };
+    if (richLink === "true" && href) {
+      return (
+        <RichLink href={href} {...anchorProps}>
+          {children}
+        </RichLink>
+      );
+    }
+    return (
+      <a href={href} {...anchorProps}>
+        {children}
+      </a>
+    );
+  },
 };
 
-export const MarkdownContent = React.memo(function MarkdownContent({ content }: MarkdownProps) {
+export const MarkdownContent = React.memo(function MarkdownContent({
+  content,
+  richLinks = false,
+}: MarkdownProps) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
       rehypePlugins={[rehypeKatex]}
       components={components}
     >
@@ -62,10 +120,10 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
   );
 });
 
-export const Markdown = React.memo(function Markdown({ content }: MarkdownProps) {
+export const Markdown = React.memo(function Markdown({ content, richLinks = false }: MarkdownProps) {
   return (
     <div className={MARKDOWN_CLASSNAME}>
-      <MarkdownContent content={content} />
+      <MarkdownContent content={content} richLinks={richLinks} />
     </div>
   );
 });
@@ -75,10 +133,13 @@ const inlineComponents: Components = {
   p: ({ children }) => <>{children}</>,
 };
 
-export const MarkdownInline = React.memo(function MarkdownInline({ content }: MarkdownProps) {
+export const MarkdownInline = React.memo(function MarkdownInline({
+  content,
+  richLinks = false,
+}: MarkdownProps) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
       rehypePlugins={[rehypeKatex]}
       components={inlineComponents}
     >

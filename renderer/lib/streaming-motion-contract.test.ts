@@ -44,6 +44,25 @@ test("stream completion no longer overlaps a second Markdown tree", () => {
   assert.doesNotMatch(codeBlock, /JSON\.parse/u);
 });
 
+test("chat rich links keep anchor navigation and work in every assistant render phase", () => {
+  const bubble = source("../components/message-bubble.tsx");
+  const streaming = source("../components/streaming-markdown-reveal.tsx");
+  const richLink = source("../components/rich-link.tsx");
+  assert.match(bubble, /<StreamingMarkdownReveal[\s\S]*richLinks/u);
+  assert.match(bubble, /<Markdown content=\{content\} richLinks/u);
+  assert.match(bubble, /<RichLinkBudget[\s\S]*key=\{streaming \? "streaming" : "settled"\}/u);
+  assert.match(streaming, /<MarkdownInline content=\{parts\.markdown\} richLinks=\{richLinks\}/u);
+  assert.match(streaming, /<MarkdownContent content=\{unit\.text\} richLinks=\{richLinks\}/u);
+  assert.match(richLink, /<a[\s\S]*href=\{href\}/u);
+  assert.doesNotMatch(richLink, /onClick=/u);
+  assert.match(richLink, /event\.key === "Escape"/u);
+  assert.match(richLink, /dismissedWhileFocusedRef\.current = true/u);
+  assert.match(richLink, /if \(nextOpen && dismissedWhileFocusedRef\.current\) return/u);
+  assert.match(richLink, /onFocus=/u);
+  assert.match(richLink, /onBlur=/u);
+  assert.doesNotMatch(richLink, /\b(?:fetch|window\.api|ipcRenderer)\b/u);
+});
+
 test("streaming and persisted messages reserve the same action and timeline shell", () => {
   const bubble = source("../components/message-bubble.tsx");
   const list = source("../components/message-list.tsx");
