@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
-import { MessageList } from "./message-list.js";
+import { MessageList, richLinkHandoffDuplicateMessageId } from "./message-list.js";
+import { Markdown } from "./markdown.js";
 import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
   partitionMessageAttachments,
@@ -43,6 +44,102 @@ test("legacy messages render unchanged without provenance", () => {
   const markup = renderToStaticMarkup(<MessageBubble role="user" content="Legacy message" />);
   assert.match(markup, /Legacy message/u);
   assert.doesNotMatch(markup, /skill/u);
+});
+
+test("assistant links show provider context while keeping their original anchors", () => {
+  const href = "https://github.com/openai/codex/pull/247?utm_source=test#files";
+  const markup = renderToStaticMarkup(
+    <MessageBubble role="assistant" content={`Created [PR #247](${href})`} />,
+  );
+  assert.match(markup, /data-rich-link-provider="github"/u);
+  assert.match(markup, /data-rich-link-resource="pull-request"/u);
+  assert.match(markup, /GitHub Pull request/u);
+  assert.match(markup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247\?utm_source=test#files"/u);
+});
+
+test("unsupported assistant links and links in code remain ordinary", () => {
+  const markup = renderToStaticMarkup(
+    <MessageBubble
+      role="assistant"
+      content={"[Example](https://example.com) `https://github.com/openai/codex/pull/1`"}
+    />,
+  );
+  assert.match(markup, /href="https:\/\/example\.com"/u);
+  assert.doesNotMatch(markup, /data-rich-link-provider/u);
+});
+
+test("shared Markdown stays unchanged until a chat message opts into rich links", () => {
+  const markup = renderToStaticMarkup(
+    <Markdown content="[PR](https://github.com/openai/codex/pull/247)" />,
+  );
+  assert.match(markup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
+  assert.doesNotMatch(markup, /data-rich-link-provider/u);
+});
+
+test("user messages autolink web URLs without swallowing punctuation", () => {
+  const markup = renderToStaticMarkup(
+    <MessageBubble
+      role="user"
+      content="Review (https://github.com/openai/codex/pull/247), then https://example.com/docs."
+    />,
+  );
+  assert.match(markup, /data-rich-link-provider="github"/u);
+  assert.match(markup, /href="https:\/\/example\.com\/docs"/u);
+  assert.match(markup, /<\/a>\), then/u);
+  assert.match(markup, /<\/a>\.<\/span>/u);
+});
+
+test("one message renders at most fifty rich preview triggers", () => {
+  const content = Array.from(
+    { length: 51 },
+    (_, index) => `[PR ${index + 1}](https://github.com/openai/codex/pull/${index + 1})`,
+  ).join(" ");
+  const markup = renderToStaticMarkup(<MessageBubble role="assistant" content={content} />);
+  assert.equal(markup.match(/data-rich-link-provider="github"/gu)?.length, 50);
+  assert.equal(markup.match(/href="https:\/\/github\.com\/openai\/codex\/pull\//gu)?.length, 51);
+});
+
+test("the persisted handoff duplicate yields rich previews to the streaming copy", () => {
+  const messages = [
+    { id: "assistant-old", role: "assistant" as const, content: "Earlier", createdAt: 1 },
+    {
+      id: "assistant-final",
+      role: "assistant" as const,
+      content: "[PR](https://github.com/openai/codex/pull/247)",
+      createdAt: 2,
+    },
+  ];
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true, "assistant-final"),
+    "assistant-final",
+  );
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false, "assistant-final"),
+    null,
+  );
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, "Different", true, "assistant-final"),
+    null,
+  );
+
+  const duplicateMarkup = renderToStaticMarkup(
+    <MessageBubble role="assistant" content={messages[1]!.content} richLinks={false} />,
+  );
+  assert.match(duplicateMarkup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
+  assert.doesNotMatch(duplicateMarkup, /data-rich-link-provider/u);
+});
+
+test("an unpersisted equal-text partial does not suppress an older assistant preview", () => {
+  const repeated = "[PR](https://github.com/openai/codex/pull/247)";
+  const messages = [
+    { id: "assistant-old", role: "assistant" as const, content: repeated, createdAt: 1 },
+  ];
+
+  assert.equal(richLinkHandoffDuplicateMessageId(messages, repeated, true, null), null);
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, repeated, true, "missing-current-response"),
+    null,
+  );
 });
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {

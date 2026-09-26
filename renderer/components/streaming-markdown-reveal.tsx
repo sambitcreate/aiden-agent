@@ -16,6 +16,7 @@ interface StreamingMarkdownRevealProps {
   content: string;
   complete?: boolean;
   onHandoffComplete?: () => void;
+  richLinks?: boolean;
 }
 
 function readReducedMotion(): boolean {
@@ -53,6 +54,7 @@ export function StreamingMarkdownReveal({
   content,
   complete = false,
   onHandoffComplete,
+  richLinks = false,
 }: StreamingMarkdownRevealProps) {
   const reducedMotion = useReducedMotion();
   const blocks = React.useMemo(() => parseStreamingReveal(content, complete), [complete, content]);
@@ -125,7 +127,9 @@ export function StreamingMarkdownReveal({
                 return (
                   <span key={unit.id} className="streaming-reveal-unit">
                     {parts.leadingWhitespace}
-                    {parts.markdown ? <MarkdownInline content={parts.markdown} /> : null}
+                    {parts.markdown ? (
+                      <MarkdownInline content={parts.markdown} richLinks={richLinks} />
+                    ) : null}
                     {parts.trailingWhitespace}
                   </span>
                 );
@@ -135,7 +139,7 @@ export function StreamingMarkdownReveal({
         }
         return block.units.map((unit) => (
           <div key={unit.id} className="streaming-reveal-block">
-            <MarkdownContent content={unit.text} />
+            <MarkdownContent content={unit.text} richLinks={richLinks} />
           </div>
         ));
       })}

@@ -11,6 +11,12 @@ import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import { MessageAttachments } from "./message-attachments";
+import {
+  describeRichLink,
+  MAX_RICH_LINKS_PER_MESSAGE,
+  tokenizeWebLinks,
+} from "../lib/rich-link";
+import { RichLink, RichLinkBudget } from "./rich-link";
 
 export interface MessageBubbleProps {
   role: ChatMessage["role"];
@@ -26,6 +32,8 @@ export interface MessageBubbleProps {
   copyText?: string;
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
+  /** Disable rich previews for a duplicate transcript copy during handoff. */
+  richLinks?: boolean;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -51,11 +59,13 @@ export function MessageBubble({
   showCopy = true,
   copyText,
   readAloud,
+  richLinks = true,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
-      <div className="group flex justify-end">
-        <div className="flex max-w-[80%] flex-col items-end gap-2">
+      <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
+        <div className="group flex justify-end">
+          <div className="flex max-w-[80%] flex-col items-end gap-2">
           {skill ? (
             <div
               className="flex max-w-full items-center gap-1.5 rounded-lg bg-status-accent-surface px-2 py-1 text-small text-secondary"
@@ -71,7 +81,7 @@ export function MessageBubble({
           ) : null}
           {content ? (
             <div className="rounded-2xl bg-control px-4 py-2.5">
-              <Text className="whitespace-pre-wrap break-words">{content}</Text>
+              <UserMessageContent content={content} />
             </div>
           ) : null}
           {content ? (
@@ -81,14 +91,19 @@ export function MessageBubble({
               className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
             />
           ) : null}
+          </div>
         </div>
-      </div>
+      </RichLinkBudget>
     );
   }
 
   return (
-    <div className="group flex w-full">
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
+    <RichLinkBudget
+      key={streaming ? "streaming" : "settled"}
+      limit={MAX_RICH_LINKS_PER_MESSAGE}
+    >
+      <div className="group flex w-full">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
         {attachments && attachments.length > 0 ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
@@ -97,9 +112,10 @@ export function MessageBubble({
             content={content}
             complete={streamComplete}
             onHandoffComplete={onStreamHandoffComplete}
+            richLinks={richLinks}
           />
         ) : (
-          <Markdown content={content} />
+          <Markdown content={content} richLinks={richLinks} />
         )}
         {content && showCopy ? (
           <MessageActions
@@ -108,8 +124,48 @@ export function MessageBubble({
             hidden={Boolean(streaming && !streamComplete)}
           />
         ) : null}
+        </div>
       </div>
-    </div>
+    </RichLinkBudget>
+  );
+}
+
+function UserMessageContent({ content }: { content: string }) {
+  const segments = tokenizeWebLinks(content);
+  let richLinkCount = 0;
+  return (
+    <Text className="whitespace-pre-wrap break-words">
+      {segments.map((segment) => {
+        if (segment.kind === "text") return segment.text;
+        const descriptor = describeRichLink(segment.href);
+        const canRenderRichLink = Boolean(
+          descriptor && richLinkCount < MAX_RICH_LINKS_PER_MESSAGE,
+        );
+        if (canRenderRichLink) richLinkCount += 1;
+        const key = `${segment.start}:${segment.end}`;
+        if (descriptor && canRenderRichLink) {
+          return (
+            <RichLink
+              key={key}
+              href={segment.href}
+              descriptor={descriptor}
+              className="text-accent underline underline-offset-2"
+            >
+              {segment.text}
+            </RichLink>
+          );
+        }
+        return (
+          <a
+            key={key}
+            href={segment.href}
+            className="rounded-[2px] text-accent underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            {segment.text}
+          </a>
+        );
+      })}
+    </Text>
   );
 }
 

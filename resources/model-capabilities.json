@@ -71856,7 +71856,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
           "input": 0.3,
@@ -73719,8 +73719,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048575,
-          "output": 943717
+          "context": 1048576,
+          "output": 131072
         },
         "cost": {
           "input": 1.4,
@@ -74727,9 +74727,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.4746,
-          "output": 1.4916,
-          "cache_read": 0.08814
+          "input": 0.3794,
+          "output": 1.1924,
+          "cache_read": 0.07046
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -107954,12 +107954,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.14,
-          "output": 0.42,
-          "cache_read": 0.0042
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006
         }
       },
       "deepseek/deepseek-v4-flash-vision-exp": {
@@ -109801,12 +109801,12 @@
         "open_weights": true,
         "limit": {
           "context": 1310720,
-          "output": 943717
+          "output": 131072
         },
         "cost": {
-          "input": 1.4,
-          "output": 4.4,
-          "cache_read": 0.26
+          "input": 0.3794,
+          "output": 1.1924,
+          "cache_read": 0.07046
         }
       },
       "inference-net/schematron-v2-small": {
@@ -110853,9 +110853,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.4746,
-          "output": 1.4916,
-          "cache_read": 0.08814
+          "input": 0.3794,
+          "output": 1.1924,
+          "cache_read": 0.07046
         }
       },
       "arcee-ai/trinity-large-thinking": {
