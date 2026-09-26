@@ -445,7 +445,9 @@ export class AidenRemoteFileService {
         return projectedDocument(
           fileId,
           input.displayPath,
-          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal),
+          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal, {
+            exclusiveIdentity: { device: input.claims.filesystemDevice, inode: input.claims.filesystemInode },
+          }),
         );
       } catch {
         throw new AidenRemoteServiceError(

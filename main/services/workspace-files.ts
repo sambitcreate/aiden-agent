@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
-import { readRegularFile } from "./regular-file-read.js";
+import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
 const MAX_INDEX_DEPTH = 20;
@@ -316,6 +316,7 @@ export async function readWorkspaceFile(
   root: string,
   suppliedPath: string,
   signal?: AbortSignal,
+  options: { exclusiveIdentity?: RegularFileIdentity } = {},
 ): Promise<WorkspaceFileDocument> {
   throwIfAborted(signal);
   const { fullPath, relativePath } = await resolveExistingPath(root, suppliedPath);
@@ -326,7 +327,8 @@ export async function readWorkspaceFile(
   }
   // A pathname stat is only a snapshot: another app can grow or replace the
   // file before it is read. Enforce the byte limit on the opened descriptor.
-  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES).catch((error: unknown) => {
+  // Remote handles also bind the descriptor to the issued single-link inode.
+  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES, options).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "EFBIG") {
       throw new Error(`${relativePath} is too large to edit in Aiden.`);
     }

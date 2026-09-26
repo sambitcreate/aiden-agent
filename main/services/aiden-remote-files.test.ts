@@ -187,6 +187,48 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     assert.equal(await fs.readFile(outsideAlias, "utf8"), "let value = 3\n");
     await fs.rm(outsideAlias);
 
+    // Race: the name passes pathname validation, then changes before the read
+    // opens it. The opened descriptor must still be the issued single-link inode.
+    const appPath = path.join(root, "Sources", "App.swift");
+    const racing = (await service.list("device-1", workspace.id)).entries
+      .find((entry) => entry.displayPath === "Sources/App.swift")!;
+    const { default: promises } = await import("node:fs/promises");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const originalOpen = promises.open;
+    const raceBeforeOpen = async (swap: () => Promise<void>) => {
+      let armed = true;
+      promises.open = (async (...args: Parameters<typeof promises.open>) => {
+        if (armed && String(args[0]).endsWith(`${path.sep}workspace${path.sep}Sources${path.sep}App.swift`)) {
+          armed = false;
+          await swap();
+        }
+        return originalOpen(...args);
+      }) as typeof promises.open;
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(
+          () => service.read("device-1", workspace.id, racing.id),
+          (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable",
+        );
+        assert.equal(armed, false);
+      } finally {
+        promises.open = originalOpen;
+        syncBuiltinESMExports();
+      }
+    };
+    // 1. The name is replaced by a hard link to an outside inode.
+    await raceBeforeOpen(async () => {
+      await fs.rename(appPath, path.join(temporary, "held-app.swift"));
+      await fs.link(outside, appPath);
+    });
+    await fs.rm(appPath);
+    await fs.rename(path.join(temporary, "held-app.swift"), appPath);
+    // 2. The issued inode gains a second, outside name.
+    const lateAlias = path.join(temporary, "late-alias.swift");
+    await raceBeforeOpen(() => fs.link(appPath, lateAlias));
+    await fs.rm(lateAlias);
+    assert.equal((await service.read("device-1", workspace.id, racing.id)).content, "let value = 3\n");
+
     await fs.rm(path.join(root, "Sources", "App.swift"));
     await fs.symlink(outside, path.join(root, "Sources", "App.swift"));
     await assert.rejects(
