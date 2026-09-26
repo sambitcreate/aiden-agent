@@ -9,6 +9,8 @@ import {
   buildOpenApplicationArguments,
   launchApplicationBundle,
   openFolderInExternalEditor,
+  linuxExecutableSearchPaths,
+  resolveInstalledLinuxEditors,
   resolveInstalledEditorApplications,
   type OpenFolderInEditorDependencies,
   type ResolvedExternalEditor,
@@ -18,7 +20,7 @@ const cursor: ResolvedExternalEditor = {
   id: "cursor",
   label: "Cursor",
   appPath: "/Applications/Cursor.app",
-  bundleId: "com.todesktop.230313mzl4w4u92",
+  launch: { kind: "bundle", bundleId: "com.todesktop.230313mzl4w4u92" },
   iconDataUrl: "data:image/png;base64,icon",
 };
 
@@ -30,7 +32,6 @@ function dependencies(
     editors: async () => [cursor],
     openPath: async () => "",
     launchApplication: async () => {},
-    launchExecutable: async () => {},
     ...overrides,
   };
 }
@@ -101,25 +102,27 @@ test("rejects missing and non-directory workspace folders", async () => {
 
 test("launches with fixed open arguments and never interprets the folder as shell syntax", async () => {
   const folderPath = "/tmp/workspace; touch should-not-exist";
-  assert.deepEqual(buildOpenApplicationArguments(cursor.bundleId, folderPath), [
+  assert.equal(cursor.launch.kind, "bundle");
+  if (cursor.launch.kind !== "bundle") throw new Error("Expected a macOS bundle fixture.");
+  assert.deepEqual(buildOpenApplicationArguments(cursor.launch.bundleId, folderPath), [
     "-b",
-    cursor.bundleId,
+    cursor.launch.bundleId,
     folderPath,
   ]);
 
   let invocation: { file: string; args: readonly string[] } | undefined;
-  await launchApplicationBundle(cursor.bundleId, folderPath, async (file, args) => {
+  await launchApplicationBundle(cursor.launch.bundleId, folderPath, async (file, args) => {
     invocation = { file, args };
   });
   assert.deepEqual(invocation, {
     file: "/usr/bin/open",
-    args: ["-b", cursor.bundleId, folderPath],
+    args: ["-b", cursor.launch.bundleId, folderPath],
   });
 });
 
 test("refreshes availability before launching the selected editor", async () => {
   let forcedRefresh = false;
-  let launched: { bundleId: string; folderPath: string } | undefined;
+  let launched: { editorId: string; folderPath: string } | undefined;
   await openFolderInExternalEditor(
     "/tmp/workspace",
     "cursor",
@@ -128,16 +131,55 @@ test("refreshes availability before launching the selected editor", async () => 
         forcedRefresh = forceRefresh;
         return [cursor];
       },
-      launchApplication: async (bundleId, folderPath) => {
-        launched = { bundleId, folderPath };
+      launchApplication: async (editor, folderPath) => {
+        launched = { editorId: editor.id, folderPath };
       },
     }),
   );
   assert.equal(forcedRefresh, true);
   assert.deepEqual(launched, {
-    bundleId: cursor.bundleId,
+    editorId: cursor.id,
     folderPath: "/tmp/workspace",
   });
+});
+
+test("Linux editor lookup includes distro, Snap, user, and Toolbox command locations", () => {
+  assert.deepEqual(linuxExecutableSearchPaths("/custom/bin:/usr/bin", "/home/aiden"), [
+    "/custom/bin",
+    "/usr/bin",
+    "/usr/local/bin",
+    "/snap/bin",
+    "/home/aiden/.local/bin",
+    "/home/aiden/.local/share/JetBrains/Toolbox/scripts",
+  ]);
+});
+
+test("Linux editor lookup recognizes common Flatpak application IDs", async () => {
+  const definitions = [
+    {
+      id: "vscode",
+      label: "VS Code",
+      bundleIds: [],
+      applicationNames: [],
+      priority: 1,
+    },
+  ];
+  const resolved = await resolveInstalledLinuxEditors(definitions, [], {
+    executablePath: "/usr/bin/flatpak",
+    applicationIds: new Set(["com.visualstudio.code"]),
+  });
+  assert.deepEqual(resolved, [
+    {
+      id: "vscode",
+      label: "VS Code",
+      appPath: "/usr/bin/flatpak",
+      launch: {
+        kind: "flatpak",
+        executablePath: "/usr/bin/flatpak",
+        applicationId: "com.visualstudio.code",
+      },
+    },
+  ]);
 });
 
 test("rejects an editor that disappeared after discovery", async () => {
@@ -176,9 +218,9 @@ test("Linux discovers executable editor launchers and keeps the file manager las
     }
     const editors = await listExternalEditors(true);
     assert.deepEqual(editors.map(({ id }) => id), [
-      "vscode", "vscode-insiders", "vscodium", "zed", "sublime-text", "finder",
+      "vscode", "vscode-insiders", "vscodium", "zed", "sublime-text", "file-manager",
     ]);
-    assert.equal(editors[editors.length - 1]?.label, "File Manager");
+    assert.equal(editors[editors.length - 1]?.label, "Files");
     assert.ok(editors.every((editor) => !("appPath" in editor)));
   });
 });
@@ -192,7 +234,7 @@ test("Linux omits unavailable launchers, non-executable files, directories and r
     await fs.writeFile(path.join(relativeRoot, "zed"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     process.env.PATH = `:${path.relative(process.cwd(), relativeRoot)}:${root}`;
     assert.deepEqual(await listExternalEditors(true), [
-      { id: "finder", label: "File Manager", iconDataUrl: "" },
+      { id: "file-manager", label: "Files", iconDataUrl: "" },
     ]);
   });
 });
@@ -206,7 +248,7 @@ test("Linux launches a discovered editor with a single absolute workspace argume
       { mode: 0o755 });
     const workspace = path.join(root, "--workspace ; $() ' spaces");
     await fs.mkdir(workspace);
-    assert.equal((await listExternalEditors(true)).find(({ id }) => id === "finder")?.label, "File Manager");
+    assert.equal((await listExternalEditors(true)).find(({ id }) => id === "file-manager")?.label, "Files");
     await openFolderInExternalEditor(workspace, "vscode");
     for (let attempt = 0; attempt < 100; attempt++) {
       if (await fs.stat(marker).then(() => true, () => false)) break;
@@ -222,12 +264,15 @@ test("Linux launches a discovered editor with a single absolute workspace argume
 test("executable launch failures are reported and leading-option paths become absolute", async () => {
   await assert.rejects(launchEditorExecutable("/nonexistent/aiden-editor", "/tmp/workspace"), /ENOENT/);
   let launchPath = "";
-  const linuxEditor = { ...cursor, bundleId: "", executablePath: "/usr/bin/cursor" };
+  const linuxEditor: ResolvedExternalEditor = {
+    ...cursor,
+    launch: { kind: "executable", executablePath: "/usr/bin/cursor" },
+  };
   await assert.rejects(openFolderInExternalEditor("--workspace with spaces", "cursor", dependencies({
     editors: async () => [linuxEditor],
-    launchApplication: async () => assert.fail("Linux must not call macOS open"),
-    launchExecutable: async (executable, folder) => {
-      assert.equal(executable, linuxEditor.executablePath);
+    launchApplication: async (editor, folder) => {
+      if (editor.launch.kind !== "executable") throw new Error("Expected an executable launch.");
+      assert.equal(editor.launch.executablePath, "/usr/bin/cursor");
       launchPath = folder;
       throw new Error("EACCES");
     },
@@ -236,17 +281,21 @@ test("executable launch failures are reported and leading-option paths become ab
 });
 
 test("file manager preserves shell.openPath and uses its returned platform label in errors", async () => {
-  for (const label of ["Finder", "File Manager"]) {
-    const fileManager = { ...cursor, id: "finder", label };
+  for (const [id, label] of [["finder", "Finder"], ["file-manager", "Files"]] as const) {
+    const fileManager: ResolvedExternalEditor = {
+      ...cursor,
+      id,
+      label,
+      launch: { kind: "file-manager" },
+    };
     let opened = "";
-    await openFolderInExternalEditor("/tmp/workspace", "finder", dependencies({
+    await openFolderInExternalEditor("/tmp/workspace", id, dependencies({
       editors: async () => [fileManager],
       openPath: async (folder) => { opened = folder; return ""; },
       launchApplication: async () => assert.fail("file manager uses Electron"),
-      launchExecutable: async () => assert.fail("file manager uses Electron"),
     }));
     assert.equal(opened, "/tmp/workspace");
-    await assert.rejects(openFolderInExternalEditor("/tmp/workspace", "finder", dependencies({
+    await assert.rejects(openFolderInExternalEditor("/tmp/workspace", id, dependencies({
       editors: async () => [fileManager],
       openPath: async () => "no handler",
     })), new RegExp(`Could not open workspace in ${label}: no handler`));
@@ -265,12 +314,12 @@ test("Linux honors PATH precedence, follows launcher symlinks and skips unusable
     await fs.writeFile(path.join(first, "code"), "no execution", { mode: 0o644 });
     await fs.symlink(target, path.join(second, "code"));
     process.env.PATH = `${first}:${second}`;
-    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["vscode", "finder"]);
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["vscode", "file-manager"]);
     // A denied/broken launcher must disappear on a forced refresh.
     await fs.chmod(target, 0o644);
-    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["file-manager"]);
     delete process.env.PATH;
-    assert.equal((await listExternalEditors(true)).find(({ id }) => id === "finder")?.label, "File Manager");
+    assert.equal((await listExternalEditors(true)).find(({ id }) => id === "file-manager")?.label, "Files");
   });
 });
 
@@ -293,7 +342,7 @@ test("Linux Zed aliases preserve PATH precedence, executable guards and literal 
     };
     const assertLaunch = async (expected: string) => {
       await fs.rm(marker, { force: true });
-      assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["zed", "finder"]);
+      assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["zed", "file-manager"]);
       await openFolderInExternalEditor(workspace, "zed");
       for (let attempt = 0; attempt < 100; attempt++) {
         if (await fs.stat(marker).then(() => true, () => false)) break;
@@ -316,7 +365,7 @@ test("Linux Zed aliases preserve PATH precedence, executable guards and literal 
     await fs.mkdir(alias);
     await assertLaunch(laterZed); // An executable directory is not a launcher.
     await fs.unlink(laterZed);
-    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["file-manager"]);
     await assert.rejects(openFolderInExternalEditor(workspace, "zed"), /no longer installed/);
   });
 });
@@ -324,7 +373,7 @@ test("Linux Zed aliases preserve PATH precedence, executable guards and literal 
 test("Linux excludes Cursor until its launcher has a reliable editor-surface contract", async () => {
   await withLinuxPath(async (root) => {
     await fs.writeFile(path.join(root, "cursor"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["file-manager"]);
     await assert.rejects(openFolderInExternalEditor(root, "cursor"), /Opening Cursor from Aiden is not supported on Linux/);
   });
 });

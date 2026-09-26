@@ -361,7 +361,7 @@ export function TelegramSettings() {
       {hasToken && (
         <Field
           label="Connection"
-          description="Keep Aiden running on this Mac. After connecting, send /start to your bot from your own Telegram account."
+          description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
         >
           <div className="flex flex-wrap items-center gap-3">
             <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>

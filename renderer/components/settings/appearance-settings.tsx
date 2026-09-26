@@ -425,7 +425,7 @@ export function AppearanceSettings() {
         apply(configRef.current);
       } catch (error) {
         if (isCurrent()) {
-          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the macOS appearance state."));
+          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the system appearance state."));
         }
       }
     }).finally(() => {

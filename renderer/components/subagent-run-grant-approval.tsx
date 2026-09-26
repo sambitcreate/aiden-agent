@@ -27,7 +27,7 @@ export function SubagentRunGrantApproval({
       <Text as="p" variant="small" color="secondary">
         {details.lane === "write"
           ? "Allow this subagent to write and edit files for this run. Later file changes will not ask again. Aiden checks each target and refuses changes if the file or workspace has drifted."
-          : "Allow this subagent to run commands for this run. Later commands will not ask again. Commands have the macOS user’s full host and network access; they are not OS sandboxed and cannot be rolled back. Detached processes may survive cancellation."}
+          : "Allow this subagent to run commands for this run. Later commands will not ask again. Commands have the current user’s full host and network access; they are not OS sandboxed and cannot be rolled back. Detached processes may survive cancellation."}
       </Text>
     </div>
   );

@@ -11,20 +11,40 @@ import { cleanupDictationTranscript } from "./dictation-cleanup.js";
 import { shouldAcceptDictationPress } from "./dictation-hotkey.js";
 import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
+import { dictationPlatformBehavior } from "./dictation-platform.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
+
+import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
 
 let lastPressAt = 0;
 
 function livePasteDeps(): PasteDeps {
+  const behavior = dictationPlatformBehavior();
   return {
     writeClipboard: (text) => clipboard.writeText(text),
     // Delivery must never steal focus with a native permission prompt. Users
     // grant paste access explicitly from Settings; otherwise we copy safely.
-    isAccessibilityTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
-    pasteWithPreservedClipboard: runAtomicMacPaste,
+    isAccessibilityTrusted: () =>
+      behavior.accessibilityPaste &&
+      systemPreferences.isTrustedAccessibilityClient(false),
+    pasteWithPreservedClipboard: behavior.accessibilityPaste
+      ? runAtomicMacPaste
+      : async () => false,
     log: (message, error) => logger.warn("dictation", message, error),
   };
+}
+
+async function deliverTranscript(text: string) {
+  if (!dictationPlatformBehavior().accessibilityPaste) {
+    clipboard.writeText(text);
+    return {
+      outcome: "copied" as const,
+      reason: "paste-unavailable" as const,
+      message: "Copied — automatic paste is not available on this system.",
+    };
+  }
+  return pasteTranscript(text, livePasteDeps());
 }
 
 const coordinator = new DictationCoordinator({
@@ -32,26 +52,37 @@ const coordinator = new DictationCoordinator({
   hidePill,
   destroyPill,
   broadcast: (payload) => ipcMain.broadcast("dictation:state", payload),
-  paste: (text) => pasteTranscript(text, livePasteDeps()),
+  paste: deliverTranscript,
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: (timer) => clearTimeout(timer),
   logError: (message, error) => logger.error("dictation", message, error),
-  isHoldToTalk: async () => (await configStore.getSettings()).dictationHoldToTalk === true,
+  isHoldToTalk: async () =>
+    activeLinuxDictationHoldShortcut() ||
+    (dictationPlatformBehavior().holdToTalk &&
+      (await configStore.getSettings()).dictationHoldToTalk === true),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
   cleanupTranscript: cleanupDictationTranscript,
+  ...(process.platform === "linux" ? { startReleaseWatch: subscribeLinuxDictationRelease } : {}),
   getHoldKeyCode: async () => {
+    if (!dictationPlatformBehavior().holdToTalk) return null;
     const settings = await configStore.getSettings();
     const binding = effectiveBindings(settings.keybindings, settings)["dictation.toggle"];
     return acceleratorPrimaryMacKeyCode(binding);
   },
   startHoldWatch: (keyCode, onRelease, onFailed) =>
-    watchMacKeyUntilUp(keyCode, onRelease, { onFailed }),
+    dictationPlatformBehavior().holdToTalk
+      ? watchMacKeyUntilUp(keyCode, onRelease, { onFailed })
+      : null,
 });
+
+// A portal can disappear before the queued press has installed its release watcher.
+// Queue cancellation behind that press so no recording survives lost ownership.
+initLinuxDictationSessionLost(() => { void coordinator.cancel(); });
 
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
 export function toggleDictation(): void {
   const now = Date.now();
-  if (!shouldAcceptDictationPress(lastPressAt, now)) return;
+  if (!activeLinuxDictationHoldShortcut() && !shouldAcceptDictationPress(lastPressAt, now)) return;
   lastPressAt = now;
   void coordinator.press();
 }
