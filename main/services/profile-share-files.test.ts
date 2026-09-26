@@ -9,6 +9,7 @@ import {
   PROFILE_SHARE_DIRECTORY_PREFIX,
   PROFILE_SHARE_FILE_NAME,
   PROFILE_SHARE_STALE_AGE_MS,
+  writeProfileShareExport,
 } from "./profile-share-files.js";
 
 async function withTemporaryRoot(run: (root: string) => Promise<void>): Promise<void> {
@@ -55,5 +56,22 @@ test("removes only stale, inactive Aiden share directories", async () => {
     await fs.stat(active);
     await fs.stat(fresh);
     await fs.stat(unrelated);
+  });
+});
+
+test("writes a private Linux export without following symbolic links", async () => {
+  await withTemporaryRoot(async (root) => {
+    const target = path.join(root, "profile.png");
+    await fs.writeFile(target, "old", { mode: 0o644 });
+    await writeProfileShareExport(target, Buffer.from("image"));
+    assert.deepEqual(await fs.readFile(target), Buffer.from("image"));
+    assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
+
+    const protectedTarget = path.join(root, "protected.png");
+    const link = path.join(root, "link.png");
+    await fs.writeFile(protectedTarget, "keep");
+    await fs.symlink(protectedTarget, link);
+    await assert.rejects(writeProfileShareExport(link, Buffer.from("replace")));
+    assert.equal(await fs.readFile(protectedTarget, "utf8"), "keep");
   });
 });

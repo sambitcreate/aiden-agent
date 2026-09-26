@@ -1176,7 +1176,7 @@ final class AidenChatViewModel {
             throw NSError(
                 domain: "AidenVoiceInput",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The Mac speech engine is unavailable.")]
+                userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The desktop speech engine is unavailable.")]
             )
         }
         guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
@@ -1185,7 +1185,7 @@ final class AidenChatViewModel {
             throw NSError(
                 domain: "AidenVoiceInput",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a Mac speech model in App Settings before using this option.")]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App Settings before using this option.")]
             )
         }
         if status.selectedModelId != model.id { _ = try await client.selectSpeechModel(model.id) }
@@ -2475,7 +2475,16 @@ final class AidenChatViewModel {
             approval: approval, decision: decision, capabilities: capabilities
         )
         guard authorization == .allowed else {
-            presentedError = String(localized: "Approval access changed. Review the current request on your Mac.")
+            presentedError = switch authorization {
+            case .allowed:
+                nil
+            case .approvalResponseRequired:
+                String(localized: "Approval response access was removed from this paired device. The request has been refreshed without sending a decision.")
+            case .scheduleWriteRequired:
+                String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
+            case .hostApprovalRequired:
+                String(localized: "This request can only be approved on your paired desktop.")
+            }
             pendingApproval = nil
             streamState = .reconciling
             await restorePendingApproval(streamID: streamID, context: context)
@@ -3208,7 +3217,7 @@ final class AidenChatViewModel {
                     return
                 } catch {
                     // Keep the durable stream cursor and continue retrying while
-                    // this Mac connection remains current. Long Tailscale or
+                    // this desktop connection remains current. Long Tailscale or
                     // local-network outages must not erase terminal evidence.
                 }
                 attempt += 1
@@ -4526,7 +4535,7 @@ struct AidenMessageOutcomePresentation: Equatable {
         case "rate_limit":
             detail = "The model provider is receiving too many requests. Try again shortly."
         case "authentication":
-            detail = "The model provider rejected its credentials. Check Provider Settings on your Mac."
+            detail = "The model provider rejected its credentials. Check Provider Settings on your desktop."
         case "quota":
             detail = "The model provider account has no available quota."
         case "invalid_request":
@@ -5648,7 +5657,7 @@ private struct AidenApprovalCard: View {
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
             } else if kind == .scheduledTask && !canAllow {
-                Label("This task must be approved on your Mac.", systemImage: "desktopcomputer")
+                Label("This task must be approved on your paired desktop.", systemImage: "desktopcomputer")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
             }

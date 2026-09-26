@@ -425,7 +425,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     botSwift,
     /case inbox[\s\S]*?case profile[\s\S]*?case editor[\s\S]*?case access[\s\S]*?case chat/u,
   );
-  assert.match(botSwift, /Bots can use your Mac/u);
+  assert.match(botSwift, /Bots can use your paired desktop/u);
   assert.match(botSwift, /Continue with Full Access/u);
   assert.match(botSwift, /Customize first/u);
   assert.match(botSwift, /onDismiss: presentCustomEditorAfterNoticeIfNeeded/u);
@@ -509,11 +509,11 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(accessSection, /\.disabled\(!allowed\)/u);
   assert.match(
     botSwift,
-    /case fullMac = "Full Mac"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u,
+    /case fullMac = "Full desktop"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u,
   );
   assert.match(
     accessSection,
-    /Section\("Mac files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u,
+    /Section\("Desktop files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u,
   );
   assert.match(
     accessSection,
@@ -547,7 +547,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   assert.doesNotMatch(
     accessSection,
-    /fullNoticeAccepted|Bots can use your Mac|Continue with Full Access|Customize first/u,
+    /fullNoticeAccepted|Bots can use your paired desktop|Continue with Full Access|Customize first/u,
   );
   assert.doesNotMatch(botSwift, /UserDefaults|Keychain|URLSession/u);
   assert.match(botSwift, /\.safeAreaInset\(edge: \.bottom/u);
@@ -755,7 +755,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     productShell,
     /one-time Full Access notice[\s\S]*?Choose Continue with Full Access or Customize first\./u,
   );
-  assert.match(productShell, /This Mac shared Bots as read-only\./u);
+  assert.match(productShell, /This desktop shared Bots as read-only\./u);
   assert.doesNotMatch(
     coachmark,
     /URLSession|AidenRemoteClient|managed (?:home|workspace)|Git repository/u,
@@ -773,7 +773,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
   assert.match(
     shell,
-    /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u,
+    /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u,
   );
   assert.match(
     shell,
@@ -834,7 +834,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
   assert.match(
     shell,
-    /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u,
+    /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your desktop and on other devices/u,
   );
   assert.match(
     shell,
@@ -863,7 +863,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
   assert.match(
     pairing,
-    /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u,
+    /case \.nearbyMac: return String\(localized: "Nearby Desktop \+ Setup Code"\)/u,
   );
   assert.match(
     pairing,
@@ -882,7 +882,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /BOTS AND WORKSPACES/u);
   assert.match(
     pairing,
-    /When Bots are available on your paired Mac[\s\S]*?tap the Aiden logo to switch\./u,
+    /When Bots are available on your paired desktop[\s\S]*?tap the Aiden logo to switch\./u,
   );
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
@@ -921,8 +921,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
   assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
   assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
-  assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
-  assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.local:49220\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(
     chat,
@@ -1028,6 +1028,15 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /Text\(AidenApprovalPresentation\.denyTitle\(for: kind\)\)[\s\S]*?Text\(AidenApprovalPresentation\.allowTitle\(for: kind\)\)/u,
   );
+  assert.match(
+    chat,
+    /String\(localized: "This request can only be approved on your paired desktop\."\)/u,
+  );
+  assert.match(
+    chat,
+    /Label\("This task must be approved on your paired desktop\.", systemImage: "desktopcomputer"\)/u,
+  );
+  assert.doesNotMatch(chat, /(?:request can only|task must) be approved on your Mac/iu);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(chat, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
@@ -1220,4 +1229,14 @@ test("Bot catalog requests stay scoped through editor, selection, chat, files, a
   assert.match(clientTests, /testBotCatalogRejectsInvalidTargetsBeforeIssuingAnyRequest/u);
   assert.match(cacheTests, /testTargetedCatalogsNeverOverwriteOrFallbackToGlobalOrAnotherBot/u);
   assert.match(cacheTests, /testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes/u);
+});
+
+
+test("workspace revision conflicts retain a visible reload action", async () => {
+  const source = await readFile(new URL("../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift", import.meta.url), "utf8");
+  const conflictMessage = source.match(/body\.code\.rawValue == "revision_conflict"[\s\S]*?errorMessage = "([^"]+)"/u)?.[1];
+  const reloadCondition = source.match(/if message\.contains\("([^"]+)"\) \{\s*Button\("Reload from desktop"/u)?.[1];
+  assert.ok(conflictMessage, "revision conflicts must publish a recovery message");
+  assert.ok(reloadCondition, "revision conflicts must offer a reload action");
+  assert.ok(conflictMessage.includes(reloadCondition), "the reload condition must match the actual conflict message");
 });

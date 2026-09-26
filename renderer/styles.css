@@ -255,7 +255,7 @@
   font-family: var(--font-ui-family);
   --font-ui-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
-    sans-serif;
+    system-ui, sans-serif;
   --font-code-family:
     ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --ui-font-size: 14px;
@@ -1394,6 +1394,19 @@ textarea {
 
   .settings-action-align {
     justify-content: flex-start;
+  }
+}
+
+/* Short windows share one wrapping row flow for Pad counts and actions. This
+ * avoids an otherwise nearly empty counts row pushing the minimum-size Pad
+ * and its legend below the Linux content viewport. Keep control sizes intact. */
+@media (max-height: 640px) {
+  .model-pad-toolbar-actions {
+    display: contents;
+  }
+
+  .settings-model-pad-grid {
+    margin-top: 0.75rem;
   }
 }
 

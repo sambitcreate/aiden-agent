@@ -25,6 +25,7 @@ import { profileShareSvgToPng, USAGE_RANGE_LABELS } from "../lib/profile-share-d
 import { formatTrackedUsd, profileInitials } from "../lib/usage-profile-data";
 import { queryKeys, useProfile, useProviders, useUsageSummary } from "../lib/queries";
 import type { UsageDateRange, UsageSummary } from "../lib/types";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 function compactNumber(value: number): string {
   return Intl.NumberFormat("en-US", {
@@ -73,7 +74,7 @@ function ProfileIdentity() {
             Profile unavailable
           </Text>
           <Text as="p" variant="small" color="secondary" className="mt-0.5">
-            Your usage is still stored privately on this Mac.
+            Your usage is still stored privately on this device.
           </Text>
         </div>
         <Button variant="transparent" size="small" onClick={() => void profile.refetch()}>
@@ -156,7 +157,7 @@ function ProfileIdentity() {
           </div>
         )}
         <Text as="p" variant="small" color="secondary" className="mt-1 flex items-center gap-1.5">
-          <Laptop aria-hidden="true" className="size-3.5" /> Only on this Mac
+          <Laptop aria-hidden="true" className="size-3.5" /> Only on this device
         </Text>
       </div>
     </section>
@@ -257,6 +258,7 @@ function UsageContent({ summary }: { summary: UsageSummary }) {
 }
 
 export function ProfileView() {
+  const capabilities = useAppCapabilities();
   const [range, setRange] = React.useState<UsageDateRange>("1y");
   const [shareOpen, setShareOpen] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
@@ -278,8 +280,8 @@ export function ProfileView() {
     setSharing(true);
     try {
       const image = await profileShareSvgToPng(shareCardRef.current);
-      await profileApi.shareImage(image);
-      setShareOpen(false);
+      const completed = await profileApi.shareImage(image);
+      if (completed) setShareOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't share the profile snapshot.");
     } finally {
@@ -297,11 +299,14 @@ export function ProfileView() {
               variant="transparent"
               size="small"
               disabled={!usage.data || !profile.data}
-              aria-label="Share profile snapshot"
-              title="Share profile snapshot"
+              aria-label={`${capabilities.nativeShare ? "Share" : "Save"} profile snapshot`}
+              title={`${capabilities.nativeShare ? "Share" : "Save"} profile snapshot`}
               onClick={openSharePreview}
             >
-              <Share2 /> <span className="profile-share-label">Share</span>
+              <Share2 />{" "}
+              <span className="profile-share-label">
+                {capabilities.nativeShare ? "Share" : "Save"}
+              </span>
             </Button>
             <Select value={range} onValueChange={(value) => setRange(value as UsageDateRange)}>
               <SelectTrigger
@@ -361,10 +366,12 @@ export function ProfileView() {
         onOpenChange={(open) => {
           if (!sharing) setShareOpen(open);
         }}
-        title="Share profile"
-        description="Preview and share a PNG containing your name and aggregate model usage."
+        title={`${capabilities.nativeShare ? "Share" : "Save"} profile`}
+        description={`Preview and ${capabilities.nativeShare ? "share" : "save"} a PNG containing your name and aggregate model usage.`}
         size="large"
-        confirmLabel={sharing ? "Preparing…" : "Share…"}
+        confirmLabel={
+          sharing ? "Preparing…" : capabilities.nativeShare ? "Share…" : "Save…"
+        }
         confirmDisabled={sharing || !usage.data || !profile.data}
         cancelDisabled={sharing}
         busy={sharing}

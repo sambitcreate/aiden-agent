@@ -27,6 +27,7 @@ import {
   requestAccessibilityPermission,
   type AccessibilityPermissionState,
 } from "../../lib/accessibility-permission-core";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 async function openAccessibilitySettings(): Promise<void> {
   try {
@@ -148,6 +149,7 @@ function AccessibilityAccess() {
 
 function DictationHotkey() {
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const shortcuts = useShortcuts();
 
   if (shortcuts.isError) {
@@ -184,7 +186,9 @@ function DictationHotkey() {
   return (
     <Field
       label="Dictation hotkey"
-      description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
+      description={capabilities.accessibilityPaste
+        ? "Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
+        : "Press it from anywhere to dictate. The completed transcript is copied to the clipboard."}
     >
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Badge
@@ -202,7 +206,7 @@ function DictationHotkey() {
               ? "Unavailable"
               : "Off"}
         </Badge>
-        <Text variant="small-strong">{prettyAccelerator(binding)}</Text>
+        <Text variant="small-strong">{capabilities.dictationHoldTrigger ?? prettyAccelerator(binding)}</Text>
         <Button
           size="small"
           variant="filled"
@@ -217,8 +221,11 @@ function DictationHotkey() {
 
 export function DictationShortcutSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const settings = useSettings();
-  const holdToTalk = settings.data?.dictationHoldToTalk === true;
+  const [holdBusy, setHoldBusy] = React.useState(false);
+  const canChooseHold = capabilities.dictationHoldToTalk || capabilities.dictationHoldSetup;
+  const holdToTalk = capabilities.dictationHoldToTalk && settings.data?.dictationHoldToTalk === true;
   const silenceStop = settings.data?.dictationSilenceStop === true;
   const cleanup = settings.data?.dictationCleanup === true;
   const sounds = settings.data?.dictationSounds === true;
@@ -229,34 +236,54 @@ export function DictationShortcutSettings() {
     dictationCleanup?: boolean;
     dictationSounds?: boolean;
   }) => {
-    await settingsApi.set(next);
-    await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    if (next.dictationHoldToTalk !== undefined) setHoldBusy(true);
+    try {
+      await settingsApi.set(next);
+      await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch {
+      toast.error("Aiden couldn’t change dictation settings. Your desktop may not support hold shortcuts or the request was cancelled.");
+    } finally { setHoldBusy(false); }
   };
 
   return (
     <FieldSet title="Dictation Shortcut">
       <DictationHotkey />
-      <AccessibilityAccess />
+      {capabilities.accessibilityPaste ? (
+        <AccessibilityAccess />
+      ) : (
+        <Callout color="blue">
+          <Text variant="small">
+            Completed transcripts are copied to the clipboard so you can paste them into any app.
+          </Text>
+        </Callout>
+      )}
       <Field
         label="Shortcut behavior"
-        description="Choose how the global dictation shortcut starts and stops each recording."
+        description={canChooseHold
+          ? "Choose how the global dictation shortcut starts and stops each recording."
+          : "Press the global dictation shortcut once to start and again to stop."}
         orientation="vertical"
       >
         <RadioGroup
           value={holdToTalk ? "hold" : "toggle"}
-          onValueChange={(value) => void patch({ dictationHoldToTalk: value === "hold" })}
+          onValueChange={(value) => void patch({ dictationHoldToTalk: canChooseHold && value === "hold" })}
           orientation="vertical"
           aria-label="Dictation shortcut behavior"
+          disabled={holdBusy}
         >
+          {canChooseHold ? (
           <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="hold" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
               <span className="block text-regular text-primary">Hold to dictate</span>
               <span className="mt-0.5 block text-small text-secondary">
-                Hold the shortcut while speaking; release it to transcribe.
+                {capabilities.dictationHoldSetup && !capabilities.dictationHoldToTalk
+                  ? "Choose this to let your desktop assign a hold shortcut for this session."
+                  : "Hold the shortcut while speaking; release it to transcribe."}
               </span>
             </span>
           </Label>
+          ) : null}
           <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="toggle" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
@@ -270,7 +297,9 @@ export function DictationShortcutSettings() {
       </Field>
       <Field
         label="Stop after silence"
-        description="Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
+        description={capabilities.dictationHoldToTalk
+          ? "Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
+          : "Press the shortcut again to stop manually."}
       >
         <Switch
           checked={silenceStop}

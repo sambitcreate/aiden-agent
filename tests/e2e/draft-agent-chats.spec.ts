@@ -62,19 +62,17 @@ test("startup migration removes legacy empty chats once and keeps sent conversat
   const privateJournal = journal + `${JSON.stringify({ type: "message", id: "private-message", parentId: null,
     timestamp: "2026-08-31T12:00:01.000Z", message: { role: "user", content: "Private journal history", timestamp: 1 } })}\n`;
   const promotedPath = path.join(journalRoot, "promoted-empty.jsonl");
-  let promoted: Awaited<ReturnType<typeof migratePiSessionJournal>> | undefined;
+  let promotedReceiptPath!: string;
   const reopened = await aiden.relaunch(async () => {
     // Seed only after Electron has closed so shutdown cannot flush a stale
     // in-memory chat index over the migration fixture.
-    await seed("legacy-empty");
-    await seed("private-empty");
-    await seed("header-only-empty");
-    await seed("promoted-empty");
     await mkdir(journalRoot, { recursive: true });
+    for (const id of ["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"]) await seed(id);
     await writeFile(journalPath, privateJournal);
     await writeFile(path.join(journalRoot, "header-only-empty.jsonl"), journal.replace(/private-empty/gu, "header-only-empty"));
     await writeFile(promotedPath, journal.replace(/private-empty/gu, "promoted-empty"));
-    promoted = await migratePiSessionJournal(promotedPath, "promoted-empty");
+    const promoted = await migratePiSessionJournal(promotedPath, "promoted-empty");
+    promotedReceiptPath = promoted.receiptPath;
     const journalIndexPath = path.join(journalRoot, "aiden-journal-index.json");
     let journalIndex: { version: number; chats: Record<string, string[]> } = { version: 1, chats: {} };
     try { journalIndex = JSON.parse(await readFile(journalIndexPath, "utf8")); }
@@ -82,19 +80,22 @@ test("startup migration removes legacy empty chats once and keeps sent conversat
     journalIndex.chats["promoted-empty"] = [promotedPath, promoted.receipt.backupPath, promoted.receiptPath];
     await writeFile(journalIndexPath, JSON.stringify(journalIndex));
     await rm(path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"), { force: true });
+    expect((await index(aiden.userDataDir)).map((chat) => chat.id)).toEqual(expect.arrayContaining(["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"]));
+    expect(await readFile(journalPath, "utf8")).toBe(privateJournal);
   });
-  const completedPromotion = promoted;
-  if (!completedPromotion) throw new Error("Promoted migration fixture was not created.");
   await expect(reopened.locator("textarea")).toBeVisible();
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "legacy-empty")).toBe(false);
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "private-empty")).toBe(true);
   expect(await readFile(journalPath, "utf8")).toBe(privateJournal);
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "header-only-empty")).toBe(false);
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "promoted-empty")).toBe(false);
-  await expect.poll(async () => { try { await readFile(completedPromotion.receiptPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }).toBe(false);
+  await expect.poll(async () => { try { await readFile(promotedReceiptPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }).toBe(false);
   expect((await regularChats(aiden.userDataDir)).some((chat) => chat.messages.some((message) => message.content === "Keep this real conversation"))).toBe(true);
   await expect.poll(async () => JSON.parse(await readFile(path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"), "utf8")).complete).toBe(true);
-  await aiden.relaunch(() => seed("later-remote-empty"));
+  await aiden.relaunch(async () => {
+    await seed("later-remote-empty");
+    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(true);
+  });
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(true);
 });
 
@@ -171,11 +172,16 @@ test("unreadable private history preserves candidates without leaving a future m
     await mkdir(journalRoot, { recursive: true });
     await writeFile(corruptJournal, "{broken header");
     await rm(marker, { force: true });
+    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "uncertain-empty")).toBe(true);
+    expect(await readFile(corruptJournal, "utf8")).toBe("{broken header");
   });
   await expect(reopened.locator("textarea")).toBeVisible();
   expect(JSON.parse(await readFile(marker, "utf8")).complete).toBe(true);
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "uncertain-empty")).toBe(true);
-  await rm(corruptJournal);
-  await aiden.relaunch(() => seed("created-after-migration"));
+  await aiden.relaunch(async () => {
+    await rm(corruptJournal);
+    await seed("created-after-migration");
+    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration")).toBe(true);
+  });
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration")).toBe(true);
 });

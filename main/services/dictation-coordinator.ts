@@ -18,6 +18,8 @@ export interface DictationCoordinatorDeps {
   /** Optional polish after STT; must return the original text on failure. */
   cleanupTranscript?: (text: string) => Promise<string>;
   shouldCleanup?: () => boolean | Promise<boolean>;
+  /** Desktop-owned release subscription; no global key polling. */
+  startReleaseWatch?: (onRelease: () => void, onFailed: () => void) => (() => void) | null;
   getHoldKeyCode?: () => number | null | Promise<number | null>;
   startHoldWatch?: (
     keyCode: number,
@@ -121,7 +123,23 @@ export class DictationCoordinator {
 
   private beginHoldWatch(): void {
     this.endHoldWatch();
-    if (!this.holdToTalk || this.holdKeyCode === null || !this.deps.startHoldWatch) return;
+    if (!this.holdToTalk) return;
+    const operationId = this.operationId;
+    if (this.deps.startReleaseWatch) {
+      try {
+        const stop = this.deps.startReleaseWatch(
+          () => { void this.release(operationId); },
+          () => { void this.release(operationId); },
+        );
+        this.stopHoldWatch = stop;
+        this.holdWatchActive = typeof stop === "function";
+      } catch (error) {
+        this.deps.logError("Could not subscribe to desktop shortcut release.", error);
+        this.holdWatchActive = false;
+      }
+      return;
+    }
+    if (this.holdKeyCode === null || !this.deps.startHoldWatch) return;
     try {
       const stop = this.deps.startHoldWatch(
         this.holdKeyCode,
@@ -194,10 +212,12 @@ export class DictationCoordinator {
         this.pendingRelease = false;
         this.operationSequence += 1;
         this.operationId = `${(this.deps.now ?? Date.now)()}-${this.operationSequence}`;
+        if (this.deps.startReleaseWatch) this.beginHoldWatch();
         try {
           const created = await this.deps.showPill();
           if (created) this.pillReady = false;
         } catch (error) {
+          this.endHoldWatch();
           this.stage = "idle";
           this.operationId = null;
           this.deps.logError("Could not show the dictation pill.", error);
@@ -206,7 +226,7 @@ export class DictationCoordinator {
         if (this.stage === "starting" && this.pillReady) {
           this.stage = "recording";
           this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
-          this.beginHoldWatch();
+          if (!this.deps.startReleaseWatch) this.beginHoldWatch();
           if (this.pendingRelease) this.stopIfRecording();
         }
         return;
@@ -244,8 +264,9 @@ export class DictationCoordinator {
   }
 
   /** Hold-to-talk key-up, with a short grace so OS repeats do not cut capture. */
-  release(): Promise<void> {
+  release(expectedOperationId?: string | null): Promise<void> {
     return this.enqueue(async () => {
+      if (expectedOperationId !== undefined && expectedOperationId !== this.operationId) return;
       if (!this.holdToTalk) return;
       if (this.stage === "starting") {
         this.pendingRelease = true;
@@ -280,7 +301,7 @@ export class DictationCoordinator {
       if (this.stage === "starting") {
         this.stage = "recording";
         this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
-        this.beginHoldWatch();
+        if (!this.deps.startReleaseWatch) this.beginHoldWatch();
         if (this.pendingRelease) this.stopIfRecording();
       }
     });

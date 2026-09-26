@@ -184,7 +184,7 @@ fun AidenBotCustomAccessFlowScreen(
                                             val freshCat = cl.botCapabilityCatalog(detail.id)
                                             selectedBotDetail = fresh
                                             catalog = freshCat
-                                            saveError = "Access policy was changed on your Mac. Review the latest policy and try again."
+                                            saveError = "Access policy was changed on your paired desktop. Review the latest policy and try again."
                                         } catch (_: Exception) {
                                             saveError = e.message ?: "Conflict updating access"
                                         }
@@ -305,7 +305,7 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // File Scopes Section
                 item {
-                    Text("Mac Files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text("Desktop Files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -370,7 +370,7 @@ fun AidenBotCustomAccessFlowScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("Execute Shell Commands", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                Text("Allows bot to run terminal commands on Mac", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                                Text("Allows bot to run terminal commands on the paired desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                             }
                             Switch(
                                 checked = curDraft.shellEnabled,
