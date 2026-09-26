@@ -14,6 +14,8 @@ export interface AidenOpaqueHandleClaims {
   canonicalPath: string;
   filesystemDevice: string;
   filesystemInode: string;
+  confinedRootDevice?: string;
+  confinedRootInode?: string;
   expiresAt: number;
   depth?: number;
   snapshotId?: string;
@@ -80,6 +82,18 @@ export class AidenOpaqueHandleStore {
     return token;
   }
 
+  /** Reserve before a save, then bind the same slot to its installed inode. */
+  updateReservedFileIdentity(token: string, device: string, inode: string): void {
+    const stored = this.handles.get(digest(token));
+    if (!stored || stored.kind !== "file") throw new AidenOpaqueHandleError("handle_invalid");
+    stored.claims.filesystemDevice = device;
+    stored.claims.filesystemInode = inode;
+  }
+
+  discard(token: string): void {
+    this.handles.delete(digest(token));
+  }
+
   claimsFor(
     token: string,
     expectedKind: AidenOpaqueHandleKind,
@@ -137,6 +151,8 @@ export class AidenOpaqueHandleStore {
       claims.canonicalPath !== current.canonicalPath ||
       claims.filesystemDevice !== current.filesystemDevice ||
       claims.filesystemInode !== current.filesystemInode ||
+      claims.confinedRootDevice !== current.confinedRootDevice ||
+      claims.confinedRootInode !== current.confinedRootInode ||
       claims.kind !== current.kind ||
       claims.depth !== current.depth ||
       claims.snapshotId !== current.snapshotId ||
@@ -178,6 +194,9 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
   const relative = path.relative(canonicalRootPath, canonicalPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new AidenOpaqueHandleError("path_outside_root");
   const identity = await stat(canonicalPath);
+  // Another name for a multiply-linked regular file can live outside the root,
+  // so the in-root name would expose or mutate that outside file.
+  if (identity.isFile() && identity.nlink !== 1) throw new AidenOpaqueHandleError("path_outside_root");
   return {
     canonicalRootPath,
     canonicalPath,

@@ -465,3 +465,7 @@ test("provider onboarding explains separate opt-in and cloud speech privacy with
   assert.match(disclosure, /charges may apply/u);
   assert.doesNotMatch(source, /ttsApi\.(start|preview)/u);
 });
+
+test("feature tour introduces native folder browsing and source previews", () => {
+  assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
+});

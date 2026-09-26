@@ -2162,11 +2162,14 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/WorkspaceId"
-          }
+          },
+          { "name": "tree", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "Opt into nonrecursive directory pages. Required when directory or cursor is supplied." },
+          { "name": "directory", "in": "query", "schema": { "type": "string", "pattern": "^file_[A-Za-z0-9_-]{43}$" }, "description": "Opaque directory handle from a file page; omitted for workspace root." },
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" }, "description": "Expiring device/workspace/directory-bound continuation. An evicted snapshot returns handle_expired." }
         ],
         "responses": {
           "200": {
-            "description": "Bounded recursive file index",
+            "description": "Legacy bounded recursive file index, or at most 200 direct children when tree=1. Page responses include directoryPath; nextCursor indicates more captured children. truncated reports omitted/scan-limited entries, not pagination.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7891,6 +7894,8 @@
           "maxDepth"
         ],
         "properties": {
+          "directoryPath": { "type": "string", "maxLength": 4096, "description": "Workspace-relative directory, empty for root. Present only for tree pages." },
+          "nextCursor": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" },
           "snapshotId": {
             "type": "string"
           },

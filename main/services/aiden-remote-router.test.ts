@@ -604,6 +604,10 @@ async function fixture(options: {
       },
     },
     files: {
+      children: async (deviceId, workspaceId, directoryId, cursor) => {
+        calls.push(`file-page:${deviceId}:${workspaceId}:${directoryId ?? "root"}:${cursor ?? "first"}`);
+        return { snapshotId: "files-page", entries: [], truncated: false, maxEntries: 4_000 as const, maxDepth: 20 as const, directoryPath: "" };
+      },
       list: async (deviceId, workspaceId) => {
         calls.push(`files:${deviceId}:${workspaceId}`);
         return {
@@ -3054,6 +3058,18 @@ test("Read Aloud authenticates before parsing, checks Bot access and never expos
     }
     assert.equal(called, before);
   } finally { await bot.close(); }
+});
+
+test("workspace file pages keep authentication and reject path-shaped or ambiguous queries", async () => {
+  const app = await fixture({ capabilities: ["files:read"] });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  try {
+    assert.equal((await fetch(`${app.base}/workspaces/workspace-1/files?tree=1`, { headers })).status, 200);
+    for (const query of ["tree=2", "tree=1&tree=1", "tree=1&directory=../secret", "tree=1&cursor=bad", "tree=1&path=src", "directory=file_x"]) {
+      assert.equal((await fetch(`${app.base}/workspaces/workspace-1/files?${query}`, { headers })).status, 400, query);
+    }
+    assert.equal(app.calls.filter(value => value.startsWith("file-page:")).length, 1);
+  } finally { await app.close(); }
 });
 
 function simulatorHost(sharing = true): AidenRemoteSimulatorHost {

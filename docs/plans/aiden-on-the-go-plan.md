@@ -892,6 +892,9 @@ iOS, Android, the shared Remote contracts, and the completed Bot companion-visio
 
 Pull-request CI now gives Android its own Java 21/SDK 36 job. Pull requests run the complete debug JVM tests, lint, Android-test Kotlin compilation, and Compose UI verification without publishing an installable artifact. Relevant pushes to main additionally assemble and publish the debug APK plus its SHA-256 checksum as a 14-day workflow artifact. Hosted CI continues to compile the iOS app and test bundle for generic physical hardware without using a simulator; signed XCTest acceptance remains a recorded physical-device gate.
 
+### Native workspace browsing follow-up — 2026-09-22
+
+Implementation in `feature/native-workspace-browsing`: optional per-directory pages supplement the legacy recursive index; iOS and Android expand loaded folders, search only downloaded entries, and open bounded source previews before explicit editing. Explicit `./` file links resolve through opaque directory/file handles. Both native clients retain offline read-only caches and expected-version writes. The workspace-browser selection service, Bot files, streaming, and produced-file events are outside this slice. Focused test and review evidence is tracked in `.memory/native-workspace-browsing.md`; PR/physical-device acceptance remains pending.
 
 ## Desktop-configured Read Aloud follow-up — September 2026
 
