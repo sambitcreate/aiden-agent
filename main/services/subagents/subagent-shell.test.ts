@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { BeforeToolCallContext } from "@earendil-works/pi-agent-core";
-import { isSubagentShellApprovalDetails } from "../../../renderer/shared/assistant.js";
+import { isSubagentShellApprovalDetails, isSubagentRunGrantApprovalDetails } from "../../../renderer/shared/assistant.js";
 import type { Workspace } from "../types.js";
 import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
@@ -87,22 +87,26 @@ function harness(
     longOutput?: boolean;
     waitForAbort?: boolean;
     onRunShellStart?: () => void;
+    implementerRunGrant?: boolean;
+    parentPermission?: "ask" | "full";
   } = {},
 ) {
   const granted = authority(workspace);
   const transitions: string[] = [];
   const prompts: unknown[] = [];
   let rawCalls = 0;
+  let allocated = 0;
   let current: SubagentAuthorityV2 | undefined = granted;
   const input: SubagentShellBrokerV2Input = {
     authority: granted,
     childId: "child-shell",
     childLabel: "Host command",
     workspace,
+    parentPermission: options.parentPermission ?? workspace.permission,
     workspaceRoot: workspace.folderPath!,
     ledger: new SubagentApprovalLedgerV2(
       () => 1_000,
-      () => "approval-shell",
+      () => `approval-shell-${++allocated}`,
     ),
     journal: {
       prepareEffect: async () => transitions.push("prepared"),
@@ -151,8 +155,9 @@ function harness(
           };
     },
     registry: new WorkspaceOperationRegistry(),
+    implementerRunGrant: options.implementerRunGrant,
     now: () => 1_000,
-    randomUUID: () => "shell-effect",
+    randomUUID: () => `shell-effect-${++allocated}`,
   };
   return {
     gate: createSubagentShellBrokerV2(input),
@@ -190,6 +195,37 @@ test("exact multiline approval is durable before one helper dispatch", async (t)
     /Untrusted stdout/u,
   );
   assert.deepEqual(run.transitions, ["prepared", "authorized", "dispatch_started", "completed"]);
+});
+
+test("implementer Ask grants shell once for two commands and Full requires no card", async (t) => {
+  const command = "printf 'one'\nprintf 'two'";
+  for (const permission of ["ask", "full"] as const) {
+    const workspace = await fixture(t);
+    workspace.permission = permission;
+    const run = harness(workspace, { implementerRunGrant: true });
+    for (const id of ["call-shell-1", "call-shell-2"]) {
+      assert.equal(await run.gate.beforeToolCall(call(command, id)), undefined);
+      await run.gate.execute({ toolCallId: id, toolName: "run_command", arguments: { command } });
+    }
+    assert.equal(run.rawCalls(), 2);
+    assert.equal(run.prompts.length, permission === "ask" ? 1 : 0);
+    if (permission === "ask") {
+      assert.equal(isSubagentRunGrantApprovalDetails(run.prompts[0]), true);
+      assert.equal((run.prompts[0] as { lane: string }).lane, "shell");
+    }
+    await run.gate.shutdown();
+  }
+});
+
+test("stored Full shell authority uses Ask when the active turn is narrowed", async (t) => {
+  const workspace = await fixture(t);
+  workspace.permission = "full";
+  const run = harness(workspace, { implementerRunGrant: true, parentPermission: "ask" });
+  const command = "printf 'one'\nprintf 'two'";
+  assert.equal(await run.gate.beforeToolCall(call(command)), undefined);
+  await run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } });
+  assert.equal(run.prompts.length, 1);
+  await run.gate.shutdown();
 });
 
 test("denial, hostile controls, authority drift, and replay never spawn", async (t) => {

@@ -282,6 +282,7 @@ export const AIDEN_REMOTE_CHAT_AGENT_ROLES = [
   "scout",
   "planner",
   "reviewer",
+  "implementer",
 ] as const;
 export type AidenRemoteChatAgentRole =
   (typeof AIDEN_REMOTE_CHAT_AGENT_ROLES)[number];

@@ -388,6 +388,35 @@ test("privileged approval details remain host-only and mobile can deny but canno
   assert.match(app.approvals[0] ?? "", /:deny:/u);
 });
 
+test("implementer run grants remain Mac-only approvals", async () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const details = {
+    kind: "subagent-run-grant" as const,
+    lane: "shell" as const,
+    runId: "run-implementer",
+    childLabel: "Implement checks",
+    workspaceLabel: "Project",
+    worktreeLabel: null,
+    isManagedWorktree: false,
+    workspaceRevisionPrefix: "a".repeat(12),
+    fullHostAccess: true,
+    noRollback: true,
+  };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-run",
+    summary: "Allow shell for this subagent run",
+    details,
+  });
+  assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, details);
+  assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
+  await assert.rejects(
+    app.service.respondApproval("device-1", "approval-run", "allow", "approval-run-grant-allow-key"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+  );
+  assert.deepEqual(app.approvals, []);
+});
+
 test("bounded standard schedule approvals remain mobile-allowable without exposing details", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

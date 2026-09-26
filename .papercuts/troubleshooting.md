@@ -982,6 +982,13 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+# 2026-09-24 implementer run-grant worktree
+
+Fresh managed worktrees have no `node_modules`; `npm ci --no-audit --no-fund`
+was needed before type checking. Direct workspace-write tests initially failed
+because their native file-mutator test binary had not been built. Run
+`npm run build:subagent-file-mutator` and
+`node scripts/build-subagent-file-mutator.mjs --test` before the focused suite.
 
 ## Composer busy controls — 2026-09-23
 
