@@ -614,6 +614,20 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   await expect(composer).toHaveValue("hi there");
   await page.keyboard.press("Escape");
   await expect(modelFilter).toBeHidden();
+
+  // Disclosure summaries (activity feed, subagent detail) toggle on Space too.
+  await page.evaluate(() => {
+    const details = document.createElement("details");
+    details.id = "type-focus-disclosure-fixture";
+    details.innerHTML = "<summary>Disclosure</summary><p>Body</p>";
+    details.style.cssText = "position:fixed;left:320px;top:80px;z-index:100";
+    document.body.append(details);
+  });
+  const disclosure = page.locator("#type-focus-disclosure-fixture");
+  await disclosure.locator("summary").focus();
+  await page.keyboard.press("Space");
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(composer).toHaveValue("hi there");
 });
 
 // Human-readable palette labels may legitimately collide. Keyboard selection

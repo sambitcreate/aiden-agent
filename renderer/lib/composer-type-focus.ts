@@ -104,7 +104,7 @@ export function isActivationControl(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (
     target.closest(
-      "button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], [role='radio'], [role='checkbox'], [role='switch'], [role='link'], a[href]",
+      "button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], [role='radio'], [role='checkbox'], [role='switch'], [role='link'], a[href], summary",
     )
   ) {
     return true;
