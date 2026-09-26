@@ -3499,6 +3499,243 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testHomePageCommitRetainsTwoQueuedEditsIncludingNewPageRow() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-home-postcommit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let initialData = try encoder.encode(["chats": [detail.chat]])
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            request.url?.path.hasSuffix("/chats") == true ? (200, "application/json", initialData) : nil
+        }
+        let home = AidenHomeModel(chatCache: cache)
+        await home.load(coordinator: coordinator)
+        let cursor = "cur_page_2." + String(repeating: "A", count: 43)
+        let initial = try AidenChatSummaryPage(summaries: home.chats, nextCursor: cursor)
+        home.acceptInitialChatSummaryPage(initial)
+        try await cache.saveChatSummaries(.init(summaries: initial.summaries, nextCursor: cursor), instanceId: "instance-progress-lifecycle", writeToken: cache.reserveChatWrite())
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(detail.chat)) as? [String: Any])
+        object["id"] = "page-tail"
+        var tail = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: JSONSerialization.data(withJSONObject: object))
+        tail.updatedAt = detail.chat.updatedAt.addingTimeInterval(-1)
+        let page = try AidenChatSummaryPage(summaries: [AidenChatSummary(chat: tail)], nextCursor: nil)
+        var updated = detail.chat
+        updated.title = "First local edit"
+        tail.title = "Second local edit"
+        var checks = 0
+        try await home.acceptChatSummaryContinuation(page, requestedCursor: cursor, instanceId: "instance-progress-lifecycle", writeToken: cache.reserveSummaryWrite(instanceId: "instance-progress-lifecycle"), isCurrent: {
+            checks += 1
+            if checks == 3 {
+                home.accept(updated)
+                home.accept(tail)
+            }
+            return true
+        })
+        XCTAssertEqual(home.chats.map(\.title), [updated.title, tail.title])
+        XCTAssertNil(home.nextChatCursor)
+        for _ in 0..<1_000 {
+            let current = await cache.loadChatSummaries(instanceId: "instance-progress-lifecycle")
+            if current?.summaries.map(\.title) == [updated.title, tail.title] { break }
+            await Task.yield()
+        }
+        let reopened = AidenChatCache(root: root)
+        let stored = await reopened.loadChatSummaries(instanceId: "instance-progress-lifecycle")
+        XCTAssertEqual(stored?.summaries.map(\.title), [updated.title, tail.title])
+        XCTAssertNil(stored?.nextCursor)
+    }
+
+    @MainActor
+    func testHomeRemovalOutranksRequestsReservedDuringCleanupAfterRestart() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-home-removal-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat)], nextCursor: nil), instanceId: "home-remove", writeToken: cache.reserveChatWrite())
+        let gate = AidenChatWriteTestGate()
+        await gate.arm()
+        let lifetime = cache.registerLifetime(instanceId: "home-remove", chatId: chat.id)
+        lifetime.onRemovalCleanup = { await gate.waitIfArmed() }
+        let removal = Task { await cache.removeChat(instanceId: "home-remove", chatId: chat.id) }
+        await waitForChatWrite(gate)
+        _ = cache.reserveSummaryWrite(instanceId: "home-remove") // Request then fails without a response.
+        await gate.release()
+        await removal.value
+        let reopened = AidenChatCache(root: root)
+        let stored = await reopened.loadChatSummaries(instanceId: "home-remove")
+        XCTAssertFalse(stored?.summaries.contains(where: { $0.id == chat.id }) ?? false)
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat)], nextCursor: nil), instanceId: "removal-seam", writeToken: cache.reserveChatWrite())
+        try await cache.removeChatSummary(instanceId: "removal-seam", chatId: chat.id, beforeWrite: {
+            _ = cache.reserveSummaryWrite(instanceId: "removal-seam")
+        })
+        let seamReopened = AidenChatCache(root: root)
+        let seamStored = await seamReopened.loadChatSummaries(instanceId: "removal-seam")
+        XCTAssertEqual(seamStored?.summaries, [])
+    }
+
+    func testHomeAdmittedMemorySurvivesDiskFailureAndLocalPatchPreservesPage() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-home-memory-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        var first = sampleChat()
+        first.title = "Initial"
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(first)) as? [String: Any])
+        object["id"] = "page-tail"
+        var second = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: JSONSerialization.data(withJSONObject: object))
+        second.updatedAt = first.updatedAt.addingTimeInterval(-1)
+        let cursor = "cur_page_3." + String(repeating: "A", count: 43)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("blocked".utf8).write(to: root.appending(path: "summaries"))
+        let accepted = try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: first), AidenChatSummary(chat: second)], nextCursor: cursor), instanceId: "home-memory", writeToken: cache.reserveSummaryWrite(instanceId: "home-memory"))
+        XCTAssertTrue(accepted)
+        first.title = "Local update"
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: first)], nextCursor: nil), instanceId: "home-memory", writeToken: cache.reserveSummaryWrite(instanceId: "home-memory"), preservingCursor: true, changedIDs: [first.id])
+        let snapshot = await cache.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(snapshot?.summaries.map(\.id), [first.id, second.id])
+        XCTAssertEqual(snapshot?.summaries.first?.title, first.title)
+        XCTAssertEqual(snapshot?.nextCursor, cursor)
+        let old = cache.reserveChatWrite()
+        _ = cache.reserveSummaryWrite(instanceId: "home-memory")
+        let rejected = try await cache.saveChatSummaries(.init(summaries: [], nextCursor: nil), instanceId: "home-memory", writeToken: old)
+        XCTAssertFalse(rejected)
+        let retained = await cache.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(retained, snapshot)
+        let queuedFirst = cache.reserveSummaryWrite(instanceId: "home-memory")
+        var settled = first
+        settled.title = "Newer cross-owner settlement"
+        try await cache.saveChat(settled, instanceId: "home-memory", writeToken: cache.reserveChatWrite())
+        let queuedSecond = cache.reserveSummaryWrite(instanceId: "home-memory")
+        second.title = "Latest local second row"
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: first), AidenChatSummary(chat: second)], nextCursor: nil), instanceId: "home-memory", writeToken: queuedSecond, preservingCursor: true, changedIDs: [first.id, second.id], editTokens: [first.id: queuedFirst, second.id: queuedSecond])
+        let combined = await cache.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(combined?.summaries.map(\.title), [settled.title, second.title])
+        try FileManager.default.removeItem(at: root.appending(path: "summaries"))
+        let activityToken = cache.reserveSummaryWrite(instanceId: "home-memory")
+        let active = AidenChatSummary(chat: settled, preservingActivity: .active)
+        second.title = "Unrelated detail settlement"
+        try await cache.saveChat(second, instanceId: "home-memory", writeToken: cache.reserveChatWrite())
+        let laterLocal = cache.reserveSummaryWrite(instanceId: "home-memory")
+        try await cache.saveChatSummaries(.init(summaries: [active, AidenChatSummary(chat: second)], nextCursor: nil), instanceId: "home-memory", writeToken: laterLocal, preservingCursor: true, changedIDs: [first.id, second.id], editTokens: [first.id: activityToken, second.id: laterLocal])
+        let unrelated = await cache.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(unrelated?.summaries.first?.activity, .active)
+        XCTAssertEqual(unrelated?.summaries.last?.title, second.title)
+        let reopened = AidenChatCache(root: root)
+        let durable = await reopened.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(durable, unrelated)
+        let renameOrigin = cache.reserveChatWrite()
+        try await cache.saveChat(settled, instanceId: "home-memory", writeToken: cache.reserveChatWrite())
+        let queuedBeforeReceipt = cache.reserveSummaryWrite(instanceId: "home-memory")
+        let renameCutoff = cache.reserveChatWrite()
+        var receipt = settled
+        receipt.title = "Accepted unrelated rename"
+        let postReceiptActivity = cache.reserveSummaryWrite(instanceId: "home-memory")
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: settled, preservingActivity: .active)], nextCursor: nil), instanceId: "home-memory", writeToken: postReceiptActivity, preservingCursor: true, changedIDs: [first.id], editTokens: [first.id: postReceiptActivity])
+        _ = await cache.acceptRename(receipt, instanceId: "home-memory", origin: renameOrigin, cutoff: renameCutoff)
+        try await cache.saveChat(second, instanceId: "home-memory", writeToken: cache.reserveChatWrite())
+        _ = await cache.reconcileWorkspaceChat(receipt, instanceId: "home-memory", authority: renameOrigin, cutoff: renameCutoff)
+        let renamed = await cache.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(renamed?.summaries.first(where: { $0.id == first.id })?.title, receipt.title)
+        XCTAssertEqual(renamed?.summaries.first(where: { $0.id == first.id })?.activity, .active)
+        XCTAssertEqual(renamed?.summaries.first(where: { $0.id == second.id })?.title, second.title)
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: settled, preservingActivity: .active)], nextCursor: nil), instanceId: "home-memory", writeToken: queuedBeforeReceipt, preservingCursor: true, changedIDs: [first.id], editTokens: [first.id: queuedBeforeReceipt])
+        let renameReopened = AidenChatCache(root: root)
+        let retainedRename = await renameReopened.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(retainedRename?.summaries.first(where: { $0.id == first.id })?.title, receipt.title)
+        XCTAssertEqual(retainedRename?.summaries.first(where: { $0.id == first.id })?.activity, renamed?.summaries.first(where: { $0.id == first.id })?.activity)
+        let laterActivity = cache.reserveSummaryWrite(instanceId: "home-memory")
+        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: settled, preservingActivity: .idle)], nextCursor: nil), instanceId: "home-memory", writeToken: laterActivity, preservingCursor: true, changedIDs: [first.id], editTokens: [first.id: laterActivity], activityOnlyIDs: [first.id])
+        let activityReopened = AidenChatCache(root: root)
+        let activityUpdated = await activityReopened.loadChatSummaries(instanceId: "home-memory")
+        XCTAssertEqual(activityUpdated?.summaries.first(where: { $0.id == first.id })?.title, receipt.title)
+        XCTAssertEqual(activityUpdated?.summaries.first(where: { $0.id == first.id })?.activity, .idle)
+    }
+
+    @MainActor
+    func testHeldHomeHTTPResponseCannotReplaceSettlementOrNewerHomeOwner() async throws {
+        for mode in ["detail", "otherHome", "purge"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-home-owner-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var coordinator: AidenRemoteCoordinator!
+            let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+            let home = AidenHomeModel(chatCache: cache)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let oldData = try encoder.encode(["chats": [detail.chat]])
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                request.url?.path.hasSuffix("/chats") == true ? (200, "application/json", oldData) : nil
+            }
+            let held = expectation(description: "Home HTTP held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats", onRequest: { held.fulfill() })
+            let loading = Task { await home.load(coordinator: coordinator) }
+            await fulfillment(of: [held], timeout: 2)
+            var winner = detail.chat
+            winner.title = "Current winner"
+            winner.revision = "winner-revision"
+            if mode == "detail" {
+                try await cache.saveChat(winner, instanceId: "instance-progress-lifecycle", writeToken: cache.reserveChatWrite())
+            } else if mode == "otherHome" {
+                let newData = try encoder.encode(["chats": [winner]])
+                AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                    request.url?.path.hasSuffix("/chats") == true ? (200, "application/json", newData) : nil
+                }
+                let other = AidenHomeModel(chatCache: cache)
+                await other.load(coordinator: coordinator)
+                XCTAssertEqual(other.chats.first?.title, winner.title)
+            } else {
+                await cache.purge(instanceId: "instance-progress-lifecycle")
+            }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            XCTAssertFalse(home.chats.contains(where: { $0.title == detail.chat.title }))
+            let cached = await cache.loadChatSummaries(instanceId: "instance-progress-lifecycle")
+            if mode == "purge" { XCTAssertNil(cached) }
+            else {
+                XCTAssertEqual(home.chats.first?.title, winner.title)
+                XCTAssertEqual(cached?.summaries.first?.revision, winner.revision)
+            }
+        }
+    }
+
+    @MainActor
+    func testHeldHomeContinuationRejectsNewerAuthorityWithoutAdvancingCursor() async throws {
+        for mode in ["detail", "request", "purge"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-home-page-owner-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let gate = AidenChatWriteTestGate()
+            let cache = AidenChatCache(root: root, beforeMetadataWrite: { await gate.waitIfArmed() })
+            let home = AidenHomeModel(chatCache: cache)
+            let chat = sampleChat()
+            let cursor = "cur_page_2." + String(repeating: "A", count: 43)
+            let initial = try AidenChatSummaryPage(summaries: [AidenChatSummary(chat: chat)], nextCursor: cursor)
+            home.acceptInitialChatSummaryPage(initial)
+            try await cache.saveChatSummaries(.init(summaries: initial.summaries, nextCursor: cursor), instanceId: "page-owner", writeToken: cache.reserveChatWrite())
+            let page = try AidenChatSummaryPage(summaries: [], nextCursor: nil)
+            let token = cache.reserveSummaryWrite(instanceId: "page-owner")
+            await gate.arm()
+            let pending = Task { try await home.acceptChatSummaryContinuation(page, requestedCursor: cursor, instanceId: "page-owner", writeToken: token) }
+            await waitForChatWrite(gate)
+            if mode == "detail" {
+                var winner = chat
+                winner.title = "Settled title"
+                try await cache.saveChat(winner, instanceId: "page-owner", writeToken: cache.reserveChatWrite())
+            } else if mode == "request" {
+                _ = cache.reserveSummaryWrite(instanceId: "page-owner")
+            } else { await cache.purge(instanceId: "page-owner") }
+            await gate.release()
+            do { try await pending.value; XCTFail("Stale page must reject") } catch {}
+            XCTAssertEqual(home.nextChatCursor, cursor)
+            XCTAssertEqual(home.chats, initial.summaries)
+            try await home.acceptChatSummaryContinuation(page, requestedCursor: cursor, instanceId: "page-owner", writeToken: cache.reserveSummaryWrite(instanceId: "page-owner"))
+            XCTAssertNil(home.nextChatCursor)
+        }
+    }
+
+    @MainActor
     func testHomePaginationRejectsDuplicateCursorStallAndOrderingRegression() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-pagination-validation-\(UUID().uuidString)", directoryHint: .isDirectory)
