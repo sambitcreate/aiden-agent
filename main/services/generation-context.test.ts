@@ -900,3 +900,62 @@ test("retained AGENTS.md revisions after a stale usage anchor count toward ancho
   assert.equal(projectNextContextUsage(single, singleBase).shouldCompact, false);
   assert.equal(projectNextContextUsage(single, { ...singleBase, retainsSystemUpdates: true }).shouldCompact, true);
 });
+
+test("an AGENTS.md revision still active after a stale anchor is priced once near the threshold", () => {
+  const head = createInitialSystemMessage("HOST", []) as AgentMessage;
+  // The provider has reported neither revision. The active 8 KiB revision is
+  // also in the replayed static prompt, so only the superseded 16 KiB one and
+  // the update framing are extra in totals that add static context.
+  const transcript = (usage: number): AgentMessage[] => [
+    head,
+    user("first"),
+    usageAssistant(usage),
+    agentsPatch("A".repeat(16_384)),
+    usageAssistant(0),
+    agentsPatch("B".repeat(8_192)),
+    user("next"),
+  ];
+  const project = (usage: number, retainsSystemUpdates: boolean) => {
+    const messages = transcript(usage);
+    const base = {
+      ...options,
+      contextWindow: 120_000,
+      systemPrompt: getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]),
+      retainsSystemUpdates,
+    };
+    return { messages, base, projection: projectNextContextUsage(messages, base) };
+  };
+
+  // Threshold is 97,616. Both revisions are sent once (about 6.2k over the
+  // usage); pricing the active one again would add about 2k more.
+  const near = project(90_000, true);
+  const sentOnce = near.projection.contextTokens - 90_000;
+  assert.ok(sentOnce >= 6_144 && sentOnce < 6_400, `sentOnce=${sentOnce}`);
+  assert.equal(near.projection.shouldCompact, false);
+  // The static-inclusive anchored term prices only what the static prompt lacks.
+  assert.ok(
+    near.projection.addedAfterUsageAnchorTokens >= 4_096 &&
+      near.projection.addedAfterUsageAnchorTokens < 4_200,
+    `tail=${near.projection.addedAfterUsageAnchorTokens}`,
+  );
+  const nearCompaction = compactGenerationContext(near.messages, near.base);
+  assert.equal(nearCompaction.compacted, false);
+  assert.ok(nearCompaction.estimatedTokensBefore < 97_616, `before=${nearCompaction.estimatedTokensBefore}`);
+
+  // Still more than the folded model, and a slightly larger anchor crosses.
+  assert.ok(near.projection.contextTokens > project(90_000, false).projection.contextTokens);
+  const over = project(92_000, true);
+  assert.equal(over.projection.shouldCompact, true);
+
+  // Compaction candidates price the same request: keeping both revisions is
+  // over budget, so the prompt is replayed into one head. That head carries the
+  // active revision the 92k usage never saw.
+  const overCompaction = compactGenerationContext(over.messages, over.base);
+  assert.equal(overCompaction.compacted, true);
+  assert.equal(overCompaction.messages.filter((message) => message.role === "system").length, 1);
+  assert.ok(
+    overCompaction.estimatedTokensAfter >= 92_000 + 2_048,
+    `after=${overCompaction.estimatedTokensAfter}`,
+  );
+  assert.ok(overCompaction.estimatedTokensAfter <= overCompaction.inputBudgetTokens);
+});

@@ -157,9 +157,66 @@ export function retainedTailSystemTokens(
   return tokens;
 }
 
-/** Message tokens for the part of a transcript after a provider usage anchor. */
-function tailMessageTokens(messages: AgentMessage[], options: GenerationContextOptions): number {
-  return messageTokens(messages) + retainedTailSystemTokens(messages, options);
+/**
+ * Characters of the replayed prompt that come from system messages after
+ * `anchorIndex`: their appended content, plus the sections they last set that
+ * are still active. Pi replays content by appending and sections by replacing.
+ */
+function postAnchorPromptChars(messages: readonly AgentMessage[], anchorIndex: number): number {
+  let chars = 0;
+  const activeSections = new Map<string, { index: number; chars: number }>();
+  messages.forEach((message, index) => {
+    if (message.role !== "system") return;
+    const system = message as SystemMessage;
+    if (index > anchorIndex) {
+      chars += getSystemMessageText({ ...system, sections: undefined }).length;
+    }
+    for (const [name, value] of Object.entries(system.sections ?? {})) {
+      if (value === null) activeSections.delete(name);
+      else activeSections.set(name, { index, chars: value.length });
+    }
+  });
+  for (const section of activeSections.values()) {
+    if (section.index > anchorIndex) chars += section.chars;
+  }
+  return chars;
+}
+
+/**
+ * The post-anchor surcharge for a total that also adds `staticTokens`. The
+ * static prompt already prices the replayed prompt, including content and
+ * still-active sections set after the anchor, so only the rest of what the
+ * retained updates send (superseded or removed revisions and Pi's update
+ * framing) is added here.
+ */
+function retainedTailSystemTokensBeyondPrompt(
+  messages: readonly AgentMessage[],
+  anchorIndex: number,
+  options: GenerationContextOptions,
+): number {
+  if (!options.retainsSystemUpdates) return 0;
+  let sentChars = 0;
+  for (const message of messages.slice(anchorIndex + 1)) {
+    if (message.role === "system") {
+      sentChars += renderSystemMessageUpdate(message as SystemMessage).length;
+    }
+  }
+  return Math.max(0, Math.ceil((sentChars - postAnchorPromptChars(messages, anchorIndex)) / 4));
+}
+
+/**
+ * Message tokens after a provider usage anchor, for a total that adds them to
+ * both the anchor's usage and `staticTokens`.
+ */
+function staticAnchoredTailTokens(
+  messages: AgentMessage[],
+  anchorIndex: number,
+  options: GenerationContextOptions,
+): number {
+  return (
+    messageTokens(messages.slice(anchorIndex + 1)) +
+    retainedTailSystemTokensBeyondPrompt(messages, anchorIndex, options)
+  );
 }
 
 /** Message tokens for a whole outbound transcript under the model's system-message handling. */
@@ -354,7 +411,9 @@ export function projectNextContextUsage(
   const trailing =
     anchorIndex === null
       ? estimatedMessages
-      : tailMessageTokens(projected.slice(anchorIndex + 1), options);
+      : staticAnchoredTailTokens(projected, anchorIndex, options);
+  // Pi's anchored estimate (usage plus trailing messages) adds no static
+  // prompt, so every retained post-anchor update is priced in full.
   const providerAnchoredTokens =
     anchorIndex === null
       ? 0
@@ -609,11 +668,23 @@ export function compactGenerationContext(
     !usageAnchorIsCurrent || providerEstimate.lastUsageIndex === null
       ? 0
       : messageTokens(retained.slice(0, providerEstimate.lastUsageIndex + 1));
+  // The anchor's usage covered the prompt as it stood then. For a retaining
+  // model, content and still-active sections set after the anchor are in the
+  // current static prompt but not in that usage, so they are not part of the
+  // prefix measurement.
+  const anchorStaticTokens =
+    options.retainsSystemUpdates && providerEstimate.lastUsageIndex !== null
+      ? Math.max(
+          0,
+          staticTokens -
+            Math.ceil(postAnchorPromptChars(retained, providerEstimate.lastUsageIndex) / 4),
+        )
+      : staticTokens;
   const providerPrefixRatio =
     usageAnchorIsCurrent && providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
       ? Math.max(
           1,
-          (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens,
+          (providerEstimate.usageTokens - anchorStaticTokens) / estimatedPrefixTokens,
         )
       : 1;
   const estimatedTotalTokens = (candidate: AgentMessage[]) => {
@@ -630,7 +701,7 @@ export function compactGenerationContext(
     const retainedPrefixTokens = messageTokens(
       candidate.slice(0, anchorIndex + 1),
     );
-    const trailingTokens = tailMessageTokens(candidate.slice(anchorIndex + 1), options);
+    const trailingTokens = staticAnchoredTailTokens(candidate, anchorIndex, options);
     return Math.ceil(
       Math.max(
         heuristicTotal,
