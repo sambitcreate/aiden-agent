@@ -2267,17 +2267,28 @@ function requestText(context: unknown): string {
 }
 
 /** Deterministic local reducer: shrinks channels carrying the oversized marker only. */
-function channelReducer(seen: Array<{ texts: string; previousSummary?: string; isSplitTurn: boolean }>) {
+type ReducerCall = { texts: string; previousSummary?: string; isSplitTurn: boolean; contextWindow: number };
+
+/**
+ * Deterministic local reducer. With `fill`, it returns the largest summary the
+ * real compiler's acceptance rule allows for the window it was given
+ * (`summary + 64 < contextWindow - reserveTokens`).
+ */
+function channelReducer(seen: ReducerCall[], options: { fill?: boolean } = {}) {
   return async (input: Parameters<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>[0]) => {
     const texts = JSON.stringify(input.preparation.messagesToSummarize);
     seen.push({
       texts,
       previousSummary: input.preparation.previousSummary,
       isSplitTurn: input.preparation.isSplitTurn,
+      contextWindow: input.contextWindow,
     });
     if (!texts.includes("OVERSIZED_HISTORY")) throw new VccError("insufficient_reduction");
+    const fillTokens = options.fill
+      ? Math.max(0, input.contextWindow - input.preparation.settings.reserveTokens - 64 - 16)
+      : 0;
     return {
-      summary: "REDUCED_HISTORY_CANARY",
+      summary: `REDUCED_HISTORY_CANARY ${"r".repeat(fillTokens * 4)}`,
       retainedTail: [],
       tokensBefore: input.preparation.tokensBefore,
       details: { engine: "vcc" as const, version: 1 },
@@ -2306,19 +2317,19 @@ test("oversized recovery keeps the split-turn prefix in its own Pi summary chann
   await session.appendMessage(assistant(smallModel, { text: `prefix progress ${"p".repeat(1_600)}`, timestamp: 21 }));
   const last = assistant(smallModel, { text: `retained suffix ${"s".repeat(2_400)}`, timestamp: 22 });
   await session.appendMessage(last);
-  const seen: Array<{ texts: string; previousSummary?: string; isSplitTurn: boolean }> = [];
+  const seen: ReducerCall[] = [];
   const result = await new PiCompactionCoordinator({
     session, models, model: smallModel, thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 500 },
     compileVcc: channelReducer(seen),
   }).compact();
   assert.equal(result.compacted, true, result.errorMessage);
-  // History and prefix are reduced independently; the small prefix stays raw.
-  assert.equal(seen.length, 2);
-  assert.ok(seen.every((call) => call.isSplitTurn === false && call.previousSummary === undefined));
+  // Only the oversized history is reduced; the prefix request fits and stays raw.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.isSplitTurn, false);
+  assert.equal(seen[0]!.previousSummary, undefined);
   assert.match(seen[0]!.texts, /OVERSIZED_HISTORY/u);
   assert.doesNotMatch(seen[0]!.texts, /PREFIX_REQUEST_CANARY/u);
-  assert.match(seen[1]!.texts, /PREFIX_REQUEST_CANARY/u);
   assert.equal(requests.length, 2);
   assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
   assert.doesNotMatch(requests[0]!, /PREFIX_REQUEST_CANARY/u);
@@ -2348,7 +2359,7 @@ test("oversized recovery merges the prior checkpoint through Pi's previous-summa
   await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
   await session.appendMessage(user("first follow-up", 12));
   await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
-  const seen: Array<{ texts: string; previousSummary?: string; isSplitTurn: boolean }> = [];
+  const seen: ReducerCall[] = [];
   const coordinator = new PiCompactionCoordinator({
     session, models, model: smallModel, thinkingLevel: "off", settings,
     compileVcc: channelReducer(seen),
@@ -2369,6 +2380,83 @@ test("oversized recovery merges the prior checkpoint through Pi's previous-summa
   const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
   assert.equal(compactions.length, 2);
   assert.match(compactions[1]?.type === "compaction" ? compactions[1].summary : "", /updated-after-recovery/u);
+});
+
+test("oversized recovery budgets the reduction against the prior checkpoint and final request reserves", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  const requests: string[] = [];
+  faux.setResponses([
+    // A large prior checkpoint that Pi's update request must carry again.
+    fauxAssistantMessage(structuredSummary(`PRIOR_GOAL_CANARY ${"g".repeat(14_000)}`)),
+    (context) => {
+      requests.push(requestText(context));
+      return fauxAssistantMessage(structuredSummary("fits-after-budgeted-reduction"));
+    },
+  ]);
+  const session = await memorySession("oversized-budget-boundary");
+  const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 };
+  await session.appendMessage(user(`first goal ${"a".repeat(2_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user("first follow-up", 12));
+  await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
+  const seen: ReducerCall[] = [];
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off", settings,
+    compileVcc: channelReducer(seen, { fill: true }),
+  });
+  assert.equal((await coordinator.compact()).compacted, true);
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  await session.appendMessage(user(`latest request ${"l".repeat(1_200)}`, 22));
+  await session.appendMessage(assistant(smallModel, { timestamp: 23 }));
+  const result = await coordinator.compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(seen.length, 1, "the first budgeted reduction already fits");
+  // Reserve-only budgeting would allow ~7,100 reduced tokens beside a ~3,500
+  // token prior checkpoint, which the final 8,192-token request cannot hold.
+  assert.ok(seen[0]!.contextWindow - settings.reserveTokens < 4_500, `budget ${seen[0]!.contextWindow}`);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!, /<previous-summary>[\s\S]*PRIOR_GOAL_CANARY/u);
+  assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
+  const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
+  assert.equal(compactions.length, 2);
+});
+
+test("oversized recovery fails closed as a local-compiler cause when no reduction fits", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  let providerRequests = 0;
+  faux.setResponses([() => {
+    providerRequests += 1;
+    return fauxAssistantMessage(structuredSummary("must not be requested"));
+  }]);
+  const session = await memorySession("oversized-no-fit");
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user(`latest ${"l".repeat(1_200)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  const before = await session.getEntries();
+  let compiles = 0;
+  const result = await new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 },
+    // Ignores the window it is given, as a pathological estimate mismatch would.
+    compileVcc: async (input) => {
+      compiles += 1;
+      return {
+        summary: "漢".repeat(8_000),
+        retainedTail: [],
+        tokensBefore: input.preparation.tokensBefore,
+        details: { engine: "vcc" as const, version: 1 },
+      } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+    },
+  }).compact();
+  assert.equal(result.compacted, false);
+  assert.match(result.errorMessage ?? "", /could not reduce context enough/iu);
+  assert.ok(compiles >= 1 && compiles <= 3, `bounded local retries (${compiles})`);
+  assert.equal(providerRequests, 0);
+  assert.deepEqual(await session.getEntries(), before);
 });
 
 test("compaction failure diagnostics keep the later cause after budget recovery starts", () => {

@@ -168,6 +168,24 @@ export function compactionFailureDiagnosticFields(input: {
   };
 }
 
+type RecoveryChannel = "history" | "turn-prefix";
+const RECOVERY_REDUCTION_ATTEMPTS = 3;
+
+function recoveryMessage(content: string): AgentMessage {
+  return { role: "user", content, timestamp: Date.now() };
+}
+
+/** The Pi preparation whose single summary request covers only `channel`. */
+function recoveryChannelRequest(
+  channel: RecoveryChannel,
+  messages: AgentMessage[],
+  preparation: CompactionPreparation,
+): CompactionPreparation {
+  return channel === "history"
+    ? { ...preparation, messagesToSummarize: messages, turnPrefixMessages: [], isSplitTurn: false }
+    : { ...preparation, messagesToSummarize: [], turnPrefixMessages: messages, isSplitTurn: true };
+}
+
 /** One prepared compaction channel as a self-contained local-compiler input. */
 function recoveryChannelInput(
   messages: readonly AgentMessage[],
@@ -621,26 +639,41 @@ export class PiCompactionCoordinator {
           // ordinary bounded path, so the prior checkpoint still reaches the
           // update prompt and a split turn still gets its turn-prefix summary.
           recoveryStage = "local-compiler";
-          const reduceChannel = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
-            if (messages.length === 0) return messages;
-            try {
+          const spareTokensFor = (channel: RecoveryChannel, messages: AgentMessage[]) =>
+            summaryRequestSpareTokens(
+              recoveryChannelRequest(channel, messages, preparation),
+              this.options.model,
+              this.options.thinkingLevel,
+              abortController.signal,
+            );
+          const reduceChannel = async (channel: RecoveryChannel, messages: AgentMessage[]): Promise<AgentMessage[]> => {
+            // A channel whose own Pi request already fits stays raw.
+            if (messages.length === 0 || await spareTokensFor(channel, messages) >= 0) return messages;
+            // Budget the reduction against the complete request Pi will send
+            // for this channel: its prompt, the preserved prior checkpoint,
+            // output allowance and safety reserve all come out of the window.
+            let contentBudget = await spareTokensFor(channel, [recoveryMessage("")]);
+            for (let attempt = 0; attempt < RECOVERY_REDUCTION_ATTEMPTS && contentBudget > 0; attempt += 1) {
               const local = await (this.options.compileVcc ?? compileVccInWorker)(
-                recoveryChannelInput(messages, preparation, this.options.model.contextWindow),
+                recoveryChannelInput(
+                  messages,
+                  preparation,
+                  contentBudget + preparation.settings.reserveTokens,
+                ),
                 abortController.signal,
               );
-              return [{ role: "user", content: local.summary, timestamp: Date.now() }];
-            } catch (reductionError) {
-              // A channel already smaller than any local reduction is kept raw;
-              // its own bounded request still fails closed if it cannot fit.
-              if (reductionError instanceof VccError && reductionError.code === "insufficient_reduction") {
-                return messages;
-              }
-              throw reductionError;
+              const reduced = [recoveryMessage(local.summary)];
+              const spare = await spareTokensFor(channel, reduced);
+              if (spare >= 0) return reduced;
+              // The local estimate differs from the request guard (for
+              // example on dense Unicode); tighten by the measured overshoot.
+              contentBudget += spare;
             }
+            throw new VccError("insufficient_reduction");
           };
-          const messagesToSummarize = await reduceChannel(preparation.messagesToSummarize);
+          const messagesToSummarize = await reduceChannel("history", preparation.messagesToSummarize);
           const turnPrefixMessages = preparation.isSplitTurn
-            ? await reduceChannel(preparation.turnPrefixMessages)
+            ? await reduceChannel("turn-prefix", preparation.turnPrefixMessages)
             : preparation.turnPrefixMessages;
           recoveryStage = "semantic-summary";
           result = await summarize({ ...preparation, messagesToSummarize, turnPrefixMessages });
@@ -834,26 +867,73 @@ export function createPiCompactionModels(
   }) as Models;
 }
 
-/** Fail closed on estimated summary overflow before provider I/O; this is not a provider tokenizer. */
+/** Estimated size of one summary request; this is not a provider tokenizer. */
+function summaryRequestTokens(...[model, context, options]: Parameters<Models["completeSimple"]>) {
+  // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
+  // for non-ASCII text; keep the existing content estimate for the remainder.
+  const unicodeAllowance = (text: string) => {
+    const nonAscii = text.replace(/\p{ASCII}/gu, "");
+    return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
+  };
+  const systemPrompt = context.systemPrompt ?? "";
+  const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
+    context.messages.reduce((total, message) => {
+      const text = typeof message.content === "string" ? message.content : message.content
+        .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+      return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
+    }, 0);
+  const outputTokens = options?.maxTokens ?? model.maxTokens;
+  const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
+  return { inputTokens, outputTokens, safetyTokens, contextWindow: model.contextWindow };
+}
+
+class SummaryRequestProbe extends Error {
+  readonly name = "SummaryRequestProbe";
+
+  constructor(readonly spareTokens: number) {
+    super("summary request probe");
+  }
+}
+
+/**
+ * Window tokens left over by the one summary request Pi would send for `input`
+ * (negative when it would be rejected). Pi builds the real prompt; the probe
+ * measures it and stops before any provider I/O.
+ */
+async function summaryRequestSpareTokens(
+  input: CompactionPreparation,
+  model: ResolvedModelRuntime["model"],
+  thinkingLevel: ThinkingLevel,
+  signal: AbortSignal,
+): Promise<number> {
+  const probe = {
+    completeSimple: (...args: Parameters<Models["completeSimple"]>) => {
+      const size = summaryRequestTokens(...args);
+      throw new SummaryRequestProbe(
+        size.contextWindow - size.inputTokens - size.outputTokens - size.safetyTokens,
+      );
+    },
+  } as unknown as Models;
+  try {
+    await compact(input, probe, model, undefined, signal, thinkingLevel, {
+      enabled: false,
+      maxRetries: 0,
+      baseDelayMs: 0,
+    });
+  } catch (error) {
+    if (error instanceof SummaryRequestProbe) return error.spareTokens;
+    throw error;
+  }
+  signal.throwIfAborted();
+  throw new Error("Compaction summary request could not be measured.");
+}
+
+/** Fail closed on estimated summary overflow before provider I/O. */
 function boundedCompactionModels(models: Models): Models {
-  const assertFits = (...[model, context, options]: Parameters<Models["completeSimple"]>) => {
-    // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
-    // for non-ASCII text; keep the existing content estimate for the remainder.
-    const unicodeAllowance = (text: string) => {
-      const nonAscii = text.replace(/\p{ASCII}/gu, "");
-      return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
-    };
-    const systemPrompt = context.systemPrompt ?? "";
-    const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
-      context.messages.reduce((total, message) => {
-        const text = typeof message.content === "string" ? message.content : message.content
-          .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
-        return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
-      }, 0);
-    const outputTokens = options?.maxTokens ?? model.maxTokens;
-    const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
-    if (inputTokens + outputTokens + safetyTokens > model.contextWindow) {
-      throw new CompactionSummaryBudgetError(inputTokens, outputTokens, safetyTokens, model.contextWindow);
+  const assertFits = (...args: Parameters<Models["completeSimple"]>) => {
+    const { inputTokens, outputTokens, safetyTokens, contextWindow } = summaryRequestTokens(...args);
+    if (inputTokens + outputTokens + safetyTokens > contextWindow) {
+      throw new CompactionSummaryBudgetError(inputTokens, outputTokens, safetyTokens, contextWindow);
     }
   };
   return new Proxy(models, {
