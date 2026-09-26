@@ -67,6 +67,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:delta",
   "chat:done",
   "chat:error",
+  "chat:guidance-returned",
   "chat:questionnaire",
   "chat:reasoning-delta",
   "chat:status",

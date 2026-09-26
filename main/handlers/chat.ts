@@ -11,6 +11,7 @@ import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
+import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -93,6 +94,19 @@ export function registerChatGenerationHandlers(): void {
       logger.info("chat", JSON.stringify({ event: "renderer_user_stop", streamId }));
     }
     return cancelled;
+  });
+
+  ipcMain.handle("chat:steer", async (event, streamId: unknown, instruction: unknown) => {
+    if (!isSafeSubagentIdentifier(streamId) || typeof instruction !== "string" ||
+        !instruction.trim() ||
+        new TextEncoder().encode(instruction).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
+      throw new Error("Invalid chat guidance.");
+    }
+    const owner = chatGenerationOwner(event);
+    if (!llmClient.steer(streamId, instruction.trim(), owner.documentId)) {
+      throw new Error("This response can no longer accept guidance. Your draft is still here.");
+    }
+    return { status: "queued" as const };
   });
 
   // Resolve a pending tool-approval request ("ask" mode).

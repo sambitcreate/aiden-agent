@@ -544,6 +544,38 @@ function broadcastChatSettled(
   });
 }
 
+function queuedGuidanceText(messages: readonly { role: string; content?: unknown }[]): string[] {
+  return messages.flatMap((message) =>
+    message.role === "user" && typeof message.content === "string" && message.content.trim()
+      ? [message.content]
+      : [],
+  );
+}
+
+/**
+ * Guidance whose visible save Stop stopped waiting for, and which then did not
+ * land. The stream's terminal has already been sent, so it goes to the window
+ * that owned the stream on its own channel.
+ */
+export function returnLateGuidance(
+  owner: Pick<ChatGenerationOwner, "kind" | "isDestroyed" | "send"> | undefined,
+  chatId: string,
+  streamId: string,
+  guidance: string[],
+): void {
+  if (guidance.length === 0) return;
+  // Steer is desktop-only; a paired-device owner has no draft to restore into.
+  if (!owner || owner.kind === "remote" || owner.isDestroyed()) {
+    logger.warn("pi", `Late guidance for stream ${streamId} had no window to return to.`);
+    return;
+  }
+  try {
+    owner.send("chat:guidance-returned", { chatId, streamId, undeliveredGuidance: guidance });
+  } catch (error) {
+    logger.warn("pi", `Could not return late guidance for stream ${streamId}.`, error);
+  }
+}
+
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
@@ -2475,6 +2507,27 @@ export const llmClient = {
           compaction: compactionOptions,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          beforeQueuedUser: async (message, signal) => {
+            if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
+              throw new Error("Queued guidance must contain text.");
+            }
+            // ChatStore writes are not abortable; never start one after Stop.
+            if (signal.aborted) throw new Error("The response stopped before guidance was saved.");
+            const chat = await chatStore.appendMessage(
+              params.chatId,
+              { role: "user", content: message.content, model: params.model },
+              {
+                providerId: params.providerId,
+                model: params.model,
+                expectedWorkspaceId: initialization.workspaceId,
+              },
+            );
+            const visible = chat.messages[chat.messages.length - 1];
+            if (!visible || visible.role !== "user") {
+              throw new Error("Queued guidance was not saved in the visible chat.");
+            }
+            return visible.id;
+          },
           ...(currentUser
             ? {
                 appendInput: async () => {
@@ -3001,6 +3054,7 @@ export const llmClient = {
             break;
           }
           case "message_end": {
+            if (event.message.role === "user") return;
             if (event.message.role === "assistant") {
               requestUsage.ended();
               lastAssistantMessage = event.message;
@@ -3389,6 +3443,35 @@ export const llmClient = {
       return false;
     }
 
+    // Accepted steer input that Pi never emitted into the visible chat (Stop,
+    // a terminal before the next step, or a failed projection). It rides on
+    // the terminal event so the renderer can restore it instead of losing it.
+    // Collection never waits on host storage: a projection that Stop stopped
+    // waiting for is returned later, only if its visible save did not land.
+    let undeliveredGuidance: string[] = [];
+    let undeliveredGuidanceCollected = false;
+    const collectUndeliveredGuidance = () => {
+      if (undeliveredGuidanceCollected) return;
+      undeliveredGuidanceCollected = true;
+      try {
+        const taken = agent.takeUndeliveredQueuedMessages();
+        undeliveredGuidance = queuedGuidanceText(taken.messages);
+        if (taken.late) {
+          const owner = ownerForStream(streamId);
+          void taken.late.then(
+            (messages) =>
+              returnLateGuidance(owner, params.chatId, streamId, queuedGuidanceText(messages)),
+            (error: unknown) => {
+              logger.warn("pi", `Could not settle late guidance for stream ${streamId}.`, error);
+            },
+          );
+        }
+      } catch (error) {
+        logger.warn("pi", `Could not collect undelivered guidance for stream ${streamId}.`, error);
+      }
+    };
+    const withUndeliveredGuidance = <T extends object>(payload: T) =>
+      undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3430,6 +3513,7 @@ export const llmClient = {
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         reconcileAbandonedVisibleAssistant = runtimeOutcome.finalMessageWasAbandoned === true;
         quarantineSessionFailureWithoutLease =
           runtimeOutcome.kind === "host_failed" && runtimeOutcome.faultKind === "session";
@@ -3481,7 +3565,7 @@ export const llmClient = {
             runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `${finalError} The partial response could not be saved: ${persisted.error}`
@@ -3490,7 +3574,7 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else if (
           !generationHasVisibleOutput(
             full,
@@ -3502,7 +3586,7 @@ export const llmClient = {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", {
+          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
               ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
@@ -3510,7 +3594,7 @@ export const llmClient = {
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          });
+          }));
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
@@ -3523,30 +3607,31 @@ export const llmClient = {
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           if (persisted.error) {
-            sendGeneration(streamId, "chat:error", {
+            sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
               message: `The response completed but could not be saved: ${persisted.error}`,
               content: full || undefined,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
-            });
+            }));
           } else {
-            sendGeneration(streamId, "chat:done", {
+            sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
               streamId,
               content: full,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
               chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-            });
+            }));
           }
         }
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
+        collectUndeliveredGuidance();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
-        sendGeneration(streamId, "chat:error", {
+        sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
           streamId,
           message: persisted.error
             ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
@@ -3555,7 +3640,7 @@ export const llmClient = {
           reasoning: reasoning || undefined,
           timeline: finalTimeline,
           chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-        });
+        }));
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
@@ -3595,6 +3680,14 @@ export const llmClient = {
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
     return questionnaires.respond(promptId, response, ownerDocumentId);
+  },
+
+  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
+    const generation = active.get(streamId);
+    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
+      return false;
+    }
+    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
   },
 
   /**

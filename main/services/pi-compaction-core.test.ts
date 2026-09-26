@@ -1270,6 +1270,17 @@ test("primary generation reconciles a visible assistant after a journal batch fa
   assert.match(source, /if \(!turnLease\) \{[\s\S]{0,250}quarantineFailedPiRecovery\(/u);
 });
 
+test("Stop's terminal never waits on an unresolved queued-guidance save", async () => {
+  const source = await readFile(new URL("./llm-client.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /await\s+collectUndeliveredGuidance\(/u);
+  assert.doesNotMatch(source, /await\s+agent\.takeUndeliveredQueuedMessages\(/u);
+  assert.match(
+    source,
+    /const taken = agent\.takeUndeliveredQueuedMessages\(\);[\s\S]{0,400}void taken\.late\.then\([\s\S]{0,200}returnLateGuidance\(owner, params\.chatId/u,
+  );
+  assert.match(source, /owner\.send\("chat:guidance-returned"/u);
+});
+
 test("compaction transport awaits hidden-summary usage accounting", async () => {
   const source = await readFile(new URL("./pi-compaction-core.ts", import.meta.url), "utf8");
   assert.match(source, /await onAssistantMessage\(message\)/u);
