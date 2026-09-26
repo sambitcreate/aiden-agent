@@ -2101,7 +2101,10 @@ export const llmClient = {
         if (!(await memoryEnabledForChat(configStore, generationChat))) {
           throw new Error("Durable memory is disabled by the current memory policy.");
         }
-        const scope = memoryScopeForChat(generationChat);
+        const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+          ? undefined
+          : await configStore.getWorkspace(generationChat.workspaceId);
+        const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
         await memoryStore.replaceChatMetadata(
           scope,
           generationChat.id,

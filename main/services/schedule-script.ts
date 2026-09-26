@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
-import { validateScriptName } from "./schedule-store.js";
+import { validateScriptName } from "./schedule-store-core.js";
 
 const SCRIPT_TIMEOUT_MS = 60_000;
 const SCRIPT_OUTPUT_LIMIT = 1024 * 1024;

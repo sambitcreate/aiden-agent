@@ -3248,6 +3248,61 @@
         }
       }
     },
+    "/scheduled-tasks/notifications": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listScheduledTaskNotifications",
+        "x-aiden-capability": "schedule:read",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed scheduled-task runs across all tasks, newest first (max 100; when the window overflows, the oldest runs are kept and the remainder arrives on the next poll)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "notifications",
+                    "now"
+                  ],
+                  "properties": {
+                    "notifications": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ScheduleRunNotification"
+                      }
+                    },
+                    "now": {
+                      "type": "integer",
+                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/scheduled-tasks/preview": {
       "parameters": [
         {
@@ -9048,6 +9103,55 @@
           },
           "errorCode": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScheduleRunNotification": {
+        "type": "object",
+        "required": [
+          "id",
+          "taskId",
+          "taskName",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "notify"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "taskName": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "status": {
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "notify": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

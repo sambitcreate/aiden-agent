@@ -347,11 +347,14 @@ static int run_shell(const char *root_path, int root_fd, const struct request *r
     snprintf(cache, sizeof(cache), "XDG_CACHE_HOME=%s/cache", private_root);
     snprintf(data, sizeof(data), "XDG_DATA_HOME=%s/data", private_root);
 #ifdef __APPLE__
+    /* zsh -f (NO_RCS) skips startup files; ZDOTDIR=/dev/null is the backstop. */
     const char *shell_path = "/bin/zsh";
     char *shell_environment = "SHELL=/bin/zsh";
     char *arguments[] = {"/bin/zsh", "-f", "-c", (char *)request->command,
                          "aiden-subagent", NULL};
 #else
+    /* POSIX sh -f means noglob, so it must not be passed. The scrubbed
+       environment leaves ENV unset, so sh -c reads no startup file. */
     const char *shell_path = "/bin/sh";
     char *shell_environment = "SHELL=/bin/sh";
     char *arguments[] = {"/bin/sh", "-c", (char *)request->command,

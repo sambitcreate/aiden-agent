@@ -1,5 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.scheduled
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,8 +36,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -52,6 +60,8 @@ fun AidenScheduledTasksScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val notifier = remember { AidenScheduledRunNotifier(context.applicationContext) }
     val client by coordinator.client.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val installations by coordinator.installationStore.installations.collectAsState()
@@ -80,6 +90,26 @@ fun AidenScheduledTasksScreen(
     var runs by remember { mutableStateOf<List<AidenScheduledRun>>(emptyList()) }
     var runsLoading by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        // Persist only once the system dialog resolves — a process death while
+        // it is up must not permanently suppress the prompt.
+        onResult = { requestedNotificationPermission = true }
+    )
+
+    // Scheduled-run notifications need POST_NOTIFICATIONS on API 33+; prompt
+    // here rather than relying on the chat-streaming path to have asked first.
+    LaunchedEffect(canReadSchedules) {
+        if (
+            canReadSchedules &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !requestedNotificationPermission &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     fun hasCurrentAccess(capability: AidenRemoteCapability): Boolean {
         val current = coordinator.installationStore.activeInstallation ?: return false
@@ -106,6 +136,7 @@ fun AidenScheduledTasksScreen(
         try {
             val accepted = activeClient.scheduledTasks()
             if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) retainSnapshot(accepted)
+            instanceId?.let { notifier.deliver(it, activeClient) }
         } catch (error: Exception) {
             if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) {
                 errorMessage = error.message ?: "Aiden couldn't load scheduled tasks."

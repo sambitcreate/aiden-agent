@@ -15,6 +15,8 @@ function needsFor(decisions = allTrue, overrides = {}) {
     android: { result: "success" },
     apple: { result: "success" },
     changes: { result: "success" },
+    "cli-linux": { result: "success" },
+    "cli-playground": { result: "success" },
     e2e: { result: "success" },
     ios: { result: "success" },
     policy: { result: "success" },

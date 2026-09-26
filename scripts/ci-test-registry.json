@@ -100,6 +100,7 @@
         "main/services/mcp-server-instructions.test.ts",
         "main/services/mcp-status.test.ts",
         "main/services/memory-context.test.ts",
+        "main/services/memory-shared.test.ts",
         "main/services/memory-store.test.ts",
         "main/services/memory-surface-matrix.test.ts",
         "main/services/model-runtime-core.test.ts",
@@ -592,6 +593,7 @@
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/prepare-macos-package-output.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
+        "scripts/native-helpers.test.mjs",
         "scripts/sign-macos.test.mjs",
         "scripts/subagent-packaged-soak.test.mjs",
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
@@ -603,7 +605,8 @@
       ],
       "preserved": [
         "generative-ui-chromium",
-        "ios-release-policy"
+        "ios-release-policy",
+        "cli-package"
       ]
     }
   ],
@@ -865,6 +868,19 @@
         "test:computer-use:native"
       ],
       "reason": "Preserve Rust fmt, locked tests, and clippy with warnings denied."
+    },
+    {
+      "id": "cli-package",
+      "kind": "cli",
+      "sourceScripts": [
+        "test:cli"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:cli"
+      ],
+      "reason": "Install, bundle, and test the standalone packages/cli workspace in one command."
     }
   ]
 }

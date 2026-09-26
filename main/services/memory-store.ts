@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { chmod, mkdir, open, stat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -169,14 +170,37 @@ function factFromRow(row: FactRow): MemoryFact {
   };
 }
 
+export interface MemoryImportSource {
+  /** Absolute path to a legacy `memory-v1.sqlite` to copy rows from. */
+  file: string;
+  /** scope_id remap applied to imported rows (legacy surface ids → shared ids). */
+  scopeIds?: Readonly<Record<string, string>>;
+}
+
 export class MemoryStore {
   private database?: DatabaseSync;
   private databaseFile?: string;
+  private opening?: Promise<DatabaseSync>;
+  private openGeneration = 0;
 
   constructor(
     private readonly options: {
       root(): string | Promise<string>;
       now?: () => number;
+      /**
+       * Legacy databases absorbed into this store. Each source scope is
+       * copied once per (file fingerprint, source scope, destination scope)
+       * — a downgraded surface that keeps writing to its old location is
+       * re-absorbed on the next open, and a scope remapped later still gets
+       * its canonical-scope copy.
+       */
+      imports?: () => Promise<readonly MemoryImportSource[]>;
+      /**
+       * One-time in-database scope copies (`from` rows duplicated under `to`,
+       * originals retained for downgrade compatibility). Marker-keyed so a
+       * fact deleted in the new scope is not resurrected on later opens.
+       */
+      scopeAliases?: () => Promise<readonly { from: MemoryScope; to: MemoryScope }[]>;
     },
   ) {}
 
@@ -189,6 +213,18 @@ export class MemoryStore {
       await this.repairPrivateModes();
       return this.database;
     }
+    // Concurrent cold opens would each build a handle and race the schema;
+    // share a single in-flight open instead.
+    this.opening ??= this.openDatabase();
+    try {
+      return await this.opening;
+    } finally {
+      this.opening = undefined;
+    }
+  }
+
+  private async openDatabase(): Promise<DatabaseSync> {
+    const generation = this.openGeneration;
     const root = await this.options.root();
     await mkdir(root, { recursive: true, mode: 0o700 });
     await chmod(root, 0o700);
@@ -198,6 +234,7 @@ export class MemoryStore {
     await chmod(file, 0o600);
     const database = new DatabaseSync(file);
     database.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS memory_facts (
@@ -274,12 +311,251 @@ export class MemoryStore {
     `);
     const factColumns = database.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>;
     if (!factColumns.some(({ name }) => name === "source_turn_id")) {
-      database.exec("ALTER TABLE memory_facts ADD COLUMN source_turn_id TEXT");
+      try {
+        database.exec("ALTER TABLE memory_facts ADD COLUMN source_turn_id TEXT");
+      } catch (error) {
+        // A concurrently opening surface may have just added it.
+        if (!/duplicate column/iu.test(error instanceof Error ? error.message : "")) throw error;
+      }
     }
     this.databaseFile = file;
     await this.repairPrivateModes();
+    try {
+      await this.applyMigrations(database);
+    } catch (error) {
+      // Don't cache an unmigrated handle — the next db() call must retry.
+      database.close();
+      this.databaseFile = undefined;
+      throw error;
+    }
+    // A close() that ran during the open must not leave a resurrected handle.
+    if (generation !== this.openGeneration) {
+      database.close();
+      this.databaseFile = undefined;
+      throw new Error("The memory store was closed while it was opening.");
+    }
     this.database = database;
     return database;
+  }
+
+  /**
+   * Copies rows out of legacy databases and remaps historical scope ids into
+   * the shared workspace scopes. Marker rows make every step one-time (or
+   * once-per-file-fingerprint for imports, which re-run if a downgraded
+   * surface writes to its old location again).
+   */
+  private async applyMigrations(database: DatabaseSync): Promise<void> {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS memory_migrations (
+        key TEXT PRIMARY KEY,
+        applied_at INTEGER NOT NULL
+      );
+    `);
+    const marker = database.prepare("SELECT 1 FROM memory_migrations WHERE key = ?");
+    const mark = database.prepare("INSERT OR IGNORE INTO memory_migrations (key, applied_at) VALUES (?, ?)");
+    const imports = (await this.options.imports?.()) ?? [];
+    const aliases = (await this.options.scopeAliases?.()) ?? [];
+    if (imports.length === 0 && aliases.length === 0) return;
+    // FK is toggled outside the transaction (it is a no-op inside one): alias
+    // copies may insert a row whose supersedes_id is copied later in the pass.
+    database.exec("PRAGMA foreign_keys = OFF");
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const source of imports) {
+        await this.importLegacyDatabase(database, source, marker, mark);
+      }
+      for (const { from, to } of aliases) {
+        const key = `alias:${from.kind}:${from.id}->${to.id}`;
+        if (marker.get(key)) continue;
+        validateScope(from);
+        validateScope(to);
+        // A cross-kind alias is meaningless — the copy selects the source
+        // row's own scope_kind, so copying workspace rows under a bot id
+        // would corrupt scoping. Skip it rather than poison the store.
+        if (to.kind !== from.kind) { mark.run(key, this.now()); continue; }
+        // Copied rows need derived ids — `id` is globally unique across
+        // scopes, and supersedes_id is remapped to the same derived form so
+        // the supersession chain stays inside the new scope. The ':'-joined
+        // shape stays inside SAFE_ID and the 160-char bound so remove() keeps
+        // accepting the copies.
+        database.prepare(`
+          INSERT OR IGNORE INTO memory_facts (
+            id, scope_kind, scope_id, normalized_text, provenance_kind,
+            source_id, source_chat_id, source_message_id, source_turn_id,
+            created_at, updated_at, confidence, expires_at, review_state,
+            state, supersedes_id, always_on
+          )
+          SELECT substr(id, 1, 128) || ':' || substr(?, 1, 31), scope_kind, ?, normalized_text, provenance_kind,
+            source_id, source_chat_id, source_message_id, source_turn_id,
+            created_at, updated_at, confidence, expires_at, review_state,
+            state,
+            CASE WHEN supersedes_id IS NULL THEN NULL ELSE substr(supersedes_id, 1, 128) || ':' || substr(?, 1, 31) END,
+            always_on
+          FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
+        `).run(to.id, to.id, to.id, from.kind, from.id);
+        database.prepare(`
+          INSERT OR IGNORE INTO memory_documents (
+            id, scope_kind, scope_id, kind, normalized_text,
+            source_chat_id, source_id, updated_at
+          )
+          SELECT substr(id, 1, 128) || ':' || substr(?, 1, 31), scope_kind, ?, kind, normalized_text,
+            source_chat_id, source_id, updated_at
+          FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
+        `).run(to.id, to.id, from.kind, from.id);
+        mark.run(key, this.now());
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      database.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+
+  /**
+   * Imports one legacy database scope-by-scope. Markers are keyed by
+   * (fingerprint, source scope, destination scope): a scope later remapped to
+   * a new workspace (e.g. the folder is registered after first import) gets a
+   * fresh import with derived ids, while already-imported rows are never
+   * re-copied. Rows failing validation are skipped so one bad legacy row can
+   * never poison the shared store.
+   */
+  private async importLegacyDatabase(
+    database: DatabaseSync,
+    source: MemoryImportSource,
+    marker: { get(key: string): unknown },
+    mark: { run(key: string, at: number): unknown },
+  ): Promise<void> {
+    const sourceFile = path.resolve(source.file);
+    if (sourceFile === this.databaseFile) return;
+    try {
+      if (this.databaseFile && realpathSync(sourceFile) === realpathSync(this.databaseFile)) return;
+    } catch { /* one side missing or unresolvable — the resolved-path check above stands */ }
+    const info = await stat(sourceFile).catch(() => undefined);
+    if (!info?.isFile()) return;
+    const fingerprint = `${sourceFile}:${info.size}:${Math.trunc(info.mtimeMs)}`;
+    const remap = source.scopeIds ?? {};
+    let legacy: DatabaseSync;
+    try {
+      legacy = new DatabaseSync(sourceFile);
+    } catch (error) {
+      // stderr (not console): this module also loads in the Electron main
+      // process, which bans console, and in the CLI under strip-types.
+      process.stderr.write(`[memory] Could not open legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
+      return;
+    }
+    try {
+      // A downgraded surface may hold this file without a busy timeout.
+      legacy.exec("PRAGMA busy_timeout = 2000");
+      const tables = new Set(
+        (legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
+          .map(({ name }) => name),
+      );
+      if (!tables.has("memory_facts") && !tables.has("memory_documents")) return;
+      const factColumns = tables.has("memory_facts")
+        ? new Set((legacy.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>).map(({ name }) => name))
+        : new Set<string>();
+      const turnColumn = factColumns.has("source_turn_id") ? "source_turn_id" : "NULL AS source_turn_id";
+      const factRows = tables.has("memory_facts")
+        ? legacy.prepare(`
+            SELECT id, scope_kind, scope_id, normalized_text, provenance_kind,
+              source_id, source_chat_id, source_message_id, ${turnColumn},
+              created_at, updated_at, confidence, expires_at, review_state,
+              state, supersedes_id, always_on
+            FROM memory_facts
+          `).all() as unknown as FactRow[]
+        : [];
+      const documentRows = tables.has("memory_documents")
+        ? legacy.prepare(`
+            SELECT id, scope_kind, scope_id, kind, normalized_text,
+              source_chat_id, source_id, updated_at
+            FROM memory_documents
+          `).all() as unknown as Array<{
+            id: string; scope_kind: "bot" | "workspace"; scope_id: string;
+            kind: "transcript" | "artifact"; normalized_text: string;
+            source_chat_id: string; source_id: string; updated_at: number;
+          }>
+        : [];
+      const sourceScopes = new Set<string>();
+
+      for (const row of factRows) sourceScopes.add(`${row.scope_kind}:${row.scope_id}`);
+      for (const row of documentRows) sourceScopes.add(`${row.scope_kind}:${row.scope_id}`);
+      const insertFact = database.prepare(`
+        INSERT OR IGNORE INTO memory_facts (
+          id, scope_kind, scope_id, normalized_text, provenance_kind,
+          source_id, source_chat_id, source_message_id, source_turn_id,
+          created_at, updated_at, confidence, expires_at, review_state,
+          state, supersedes_id, always_on
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertDocument = database.prepare(`
+        INSERT OR IGNORE INTO memory_documents (
+          id, scope_kind, scope_id, kind, normalized_text,
+          source_chat_id, source_id, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const scopeKey of sourceScopes) {
+        const separator = scopeKey.indexOf(":");
+        const kind = scopeKey.slice(0, separator) as MemoryScope["kind"];
+        const sourceId = scopeKey.slice(separator + 1);
+        if (kind !== "bot" && kind !== "workspace") continue;
+        const destinationId = remap[sourceId] ?? sourceId;
+        if (!SAFE_ID.test(destinationId)) continue;
+        // Keyed by destination so a scope first imported unmapped can be
+        // re-imported under its canonical scope once it becomes known.
+        const key = `import:${fingerprint}:${kind}:${sourceId}->${destinationId}`;
+        if (marker.get(key)) continue;
+        const remapped = destinationId !== sourceId;
+        const deriveId = (id: string): string => `${id.slice(0, 128)}:${destinationId.slice(0, 31)}`;
+        let skipped = 0;
+        let deduped = 0;
+        for (const row of factRows) {
+          if (row.scope_kind !== kind || row.scope_id !== sourceId) continue;
+          try {
+            // Imported rows must satisfy the same invariants as put(): the id
+            // stays removable and the text stays safe to inject into prompts.
+            if (!SAFE_ID.test(row.id)) throw new Error("bad id");
+            const text = normalizeMemoryText(row.normalized_text);
+            const id = remapped ? deriveId(row.id) : row.id;
+            const supersedesId = row.supersedes_id && remapped ? deriveId(row.supersedes_id) : row.supersedes_id;
+            const outcome = insertFact.run(
+              id, kind, destinationId, text,
+              row.provenance_kind, row.source_id, row.source_chat_id, row.source_message_id,
+              row.source_turn_id, row.created_at, row.updated_at, row.confidence,
+              row.expires_at, row.review_state, row.state, supersedesId, row.always_on,
+            );
+            if (outcome.changes === 0) deduped += 1;
+          } catch {
+            skipped += 1;
+          }
+        }
+        for (const row of documentRows) {
+          if (row.scope_kind !== kind || row.scope_id !== sourceId) continue;
+          try {
+            if (!SAFE_ID.test(row.id)) throw new Error("bad id");
+            const text = normalizeMemoryText(row.normalized_text);
+            const outcome = insertDocument.run(
+              remapped ? deriveId(row.id) : row.id, kind, destinationId, row.kind,
+              text, row.source_chat_id, row.source_id, row.updated_at,
+            );
+            if (outcome.changes === 0) deduped += 1;
+          } catch {
+            skipped += 1;
+          }
+        }
+        if (skipped > 0 || deduped > 0) {
+          process.stderr.write(`[memory] Importing ${scopeKey} from ${sourceFile}: skipped ${skipped} invalid row(s), ${deduped} already present.\n`);
+        }
+        mark.run(key, this.now());
+      }
+    } catch (error) {
+      // A locked (SQLITE_BUSY) or corrupt legacy file must degrade to a skipped
+      // source, not abort the whole store open — it self-heals next open.
+      process.stderr.write(`[memory] Could not import legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
+    } finally {
+      legacy.close();
+    }
   }
 
   private async repairPrivateModes(): Promise<void> {
@@ -308,6 +584,8 @@ export class MemoryStore {
       ? undefined
       : safeId(input.supersedesId, "superseded fact");
     const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
+    // All conflict/capacity reads run under the write transaction so two
+    // concurrent surfaces cannot both pass the gates.
     database.exec("BEGIN IMMEDIATE");
     try {
       // Lock acquisition may wait for another writer. Use the admitted time
@@ -464,8 +742,10 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let inserted = 0;
     try {
-      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ?")
-        .run(sourceChatId);
+      // Scoped delete: legacy-scope copies of this chat's documents (imported
+      // for downgrade compatibility) must not be wiped by a new-scope write.
+      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
+        .run(sourceChatId, valid.kind, valid.id);
       const existing = database.prepare(`
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
       `).get(valid.kind, valid.id) as { count: number };
@@ -623,6 +903,7 @@ export class MemoryStore {
   }
 
   async close(): Promise<void> {
+    this.openGeneration += 1;
     this.database?.close();
     this.database = undefined;
     await this.repairPrivateModes();

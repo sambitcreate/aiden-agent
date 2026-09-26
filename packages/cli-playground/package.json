@@ -1,0 +1,29 @@
+{
+  "name": "aiden-cli-playground",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4178 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4178 --strictPort",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "5.2.7",
+    "@fontsource/manrope": "5.2.8",
+    "dialkit": "1.4.3",
+    "lucide-react": "0.542.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "5.9.3",
+    "vite": "8.1.4"
+  }
+}

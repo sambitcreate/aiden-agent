@@ -281,6 +281,50 @@ class AidenScheduledTaskTest {
         assertNull(cache.load("instance_1"))
     }
 
+    @Test
+    fun testScheduledRunNotificationValidationAndSharedFixture() {
+        val stream = javaClass.classLoader?.getResourceAsStream("contract.json")
+            ?: throw IllegalStateException("Resource contract.json not found")
+        val fixture = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString<AidenRemoteContractFixture>(stream.bufferedReader().use { it.readText() })
+        val notification = fixture.scheduleRunNotification ?: throw AssertionError("fixture notification missing")
+        assertEquals("Morning review", notification.taskName)
+        assertEquals("succeeded", notification.status)
+        assertTrue(notification.notify)
+        assertEquals(listOf(notification), AidenScheduledTaskValidation.notifications(listOf(notification)))
+
+        val succeeded = AidenScheduledRunNotification(
+            id = "run_1", taskId = "task_1", taskName = "Morning review", status = "succeeded",
+            startedAt = Instant.ofEpochSecond(1), finishedAt = Instant.ofEpochSecond(2),
+            summary = "Done", errorCode = null, notify = true
+        )
+        val failed = AidenScheduledRunNotification(
+            id = "run_2", taskId = "task_2", taskName = "Evening sweep", status = "failed",
+            startedAt = Instant.ofEpochSecond(3), finishedAt = Instant.ofEpochSecond(4),
+            summary = "Blocked", errorCode = "execution_failed", notify = false
+        )
+        assertEquals(listOf(succeeded, failed), AidenScheduledTaskValidation.notifications(listOf(succeeded, failed)))
+
+        val invalid = listOf(
+            succeeded.copy(id = "run\nunsafe"),
+            succeeded.copy(taskId = "task/escape"),
+            succeeded.copy(status = "running"),
+            succeeded.copy(taskName = ""),
+            succeeded.copy(finishedAt = Instant.ofEpochSecond(0)),
+            succeeded.copy(status = "failed"), // failed requires errorCode
+            failed.copy(errorCode = null),
+            succeeded.copy(id = "r".repeat(161))
+        )
+        for (item in invalid) {
+            assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+                AidenScheduledTaskValidation.notifications(listOf(item))
+            }
+        }
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            AidenScheduledTaskValidation.notifications(listOf(succeeded, succeeded))
+        }
+    }
+
     private fun task(
         id: String,
         name: String,

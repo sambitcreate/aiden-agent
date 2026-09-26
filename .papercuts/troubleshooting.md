@@ -1299,7 +1299,87 @@ because their native file-mutator test binary had not been built. Run
 - `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
 - Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
 - The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
+- `@earendil-works/pi-coding-agent` ships `npm-shrinkwrap.json`, so its dependency tree (including `pi-ai`) installs nested under `node_modules/@earendil-works/pi-coding-agent/node_modules/` instead of hoisting; resolve both layouts when reading its dist at build time.
+- The rebranded CLI's esbuild port needs `https-proxy-agent` resolvable from `packages/cli` at build time (pi's monorepo relies on hoisting); it is pinned as an exact devDependency there.
+- `node --test tests/` resolves the directory argument as a module and fails; list the test files explicitly or rely on directory auto-discovery without an argument.
+- Plain `.mjs` files under `eslint .` get `no-undef` without Node globals; follow the repo convention of `/* global console */` comments or `import process from "node:process"`.
+- Node's TypeScript stripping does not rewrite Aiden's `.js` specifiers to `.ts` (esbuild does); modules importing `main/services` code are bundle-only — test them through an esbuild-built selfcheck entry, not direct `--experimental-strip-types` imports.
+- `rm()` from `node:fs` (callback API) without a callback throws "callback is not a function" asynchronously after the calling test ends, poisoning the whole node:test file; use `rmSync`.
+- esbuild `alias` on a package name rewrites subpath imports as plain paths and bypasses package.json `exports` (`@earendil-works/pi-ai/compat` breaks); to share one copy of a multi-entry package, don't alias — verify identity-sensitivity instead.
+- esbuild's `.js`→`.ts` remap can fail for ONE sibling import inside an otherwise-identical directory (advisor-runtime.ts → advisor-attempt-store.js) while the same pattern resolves elsewhere in the same graph; `alias` cannot fix it (breaks subpath exports) — the escape hatch is a separate prebundle pass emitting a self-contained `.mjs` consumed as a marked external.
+- When authoring tests with shell heredocs, never use catch-all cleanup (`rm -rf tests/`) — the repo root has a real tracked `tests/` directory; restore with `git checkout -- tests/` if hit.
+
+## CLI parity port (2026-09-04)
+
+- The parity inventory overstated portability: `schedule-store.ts` instantiated desktop DataStores and carried a lazy config-store import. Split `schedule-store-core.ts` out and leave the desktop singleton wrapper/re-exports in place.
+- Pi 0.84.4's extension ModelRegistry exposes `find`, not `getModel`; registration-only smoke tests did not exercise the advisor/btw bridge. Branch context must use `getBranch()`, not the full journal.
+- The native worktree remover forwarded an injected helper path to removal but dropped it when finalizing the removal manifest. It passed core tests from repository cwd and failed only in the packaged CLI. Forward the same helper binary through finalization; keep the packaged CLI create/remove regression.
+- The pinned pi package has no built-in MCP configuration/client surface despite the initial parity inventory. The CLI needs its own MCP SDK adapter.
+- esbuild's input metafile marks erased unused imports as external; this caused false bundle failures and explains the earlier apparent resolver anomalies. Validate `metafile.outputs[*].imports` instead, which describes imports that actually ship.
+
+- CLI daemon tool gates must return `{ block: true, reason }` from pi `tool_call`; throwing an extension-handler error is not an authorization denial. Workspace authority is rechecked at tool time as well as admission.
+- The parity inventory overstated speech portability: `aiden-remote-speech.ts` and `local-models.ts` directly imported desktop singletons/platform. Extracting injectable cores preserves one implementation for desktop and CLI.
+- Xcode's selected toolchain reported an unaccepted license mid-validation. Separate installed Command Line Tools work with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; the native helper build now preserves this standard build setting.
+
+### CLI daemon and child adapters (2026-09-05)
+
+- Remote turn IDs differ from stream IDs. The shared generation surface passes `options.turnId`; admission and handoff must use that ID rather than the transport stream ID. A real HTTPS replay test caught a silent start rejection.
+- Pi SDK `tools: []` is an explicit tool allowlist, including extension tools. Registering custom tools is insufficient: pass the positively selected names in `createAgentSession({ tools })`. Local-provider subprocess testing caught this in both the child worker and Bot assembly.
+- Node IPC emits `disconnect` after the worker calls `process.disconnect()` itself. Distinguish deliberate terminal shutdown from unexpected parent loss, or successful subagent runs exit as failures.
+- `subagent-supervisor.ts` was not actually a portable core: its default runner dynamically imported the Electron production graph. Split the injectable supervisor into `subagent-supervisor-core.ts`, retaining the original desktop wrapper and default runner. Constants now live in `subagent-child-policy.ts` so importing budgets does not instantiate a desktop child registry.
+
+- CLI parity: Pi session.dispose() does not emit session_shutdown; daemon-mounted MCP pools require an explicit awaited lifecycle event before disposal. Tool registration also needs an explicit custom-tool allowlist: tools: [] disables custom tools.
+- CLI provider credentials: serializing read/list behind a cross-process writer lease made subprocess startup fail and provider inventory take tens of seconds. Atomic encrypted reads require no writer lease; serialize migration/write/delete only.
+- Subagent history: completion projection is queued; /subagents must flush before reading durable snapshots. Native helper paths must remain stable through session teardown even if the embedding process restores its environment.
+- Identifier privacy: random UUID 69462a29-f592-481f-a81d-60527d897e4e is rejected by the shared encoded-text filter. Retry safe grant/tree IDs and deterministically alias unsafe external session IDs; do not bypass the privacy check.
+- Injected worktree-remover binaries also own finalize-manifest. Fake wrapper test helpers must implement that mode; otherwise safe cleanup appears to fail after successful removal.
+- Physical iOS tests compiled with Xcode-beta but awaited an unlocked phone. Earlier test failures were stale test-only assumptions (reversed JSON collection, invalidResponse wrapper, revision10 fixture), not production client regressions.
+- Linux native parity: OrbStack/btrfs assigns FS_NOCOW_FL to normal files. Treat EXTENT/NOCOW as filesystem allocation flags; unsupported user metadata flags still fail closed. Compilation-only checks missed this; portable native create/replace/recovery tests exposed it.
+- A native shell helper can reject pinned workspace identity before receiving its control frame. Handle stdin EPIPE and report failure from the verified process outcome rather than allowing an uncaught stream error.
+
+### CLI appearance studio / DialKit (2026-09-05)
+- DialKit's resolved boolean types retain literal types when configuration uses `satisfies DialConfig`; widen toggle defaults to boolean so preset updates can switch both ways.
+- DialKit select choices render as buttons, not ARIA options. Use their actual roles in browser tests. `DialRoot` needs `productionEnabled` for an intentionally shipped standalone playground.
+- React Doctor `--diff` skips an entirely untracked package; use `--scope full` to validate new sources. Two maintainability advisories remain; bug/accessibility findings were fixed.
+
+### CLI standalone phases (2026-09-10)
+
+- Node `--experimental-strip-types` eval tests require literal `.ts` specifiers end-to-end; `main/services/memory-shared.ts` imports `aiden-config-dir.ts` with a `.ts` extension for that reason. Root tsconfig has `allowImportingTsExtensions`, so tsx/esbuild accept it.
+- Memory alias copies must derive new primary keys (`substr(id,1,128)||':'||substr(scope,1,31)`); `INSERT OR IGNORE` with reused ids silently copies zero rows. Remap `supersedes_id` to the same derived form so chains stay inside the new scope.
+- Polling notification cursors should be inclusive (`finishedAt >= since`) with client-side run-id dedup; an exclusive cursor drops same-millisecond sibling runs permanently. Clients must baseline the first poll to "now" or first install replays history as a notification storm.
+- Serve-lease PIDs can be recycled by unrelated processes. Verify the recorded PID's cmdline (`/proc`/`ps`) shows the CLI entry + `serve` before reporting running or sending SIGTERM.
+- `gradlew` needs `JAVA_HOME` pointing at Android Studio's JBR and `ANDROID_HOME` set; neither is exported by default on this machine.
+
+### Adversarial review round 2 (2026-09-14)
+
+- `node --test` records relative argv[1] (`tests/parity.test.mjs`) in the process cmdline while test code often holds the absolute path; PID cmdline classifiers must generate BOTH absolute and cwd-relative entry candidates or the test's own process misclassifies as foreign.
+- A local `const relative` in the same function shadowed the imported `path.relative` — TDZ `ReferenceError` at call time. Avoid naming locals after imported helpers in converted/rewritten modules.
+- `Array.prototype.at` and `realpathSync(path, {throwIfNoEntry})` are unavailable under this repo's TS lib target and the vendored Node typings respectively — use index access and try/catch ENOENT.
+- `console.warn` violates the root `no-console` rule in `main/services`; use `process.stderr.write` for cross-context (Electron + CLI strip-types) diagnostics.
+- `realpathSync` throws on nonexistent paths on this Node version even when asked to tolerate missing entries — wrap in try/catch.
+- Android `String.length` is UTF-16 code units while the server bounds strings by Unicode code points — validate with `codePointCount` for server-bounded fields or non-BMP input poisons the client feed permanently.
+- Thin Mach-O cputype is little-endian; fat headers are big-endian. Reading both with one endianness silently rejects/accepts the wrong binaries.
+- Writing manifest checksums without any code path that verifies them is an integrity-control illusion — add the verification to BOTH the build path and a test that recomputes sha256 over the shipped bytes.
+
+## 2026-09-26 PR #121 main merge
+- The CLI's vendored advisor copies silently drift when main edits the desktop originals. Only `test:cli` catches it. Re-vendor by rewriting `./x.js` specifiers.
+- Changing any `native/*` C source (even a test fixture like setsid-fixture.c) invalidates the prebuilt manifest hashes. Linux prebuilts need Docker.
+- Main and the PR both bumped the remote contract revision to 11 independently. Watch for revision collisions on long-lived branches.
+- Shell flags differ by platform: zsh -f skips rc files, but POSIX sh -f is noglob. Guard shell flags per platform and cover them with a behavioral glob test (Hermes P1 on #121).
 - PR #199 update: the worktree guard rejects `npx playwright ... -g "a|b"` and `&&`-chained `npm run build; npx playwright`; run build and playwright as separate plain commands.
 - PR #128 merge (2026-09-26): main replaced the text Assistant dock with the Aiden Live orb, so the dock conflict resolved to main's side and the PR's dock hook usage and source-grep tests were dropped. The worktree guard rejects `npx playwright ... -g "a|b"` alternations; use a single-word `--grep`.
 - 2026-09-26 main merge: 15 `git.test.ts` managed-worktree removal tests fail locally with "could not safely remove the managed worktree quarantine"; this is the same host native-remover SDK issue above, not the PATH change.
 - 2026-09-26 PR #206 reconciliation: #207 on main superseded the runner-side four-note tail, so the merge took main's runner and kept only the projector gap (failed results with `summaryTruncated` lost the `report_truncated` notice because the gate predated failed summaries).
+
+## 2026-09-26 PR #121 merge of #71 (Linux desktop)
+- `node scripts/build-native-helpers.mjs --docker ...` bind-mounts the repo and leaves Linux ELF helpers in `build/native`. Rebuild the macOS helpers before you run local native tests, or they fail with `spawn ENOEXEC`.
+- After merging main, run `npm ci`. #71 added `bonjour-service`, and without it `tsc` fails.
+
+## 2026-09-26 PR #121 merge of #246 (pi 0.87.1)
+- The CLI bundles main/services, so it has to use the same pi version as root. Bump `packages/cli` `@earendil-works/pi-coding-agent` to match, otherwise mixing 0.84 and 0.87 types breaks `tsc`.
+- In 0.87 chord is nested, not hoisted, so declare it directly in `packages/cli`. Its exports are import-only, so `require.resolve` in the build's external check fails even when chord is installed. The check needs an ESM resolve fallback.
+- 0.87 pulls in `proxy-agent-negotiate`, which has an optional `import("kerberos")`. Add it to the CLI external allowlist.
+- 0.87 storage v1 journal headers use `v: 4`, not `version: 4`. Session import has to accept both.
+
+## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
+- A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.

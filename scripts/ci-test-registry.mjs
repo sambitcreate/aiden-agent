@@ -157,6 +157,17 @@ function collectDirectTestFiles(segment, scriptName) {
     return [];
   }
 
+  if (command === "npm") {
+    // The standalone CLI is its own npm package. Its suite runs as one
+    // preserved command because it installs, bundles, and tests packages/cli.
+    const npmCommand = segment.slice(index).join(" ");
+    const allowed = {
+      "cli:build": ["npm --prefix packages/cli run build"],
+      "test:cli": ["npm --prefix packages/cli ci", "npm --prefix packages/cli test"],
+    };
+    if (allowed[scriptName]?.includes(npmCommand)) return [];
+    throw new Error(`${scriptName} uses an unregistered npm command: ${npmCommand}`);
+  }
   if (command === "cd") {
     if (scriptName === "test:computer-use:native" && segment.slice(index).join(" ") === "cd native/computer-use-broker") {
       return [];
@@ -358,7 +369,7 @@ export function validateRegistry({
   });
   // File coverage alone cannot prove that native builds, browser execution,
   // coverage thresholds, Ruby checks or Rust checks are still executed.
-  for (const script of ["test:browser", "test:generative-ui", "test:terminal:coverage", "test:ios-release", "test:computer-use:native"]) {
+  for (const script of ["test:browser", "test:generative-ui", "test:terminal:coverage", "test:ios-release", "test:computer-use:native", "test:cli"]) {
     if (!source.visited.includes(script)) continue;
     if (!(registry.preserved ?? []).some((entry) => entry.sourceScripts?.includes(script) &&
       JSON.stringify(entry.command) === JSON.stringify(["npm", "run", script]))) {

@@ -317,6 +317,7 @@ The hub's exec route is never relayed and the hub stays bound to loopback. Relay
 - `GET|PATCH|DELETE /scheduled-tasks/{taskId}`
 - `POST /scheduled-tasks/{taskId}/pause|resume|run`
 - `GET /scheduled-tasks/{taskId}/runs`
+- `GET /scheduled-tasks/notifications?since=<epoch-ms>` — completed runs across all tasks, newest first (max 100 per poll). The cursor is inclusive so same-millisecond runs are never skipped; when the window overflows, the oldest runs are returned and the remainder arrives on the next poll rather than being dropped. The response carries `now` (the server's epoch-ms clock) — clients baseline their first-poll cursor to it instead of the device clock, mark the returned ids delivered, and suppress the history so neither clock skew nor a fresh install can replay or permanently skip runs. Per-item `summary` is redacted and bounded (2,000 chars) so the feed stays under the 1 MB response cap.
 - `POST /scheduled-tasks/preview`
 - `GET /scheduled-tasks/scripts?workspaceId=...`
 - `GET|PATCH /scheduled-tasks/settings`

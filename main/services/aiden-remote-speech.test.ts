@@ -10,6 +10,32 @@ import {
 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
 import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
+import { AidenRemoteSpeechServiceCore } from "./aiden-remote-speech-core.js";
+
+test("speech service DI preserves selection, wire bounds and serialized model lifecycle", async () => {
+  let installed = false, selected = "", calls = 0, released = false;
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: selected }), setSettings: async (patch) => { selected = patch.localVoiceModel ?? ""; } },
+    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed }],
+    localModelDownloadStates: () => [],
+    downloadModel: async () => { installed = true; }, cancelDownload: () => false,
+    deleteModel: async () => { assert.equal(released, true); installed = false; },
+    releaseRecognizer: async () => { released = true; }, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => { calls++; return "Hello"; }, recordUsage: async () => {},
+  });
+  await assert.rejects(service.select({ modelId: "parakeet-v3" }), /Download/);
+  await service.startDownload("parakeet-v3");
+  const status = await service.select({ modelId: "parakeet-v3" });
+  assert.deepEqual(status.input, { encoding: "pcm_s16le", sampleRate: 16000, channels: 1, maximumSeconds: 60, partialResults: false });
+  const request = { encoding: "pcm_s16le", sampleRate: 16000, channels: 1, modelId: "parakeet-v3", pcmBase64: "AAA=" };
+  await assert.rejects(service.transcribe({ ...request, sampleRate: 8000 }), /16 kHz/);
+  await assert.rejects(service.transcribe({ ...request, pcmBase64: "invalid" }), /base64/);
+  assert.equal(calls, 0);
+  assert.deepEqual(await service.transcribe(request), { text: "Hello", modelId: "parakeet-v3" });
+  assert.equal(calls, 1);
+  await service.deleteModel("parakeet-v3"); assert.equal(selected, "");
+  await assert.rejects(service.transcribe(request), /not installed/);
+});
 
 test("remote speech PCM codec validates base64 and converts signed little-endian samples", () => {
   const bytes = Buffer.alloc(6);

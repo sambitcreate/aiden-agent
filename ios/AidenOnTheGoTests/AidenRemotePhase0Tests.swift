@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 14)
+        XCTAssertEqual(fixture.contractRevision, 15)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)

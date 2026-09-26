@@ -29,6 +29,11 @@ async function fixture(t: test.TestContext): Promise<{
   await fs.writeFile(
     binary,
     `#!/bin/sh
+if [ "$1" = "finalize-manifest" ]; then
+  [ "$7" = "${digest}" ] || exit 22
+  : > "$3/finalized"
+  exit 0
+fi
 mv "$3/.aiden-removing-owned-token" "$3/.aiden-authorizing-owned-token"
 printf 'ready:%s:%s\\n' ".aiden-authorizing-owned-token" "${digest}"
 IFS= read -r authorization
@@ -73,6 +78,7 @@ test("managed worktree remover authorizes the exact scanned quarantine before co
   );
 
   assert.deepEqual(seen, [value.authorizationPath]);
+  assert.equal(await fs.readFile(path.join(path.dirname(value.identity.path), "finalized"), "utf8"), "");
   await assert.rejects(fs.access(value.identity.path));
   await assert.rejects(fs.access(value.authorizationPath));
 });

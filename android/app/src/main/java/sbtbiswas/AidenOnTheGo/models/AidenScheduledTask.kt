@@ -96,6 +96,25 @@ data class AidenScheduledRun(
 )
 
 @Serializable
+data class AidenScheduledRunNotification(
+    val id: String,
+    val taskId: String,
+    val taskName: String,
+    val status: String,
+    @Serializable(with = InstantIso8601Serializer::class) val startedAt: Instant,
+    @Serializable(with = InstantIso8601Serializer::class) val finishedAt: Instant,
+    val summary: String? = null,
+    val errorCode: String? = null,
+    val notify: Boolean
+)
+
+/** The `/scheduled-tasks/notifications` envelope — `serverNow` is the server clock so first-poll baselining never trusts the device clock. */
+data class AidenScheduledRunNotificationFeed(
+    val notifications: List<AidenScheduledRunNotification>,
+    val serverNow: Instant
+)
+
+@Serializable
 data class AidenScheduledScript(
     val id: String,
     val name: String
@@ -292,17 +311,19 @@ object AidenScheduledTaskValidation {
         val ids = mutableSetOf<String>()
         for (task in tasks) {
             val mcpServerIds = task.mcpServerIds.orEmpty()
+            // Server bounds are Unicode code points — String.length is UTF-16
+            // units, which would reject server-legal supplementary characters.
             if (!task.id.matches(Regex("^[A-Za-z0-9._:-]{1,160}$")) || !ids.add(task.id) ||
-                !task.revision.startsWith("rev_") || task.revision.length > 160 ||
-                task.name.isEmpty() || task.name.length > 120 ||
-                task.schedule.isEmpty() || task.schedule.length > 500 ||
-                task.timezone.isEmpty() || task.timezone.length > 120 ||
-                (task.prompt != null && task.prompt.length > 32_768) ||
-                (task.workspaceId != null && (task.workspaceId.isEmpty() || task.workspaceId.length > 128)) ||
-                (task.providerId != null && (task.providerId.isEmpty() || task.providerId.length > 256)) ||
-                (task.modelId != null && (task.modelId.isEmpty() || task.modelId.length > 256)) ||
+                !task.revision.startsWith("rev_") || task.revision.codePointCount(0, task.revision.length) > 160 ||
+                task.name.isEmpty() || task.name.codePointCount(0, task.name.length) > 120 ||
+                task.schedule.isEmpty() || task.schedule.codePointCount(0, task.schedule.length) > 500 ||
+                task.timezone.isEmpty() || task.timezone.codePointCount(0, task.timezone.length) > 120 ||
+                (task.prompt != null && task.prompt.codePointCount(0, task.prompt.length) > 32_768) ||
+                (task.workspaceId != null && (task.workspaceId.isEmpty() || task.workspaceId.codePointCount(0, task.workspaceId.length) > 128)) ||
+                (task.providerId != null && (task.providerId.isEmpty() || task.providerId.codePointCount(0, task.providerId.length) > 256)) ||
+                (task.modelId != null && (task.modelId.isEmpty() || task.modelId.codePointCount(0, task.modelId.length) > 256)) ||
                 mcpServerIds.size > 64 || mcpServerIds.toSet().size != mcpServerIds.size ||
-                mcpServerIds.any { it.isEmpty() || it.length > 256 } ||
+                mcpServerIds.any { it.isEmpty() || it.codePointCount(0, it.length) > 256 } ||
                 (task.scriptId != null && !task.scriptId.matches(Regex("^script_[A-Za-z0-9_-]{43}$")))
             ) {
                 throw AidenRemoteClientException.InvalidResponse()
@@ -312,9 +333,34 @@ object AidenScheduledTaskValidation {
     }
 
     fun runs(runs: List<AidenScheduledRun>, taskId: String): List<AidenScheduledRun> {
-        if (runs.size > 50 || runs.any { it.taskId != taskId || (it.summary != null && it.summary.length > 20_000) }) {
+        if (runs.size > 50 || runs.any {
+            it.taskId != taskId || (it.summary != null && it.summary.codePointCount(0, it.summary.length) > 20_000)
+        }) {
             throw AidenRemoteClientException.InvalidResponse()
         }
         return runs
     }
+
+    fun notifications(items: List<AidenScheduledRunNotification>): List<AidenScheduledRunNotification> {
+        if (items.size > 100 || items.map { it.id }.toSet().size != items.size || items.any {
+            !isOpaqueNotificationField(it.id, 160) || !isTaskIdentifier(it.taskId) ||
+                it.taskName.isBlank() || it.taskName.codePointCount(0, it.taskName.length) > 120 ||
+                (it.status != "succeeded" && it.status != "failed") ||
+                it.finishedAt.isBefore(it.startedAt) ||
+                (it.summary != null && it.summary.codePointCount(0, it.summary.length) > 20_000) ||
+                (it.errorCode != null && !isOpaqueNotificationField(it.errorCode, 160)) ||
+                (it.status == "failed") != (it.errorCode != null)
+        }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return items
+    }
+
+    private fun isTaskIdentifier(value: String): Boolean =
+        value.isNotEmpty() && value.length <= 160 &&
+            value.all { it.isDigit() && it.code < 128 || it in 'A'..'Z' || it in 'a'..'z' || it == '-' || it == '.' || it == '_' || it == ':' }
+
+    private fun isOpaqueNotificationField(value: String, maximum: Int): Boolean =
+        value.isNotBlank() && value.trim() == value && value.length <= maximum &&
+            value.none { it.code <= 0x1f || it.code in 0x7f..0x9f || it.code in 0x202a..0x202e || it.code in 0x2066..0x2069 }
 }

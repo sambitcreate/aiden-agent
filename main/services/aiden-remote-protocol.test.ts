@@ -99,7 +99,7 @@ const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 14);
+  assert.equal(fixture.contractRevision, 15);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -304,6 +304,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/{taskId}/resume",
     "/scheduled-tasks/{taskId}/run",
     "/scheduled-tasks/{taskId}/runs",
+    "/scheduled-tasks/notifications",
     "/scheduled-tasks/preview",
     "/scheduled-tasks/scripts",
     "/scheduled-tasks/mcp-servers",

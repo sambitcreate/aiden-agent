@@ -1,5 +1,5 @@
 {
-  "contractRevision": 14,
+  "contractRevision": 15,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -296,6 +296,16 @@
     "startedAt": "2026-08-18T19:10:00.000Z",
     "finishedAt": "2026-08-18T19:10:03.000Z",
     "summary": "Review completed."
+  },
+  "scheduleRunNotification": {
+    "id": "run_fixture_01",
+    "taskId": "task_fixture_01",
+    "taskName": "Morning review",
+    "status": "succeeded",
+    "startedAt": "2026-08-18T19:10:00.000Z",
+    "finishedAt": "2026-08-18T19:10:03.000Z",
+    "summary": "Review completed.",
+    "notify": true
   },
   "botSummary": {
     "id": "bot_fixture_01",

@@ -258,6 +258,7 @@ final class AidenScheduledTasksModel {
                 tasks: taskStorage,
                 settings: settingsStorage
             )
+            await AidenScheduledRunNotifier.shared.deliver(instanceId: instanceId, client: client)
             presentedError = nil
         } catch {
             guard access(for: context).canRead else {

@@ -261,5 +261,6 @@ data class AidenRemoteContractFixture(
     val chatSkills: JsonObject? = null,
     val events: List<JsonObject> = emptyList(),
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
+    val scheduleRunNotification: AidenScheduledRunNotification? = null,
     val error: AidenRemoteErrorEnvelope? = null
 )

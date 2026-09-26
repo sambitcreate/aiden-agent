@@ -45,6 +45,26 @@ test("malformed npm multi-script invocations fail closed", () => {
   );
 });
 
+test("npm package commands are accepted only for the audited standalone CLI suite", () => {
+  const { visited } = collectSourceTests();
+  assert.ok(visited.includes("test:cli"));
+  assert.ok(visited.includes("cli:build"));
+
+  const packageManifest = structuredClone(readPackageManifest());
+  packageManifest.scripts["test:cli"] += " && npm --prefix packages/cli run lint";
+  assert.throws(
+    () => collectSourceTests({ packageManifest }),
+    /test:cli uses an unregistered npm command: npm --prefix packages\/cli run lint/u,
+  );
+
+  const elsewhere = structuredClone(readPackageManifest());
+  elsewhere.scripts.pretest += " && npm --prefix packages/cli test";
+  assert.throws(
+    () => collectSourceTests({ packageManifest: elsewhere }),
+    /pretest uses an unregistered npm command/u,
+  );
+});
+
 test("new test environment and flags fail closed until explicitly audited", () => {
   const packageManifest = structuredClone(readPackageManifest());
   packageManifest.scripts.pretest +=
@@ -121,6 +141,10 @@ test("non-file execution modes and native prerequisites cannot disappear behind 
   const registry = structuredClone(readRegistry());
   registry.preserved = registry.preserved.filter((entry) => entry.kind !== "rust");
   assert.throws(() => validateRegistry({ registry }), /Missing preserved execution mode/u);
+  const withoutCli = structuredClone(readRegistry());
+  withoutCli.preserved = withoutCli.preserved.filter((entry) => entry.kind !== "cli");
+  for (const lane of withoutCli.lanes) lane.preserved = (lane.preserved ?? []).filter((id) => id !== "cli-package");
+  assert.throws(() => validateRegistry({ registry: withoutCli }), /Missing preserved execution mode: test:cli/u);
   const missingBuild = structuredClone(readRegistry());
   missingBuild.prerequisites = missingBuild.prerequisites.filter((entry) => entry.id !== "worktree-file-io-build");
   assert.throws(() => validateRegistry({ registry: missingBuild }), /Unknown build prerequisite|Missing build prerequisite/u);

@@ -69,6 +69,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift",
+  "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
