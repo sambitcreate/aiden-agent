@@ -128,7 +128,7 @@ test("provider failure remains a replayable terminal error with its safe message
   const response = Object.assign(new EventEmitter(), {
     writeHead() { return this; },
     write(value: string) { output.push(value); return true; },
-    end() { ended = true; return this; },
+    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(ended, true);
@@ -185,7 +185,7 @@ test("subscriber disconnect does not cancel work and reconnect replays completio
   const replay = Object.assign(new EventEmitter(), {
     writeHead() { return this; },
     write(value: string) { replayOutput.push(value); return true; },
-    end() { replayEnded = true; return this; },
+    end() { replayEnded = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 1, replay);
   assert.equal(replayEnded, true);
@@ -204,7 +204,7 @@ test("SSE replay emits frozen envelopes and closes after a terminal event", () =
   const response = Object.assign(new EventEmitter(), {
     writeHead(value: number) { status = value; return this; },
     write(value: string) { output.push(value); return true; },
-    end() { ended = true; return this; },
+    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(status, 200);
@@ -386,6 +386,35 @@ test("privileged approval details remain host-only and mobile can deny but canno
   assert.equal(denied.decision, "deny");
   assert.equal(service.pendingApproval("device-1", "stream-1"), null);
   assert.match(app.approvals[0] ?? "", /:deny:/u);
+});
+
+test("implementer run grants remain Mac-only approvals", async () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const details = {
+    kind: "subagent-run-grant" as const,
+    lane: "shell" as const,
+    runId: "run-implementer",
+    childLabel: "Implement checks",
+    workspaceLabel: "Project",
+    worktreeLabel: null,
+    isManagedWorktree: false,
+    workspaceRevisionPrefix: "a".repeat(12),
+    fullHostAccess: true,
+    noRollback: true,
+  };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-run",
+    summary: "Allow shell for this subagent run",
+    details,
+  });
+  assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, details);
+  assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
+  await assert.rejects(
+    app.service.respondApproval("device-1", "approval-run", "allow", "approval-run-grant-allow-key"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+  );
+  assert.deepEqual(app.approvals, []);
 });
 
 test("bounded standard schedule approvals remain mobile-allowable without exposing details", async () => {
@@ -713,4 +742,298 @@ test("restart filtering durably excludes journals owned by authoritative revoked
   app.service.create("device-b", "stream-b", "chat-b", "turn-b");
   const filtered = removeRevokedDeviceStreams(app.service.snapshot(), new Set(["device-a"]));
   assert.deepEqual(filtered.streams.map(({ deviceId }) => deviceId), ["device-b"]);
+});
+
+test("turnIdFor resolves issued turn identities and survives pruning and restart", () => {
+  const app = fixture();
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  assert.equal(app.service.turnIdFor("chat-1", "stream-1"), "turn-1");
+  // Cross-chat and unknown generations resolve to nothing.
+  assert.equal(app.service.turnIdFor("chat-2", "stream-1"), undefined);
+  assert.equal(app.service.turnIdFor("chat-1", "stream-9"), undefined);
+
+  const owner = app.service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-2", role: "assistant" }] },
+  });
+  // Terminal retention pruning drops the stream record but keeps the identity.
+  app.setNow(1_000 + 30 * 24 * 60 * 60 * 1000);
+  app.service.create("device-1", "stream-3", "chat-1", "turn-3");
+  assert.equal(
+    app.service.snapshot().streams.some(({ streamId }) => streamId === "stream-2"),
+    false,
+    "the aged terminal stream is pruned",
+  );
+  assert.equal(app.service.turnIdFor("chat-1", "stream-2"), "turn-2");
+
+  // The index round-trips through the durable snapshot into a fresh service.
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    snapshot: app.service.snapshot(),
+  });
+  assert.equal(restored.turnIdFor("chat-1", "stream-2"), "turn-2");
+  assert.equal(restored.turnIdFor("chat-1", "stream-1"), "turn-1");
+  assert.equal(restored.turnIdFor("chat-2", "stream-2"), undefined);
+});
+
+function blockedResponse() {
+  const output: string[] = [];
+  const emitter = new EventEmitter();
+  const response = Object.assign(emitter, {
+    destroyed: false,
+    ended: false,
+    autoFinish: true,
+    blocked: true,
+    writeHead() { return this; },
+    write(value: string) { output.push(value); return !this.blocked; },
+    end() { this.ended = true; if (this.autoFinish) emitter.emit("finish"); return this; },
+    destroy() { this.destroyed = true; emitter.emit("close"); return this; },
+  });
+  return { response, output, http: response as unknown as ServerResponse };
+}
+
+test("SSE replay waits for drain and delivers terminal completion in order", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:delta", { delta: "Hello" });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  assert.equal(client.output.length, 1);
+  assert.equal(client.response.ended, false);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.deepEqual(client.output.map((frame) => Number(/^id: (\d+)/u.exec(frame)?.[1])), [1, 2, 3]);
+  assert.equal(client.response.ended, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+});
+
+test("a blocked subscriber does not buffer live events or stall healthy subscribers", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const slow = blockedResponse();
+  const fast = blockedResponse();
+  fast.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, slow.http);
+  app.service.openEvents("device-1", "stream-1", 0, fast.http);
+  for (let i = 0; i < 30; i++) owner.owner.send("chat:delta", { delta: String(i) });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  assert.equal(slow.output.length, 1);
+  assert.equal(slow.response.ended, false);
+  assert.equal(fast.output.length, 32);
+  assert.equal(fast.response.ended, true);
+  slow.response.blocked = false;
+  slow.response.emit("drain");
+  assert.deepEqual(slow.output, fast.output);
+  assert.equal(slow.response.ended, true);
+  assert.deepEqual(app.cancelled, []);
+});
+
+test("stalled SSE output skips heartbeats and times out without cancelling generation", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  t.mock.timers.tick(15_000);
+  assert.equal(client.output.length, 1);
+  assert.equal(client.response.destroyed, false);
+  t.mock.timers.tick(15_000);
+  assert.equal(client.response.destroyed, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+  assert.equal(client.response.listenerCount("close"), 0);
+  owner.owner.send("chat:delta", { delta: "Still running" });
+  assert.deepEqual(app.cancelled, []);
+  assert.equal(app.service.status("device-1", "stream-1").state, "running");
+  const replay = blockedResponse();
+  replay.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 1, replay.http);
+  assert.match(replay.output.join(""), /Still running/u);
+  replay.response.destroy();
+});
+
+test("heartbeat backpressure pauses live delivery until drain", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  client.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.blocked = true;
+  t.mock.timers.tick(15_000);
+  assert.equal(client.output[1], ": heartbeat\n\n");
+  owner.owner.send("chat:delta", { delta: "Pending" });
+  assert.equal(client.output.length, 2);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.match(client.output[2]!, /Pending/u);
+  t.mock.timers.tick(30_000);
+  assert.equal(client.response.destroyed, false);
+  client.response.destroy();
+});
+
+test("disconnect and response errors release blocked SSE delivery", () => {
+  for (const event of ["close", "error"]) {
+    const app = fixture();
+    const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+    const client = blockedResponse();
+    app.service.openEvents("device-1", "stream-1", 0, client.http);
+    client.response.emit(event);
+    owner.owner.send("chat:delta", { delta: "After disconnect" });
+    client.response.emit("drain");
+    assert.equal(client.output.length, 1);
+    assert.equal(client.response.listenerCount("drain"), 0);
+    assert.deepEqual(app.cancelled, []);
+  }
+});
+
+test("a subscriber overtaken by journal retention disconnects for snapshot recovery", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  for (let i = 0; i < 140; i++) owner.owner.send("chat:delta", { delta: "x".repeat(65_536) });
+  assert.equal(client.output.length, 1);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.equal(client.response.destroyed, true);
+  const replay = blockedResponse();
+  replay.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 1, replay.http);
+  assert.match(replay.output[0]!, /event: snapshot/u);
+  assert.deepEqual(app.cancelled, []);
+  replay.response.destroy();
+});
+
+test("terminal replay drains each accepted frame exactly once before ending", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:done", { chat: { messages: [] } });
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 2);
+  assert.equal(client.response.ended, false);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 2);
+  assert.equal(client.response.ended, true);
+});
+
+test("revocation destroys blocked delivery and removes drain ownership", async () => {
+  const app = fixture();
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  await app.service.revokeDevice("device-1");
+  assert.equal(client.response.destroyed, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 1);
+});
+
+test("a synchronous socket write failure cannot interrupt generation publication", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  client.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.write = () => { throw new Error("socket closed"); };
+  assert.doesNotThrow(() => owner.owner.send("chat:delta", { delta: "Saved" }));
+  assert.equal(client.response.destroyed, true);
+  const events = app.service.snapshot().streams[0]!.events;
+  assert.equal(events[events.length - 1]?.payload.text, "Saved");
+});
+
+for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-timeout", "retention"] as const) {
+  test(`aggregate pressure preserves blocked terminal delivery until ${settlement}`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const app = fixture();
+    const owner = app.service.create("device-1", "terminal", "chat-1", "turn-1");
+    const client = blockedResponse();
+    client.response.blocked = false;
+    app.service.openEvents("device-1", "terminal", 0, client.http);
+    client.response.blocked = true;
+    owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+    assert.match(client.output[1]!, /event: done/u);
+    assert.equal(client.response.ended, false);
+
+    // Three active journals exceed the shared 16 MiB limit even though each
+    // remains below its individual limit. The terminal journal is oldest.
+    const producers = Array.from({ length: 3 }, (_, index) =>
+      app.service.create("device-1", `load-${index}`, `chat-${index + 2}`, `turn-${index + 2}`));
+    for (let index = 0; index < 252; index++) {
+      app.service.create("device-1", `idle-${index}`, `idle-chat-${index}`, `idle-turn-${index}`);
+    }
+    for (const producer of producers) {
+      for (let index = 0; index < 30; index++) producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
+    }
+    assert.equal(client.response.destroyed, false, "pressure must not discard accepted terminal bytes");
+    assert.equal(app.service.status("device-1", "terminal").state, "done");
+    assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+    assert.throws(
+      () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+    );
+    if (settlement === "drain") {
+      client.response.emit("drain");
+      assert.equal(client.response.ended, true);
+      assert.equal(client.response.destroyed, false);
+    } else if (settlement === "timeout" || settlement === "retention") {
+      t.mock.timers.tick(30_000);
+      assert.equal(client.response.destroyed, true);
+    } else if (settlement === "finish-abort" || settlement === "finish-timeout") {
+      client.response.autoFinish = false;
+      client.response.emit("drain");
+      assert.equal(client.response.ended, true);
+      assert.equal(app.service.status("device-1", "terminal").state, "done");
+      if (settlement === "finish-timeout") t.mock.timers.tick(30_000);
+      else client.response.destroy();
+    } else {
+      client.response.destroy();
+    }
+    assert.equal(client.response.listenerCount("drain"), 0);
+    if (settlement !== "drain") {
+      assert.equal(app.service.status("device-1", "terminal").state, "done");
+      assert.throws(
+        () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
+        (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+      );
+      // New pressure must not evict the disconnected client's replay record.
+      producers[0]!.owner.send("chat:delta", { delta: "y".repeat(200_000) });
+      assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+      if (settlement === "retention") {
+        app.setNow(1_000 + 24 * 60 * 60 * 1_000);
+      } else {
+        const replay = blockedResponse();
+        replay.response.blocked = false;
+        app.service.openEvents("device-1", "terminal", 1, replay.http);
+        assert.match(replay.output.join(""), /event: done/u);
+        assert.equal(replay.response.ended, true);
+      }
+    }
+    // Successful terminal delivery frees deferred capacity without another
+    // append. Abandoned replay remains bounded by ordinary terminal retention.
+    assert.doesNotThrow(() => app.service.create("device-1", "new-stream", "new-chat", "new-turn"));
+    assert.throws(
+      () => app.service.status("device-1", "terminal"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "not_found",
+    );
+    assert.deepEqual(app.cancelled, []);
+  });
+}
+
+
+test("stream capacity does not reclaim genuinely active generations", () => {
+  const app = fixture();
+  for (let index = 0; index < 256; index++) {
+    app.service.create("device-1", `active-${index}`, `chat-${index}`, `turn-${index}`);
+  }
+  assert.throws(
+    () => app.service.create("device-1", "extra", "extra-chat", "extra-turn"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+  );
+  assert.equal(app.service.snapshot().streams.length, 256);
+  assert.deepEqual(app.cancelled, []);
 });

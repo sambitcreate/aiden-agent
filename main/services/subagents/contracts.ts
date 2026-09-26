@@ -9,6 +9,7 @@ export const MAX_SUBAGENT_LABEL_CHARS = 120;
 export const MAX_SUBAGENT_TASK_CHARS = 8_000;
 export const MAX_SUBAGENT_SUMMARY_CHARS = 8_000;
 export const MAX_SUBAGENT_TOOL_RESULT_CHARS = 24_000;
+export const MAX_SUBAGENT_REQUESTED_TURNS = 128;
 export const MAX_SUBAGENT_REQUESTED_MCP_SERVERS = 16;
 export const MAX_SUBAGENT_REQUESTED_MCP_TOOLS_PER_SERVER = 32;
 export const SUBAGENT_SAFE_LABEL_PATTERN =
@@ -37,13 +38,15 @@ export interface SubagentTaskRequest {
   role: SubagentRole;
   label: string;
   task: string;
+  /** Explicit budget for a read-only investigation; omission keeps the default. */
+  maxTurns?: number;
   /** Optional strict subset of the root request; omission inherits the root request. */
   capabilities?: SubagentRequestedCapabilities;
 }
 
 export interface SubagentToolRequest {
   context: SubagentContextMode;
-  /** Omission preserves the legacy workspace-read-only request. */
+  /** Omission uses the union of role-owned task defaults. */
   capabilities?: SubagentRequestedCapabilities;
   tasks: SubagentTaskRequest[];
 }
@@ -254,6 +257,37 @@ const LEGACY_SUBAGENT_CAPABILITIES: SubagentRequestedCapabilities = {
   mcp: [],
 };
 
+function roleDefaultCapabilities(role: SubagentRole): SubagentRequestedCapabilities {
+  return {
+    ...LEGACY_SUBAGENT_CAPABILITIES,
+    workspaceWrite: role === "implementer",
+    shell: role === "implementer",
+    mcp: [],
+  };
+}
+
+function narrowToRoot(
+  task: SubagentRequestedCapabilities,
+  root: SubagentRequestedCapabilities,
+): SubagentRequestedCapabilities {
+  const narrowLane = (lane: "mcp" | "mcpMutations") => {
+    const allowed = requestedMcpPairs(root, lane);
+    return (task[lane] ?? []).flatMap((scope) => {
+      const tools = scope.tools.filter((tool) => allowed.has(`${scope.serverId}\0${tool}`));
+      return tools.length ? [{ serverId: scope.serverId, tools }] : [];
+    });
+  };
+  return {
+    workspaceRead: task.workspaceRead && root.workspaceRead,
+    workspaceWrite: task.workspaceWrite && root.workspaceWrite,
+    shell: task.shell === true && root.shell === true,
+    delegate: task.delegate === true && root.delegate === true,
+    web: task.web && root.web,
+    mcp: narrowLane("mcp"),
+    ...(task.mcpMutations === undefined ? {} : { mcpMutations: narrowLane("mcpMutations") }),
+  };
+}
+
 function mergeRequestedMcpScopes(
   values: readonly SubagentRequestedCapabilities[],
   lane: "mcp" | "mcpMutations",
@@ -274,17 +308,16 @@ function mergeRequestedMcpScopes(
 /**
  * A task-level positive request is already explicit model intent. When the
  * optional batch root is omitted, infer only the union needed to contain those
- * exact lanes. Tasks that omitted capabilities are pinned to the legacy
- * workspace-read-only lane so they never inherit an inferred privilege.
+ * exact lanes. Omitted tasks use role defaults within that root; ordinary
+ * read roles never inherit a sibling implementer's write or shell request.
  */
 function inferRootCapabilities(
-  taskCapabilities: readonly (SubagentRequestedCapabilities | undefined)[],
+  tasks: readonly Pick<SubagentTaskRequest, "role" | "capabilities">[],
 ): SubagentRequestedCapabilities | undefined {
-  const explicit = taskCapabilities.filter(
-    (value): value is SubagentRequestedCapabilities => value !== undefined,
-  );
-  if (explicit.length === 0) return undefined;
-  const requested = [LEGACY_SUBAGENT_CAPABILITIES, ...explicit];
+  const requested = tasks.map((task) => task.capabilities ?? roleDefaultCapabilities(task.role));
+  if (tasks.every((task) => task.capabilities === undefined && task.role !== "implementer")) {
+    return undefined;
+  }
   const mcp = mergeRequestedMcpScopes(requested, "mcp");
   const mcpMutations = mergeRequestedMcpScopes(requested, "mcpMutations");
   const readPairs = requestedMcpPairs({ ...LEGACY_SUBAGENT_CAPABILITIES, mcp }, "mcp");
@@ -324,40 +357,56 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
   const parsedTasks = request.tasks.map((entry) => {
-    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities"]);
+    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns"]);
     if (!task) throw new Error("Invalid subagent task fields.");
     if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
       throw new Error("Unknown subagent role.");
+    }
+    if (task.maxTurns !== undefined &&
+      (!Number.isInteger(task.maxTurns) || (task.maxTurns as number) < 1 ||
+        (task.maxTurns as number) > MAX_SUBAGENT_REQUESTED_TURNS)) {
+      throw new Error("Invalid subagent turn budget.");
     }
     return {
       role: task.role,
       label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
       task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+      maxTurns: task.maxTurns as number | undefined,
       capabilities:
         task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities),
     };
   });
   const inferredCapabilities = suppliedCapabilities
     ? undefined
-    : inferRootCapabilities(parsedTasks.map(({ capabilities }) => capabilities));
+    : inferRootCapabilities(parsedTasks);
   const rootCapabilities =
     suppliedCapabilities ?? inferredCapabilities ?? LEGACY_SUBAGENT_CAPABILITIES;
-  const pinLegacyTaskDefaults = suppliedCapabilities === undefined && inferredCapabilities !== undefined;
   return {
     context: request.context === "fork" ? "fork" : "fresh",
     ...(suppliedCapabilities || inferredCapabilities
       ? { capabilities: suppliedCapabilities ?? inferredCapabilities }
       : {}),
     tasks: parsedTasks.map((task) => {
-      const taskCapabilities =
-        task.capabilities ?? (pinLegacyTaskDefaults ? structuredClone(LEGACY_SUBAGENT_CAPABILITIES) : undefined);
-      if (taskCapabilities) {
-        assertTaskCapabilitiesNarrowRoot(rootCapabilities, taskCapabilities);
+      const taskCapabilities = task.capabilities ??
+        (task.role !== "implementer" && inferredCapabilities
+          ? narrowToRoot(roleDefaultCapabilities(task.role), rootCapabilities)
+          : undefined);
+      if (task.capabilities) {
+        assertTaskCapabilitiesNarrowRoot(rootCapabilities, task.capabilities);
+      }
+      const effective = taskCapabilities ?? (task.role === "implementer"
+        ? narrowToRoot(roleDefaultCapabilities(task.role), rootCapabilities)
+        : rootCapabilities);
+      if (task.maxTurns !== undefined &&
+        (effective.workspaceWrite || effective.shell === true || effective.delegate === true ||
+          (effective.mcpMutations?.length ?? 0) > 0)) {
+        throw new Error("An explicit subagent turn budget requires read-only capabilities.");
       }
       return {
         role: task.role,
         label: task.label,
         task: task.task,
+        ...(task.maxTurns === undefined ? {} : { maxTurns: task.maxTurns }),
         ...(taskCapabilities ? { capabilities: taskCapabilities } : {}),
       };
     }),
@@ -366,13 +415,11 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
 
 export function effectiveSubagentTaskCapabilities(
   request: Pick<SubagentToolRequest, "capabilities">,
-  task: Pick<SubagentTaskRequest, "capabilities">,
+  task: Pick<SubagentTaskRequest, "role" | "capabilities">,
 ): SubagentRequestedCapabilities {
-  const effective = structuredClone(
-    task.capabilities ??
-      request.capabilities ?? {
-        ...LEGACY_SUBAGENT_CAPABILITIES,
-      },
-  );
+  const root = request.capabilities ?? roleDefaultCapabilities(task.role);
+  const effective = structuredClone(task.capabilities ?? (task.role === "implementer"
+    ? narrowToRoot(roleDefaultCapabilities(task.role), root)
+    : root));
   return { ...effective, delegate: effective.delegate === true };
 }

@@ -24,6 +24,8 @@ export interface TodoExtensionScope {
   assistantMode: boolean;
   botBound: boolean;
   rendererOwner: boolean;
+  remoteOwner?: boolean;
+  botTaskTrackingAllowed?: boolean;
   excluded: boolean;
 }
 
@@ -32,8 +34,8 @@ export function shouldEnableTodoExtension(scope: TodoExtensionScope): boolean {
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.assistantMode &&
-    !scope.botBound &&
-    scope.rendererOwner &&
+    (!scope.botBound || scope.botTaskTrackingAllowed === true) &&
+    (scope.rendererOwner || scope.remoteOwner === true) &&
     !scope.excluded
   );
 }
@@ -58,7 +60,9 @@ const DependencySchema = Type.Array(Type.Integer({ minimum: 1 }), {
 });
 
 const SYSTEM_PROMPT = [
-  "Use the todo tool to track genuinely multi-step work, explicit user checklists, or work whose progress benefits from a durable plan. Skip it for trivial or purely conversational requests.",
+  "Use the todo tool only for longer-running work with at least three distinct, verifiable checkpoints whose progress benefits from a durable plan. An explicit request for tracking or a checklist still qualifies only when the work is substantive and meets this same threshold.",
+  "Normally skip todo for questions, explanations, quick lookups, one-shot commands, routine diagnostics, small edits, and work that merely happens to use multiple tools. Request type or file count alone does not decide eligibility: research or a single-file change qualifies only when it is genuinely longer-running and has at least three distinct, verifiable checkpoints. If the work can be completed directly without a meaningful checkpoint plan, skip todo.",
+  "When todo is warranted, create a concise checkpoint list near the start of the work and update it only when checkpoint state changes. Do not turn individual tool calls or implementation details into tasks.",
   "Keep at most one task in_progress. Mark it in_progress immediately before beginning and completed immediately after verified completion. Never mark partial or failing work completed.",
   "Use blockedBy for dependencies. Create starts pending; completed tasks cannot be reopened; deleted is a tombstone. Use list or get to inspect state after uncertainty.",
 ].join("\n");
@@ -78,7 +82,7 @@ export function createTodoExtensionRuntime(
       name: TODO_TOOL_NAME,
       label: "Todo",
       description:
-        "Manage the durable task list for this chat. Actions: create, update, list, get, delete (tombstone), and clear. Use status pending, in_progress, completed, or deleted; use blockedBy dependencies to sequence work.",
+        "Manage a durable checkpoint list for substantive, longer-running work. Use only for plans with at least three distinct verifiable checkpoints, not ordinary requests or individual tool calls. Actions: create, update, list, get, delete (tombstone), and clear. Use status pending, in_progress, completed, or deleted; use blockedBy dependencies to sequence work.",
       parameters: Type.Object(
         {
           action: ActionSchema,

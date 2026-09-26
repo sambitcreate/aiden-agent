@@ -15,6 +15,7 @@ import path from "node:path";
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
+import { shutdownDevices } from "./handlers/devices.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
@@ -89,6 +90,7 @@ import {
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
+import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import {
   registerGenerativeUiProtocol,
@@ -118,6 +120,10 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import {
+  geminiLiveService,
+  initializeAidenLiveService,
+} from "./services/gemini-live/service-main.js";
 import {
   getOnboardingSnapshot,
   setOnboardingOutcome,
@@ -284,6 +290,7 @@ function cleanupApplication(): void {
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
+  void geminiLiveService.shutdown();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
@@ -308,6 +315,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       return;
     }
   }
+  await geminiLiveService.shutdown();
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
@@ -396,6 +404,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       })(),
       terminalService.flushHistory(),
       browserService.shutdown(),
+      shutdownDevices(),
     ]);
   } catch (error) {
     logger.error(
@@ -1051,6 +1060,7 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
@@ -1283,6 +1293,13 @@ async function createMainWindow(): Promise<void> {
   });
   createdWindow.webContents.on("did-finish-load", () => {
     protectedAction = null;
+  });
+  let liveDiagnosticCount = 0;
+  createdWindow.webContents.on("console-message", (details) => {
+    // Only fixed local lifecycle markers; never forward arbitrary renderer console content.
+    if (liveDiagnosticCount >= 200 || !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(details.message)) return;
+    liveDiagnosticCount += 1;
+    writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
   });
 
   createdWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1756,6 +1773,15 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      try {
+        await initializeAidenLiveService();
+      } catch (error) {
+        logger.warn(
+          "aiden-live",
+          "Aiden Live thread recovery is unavailable; Live starts will retry before writing session metadata.",
+          error,
+        );
+      }
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
@@ -1786,7 +1812,17 @@ if (!ownsSingleInstanceLock) {
         );
       }
       await subagentRunStore.initialize();
+      await toolOutputStore.pruneExpired().catch(() => {
+        logger.warn("pi", "Expired tool output cleanup could not complete.");
+      });
+      const toolOutputCleanup = setInterval(() => {
+        void toolOutputStore.pruneExpired().catch(() => {
+          logger.warn("pi", "Expired tool output cleanup could not complete.");
+        });
+      }, 60 * 60 * 1_000);
+      toolOutputCleanup.unref();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
           await displayImageArtifactStore.deleteChat(chatId);
         }

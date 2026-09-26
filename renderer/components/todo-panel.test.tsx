@@ -2,21 +2,61 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TodoPanel } from "./todo-panel.js";
+import { TodoPanel, todoPanelHasVisibleChrome } from "./todo-panel.js";
+import { ScrollArea } from "./ui.js";
 
 const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
 
-test("storage-disabled tracking explains availability without suggesting corrupt history", () => {
+test("storage-disabled tracking stays hidden because it requires no user action", () => {
   const html = renderToStaticMarkup(<TodoPanel snapshot={{
     version: 1, chatId: "chat", availability: "unavailable",
     unavailableReason: "storage_not_enabled", tasks: [],
   }} />);
-  assert.match(html, /Task tracking not enabled/u);
-  assert.match(html, /cannot save or update a task list here/u);
-  assert.doesNotMatch(html, /could not verify|older snapshot|Tasks unavailable/u);
+  assert.equal(html, "");
+  assert.doesNotMatch(source, /Task tracking not enabled|cannot save or update a task list here/u);
 });
 const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("./ui.tsx", import.meta.url), "utf8");
+
+test("visible chrome and scroll clearance share the complete snapshot state matrix", () => {
+  const unavailable = (unavailableReason?: "storage_not_enabled" | "invalid_snapshot") => ({
+    version: 1 as const,
+    chatId: "chat",
+    availability: "unavailable" as const,
+    ...(unavailableReason ? { unavailableReason } : {}),
+    tasks: [],
+  });
+  const ready = (status?: "pending" | "in_progress" | "completed" | "deleted") => ({
+    version: 1 as const,
+    chatId: "chat",
+    availability: "ready" as const,
+    tasks: status ? [{ id: 1, subject: "Checkpoint", status }] : [],
+  });
+
+  assert.equal(todoPanelHasVisibleChrome(null), false);
+  assert.equal(todoPanelHasVisibleChrome(unavailable("storage_not_enabled")), false);
+  assert.equal(todoPanelHasVisibleChrome(unavailable("invalid_snapshot")), true);
+  assert.equal(todoPanelHasVisibleChrome(unavailable()), true);
+  assert.equal(todoPanelHasVisibleChrome(ready()), false);
+  assert.equal(todoPanelHasVisibleChrome(ready("deleted")), false);
+  assert.equal(todoPanelHasVisibleChrome(ready("completed")), false);
+  assert.equal(todoPanelHasVisibleChrome(ready("pending")), true);
+  assert.equal(todoPanelHasVisibleChrome(ready("in_progress")), true);
+  assert.match(
+    chatPaneSource,
+    /scrollToBottomButtonOffset=\{todoPanelVisible \? 44 : 0\}/u,
+  );
+  assert.match(chatPaneSource, /scrollContentBottomOffset=\{todoPanelVisible \? 56 : 0\}/u);
+  assert.match(uiSource, /\[autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges\]/u);
+  const html = renderToStaticMarkup(
+    <ScrollArea scrollContentBottomOffset={56} footer={<div>Composer</div>}>
+      <div>Last transcript row</div>
+    </ScrollArea>,
+  );
+  assert.match(html, /padding-bottom:56px/u);
+  assert.match(html, /Last transcript row/u);
+  assert.match(html, /Composer/u);
+});
 
 test("renders a floating elevated progress chip without an inline expanding panel", () => {
   const html = renderToStaticMarkup(
@@ -50,7 +90,6 @@ test("renders a floating elevated progress chip without an inline expanding pane
   assert.match(source, /max-h-\[min\(26rem,55vh\)\]/u);
   assert.match(source, /taskStatusText\(task, dependencyIds\)/u);
   assert.doesNotMatch(source, />Task progress<|complete<\/span>/u);
-  assert.match(chatPaneSource, /scrollToBottomButtonOffset=\{[\s\S]*\? 44[\s\S]*: 0/u);
   assert.match(uiSource, /footerHeight \+ 12 \+ Math\.max\(0, scrollToBottomButtonOffset\)/u);
 });
 

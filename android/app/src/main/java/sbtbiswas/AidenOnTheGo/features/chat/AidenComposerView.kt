@@ -45,6 +45,7 @@ fun AidenComposerView(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    canStop: Boolean = true,
     canSend: Boolean,
     isStreaming: Boolean,
     isVoiceListening: Boolean,
@@ -377,7 +378,7 @@ fun AidenComposerView(
                             onSend()
                         }
                     },
-                    enabled = (canSend || isStreaming) && !isReadOnly,
+                    enabled = (if (isStreaming) canStop else canSend) && !isReadOnly,
                     shape = CircleShape,
                     color = when {
                         isStreaming -> palette.danger

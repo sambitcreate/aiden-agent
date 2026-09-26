@@ -13,7 +13,7 @@ const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 const featureAssetPaths = [
   "aiden-workspace.png",
-  "features/aiden-assistant.png",
+  "features/gemini-live.png",
   "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
@@ -54,7 +54,7 @@ const featurePresentation = sourceSection("const featureBentos", "const FEATURE_
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
   assert.match(source, /<ProviderIcon/u);
-  for (const providerId of ["openai", "openai-codex", "anthropic", "lmstudio", "ollama"]) {
+  for (const providerId of ["openai", "openai-codex", "anthropic", "lmstudio", "ollama", "tailscale"]) {
     assert.match(providerPresentation, new RegExp(`iconProviderId: "${providerId}"`, "u"));
   }
   assert.match(source, /aria-pressed=\{choice === item\.id\}/u);
@@ -239,30 +239,32 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 
-test("pre-workspace Web Search disclosure is default-aware, explicit, and request-free", () => {
-  assert.match(source, /data-onboarding-web-search/u);
-  assert.match(source, /const webSearch = useWebSearch\(\)/u);
-  assert.match(source, /const next = await webSearchApi\.setEnabled\(enabled\)/u);
-  assert.match(source, /queryClient\.setQueryData\(queryKeys\.webSearch, next\)/u);
+test("Other ways OpenAI, Anthropic, and Tailscale choices reuse ProviderIcon wells", () => {
+  const moreWays = sourceSection("data-onboarding-more-providers", "{moreProviders.map((provider) => {");
   assert.match(
-    source,
-    /Fresh profiles start with Web Search on; anonymous Exa is the initial\s+recipient/u,
+    moreWays,
+    /\["openai-key", "anthropic", "tailscale"\][\s\S]*providerId=\{item\.iconProviderId\}/u,
   );
+  assert.match(moreWays, /rounded-control bg-popover text-primary shadow-control/u);
+  assert.match(providerPresentation, /iconProviderId: "openai"/u);
+  assert.match(providerPresentation, /iconProviderId: "anthropic"/u);
+  assert.match(providerPresentation, /iconProviderId: "tailscale"/u);
+});
+
+test("profile onboarding keeps Web Search default-on without a first-run toggle", () => {
+  const profileStep = source.slice(
+    source.indexOf('step === "profile"'),
+    source.indexOf('step === "provider"'),
+  );
+  assert.doesNotMatch(profileStep, /data-onboarding-web-search/u);
+  assert.doesNotMatch(profileStep, /Allow Web Search in attended chats/u);
+  assert.doesNotMatch(source, /useWebSearch\(/u);
+  assert.doesNotMatch(source, /webSearchApi/u);
+  assert.doesNotMatch(source, /setWebSearchEnabled/u);
   assert.match(
-    source,
-    /send\s+that query and your network\s+address to Exa only when the model\s+invokes search/u,
+    featurePresentation,
+    /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
-  assert.match(source, /This screen makes no\s+network\s+request/u);
-  assert.match(source, /Existing opt-outs and routes stay unchanged/u);
-  assert.match(
-    source,
-    /disabled=\{!webSearch\.data \|\| webSearch\.isFetching \|\| webSearchSaving\}/u,
-  );
-  assert.match(source, /aria-label="Allow Web Search in attended chats"/u);
-  assert.match(source, /aria-describedby="onboarding-web-search-description"/u);
-  assert.match(source, /motion-reduce:transition-none/u);
-  assert.doesNotMatch(source, /exaApi\.(setEnabled|setKey)/u);
-  assert.doesNotMatch(source, /setWebSearchEnabled\(true\)/u);
 });
 
 test("hosted keys validate before selection and endpoint routes require discovered models", () => {
@@ -319,7 +321,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+    /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,
@@ -355,7 +357,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Web Search",
     "Reusable Skills",
     "MCP Connectors",
-    "Aiden Assistant",
+    "Aiden Live",
     "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
@@ -417,7 +419,6 @@ test("project guidance keeps the feature bento current as Aiden evolves", () => 
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
 });
 
-
 test("primary AI choices include custom setup without opening advanced providers", () => {
   assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
   for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
@@ -429,4 +430,21 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /models.length === 0/u);
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
+});
+
+
+test("MCP onboarding discloses service-supplied tool guidance", () => {
+  assert.match(source, /Connected services may also provide guidance for using those tools\./u);
+});
+
+test("MCP tour explains connected-service resource reads", () => {
+  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+});
+
+test("blocked form filling is not advertised as a shipped tour feature", () => {
+  assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
+});
+
+test("workspace tour discloses AGENTS instruction loading and refresh", () => {
+  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
 });

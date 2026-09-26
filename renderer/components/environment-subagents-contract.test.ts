@@ -37,19 +37,36 @@ function between(value: string, start: string, end: string): string {
 }
 
 test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false });
+  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, geminiLive: false, devices: false });
+  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, geminiLive: false, devices: false });
   assert.deepEqual(parseAppCapabilities({ subagents: false }), {
     subagents: false,
+    geminiLive: false,
+    devices: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
     subagents: false,
+    geminiLive: false,
+    devices: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
+    geminiLive: false,
+    devices: false,
   });
+  assert.deepEqual(parseAppCapabilities({ devices: true }), {
+    subagents: false,
+    geminiLive: false,
+    devices: true,
+  });
+  assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true), [
+    "review",
+    "subagents",
+    "files",
+    "browser",
+  ]);
 });
 
 test("a disabled renderer presents a stored Subagents destination as Review without erasing it", () => {
@@ -66,11 +83,7 @@ test("a disabled renderer presents a stored Subagents destination as Review with
 });
 
 test("Environment exposes explicit non-modal surface states", () => {
-  const modes: EnvironmentSurfaceMode[] = [
-    "closed",
-    "tools-pinned",
-    "tools-floating",
-  ];
+  const modes: EnvironmentSurfaceMode[] = ["closed", "tools-pinned", "tools-floating"];
   assert.deepEqual(modes, ["closed", "tools-pinned", "tools-floating"]);
 });
 
@@ -153,11 +166,11 @@ test("floating Environment remains non-modal across every app-level interaction 
     environment,
     /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
   );
+  assert.match(environment, /const toggleTools = React\.useCallback/u);
   assert.match(
     environment,
-    /const toggleTools = React\.useCallback/u,
+    /<div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u,
   );
-  assert.match(environment, /<div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u);
   assert.doesNotMatch(environment, /bg-black|backdrop-blur|aria-modal|role=\{.*dialog/u);
   assert.doesNotMatch(environment, /environmentCompactModal|setCompactModalOpen/u);
 
@@ -166,7 +179,7 @@ test("floating Environment remains non-modal across every app-level interaction 
   assert.match(root, /<AssistantDock rightInset=\{environmentPanel\.dockRightInset\} \/>/u);
   assert.doesNotMatch(layout, /contentModalOpen=/u);
 
-  assert.match(assistant, /useCommandHandler\("assistant\.open", openPanel\)/u);
+  assert.match(assistant, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.match(assistant, /Math\.max\(0, rightInset\)/u);
   assert.doesNotMatch(assistant, /interactionBlocked|data-environment-modal-background/u);
 });
@@ -233,7 +246,7 @@ test("archived subagent references remain stored but are invisible while disable
 test("the Environment work surface owns one mounted Subagents destination", () => {
   const environment = source("./environment-panel.tsx");
 
-  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled\)/u);
+  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
   assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
   assert.match(environment, /id="environment-subagents-panel"/u);
   assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
@@ -260,7 +273,9 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
-  assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
+  assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
+  assert.match(appHandler, /geminiLive: geminiLiveEnabled\(\)/u);
+  assert.match(appHandler, /devices: devicesEnabled\(\)/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
@@ -269,8 +284,11 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
   assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
   assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
-  assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
-  assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
+  assert.match(environment, /surfaceState\.toolsTab,\s+subagentsEnabled,\s+devicesEnabled/u);
+  assert.match(
+    environment,
+    /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled, devicesEnabled\)/u,
+  );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
@@ -527,7 +545,10 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.match(announcer, /coordinatorRef\.current\?\.announceDetail/u);
   assert.doesNotMatch(announcer, /createPortal|portalHost/u);
   assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
-  assert.match(environment, /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
+  assert.match(
+    environment,
+    /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
+  );
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
   assert.equal(
@@ -574,10 +595,10 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s+\? "Response continues in the background…"/u);
   assert.match(
     pane,
-    /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
+    /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
   );
   assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);

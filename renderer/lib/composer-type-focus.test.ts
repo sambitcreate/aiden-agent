@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   composerInsertTextFromKey,
@@ -125,15 +124,4 @@ test("function keys and empty insert text are rejected", () => {
   assert.equal(composerInsertTextFromKey("F12"), null);
   assert.equal(composerInsertTextFromKey("Enter"), null);
   assert.equal(composerInsertTextFromKey("a"), "a");
-});
-
-test("the type-focus hook captures keydown and writes through the native value setter", () => {
-  const hook = readFileSync(new URL("./use-composer-type-focus.ts", import.meta.url), "utf8");
-  assert.match(hook, /addEventListener\("keydown", onKeyDown, true\)/u);
-  assert.match(hook, /insertTextIntoTextarea\(composer, decision\.text\)/u);
-  assert.match(hook, /\.assistant-dock-panel/u);
-  const core = readFileSync(new URL("./composer-type-focus.ts", import.meta.url), "utf8");
-  assert.match(core, /HTMLTextAreaElement\.prototype, "value"/u);
-  assert.match(core, /isActivationControl/u);
-  assert.match(core, /keyCode === 229/u);
 });

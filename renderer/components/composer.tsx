@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { ComposerContextBar } from "./composer-context-bar";
+import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -49,6 +50,7 @@ import {
 import { attachmentsApi, browserApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
@@ -58,6 +60,10 @@ import {
   shouldShowComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../lib/computer-use-notice";
+import {
+  ComposerAttachmentOperation,
+  acceptComposerAttachments,
+} from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
@@ -83,7 +89,14 @@ import {
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
-import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
+import {
+  loadComposerDraft,
+  markComposerSubmission,
+  mergeRestoredGuidance,
+  saveComposerDraftText,
+  settleComposerSubmission,
+  subscribeGuidanceRestore,
+} from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -122,6 +135,8 @@ interface ComposerProps {
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
+  /** Initial text for an explicitly seeded renderer-only chat draft. */
+  initialText?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
@@ -129,11 +144,15 @@ interface ComposerProps {
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
+  onSteer?: ComposerProps["onSend"];
+  onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
+  /** Stop has been requested; no busy Queue/Steer/Redirect may be admitted until it settles. */
+  stoppingGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
   /** New-agent drafts cannot accept edits while their first message commits. */
@@ -277,13 +296,17 @@ export function Composer({
   readinessSettingsSection,
   hasMessages,
   chatId,
+  initialText = "",
   onSend,
   onStop,
   onQueue,
+  onSteer,
+  onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
+  stoppingGeneration = false,
   configurationBusy = false,
   freezeWhileSending = false,
   firstMessageSaving = false,
@@ -328,11 +351,23 @@ export function Composer({
   slashPaletteBlocked = false,
   slashActionBusy = false,
 }: ComposerProps) {
+  const restoredText = React.useMemo(
+    () => initialText || loadComposerDraft(chatId).text,
+    [chatId, initialText],
+  );
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: "",
-    slashTracker: { epoch: 0, active: false },
+    text: restoredText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
+  const [busyMode, setBusyMode] = React.useState<"steer" | "queue" | "redirect">("queue");
+  const [confirmRedirect, setConfirmRedirect] = React.useState(false);
+  React.useEffect(() => {
+    if (!isGenerating) {
+      setBusyMode("queue");
+      setConfirmRedirect(false);
+    }
+  }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
     draftRef.current = draft;
@@ -357,7 +392,16 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
     dispatchDraft({ type: "update", value: text });
-  }, []);
+    saveComposerDraftText(chatId, text);
+  }, [chatId]);
+  React.useEffect(
+    () =>
+      subscribeGuidanceRestore(chatId, (guidance) => {
+        setText((current) => mergeRestoredGuidance(current, guidance));
+        toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
+      }),
+    [chatId, setText],
+  );
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
@@ -383,7 +427,7 @@ export function Composer({
       return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
     };
     const receive = (annotation: BrowserAnnotation) => {
-      if (firstSendPendingRef.current || !available()) return false;
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
       const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
@@ -403,7 +447,15 @@ export function Composer({
     });
     return () => { unregister(); unsubscribe(); };
   }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
-  const attachmentOperationRef = React.useRef(false);
+  const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
+  const attachmentVisionRef = React.useRef(visionSupported);
+  React.useLayoutEffect(() => {
+    attachmentVisionRef.current = visionSupported;
+  }, [visionSupported]);
+  React.useLayoutEffect(() => {
+    const operation = attachmentOperationRef.current;
+    return () => operation.cancel();
+  }, []);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
@@ -466,7 +518,8 @@ export function Composer({
     }) &&
     !configurationBusy &&
     !firstMessageSaving &&
-    !sessionCommandBusy;
+    !sessionCommandBusy &&
+    !(isGenerating && stoppingGeneration);
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
   const selectedSkillState = React.useMemo(
@@ -825,6 +878,7 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
+      mode?: "steer" | "queue" | "redirect";
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -832,6 +886,14 @@ export function Composer({
       sendPendingRef.current = true;
       firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
+      try {
+        markComposerSubmission(chatId, payload.draftText);
+      } catch (error) {
+        sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
+        setSending(false);
+        throw error;
+      }
 
       setText("");
       const optimisticTextRevision = textRevisionRef.current;
@@ -845,7 +907,19 @@ export function Composer({
       });
 
       try {
-        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        let submit: ComposerProps["onSend"];
+        if (payload.mode === "steer") {
+          if (!onSteer) throw new Error("Steer is unavailable for this response.");
+          submit = onSteer;
+        } else if (payload.mode === "redirect") {
+          if (!onRedirect) throw new Error("Redirect is unavailable for this response.");
+          submit = onRedirect;
+        } else if (payload.mode === "queue") {
+          if (!onQueue) throw new Error("Queue is unavailable for this response.");
+          submit = onQueue;
+        } else {
+          submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        }
         await submit(
           payload.sendText,
           payload.attachments,
@@ -854,39 +928,42 @@ export function Composer({
             ? { visualize: payload.visualize, btw: payload.btw }
             : undefined,
         );
+        if (payload.mode === "steer") toast.info("Guidance queued. Aiden will read it at the next step.");
+        if (payload.mode === "queue") toast.info("Follow-up queued. It will run after the current response.");
+        if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
+        settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
       } catch (error) {
-        // An unknown append result may already be durable. ChatPane blocks
-        // another send until reload, so restoring it here would invite a
-        // duplicate message with a new turn identity.
-        if (!isAppendReconciliationRequired(error)) {
-          const currentDraft = draftRef.current.text;
-          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
-          if (
-            textRevisionRef.current === optimisticTextRevision ||
-            restoredDraft !== currentDraft
-          ) {
-            setText(restoredDraft);
-          }
-
-          const currentAttachments = attachmentsRef.current;
-          const restoredAttachments = failedSendAttachments(
-            payload.attachments,
-            currentAttachments,
-          );
-          if (
-            attachmentRevisionRef.current === optimisticAttachmentRevision ||
-            restoredAttachments.length !== currentAttachments.length
-          ) {
-            attachmentRevisionRef.current += 1;
-            updateAttachments(restoredAttachments);
-          }
-          dispatchSkillSelection({
-            type: "send-failed",
-            optimisticRevision: optimisticSkillRevision,
-            submitted: payload.selectedSkill,
-          });
+        // Keep the submitted text after a rejected or uncertain acknowledgment.
+        // An uncertain append is reconciled by ChatPane; it is never replayed here.
+        const currentDraft = draftRef.current.text;
+        const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+        if (
+          textRevisionRef.current === optimisticTextRevision ||
+          restoredDraft !== currentDraft
+        ) {
+          setText(restoredDraft);
         }
+
+        const currentAttachments = attachmentsRef.current;
+        const restoredAttachments = failedSendAttachments(
+          payload.attachments,
+          currentAttachments,
+        );
+        if (
+          attachmentRevisionRef.current === optimisticAttachmentRevision ||
+          restoredAttachments.length !== currentAttachments.length
+        ) {
+          attachmentRevisionRef.current += 1;
+          updateAttachments(restoredAttachments);
+        }
+        dispatchSkillSelection({
+          type: "send-failed",
+          optimisticRevision: optimisticSkillRevision,
+          submitted: payload.selectedSkill,
+        });
+        // Any failed IPC acknowledgement may have an unknown delivery outcome.
+        // Keep the marker until another deliberate submission settles it.
         throw error;
       } finally {
         sendPendingRef.current = false;
@@ -894,7 +971,7 @@ export function Composer({
         setSending(false);
       }
     },
-    [onSend, onQueue, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [chatId, onSend, onQueue, onSteer, onRedirect, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
@@ -1107,33 +1184,44 @@ export function Composer({
     }
   }, [onRenameChat, renameTitle, renaming]);
 
-  const beginAttachmentRead = (status: string): boolean => {
-    if (firstSendPendingRef.current) return false;
+  const beginAttachmentRead = (status: string): number | null => {
+    if (firstSendPendingRef.current) return null;
+    if (sendPendingRef.current) {
+      toast.info("Wait for the current message to finish sending before attaching files.");
+      return null;
+    }
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
-      return false;
+      return null;
     }
-    if (attachmentOperationRef.current) {
+    if (attachmentOperationRef.current.isBusy) {
       toast.info("Wait for the current attachments to finish loading.");
-      return false;
+      return null;
     }
-    attachmentOperationRef.current = true;
+    const token = attachmentOperationRef.current.begin();
     setAttaching(true);
     setAttachmentStatus(status);
-    return true;
+    return token;
   };
 
-  const finishAttachmentRead = () => {
-    attachmentOperationRef.current = false;
+  const finishAttachmentRead = (token: number) => {
+    if (!attachmentOperationRef.current.isCurrent(token)) return;
+    attachmentOperationRef.current.finish(token);
     setAttaching(false);
-    requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      if (attachmentOperationRef.current.isCurrent(token)) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+    });
   };
 
   const acceptReadAttachments = (added: Attachment[], emptyStatus: string): number => {
-    if (visionSupported === false && added.some((attachment) => attachment.kind === "image")) {
-      added = added.filter((attachment) => attachment.kind !== "image");
-      toast.info("The selected model can't read images — image attachments were skipped.");
-    }
+    const accepted = acceptComposerAttachments(
+      attachmentsRef.current,
+      added,
+      attachmentVisionRef.current !== false,
+    );
+    added = accepted;
     if (added.length === 0) {
       setAttachmentStatus(emptyStatus);
       return 0;
@@ -1147,17 +1235,18 @@ export function Composer({
   };
 
   const handleAttach = async () => {
-    if (!beginAttachmentRead("Attachment picker open. Selected files will load before sending.")) {
-      return;
-    }
+    const token = beginAttachmentRead(
+      "Attachment picker open. Selected files will load before sending.",
+    );
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
       if (remainingSlots <= 0) {
         setAttachmentStatus("The attachment count limit has been reached.");
         toast.info(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`);
         return;
       }
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingInlineBytes <= 0) {
         setAttachmentStatus("The attachment data limit has been reached.");
         toast.info("This message has reached the attachment data limit.");
@@ -1168,25 +1257,32 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
-      if (picked.skipped > 0) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
+      const accepted = acceptReadAttachments(
+        picked.attachments,
+        "No compatible attachments were added.",
+      );
+      const skipped = picked.skipped + picked.attachments.length - accepted;
+      if (skipped > 0) {
         toast.info(
-          `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+          `${skipped} selected ${skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
         );
       }
-      acceptReadAttachments(picked.attachments, "No compatible attachments were added.");
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Attachments could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readDroppedAttachments = async (files: File[]) => {
-    if (!beginAttachmentRead("Dropped files are loading before sending.")) return;
+    const token = beginAttachmentRead("Dropped files are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingSlots <= 0 || remainingInlineBytes <= 0) {
         toast.info("This message has reached its attachment limit.");
         setAttachmentStatus("The attachment limit has been reached.");
@@ -1198,6 +1294,7 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No compatible dropped files were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1205,18 +1302,20 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Dropped files could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that dropped file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readClipboardImages = async (files: File[]) => {
-    if (!beginAttachmentRead("Clipboard images are loading before sending.")) return;
+    const token = beginAttachmentRead("Clipboard images are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       const eligible: File[] = [];
       let plannedBytes = 0;
       for (const file of files) {
@@ -1243,11 +1342,13 @@ export function Composer({
           bytes: new Uint8Array(await file.arrayBuffer()),
         })),
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const added = await attachmentsApi.readClipboardImages(
         payload,
         remainingSlots,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No clipboard images were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1255,14 +1356,35 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Clipboard images could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that clipboard image.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
+  const readClipboardImagesRef = React.useRef(readClipboardImages);
+  readClipboardImagesRef.current = readClipboardImages;
+  React.useEffect(
+    () =>
+      composerImageAttach.register({
+        chatId,
+        available: () => {
+          const input = inputRef?.current;
+          return Boolean(
+            input?.isConnected &&
+              !input.disabled &&
+              !input.closest('[aria-hidden="true"], [inert]') &&
+              !firstSendPendingRef.current &&
+              !sendPendingRef.current,
+          );
+        },
+        receive: (files) => void readClipboardImagesRef.current(files),
+      }),
+    [chatId, inputRef],
+  );
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1306,9 +1428,13 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  const submit = async () => {
+  const submit = async (redirectConfirmed = false) => {
+    if (redirectConfirmed && !isGenerating) {
+      toast.info("The previous response has finished. Send your message normally.");
+      return;
+    }
     if (sendPendingRef.current || composing) return;
-    if (attachmentOperationRef.current || attaching) {
+    if (attachmentOperationRef.current.isBusy || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
     }
@@ -1322,6 +1448,20 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    const mode = isGenerating ? busyMode : hasQueuedMessages ? "queue" : undefined;
+    if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
+      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      return;
+    }
+    if (mode === "redirect" && !redirectConfirmed) {
+      if (attachments.length > 0 || selectedSkill) {
+        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
+        return;
+      }
+      setConfirmRedirect(true);
+      return;
+    }
+    if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
       toast.info(selectedSkillState.reason);
       return;
@@ -1340,6 +1480,7 @@ export function Composer({
         attachments,
         selectedSkill,
         skillRevision: skillSelection.revision,
+        mode,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -1622,6 +1763,7 @@ export function Composer({
                 programmaticReturnFocusRef={inputRef}
               />
             ) : null}
+            <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
           <div
@@ -1719,7 +1861,6 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
-              data-aiden-composer="true"
               value={text}
               readOnly={sessionCommandBusy || firstSendPending}
               aria-busy={sessionCommandBusy || firstSendPending || undefined}
@@ -2026,10 +2167,31 @@ export function Composer({
                   )}
                 </Button>
                 {onQueue && isGenerating ? (
-                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
-                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
-                    <ListPlus />
-                  </Button>
+                  <>
+                    <Button variant="accent" size="small" disabled={!canSend}
+                      onClick={() => void submit()} aria-label={busyMode === "queue" ? "Queue message" : busyMode === "steer" ? "Steer response" : "Redirect response"}>
+                      {busyMode === "queue" ? <ListPlus /> : <ArrowUp />}
+                      {busyMode === "queue" ? "Queue" : busyMode === "steer" ? "Steer" : "Redirect"}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="transparent" size="small" iconOnly aria-label="Choose message action">
+                          <ChevronDown aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem disabled={!onSteer || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("steer")}>
+                          Steer · Add guidance without stopping
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setBusyMode("queue")}>
+                          Queue · Run after this response
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={!onRedirect || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("redirect")}>
+                          Redirect · Stop and change direction
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
                 ) : null}
                 {isGenerating ? (
                   <Button
@@ -2059,6 +2221,18 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={confirmRedirect}
+        onOpenChange={setConfirmRedirect}
+        title="Redirect this response?"
+        description="Aiden will stop the current response and run your new direction next. Queued follow-ups will be cleared."
+        confirmLabel="Redirect"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => {
+          setConfirmRedirect(false);
+          void submit(true);
+        }}
+      />
       <AlertDialog
         open={voice.awaitingRecordedRetryConsent}
         onOpenChange={(open) => {

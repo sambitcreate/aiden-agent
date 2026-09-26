@@ -6,7 +6,9 @@ import test from "node:test";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
+  AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
   AIDEN_REMOTE_ERROR_CODES,
   AIDEN_REMOTE_EVENT_TYPES,
   AIDEN_REMOTE_MAX_CHAT_MESSAGES,
@@ -16,6 +18,8 @@ import {
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
+  parseAidenRemoteChatAgentRoster,
+  parseAidenRemoteChatTaskProgress,
   parseAidenRemoteChatProjection,
   parseAidenRemoteStreamEvent,
   parseAidenSseFrames,
@@ -85,12 +89,19 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
+// Simulator control is a desktop-to-desktop grant: pairing never issues it and
+// phones are never told it exists, so the shared mobile fixture omits it.
+const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
+  (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+);
+
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 10);
+  assert.equal(fixture.contractRevision, 11);
+  assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
-  assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
-  assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
+  assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.equal(record(fixture.speechStatus, "fixture speech status").selectedModelId, "parakeet-v3");
@@ -101,7 +112,15 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   );
   assert.deepEqual(
     new Set(fixture.events.map((event) => event.type)),
-    new Set(AIDEN_REMOTE_EVENT_TYPES),
+    new Set(
+      AIDEN_REMOTE_EVENT_TYPES.filter(
+        (type) => type !== "task_update" && type !== "agents_update",
+      ),
+    ),
+  );
+  assert.deepEqual(
+    new Set(fixture.chatProgressEvents.map((event) => event.type)),
+    new Set(["task_update", "agents_update"]),
   );
   assert.equal(JSON.stringify(fixture).includes("/Users/"), false);
   assert.equal(JSON.stringify(fixture).includes("BEGIN PRIVATE KEY"), false);
@@ -147,6 +166,59 @@ test("shared manual pairing vector decrypts with the frozen cross-platform const
   assert.equal(JSON.stringify(bootstrap).includes(String(pairingBootstrap.secret)), false);
 });
 
+test("task progress projections reject multiple active tasks and dependency cycles", async () => {
+  const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
+  const multipleActive = structuredClone(fixture.taskProgress);
+  multipleActive.tasks[2]!.status = "in_progress";
+  assert.throws(
+    () => parseAidenRemoteChatTaskProgress(multipleActive),
+    /at most one in_progress task/u,
+  );
+
+  const cycle = structuredClone(fixture.taskProgress);
+  cycle.tasks[0]!.blockedBy = [3];
+  assert.throws(
+    () => parseAidenRemoteChatTaskProgress(cycle),
+    /blockedBy relationships must be acyclic/u,
+  );
+});
+
+test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
+  const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
+  const roster = fixture.agentRoster;
+  assert.deepEqual(roster.previousTurns?.map((turn) => turn.turnId), [
+    "turn_fixture_previous_02",
+    "turn_fixture_previous_01",
+  ]);
+
+  const currentTurn = structuredClone(roster);
+  currentTurn.previousTurns![0]!.turnId = roster.turnId!;
+  assert.throws(
+    () => parseAidenRemoteChatAgentRoster(currentTurn),
+    /exclude the current turn/u,
+  );
+
+  const unordered = structuredClone(roster);
+  [unordered.previousTurns![0], unordered.previousTurns![1]] = [
+    unordered.previousTurns![1]!,
+    unordered.previousTurns![0]!,
+  ];
+  assert.throws(
+    () => parseAidenRemoteChatAgentRoster(unordered),
+    /newest-first/u,
+  );
+
+  const tooMany = structuredClone(roster);
+  tooMany.previousTurns = Array.from({ length: AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS + 1 }, (_, index) => ({
+    turnId: `turn_previous_${index}`,
+    startedAt: "2026-08-18T18:00:00.000Z",
+  }));
+  assert.throws(
+    () => parseAidenRemoteChatAgentRoster(tooMany),
+    /bounded array/u,
+  );
+});
+
 test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics", async () => {
   const document = record(await json("openapi.json"), "OpenAPI");
   assert.equal(document.openapi, "3.1.0");
@@ -159,6 +231,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/exchange",
     "/server",
     "/device/identity",
+    "/device/capabilities",
     "/workspaces",
     "/workspaces/{workspaceId}",
     "/workspace-browser/roots",
@@ -168,6 +241,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/move",
+    "/chats/{chatId}/tasks",
+    "/chats/{chatId}/agents",
+    "/chats/{chatId}/progress/events",
     "/chats/{chatId}/turns",
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
@@ -222,6 +298,12 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/mcp-servers",
     "/memory/settings",
     "/scheduled-tasks/settings",
+    "/simulators",
+    "/simulators/open",
+    "/simulators/shutdown",
+    "/simulators/settings",
+    "/simulators/action",
+    "/simulators/hub/{hubPath}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -242,6 +324,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
   });
+  assert.equal(record(pairingRequestProperties.acceptsProgressCapabilities, "acceptsProgressCapabilities").type, "boolean");
   const pairingResponseCapabilities = record(
     record(
       record(schemas.PairingExchangeResponse, "PairingExchangeResponse").properties,
@@ -249,7 +332,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     ).capabilities,
     "PairingExchangeResponse capabilities",
   );
-  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, MOBILE_CAPABILITIES);
   const serverSchema = record(schemas.Server, "Server");
   const serverProperties = record(
     serverSchema.properties,
@@ -285,6 +368,54 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "device identity patch",
   );
   assert.equal(identityPatch["x-aiden-capability"], "server:read");
+  const capabilitiesPost = record(
+    record(paths["/device/capabilities"], "device capabilities").post,
+    "device capabilities post",
+  );
+  assert.equal(capabilitiesPost["x-aiden-capability"], "server:read");
+  const tasksGet = record(
+    record(paths["/chats/{chatId}/tasks"], "chat tasks").get,
+    "chat tasks get",
+  );
+  assert.equal(tasksGet["x-aiden-capability"], "chat:read");
+  assert.deepEqual(tasksGet["x-aiden-capabilities"], ["chat:read", "tasks:read"]);
+  const agentsGet = record(
+    record(paths["/chats/{chatId}/agents"], "chat agents").get,
+    "chat agents get",
+  );
+  assert.equal(agentsGet["x-aiden-capability"], "chat:read");
+  assert.deepEqual(agentsGet["x-aiden-capabilities"], ["chat:read", "agents:read"]);
+  const progressEventsGet = record(
+    record(paths["/chats/{chatId}/progress/events"], "chat progress events").get,
+    "chat progress events get",
+  );
+  assert.equal(progressEventsGet["x-aiden-capability"], "chat:read");
+  assert.deepEqual(
+    record(
+      record(record(schemas.ChatTaskProgress, "ChatTaskProgress").properties, "ChatTaskProgress properties")
+        .availability,
+      "task availability",
+    ).enum,
+    ["ready", "unavailable"],
+  );
+  assert.equal(
+    record(
+      record(record(schemas.ChatAgentRoster, "ChatAgentRoster").properties, "ChatAgentRoster properties")
+        .agents,
+      "roster agents",
+    ).maxItems,
+    64,
+  );
+  assert.equal(
+    record(
+      record(record(schemas.ChatAgentRoster, "ChatAgentRoster").properties, "ChatAgentRoster properties")
+        .previousTurns,
+      "roster previousTurns",
+    ).maxItems,
+    AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
+  );
+  const previousTurnSchema = record(schemas.ChatPreviousTurn, "ChatPreviousTurn");
+  assert.deepEqual(previousTurnSchema.required, ["turnId", "startedAt"]);
   const chatProperties = record(record(schemas.Chat, "Chat").properties, "Chat properties");
   assert.equal(record(chatProperties.botId, "Chat botId").maxLength, 160);
   const providerSchema = record(schemas.Provider, "Provider schema");
@@ -400,7 +531,13 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     document["x-aiden-context-private-response-fields"],
     "context-private response fields",
   );
-  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "ChatSummary", "Bot"]);
+  assert.deepEqual(privateResponseFields.appliesTo, [
+    "Chat",
+    "ChatSummary",
+    "Bot",
+    "ChatTaskProgress",
+    "ChatAgentRoster",
+  ]);
   assert.equal(privateResponseFields.recursive, true);
   assert.equal(
     privateResponseFields.normalization,
@@ -1073,6 +1210,22 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const unsafeDetails = clone();
   record(record(unsafeDetails.error, "error envelope").error, "error").details = { absolutePath: "/private/secret" };
   assert.throws(() => parseAidenRemoteContractFixture(unsafeDetails), /unsupported field/);
+
+  // The new progress projections are bounded public surfaces: private or
+  // additive unknown fields fail closed at every level, not only on legacy
+  // transcript shapes.
+  for (const [mutate, label] of [
+    [(draft: Record<string, unknown>) => { record(draft.taskProgress, "taskProgress").absolutePath = "/private/secret"; }, "taskProgress root"],
+    [(draft: Record<string, unknown>) => { record((record(draft.taskProgress, "taskProgress").tasks as unknown[])[0], "task").childTranscript = ["secret"]; }, "taskProgress task"],
+    [(draft: Record<string, unknown>) => { record(draft.agentRoster, "agentRoster").providerCredential = "secret"; }, "agentRoster root"],
+    [(draft: Record<string, unknown>) => { record((record(draft.agentRoster, "agentRoster").agents as unknown[])[0], "agent").childResult = "secret"; }, "agentRoster agent"],
+    [(draft: Record<string, unknown>) => { record((draft.chatProgressEvents as unknown[])[0], "event").payload = { ...record(record((draft.chatProgressEvents as unknown[])[0], "event").payload, "payload"), hiddenPrompt: "secret" }; }, "chatProgressEvents payload"],
+    [(draft: Record<string, unknown>) => { record(draft.deviceCapabilitiesUpdate, "deviceCapabilitiesUpdate").sessionId = "private"; }, "deviceCapabilitiesUpdate"],
+  ] as const) {
+    const mutated = clone();
+    mutate(mutated);
+    assert.throws(() => parseAidenRemoteContractFixture(mutated), /Forbidden private Bot wire key|private child field|unsupported field|unsupported key/i, label);
+  }
   for (const requiredField of ["message", "requestId", "retryable"]) {
     const malformed = clone();
     delete record(record(malformed.error, "error envelope").error, "error")[requiredField];
@@ -1113,6 +1266,37 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
     /Forbidden Aiden Remote wire key/,
   );
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, type: "future_terminal", terminal: true, payload: {} }), /Unknown terminal/);
+
+  const progressHeartbeat = clone();
+  const progressEvents = progressHeartbeat.chatProgressEvents;
+  assert(Array.isArray(progressEvents));
+  progressHeartbeat.chatProgressEvents = [
+    ...progressEvents,
+    {
+      ...record(progressEvents[0], "progress event"),
+      sequence: 3,
+      type: "heartbeat",
+      payload: {},
+    },
+  ];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(progressHeartbeat),
+    /Chat progress events must be nonterminal updates/u,
+  );
+  const ordinaryProgress = clone();
+  assert(Array.isArray(ordinaryProgress.events));
+  ordinaryProgress.events = [
+    {
+      ...record(progressEvents[0], "progress event"),
+      streamId: "stream_fixture_01",
+      sequence: 1,
+    },
+    ...ordinaryProgress.events.slice(1),
+  ];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(ordinaryProgress),
+    /task_update payload chatId must match the event streamId/u,
+  );
 });
 
 test("endpoint authority grammar stays exact across LAN and tailnet host forms", async () => {
@@ -1317,6 +1501,25 @@ test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and reje
   }
 });
 
+test("chat parser limits reasoning to regular assistants and 100,000 UTF-16 units", () => {
+  const projection = {
+    id: "chat-1", workspaceId: "workspace-1", title: "Chat",
+    messages: [{ id: "message-1", role: "assistant", text: "Done", reasoning: "visible",
+      createdAt: "2026-08-23T00:00:00.000Z" }],
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z", revision: "revision-1",
+  };
+  assert.equal(parseAidenRemoteChatProjection(projection).messages[0]?.reasoning, "visible");
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection, botId: "bot-1" }),
+    /regular-assistant-only/u);
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(60_000) }],
+  }), /UTF-16/u);
+  assert.equal(parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(50_000) }],
+  }).messages[0]?.reasoning?.length, 100_000);
+});
+
 test("SSE framing resumes by id, ignores duplicates and unknown nonterminal events, and reconciles gaps", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const [first, second] = fixture.events;
@@ -1356,4 +1559,22 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
     true,
   );
+});
+
+test("produced-file OpenAPI constraints agree with runtime path and provenance validation", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { parseProducedFile } = await import("../../renderer/shared/produced-file.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const ajv = new Ajv2020({ strict: false });
+  const validate = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const base = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "write_file", label: "Write file", status: "completed", startedAt: 1, updatedAt: 1 };
+  for (const relativePath of [...["\u2028", "\u2029"].flatMap((separator) => [`a/${separator}/b`, `a/${separator}/../b`, `a/${separator}/./b`, `a/${separator}//b`, `a/${separator}/`]), "out/report.txt", "foo:bar.txt", "a:b/c.txt", "K:/secret", "😀".repeat(121), "😀".repeat(241), "/abs", "../secret", "a/../b", "a/./b", "a\\b", "a//b", "a/", "~file", "C:/secret", "bad\nname"]) {
+    const file = { relativePath, operation: "written", bytes: 12 };
+    assert.equal(validate({ ...base, producedFile: file }), Boolean(parseProducedFile(file, "write_file")), relativePath);
+  }
+  const producedFile = { relativePath: "report.txt", operation: "written", bytes: 12 };
+  assert.equal(validate({ ...base, producedFile, status: "failed" }), false);
+  assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
+  assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
+  assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
 });

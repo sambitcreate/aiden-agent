@@ -182,8 +182,14 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/message-list.tsx"),
     "utf8",
   );
-  assert.match(messageList, /MINIMUM_VISUALIZING_MS = 700/u);
-  assert.match(messageList, /active=\{active \|\| visualizing\}/u);
+  assert.match(messageList, /assistantPresentationRows\(/u);
+  assert.doesNotMatch(messageList, /MINIMUM_VISUALIZING_MS/u);
+  const chatPane = await fs.readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/main/chat-pane.tsx"),
+    "utf8",
+  );
+  assert.match(chatPane, /hasActiveToolStep\(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME\)/u);
+  assert.match(chatPane, /visualizingVisible:/u);
 });
 
 test("export refuses to silently drop missing host libraries", () => {

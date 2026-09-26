@@ -241,7 +241,7 @@ export async function sendTelegramTurn(
   workspace?: TelegramWorkspaceResolution,
   attachments?: readonly Attachment[],
   observer?: (channel: NotificationChannel, payload: unknown) => void,
-  options?: { binding?: TelegramBotBindingSnapshot; skillInvocation?: TelegramSkillInvocation },
+  options?: { binding?: TelegramBotBindingSnapshot; skillInvocation?: TelegramSkillInvocation; signal?: AbortSignal },
 ): Promise<TelegramTurnResult> {
   const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
   if (resolvedWorkspace.kind === "stale") {
@@ -304,6 +304,7 @@ export async function sendTelegramTurn(
 
   const streamId = telegramStreamId();
   const thinkingLevel = await deps.resolveThinkingLevel?.();
+  if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
   const background = createTelegramBackgroundOwner(streamId, observer);
   const turn = deps.llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
   if (!turn) {
@@ -325,6 +326,7 @@ export async function sendTelegramTurn(
       turn.settleAsyncWork();
     }
 
+    if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
     const started = await deps.llmClient.start(
       streamId,
       {

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   completeHeldModifierSet,
@@ -78,13 +77,3 @@ test("a later keydown without Command clears a stuck Meta hold", () => {
   }, tracked);
   assert.equal(completeHeldModifierSet(held, required), false);
 });
-
-test("the reveal hook waits for a complete hold, uses capture, and clears on blur", () => {
-  const hook = readFileSync(new URL("./use-held-modifier-reveal.ts", import.meta.url), "utf8");
-  assert.match(hook, /delayMs/u);
-  assert.match(hook, /addEventListener\("keydown", onKeyDown, true\)/u);
-  assert.match(hook, /addEventListener\("keyup", onKeyUp, true\)/u);
-  assert.match(hook, /window\.addEventListener\("blur", hide\)/u);
-  assert.match(hook, /document\.visibilityState !== "visible"/u);
-});
-

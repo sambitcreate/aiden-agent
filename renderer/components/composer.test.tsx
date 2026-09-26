@@ -4,6 +4,14 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ProviderIcon } from "./provider-icon";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import {
+  loadComposerDraft,
+  markComposerSubmission,
+  restoreUndeliveredGuidance,
+  saveComposerDraftText,
+  settleComposerSubmission,
+  subscribeGuidanceRestore,
+} from "../lib/composer-draft-store";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -14,6 +22,80 @@ const PROVIDER_ARTWORK: ProviderArtwork = {
   dataBase64:
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
 };
+
+test("uncertain composer submission restores text without automatically resending", () => {
+  const values = new Map<string, string>();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  try {
+    saveComposerDraftText("test-chat", "Change the plan");
+    markComposerSubmission("test-chat", "Change the plan");
+    saveComposerDraftText("test-chat", "");
+    assert.equal(loadComposerDraft("test-chat").text, "Change the plan");
+    assert.equal(loadComposerDraft("test-chat").unresolvedText, "Change the plan");
+    saveComposerDraftText("test-chat", "A newer thought");
+    settleComposerSubmission("test-chat", true, "A newer thought");
+    assert.equal(loadComposerDraft("test-chat").text, "A newer thought");
+    assert.equal(loadComposerDraft("test-chat").unresolvedText, undefined);
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
+
+test("submission refuses to clear a draft when its recovery marker cannot be saved", () => {
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    setItem: () => { throw new Error("Quota exceeded"); },
+  } as unknown as Storage;
+  try {
+    assert.throws(
+      () => markComposerSubmission("full-storage-chat", "Keep this text"),
+      /could not save this draft/u,
+    );
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
+
+test("undelivered Steer guidance is appended to the draft, never resent", () => {
+  const values = new Map<string, string>();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  try {
+    // Unmounted chat: the device-local draft keeps the existing text first.
+    saveComposerDraftText("guidance-chat", "Unsent note");
+    restoreUndeliveredGuidance("guidance-chat", ["Use smaller commits"]);
+    assert.equal(loadComposerDraft("guidance-chat").text, "Unsent note\n\nUse smaller commits");
+
+    // Mounted composer: it merges with its live text, so storage is left to it.
+    const received: string[][] = [];
+    const unsubscribe = subscribeGuidanceRestore("guidance-chat", (guidance) => {
+      received.push([...guidance]);
+    });
+    restoreUndeliveredGuidance("guidance-chat", ["Second thought"]);
+    unsubscribe();
+    assert.deepEqual(received, [["Second thought"]]);
+    assert.equal(loadComposerDraft("guidance-chat").text, "Unsent note\n\nUse smaller commits");
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
+
+test("busy composer actions are closed while Stop is settling", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /stoppingGeneration = false,/u);
+  assert.match(composer, /!sessionCommandBusy &&\s*!\(isGenerating && stoppingGeneration\)/u);
+  assert.match(composer, /subscribeGuidanceRestore\(chatId, \(guidance\) => \{/u);
+  assert.match(composer, /mergeRestoredGuidance\(current, guidance\)/u);
+});
 
 test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {
   const markup = renderToStaticMarkup(
@@ -52,7 +134,6 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /composer-shell/u);
-  assert.match(composer, /data-aiden-composer="true"/u);
   assert.match(
     composer,
     /className="max-h-48 border-0 bg-transparent px-1\.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"/u,
@@ -107,7 +188,7 @@ test("composer routes Finder drops and raster paste through the fixed preload br
   assert.match(composer, /onDragOver=\{handleDragOver\}/u);
   assert.match(composer, /onDrop=\{handleDrop\}/u);
   assert.match(composer, /onPaste=\{handlePaste\}/u);
-  assert.match(composer, /attachmentOperationRef\.current \|\| attaching/u);
+  assert.match(composer, /attachmentOperationRef\.current\.isBusy \|\| attaching/u);
   assert.match(composer, /Wait for the current attachments to finish loading/u);
   assert.match(composer, /plannedBytes \+ file\.size > remainingInlineBytes/u);
   assert.match(ipc, /window\.aidenAPI\.attachments\.readDroppedFiles/u);
@@ -155,6 +236,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /event\.key === "PageDown"/u);
   assert.match(composer, /event\.key === "Home"/u);
   assert.match(palette, /role="listbox"/u);
+  assert.match(palette, /data-browser-occluder/u);
   assert.doesNotMatch(palette, /role="group"/u);
   assert.match(palette, /role="option"/u);
   assert.match(palette, /aria-live="polite"/u);
@@ -182,7 +264,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /slashSession\?\.kind === "skill" && skillCatalog\.isError/u);
   assert.match(
     composer,
-    /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => inputRef\?\.current\?\.focus/u,
+    /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => \{\s*if \(attachmentOperationRef\.current\.isCurrent\(token\)\)/u,
   );
   assert.match(palette, /data-presence=\{presenceState\}/u);
   assert.match(styles, /@keyframes aiden-slash-palette-in/u);
@@ -217,7 +299,8 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
-  assert.match(composer, /!isAppendReconciliationRequired\(error\)/u);
+  assert.match(composer, /markComposerSubmission\(chatId, payload\.draftText\)/u);
+  assert.match(composer, /settleComposerSubmission\(chatId, true, draftRef\.current\.text\)/u);
   assert.match(
     composer,
     /if \(result\.command\.action\.kind === "composer-instruction"\) return;/u,
@@ -338,7 +421,7 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   const composer = source("./composer.tsx");
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
-  assert.match(composer, /if \(firstSendPendingRef\.current \|\| !available\(\)\) return false/u);
+  assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
   assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
   assert.match(composer, /role="status"[^\n]*Sending…/u);
 });
@@ -362,4 +445,23 @@ test("voice recovery preserves the draft and offers a direct settings action", (
   assert.match(composer, /voice.dismissError/u);
   assert.match(recorder, /setLastError\(message\)/u);
   assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
+});
+
+test("all asynchronous attachment entry points fence completion and current draft limits", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /return \(\) => operation\.cancel\(\)/u);
+  assert.match(composer, /attachmentVisionRef\.current = visionSupported/u);
+  assert.match(composer, /acceptComposerAttachments\(\s*attachmentsRef\.current,\s*added,\s*attachmentVisionRef\.current !== false/u);
+  for (const [start, end] of [
+    ["const handleAttach =", "const readDroppedAttachments ="],
+    ["const readDroppedAttachments =", "const readClipboardImages ="],
+    ["const readClipboardImages =", "const handleDrop ="],
+  ]) {
+    const handler = composer.slice(composer.indexOf(start), composer.indexOf(end));
+    assert.match(handler, /if \(token === null\) return/u);
+    assert.match(handler, /await attachmentsApi\.[\s\S]*?if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;[\s\S]*?acceptReadAttachments/u);
+    assert.match(handler, /catch \(error\) \{\s*if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return/u);
+    assert.match(handler, /finishAttachmentRead\(token\)/u);
+  }
+  assert.match(composer, /if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;\s*const added = await attachmentsApi\.readClipboardImages/u);
 });

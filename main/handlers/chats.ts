@@ -31,6 +31,7 @@ import {
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import {
@@ -48,6 +49,7 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
+import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
@@ -149,7 +151,7 @@ export function registerChatHistoryHandlers(): void {
     );
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (!chat || chat.botId || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
+    if (!chat || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
@@ -492,40 +494,18 @@ export function registerChatHistoryHandlers(): void {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean")
         throw new Error("Invalid Computer Use chat setting.");
-      const release = llmClient.beginComputerUseSettingChange(chatId);
-      if (!release) {
-        throw new Error(
-          "Finish or stop the current response before changing Computer Use.",
-        );
-      }
-      const controller = new AbortController();
-      const removeInvalidation = owner.onInvalidated(() =>
-        controller.abort(
-          new Error("The renderer document is no longer active."),
-        ),
+      return chatForRenderer(
+        await applyComputerUseSettingChange(owner, chatId, enabled, {
+          begin: (targetChatId) =>
+            llmClient.beginComputerUseSettingChange(targetChatId),
+          status: (signal) => computerUseStatus.status({ signal }),
+          persist: (targetChatId, nextEnabled, isCurrent) =>
+            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
+          // Aiden Live owns separate per-session authority and is unaffected
+          // by an ordinary chat's Computer Use toggle.
+          revokeLive: () => undefined,
+        }),
       );
-      try {
-        if (enabled) {
-          const status = await computerUseStatus.status({
-            signal: controller.signal,
-          });
-          if (owner.isDestroyed())
-            throw new Error("The renderer document is no longer active.");
-          if (!status.ready) throw new Error(status.detail);
-        }
-        if (owner.isDestroyed())
-          throw new Error("The renderer document is no longer active.");
-        return chatForRenderer(
-          await chatStore.setComputerUseEnabled(
-            chatId,
-            enabled,
-            () => !owner.isDestroyed(),
-          ),
-        );
-      } finally {
-        removeInvalidation();
-        release();
-      }
     },
   );
 
@@ -536,6 +516,7 @@ export function registerChatHistoryHandlers(): void {
       ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
       : await chatApplicationService.remove(chatId);
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
+    closeDeviceSessionsForChat(chatId);
     return result;
   });
 

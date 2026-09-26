@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.protocol.*
 
 @Serializable
@@ -173,6 +174,22 @@ data class AidenBotAvatarUploadContractFixture(
 )
 
 @Serializable
+data class AidenDeviceCapabilitiesUpdateRequestFixture(
+    val accepts: List<AidenRemoteCapability>
+)
+
+@Serializable
+data class AidenDeviceCapabilitiesUpdateResponseFixture(
+    val capabilities: List<AidenRemoteCapability>
+)
+
+@Serializable
+data class AidenDeviceCapabilitiesUpdateFixture(
+    val request: AidenDeviceCapabilitiesUpdateRequestFixture,
+    val response: AidenDeviceCapabilitiesUpdateResponseFixture
+)
+
+@Serializable
 data class AidenBotLegacyNonNegotiatingFixture(
     val pairingExchange: AidenPairingExchange,
     val server: AidenServer
@@ -216,6 +233,10 @@ data class AidenRemoteContractFixture(
     val botNoticeAcknowledgement: AidenBotNoticeAcknowledgementContractFixture,
     val botAvatarUpload: AidenBotAvatarUploadContractFixture,
     val botAvatarMetadata: AidenBotAvatarAsset,
+    val taskProgress: AidenChatTaskProgress? = null,
+    val agentRoster: AidenChatAgentRoster? = null,
+    val deviceCapabilitiesUpdate: AidenDeviceCapabilitiesUpdateFixture? = null,
+    val chatProgressEvents: List<AidenRemoteStreamEvent> = emptyList(),
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
     val error: AidenRemoteErrorEnvelope? = null
 )

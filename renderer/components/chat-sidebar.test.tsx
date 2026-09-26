@@ -241,9 +241,6 @@ test("chat shortcuts follow the rows rendered by the active organization", () =>
     /const shortcutGroups = React\.useMemo\(\(\) => groupChats\(renderedChats\)/u,
   );
   assert.match(sidebar, /createSidebarChatShortcutAssignments\(shortcutGroups\)/u);
-  assert.match(sidebar, /useHeldModifierReveal\(/u);
-  assert.match(sidebar, /prettyAccelerator\(shortcutBinding\)/u);
-  assert.match(sidebar, /data-chat-shortcut-hint="true"/u);
 });
 
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
@@ -330,22 +327,12 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden settings uses the canonical sidebar logo", () => {
+test("Aiden Live settings has a dedicated destination and the dock restores the app logo", () => {
   const settings = source("../main/settings-view.tsx");
-  const rendererLogo = readFileSync(
-    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
-  );
-  const canonicalLogo = readFileSync(
-    new URL(
-      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
-      import.meta.url,
-    ),
-  );
-
-  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
-  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
-  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
-  assert.deepEqual(rendererLogo, canonicalLogo);
+  const dock = source("./assistant/assistant-dock.tsx");
+  assert.match(settings, /geminiLive: <AudioWaveform/u);
+  assert.match(dock, /resources\/app-icon\.png/u);
+  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
 });
 
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {

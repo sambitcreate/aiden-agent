@@ -1,5 +1,5 @@
 {
-  "contractRevision": 10,
+  "contractRevision": 11,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -18,7 +18,9 @@
     "schedule:read",
     "schedule:write",
     "bot:read",
-    "bot:write"
+    "bot:write",
+    "tasks:read",
+    "agents:read"
   ],
   "health": { "ok": true, "protocolVersion": 1 },
   "pairingBootstrap": {
@@ -35,7 +37,7 @@
     "deviceId": "device_fixture_01",
     "credential": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "displayName": "Fixture Aiden",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write"],
+    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"],
     "endpoint": "https://aiden-fixture.example.test/api/aiden/v1",
     "serverSpkiSha256": "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   },
@@ -44,9 +46,9 @@
     "instanceId": "instance_fixture_01",
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write"],
-    "features": ["chat-summaries-v1"],
+    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"],
+    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -164,10 +166,10 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }] } } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "heartbeat", "terminal": false, "payload": {} },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.750Z", "type": "heartbeat", "terminal": false, "payload": {} },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 10, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_error", "sequence": 1, "timestamp": "2026-08-18T19:02:00.000Z", "type": "error", "terminal": true, "payload": { "code": "server_interrupted", "message": "Aiden restarted before the turn completed." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_cancelled", "sequence": 1, "timestamp": "2026-08-18T19:03:00.000Z", "type": "cancelled", "terminal": true, "payload": { "source": "device" } }
@@ -804,6 +806,79 @@
     "height": 512,
     "byteSize": 1024
   },
+  "taskProgress": {
+    "version": 1,
+    "chatId": "chat_fixture_01",
+    "availability": "ready",
+    "epoch": "epoch_fixture_01",
+    "revision": 3,
+    "updatedAt": "2026-08-18T19:01:09.000Z",
+    "tasks": [
+      { "id": 1, "subject": "Inspect workspace structure", "status": "completed" },
+      { "id": 2, "subject": "Update greeting copy", "status": "in_progress", "activeForm": "Updating greeting copy", "blockedBy": [1] },
+      { "id": 3, "subject": "Verify the change builds", "status": "pending", "blockedBy": [2] }
+    ]
+  },
+  "agentRoster": {
+    "version": 1,
+    "chatId": "chat_fixture_01",
+    "turnId": "turn_fixture_01",
+    "previousTurns": [
+      { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" },
+      { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" }
+    ],
+    "availability": "ready",
+    "epoch": "epoch_fixture_01",
+    "revision": 2,
+    "updatedAt": "2026-08-18T19:01:09.000Z",
+    "agents": [
+      {
+        "agentId": "agent_fixture_01",
+        "depth": 1,
+        "revision": 4,
+        "role": "implementer",
+        "label": "Implement the change",
+        "taskPreview": "Make a scoped code change",
+        "state": "running",
+        "activity": "Reading sources",
+        "startedAt": "2026-08-18T19:01:01.000Z",
+        "updatedAt": "2026-08-18T19:01:08.000Z",
+        "modelId": "model_fixture",
+        "turns": 3,
+        "tools": 5,
+        "tokens": 4200,
+        "milestones": ["reading", "searching"]
+      },
+      {
+        "agentId": "agent_fixture_02",
+        "parentAgentId": "agent_fixture_01",
+        "depth": 2,
+        "revision": 2,
+        "role": "reviewer",
+        "label": "Check the findings",
+        "taskPreview": "Review the surveyed findings",
+        "state": "completed",
+        "startedAt": "2026-08-18T19:01:02.000Z",
+        "updatedAt": "2026-08-18T19:01:07.000Z",
+        "finishedAt": "2026-08-18T19:01:07.000Z",
+        "modelId": "model_fixture",
+        "turns": 2,
+        "tools": 1,
+        "tokens": 1100,
+        "notices": ["display_filtered"]
+      }
+    ]
+  },
+  "deviceCapabilitiesUpdate": {
+    "request": { "accepts": ["tasks:read", "agents:read"] },
+    "response": {
+      "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"]
+    }
+  },
+  "chatProgressEvents": [
+    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:09.000Z", "type": "task_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "availability": "ready", "epoch": "epoch_fixture_01", "revision": 3, "updatedAt": "2026-08-18T19:01:09.000Z", "tasks": [ { "id": 1, "subject": "Inspect workspace structure", "status": "completed" }, { "id": 2, "subject": "Update greeting copy", "status": "in_progress", "activeForm": "Updating greeting copy", "blockedBy": [1] }, { "id": 3, "subject": "Verify the change builds", "status": "pending", "blockedBy": [2] } ] } },
+    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:09.500Z", "type": "agents_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "previousTurns": [ { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" }, { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" } ], "availability": "ready", "epoch": "epoch_fixture_01", "revision": 2, "updatedAt": "2026-08-18T19:01:09.000Z", "agents": [ { "agentId": "agent_fixture_01", "depth": 1, "revision": 4, "role": "implementer", "label": "Implement the change", "taskPreview": "Make a scoped code change", "state": "running", "activity": "Reading sources", "startedAt": "2026-08-18T19:01:01.000Z", "updatedAt": "2026-08-18T19:01:08.000Z", "modelId": "model_fixture", "turns": 3, "tools": 5, "tokens": 4200, "milestones": ["reading", "searching"] }, { "agentId": "agent_fixture_02", "parentAgentId": "agent_fixture_01", "depth": 2, "revision": 2, "role": "reviewer", "label": "Check the findings", "taskPreview": "Review the surveyed findings", "state": "completed", "startedAt": "2026-08-18T19:01:02.000Z", "updatedAt": "2026-08-18T19:01:07.000Z", "finishedAt": "2026-08-18T19:01:07.000Z", "modelId": "model_fixture", "turns": 2, "tools": 1, "tokens": 1100, "notices": ["display_filtered"] } ] } }
+  ],
   "legacyNonNegotiating": {
     "pairingExchange": {
       "protocolVersion": 1,

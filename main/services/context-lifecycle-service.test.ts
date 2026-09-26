@@ -344,7 +344,7 @@ test("manual compaction excludes durable skill instructions while Skills is disa
       {
         id: `visible-user-${index}`,
         role: "user" as const,
-        content: `${index === 0 ? "Visible operator request" : `Visible follow-up ${index}`} ${"x".repeat(8_000)}`,
+        content: `${index === 0 ? "Visible operator request" : `Visible follow-up ${index}`} ${"x".repeat(1_200)}`,
         createdAt: index * 2 + 10,
       },
       {

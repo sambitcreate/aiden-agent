@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mcpResourceToolName } from "./mcp-resources.js";
+import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
 import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";
 import {
   assertBotSkillInvocationAllowed,
+  isComputerUseCapabilityTool,
+  protectAdmittedBotTool,
   botToolCapabilityAllowed,
   exactBotMcpToolNames,
   exactBotSkillToolNames,
@@ -732,4 +736,34 @@ test("skill publication joins the exact fresh catalog resource and runtime conte
     ),
     /skill changed while this response was starting/u,
   );
+});
+
+test("existing Full and Custom Bot MCP grants never admit the separate resource operation", () => {
+  const server = { id: connection.sourceId, name: "Calendar" };
+  const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true } };
+  for (const accessMode of ["full", "custom"] as const) {
+    const authority = { ...customAuthority, accessMode };
+    const admitted = exactBotMcpToolNames(authority, [current], (_id, name) => mcpAgentToolName(server, name));
+    assert.equal(admitted.has(mcpAgentToolName(server, mcpTool.name)), true);
+    assert.equal(admitted.has(mcpResourceToolName(server)), false);
+  }
+});
+
+
+test("form specialist uses only the Computer Use grant and remains revocable", async () => {
+  const names = ["computer_use", "form_fill", "form_fill_submit", "run_command"];
+  const grant = { kind: "computer_use" as const, capabilityFingerprint: fingerprint("u"), exactFingerprint: fingerprint("U") };
+  const authority = { ...customAuthority, otherCapabilities: [grant] };
+  const capability = { kind: "other" as const, ordinaryKind: grant.kind, capabilityFingerprint: grant.capabilityFingerprint, exactFingerprint: grant.exactFingerprint };
+  for (const allowed of [false, true]) {
+    const admitted = names.filter((name) => isComputerUseCapabilityTool(name) && botToolCapabilityAllowed(allowed ? authority : { ...authority, otherCapabilities: [] }, capability));
+    assert.deepEqual(admitted, allowed ? ["computer_use", "form_fill"] : []);
+  }
+  let effects = 0;
+  const controller = new AbortController();
+  const protectedTool = protectAdmittedBotTool(tool("form_fill", () => { effects++; }), { ...admission(authority), signal: controller.signal });
+  await protectedTool.execute("first", {});
+  controller.abort(new Error("Computer Use revoked"));
+  await assert.rejects(() => protectedTool.execute("second", {}), /revoked/);
+  assert.equal(effects, 1);
 });

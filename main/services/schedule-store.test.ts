@@ -629,3 +629,56 @@ test("a missing dedicated chat can be cleared and recreated", async () => {
   assert.notEqual(second, first);
   assert.equal(created.length, 2);
 });
+
+test("runtime ownership is rechecked at disk publication and preserves later writes", async (t) => {
+  const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { DataStore } = await import("./data-store.js");
+  const root = await mkdtemp(join(tmpdir(), "aiden-schedule-runtime-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let ownerIsCurrent = true;
+  let revokeBeforePublication = false;
+  const tasks = new DataStore<unknown[]>("tasks.json", [], () => root, {
+    beforeWritePublish: () => {
+      if (revokeBeforePublication) ownerIsCurrent = false;
+    },
+  });
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const task = await store.save({
+    name: "Daily brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  const originalBytes = await readFile(join(root, "tasks.json"), "utf8");
+  revokeBeforePublication = true;
+
+  await assert.rejects(
+    store.updateRuntime(
+      task.id,
+      { enabled: false, lastResult: "error", lastError: "obsolete startup failure" },
+      () => ownerIsCurrent,
+    ),
+    /no longer active/iu,
+  );
+  assert.deepEqual(await store.get(task.id), task);
+  assert.equal(await readFile(join(root, "tasks.json"), "utf8"), originalBytes);
+
+  revokeBeforePublication = false;
+  const newer = await store.updateRuntime(task.id, {
+    lastResult: "success",
+    chatId: "newer-chat-claim",
+  });
+  await assert.rejects(
+    store.updateRuntime(task.id, { enabled: false }, () => ownerIsCurrent),
+    /no longer active/iu,
+  );
+  assert.deepEqual(await store.get(task.id), newer);
+  const diskTask = JSON.parse(await readFile(join(root, "tasks.json"), "utf8"))[0];
+  assert.equal(diskTask.enabled, true);
+  assert.equal(diskTask.lastResult, "success");
+  assert.equal(diskTask.chatId, "newer-chat-claim");
+  assert.equal(diskTask.updatedAt, newer.updatedAt);
+});

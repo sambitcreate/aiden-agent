@@ -1,9 +1,12 @@
 import type { Chat } from "./types";
+import { discardComposerDraft } from "./composer-draft-store";
 
 /** A new-agent surface is renderer-only until its first user message commits. */
 export interface ChatDraft {
   readonly chat: Chat;
   readonly sending: boolean;
+  /** Optional one-shot composer seed supplied by an explicit app entry point. */
+  readonly initialText?: string;
 }
 
 const drafts = new Map<string, ChatDraft>();
@@ -20,17 +23,25 @@ export function getChatDraft(id: string): ChatDraft | undefined {
   return drafts.get(id);
 }
 
-export function createChatDraft(workspaceId: string, id = crypto.randomUUID()): ChatDraft {
+export function createChatDraft(
+  workspaceId: string,
+  id = crypto.randomUUID(),
+  initialText?: string,
+): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   // Multiple New activations can supersede navigation before a pane mounts.
   // Only keep drafts that acquired a view owner or have a send to settle.
   for (const [previousId, previous] of drafts) {
-    if (!owners.has(previousId) && !previous.sending) drafts.delete(previousId);
+    if (!owners.has(previousId) && !previous.sending) {
+      drafts.delete(previousId);
+      discardComposerDraft(previousId);
+    }
   }
   const now = Date.now();
   const draft: ChatDraft = {
     chat: { id, workspaceId, title: "New agent", messages: [], createdAt: now, updatedAt: now },
     sending: false,
+    ...(initialText ? { initialText } : {}),
   };
   drafts.set(id, draft);
   notify();
@@ -62,7 +73,10 @@ export function finishChatDraftSend(id: string, committed: boolean): void {
 
 export function discardChatDraft(id: string): void {
   if (drafts.get(id)?.sending) return;
-  if (drafts.delete(id)) notify();
+  if (drafts.delete(id)) {
+    discardComposerDraft(id);
+    notify();
+  }
 }
 
 /** Delay disposal one microtask so StrictMode's effect replay can reacquire it. */

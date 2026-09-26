@@ -11,6 +11,23 @@ checks for same-process writes. Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
+## Implementer run grants (2026-09-24)
+
+The foreground `implementer` role is being added to the host-managed Pi stack.
+Omitted task capabilities request workspace read, write, and shell while web,
+MCP, and nesting remain off. Existing scout, planner, and reviewer defaults stay
+read-only. Positive authority still intersects rollout flags, workspace and
+generation permission, and the parent ceiling. Full grants write and shell for
+the implementer run without a card; Ask presents one write card and one separate
+shell card on first use. The in-memory grants bind the run, authority digest,
+and workspace revision. Each operation still uses its exact-call ledger and
+rechecks live authority, workspace state, file preimage or shell root, and stop.
+
+P1 follow-up: support a per-task child model override resolved through the
+parent's model resolver, with the selected provider/model disclosed on the child
+run. This implementation keeps inheritance from the current parent runtime.
+Concurrent implementer worktree warnings and same-run continuation remain P1.
+
 ## Goal
 
 Evolve Aiden's safe foreground, fresh-context, read-only children into a native
@@ -53,7 +70,7 @@ authority is always the positive intersection:
 
 - Unknown versions, roles, tools, grants, and fields fail closed.
 - A descendant may only preserve or narrow its parent's effective authority.
-- Workspace Full permission is an upper bound, not automatic child consent.
+- Workspace Full permission is an upper bound. The foreground implementer role treats Full as implicit write and shell consent for that run; Ask requires one separate grant per lane.
 - A grant binds the tree, run, parent, chat, renderer owner, workspace identity
   and revision, provider/model fingerprint, context revision, tool identities,
   expiry, and resource budgets.
@@ -219,6 +236,8 @@ snapshots, histories, controls, and endpoints remain Mac-local. Structural
 privacy validation is recursive and normalized, but visible parent text stays
 opaque and exact. Aggregate desktop gates, Android 104/104 unit tests, and a
 physical-iPhone Phase 0 run (26 pass, 2 expected skips) are green.
+
+Mobile progress follow-on (2026-09-14): [Mobile Task Progress and Subagents](mobile-task-progress-and-subagents-plan.md) introduces a separately negotiated, read-only public roster with opaque public identities and bounded display facts. Ordinary parent transcripts and turn streams retain the historical parent-only contract; private child histories, raw prompts/results, and child mutation authority remain excluded. Follow-on validation does not replace the historical evidence above or activate background controls.
 
 Foreground failure remediation (2026-09-01): installed-production evidence
 showed three independent failures in one attended turn. `share_image` was being

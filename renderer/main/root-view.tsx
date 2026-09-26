@@ -34,6 +34,11 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
+import {
+  ASSISTANT_AUTOMATION_DRAFT,
+  onAssistantAutomationComposerRequested,
+} from "../lib/assistant-dock";
 
 export function RootView() {
   useTheme();
@@ -156,15 +161,21 @@ function RootContent() {
     }
     void navigate({ to: "/settings" });
   });
-  useCommandHandler(
-    "chat.new",
-    async () => {
-      if (!activeId) return;
+  const openNewChat = React.useCallback(
+    async (initialText?: string) => {
+      if (!activeId) {
+        toast.info("Choose a workspace before starting a chat.");
+        return;
+      }
+      if (appendReconciliationRequired) {
+        toast.error("Reload Aiden before creating another chat.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
       }
-      const chat = createChatDraft(activeId).chat;
+      const chat = createChatDraft(activeId, undefined, initialText).chat;
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
       } catch (error) {
@@ -172,7 +183,19 @@ function RootContent() {
         throw error;
       }
     },
+    [activeId, appendReconciliationRequired, navigate, navigationBlockedReason],
+  );
+  useCommandHandler(
+    "chat.new",
+    () => openNewChat(),
     Boolean(activeId) && !appendReconciliationRequired,
+  );
+  React.useEffect(
+    () =>
+      onAssistantAutomationComposerRequested(() => {
+        void openNewChat(ASSISTANT_AUTOMATION_DRAFT);
+      }),
+    [openNewChat],
   );
   React.useEffect(() => {
     void appApi.setCloseGuard({
@@ -235,6 +258,27 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
+    return onNotification("chats:pull-requests-changed", (payload: unknown) => {
+      const chatId =
+        payload && typeof payload === "object" && "chatId" in payload
+          ? (payload as { chatId?: unknown }).chatId
+          : undefined;
+      const scoped = typeof chatId === "string" && chatId;
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["chat-pull-requests", ...(scoped ? [chatId] : [])],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["chat-current-pull-request", ...(scoped ? [chatId] : [])],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["chat-pull-request-pending", ...(scoped ? [chatId] : [])],
+        }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
     return onNotification("bots:changed", () => {
       invalidateBotCanonicalPhotos();
       void Promise.all([
@@ -271,6 +315,8 @@ function RootContent() {
       ),
     [queryClient, reconcileChatCacheAfterIdle],
   );
+
+  React.useEffect(() => subscribeLateReturnedGuidance(onNotification), []);
 
   React.useEffect(
     () => subscribeChatReadReconciliations((owner) => reconcileChatCacheAfterIdle(owner.chatId)),

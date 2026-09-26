@@ -38,6 +38,24 @@ object AidenRemoteProtocol {
     const val MAX_PAIRING_PAYLOAD_BYTES = 4_096
     const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
     const val MAX_JSON_NESTING_DEPTH = 128
+    const val CHAT_TASKS_FEATURE = "chat-tasks-v1"
+    const val CHAT_AGENTS_FEATURE = "chat-agents-v1"
+    const val CHAT_PROGRESS_EPOCH_MAX_LENGTH = 64
+    const val MAX_CHAT_PREVIOUS_TURNS = 16
+    const val MAX_CHAT_TASKS = 256
+    const val MAX_CHAT_AGENTS = 64
+    const val MAX_CHAT_TASK_SUBJECT_LENGTH = 512
+    const val MAX_CHAT_TASK_ACTIVE_FORM_LENGTH = 512
+    const val MAX_CHAT_AGENT_DEPTH = 8
+    const val MAX_CHAT_AGENT_LABEL_LENGTH = 120
+    const val MAX_CHAT_AGENT_TASK_PREVIEW_LENGTH = 240
+    const val MAX_CHAT_AGENT_ACTIVITY_LENGTH = 160
+    const val MAX_CHAT_AGENT_MODEL_ID_LENGTH = 160
+    const val MAX_CHAT_AGENT_ERROR_LENGTH = 240
+    const val MAX_CHAT_AGENT_WARNINGS = 5
+    const val MAX_CHAT_AGENT_WARNING_LENGTH = 240
+    const val MAX_CHAT_AGENT_MILESTONES = 12
+    const val MAX_CHAT_AGENT_NOTICES = 3
 
     val FORBIDDEN_WIRE_KEYS = setOf(
         "authorization", "credentialDigest", "providerFingerprint", "mcpServerBindings",
@@ -175,6 +193,8 @@ sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
     object ChatSummaryProjection : AidenBotPrivateResponseScope()
+    /** Progress has its own strict DTO parser; this scope only applies the generic wire-key guard. */
+    object ChatProgressProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
 }
 
@@ -246,6 +266,13 @@ object AidenBotPrivateResponseValidator {
                 rejectExplicitNullCursor(element)
                 validateElement(element, root = "chatSummaryProjection", path = emptyList(), rejectPrivateChildFields = true)
             }
+            is AidenBotPrivateResponseScope.ChatProgressProjection -> {
+                // The progress codec enforces the exact DTO shape and bounded
+                // public fields. Keep this validator focused on generic
+                // credential/path aliases without treating safe counters such
+                // as `tokens` as private child transcript data.
+                validateElement(element, root = "chatProgressProjection", path = emptyList(), rejectPrivateChildFields = false)
+            }
             is AidenBotPrivateResponseScope.SharedFixture -> {
                 val obj = element as? kotlinx.serialization.json.JsonObject
                     ?: throw AidenRemoteContractException.InvalidJson("Expected JSON object for fixture")
@@ -278,24 +305,29 @@ object AidenBotPrivateResponseValidator {
         element: kotlinx.serialization.json.JsonElement,
         root: String,
         path: List<String>,
-        rejectPrivateChildFields: Boolean
+        rejectPrivateChildFields: Boolean,
+        regularChat: Boolean = false
     ) {
         when (element) {
             is kotlinx.serialization.json.JsonObject -> {
+                val knownRegularChat = root == "chatProjection" &&
+                    (path.isEmpty() || path == listOf("chats", "[]")) && element.containsKey("messages") &&
+                    element.containsKey("id") && !element.containsKey("botId")
+                val reasoningAllowed = regularChat || knownRegularChat
                 for ((key, child) in element) {
                     if ((normalizedPrivateKeys.contains(normalize(key)) ||
                             (rejectPrivateChildFields &&
                                 (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
-                        !isAllowedKnownIdentityKey(key, root, path)
+                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
-                    validateElement(child, root, path + key, rejectPrivateChildFields)
+                    validateElement(child, root, path + key, rejectPrivateChildFields, reasoningAllowed)
                 }
             }
             is kotlinx.serialization.json.JsonArray -> {
                 for (child in element) {
-                    validateElement(child, root, path + "[]", rejectPrivateChildFields)
+                    validateElement(child, root, path + "[]", rejectPrivateChildFields, regularChat)
                 }
             }
             else -> {}
@@ -345,8 +377,12 @@ object AidenBotPrivateResponseValidator {
     private fun isAllowedKnownIdentityKey(
         key: String,
         root: String,
-        parentPath: List<String>
+        parentPath: List<String>,
+        regularChat: Boolean
     ): Boolean {
+        if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
+            (parentPath == listOf("messages", "[]") ||
+                parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
         if (key != "instructions" && key != "openingGreeting") return false
         if (root in listOf("botDetail", "botArchive", "botRestore")) {
             return parentPath.isEmpty()
@@ -389,13 +425,17 @@ data class AidenRemoteCapability(val rawValue: String) {
         val SCHEDULE_WRITE = AidenRemoteCapability("schedule:write")
         val BOT_READ = AidenRemoteCapability("bot:read")
         val BOT_WRITE = AidenRemoteCapability("bot:write")
+        val TASKS_READ = AidenRemoteCapability("tasks:read")
+        val AGENTS_READ = AidenRemoteCapability("agents:read")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
             FILES_READ, FILES_WRITE, GIT_READ, GIT_WRITE,
-            SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE
+            SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ
         )
+
+        val PROGRESS = listOf(TASKS_READ, AGENTS_READ)
     }
 }
 
@@ -495,6 +535,8 @@ data class AidenRemoteEventType(val rawValue: String) {
         val TOOL_FINISHED = AidenRemoteEventType("tool_finished")
         val TIMELINE = AidenRemoteEventType("timeline")
         val APPROVAL_REQUIRED = AidenRemoteEventType("approval_required")
+        val TASK_UPDATE = AidenRemoteEventType("task_update")
+        val AGENTS_UPDATE = AidenRemoteEventType("agents_update")
         val DONE = AidenRemoteEventType("done")
         val ERROR = AidenRemoteEventType("error")
         val CANCELLED = AidenRemoteEventType("cancelled")
@@ -503,6 +545,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val V1_KNOWN = listOf(
             SNAPSHOT, STATUS, TEXT_DELTA, REASONING_DELTA,
             TOOL_STARTED, TOOL_FINISHED, TIMELINE, APPROVAL_REQUIRED,
+            TASK_UPDATE, AGENTS_UPDATE,
             DONE, ERROR, CANCELLED, HEARTBEAT
         )
     }

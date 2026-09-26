@@ -20,6 +20,12 @@ import type {
 } from "./web-search-provider-registry.js";
 import type { WebSearchProviderId } from "./web-search-provider-registry-core.js";
 
+import {
+  cancelWebSearchResponse,
+  readBoundedWebSearchResponse as readBoundedWebSearchJsonResponse,
+} from "./web-search-response.js";
+export { readBoundedWebSearchResponse as readBoundedWebSearchJsonResponse } from "./web-search-response.js";
+
 export const WEB_SEARCH_JSON_RESPONSE_MAX_BYTES = 256 * 1_024;
 export const WEB_SEARCH_JSON_REQUEST_MAX_BYTES = 8 * 1_024;
 export const WEB_SEARCH_API_KEY_MAX_CHARS = 4_096;
@@ -139,102 +145,6 @@ export function requireWebSearchApiKey(
 ): string {
   if (request.credentialMode !== "api-key") throw webSearchError("auth", providerId);
   return normalizeWebSearchApiKey(providerId, request.credential);
-}
-
-function responseContentLength(response: Response): number | undefined {
-  const raw = response.headers.get("content-length");
-  if (raw === null || !/^\d+$/u.test(raw)) return undefined;
-  const length = Number(raw);
-  return Number.isSafeInteger(length) ? length : Number.POSITIVE_INFINITY;
-}
-
-async function cancelBody(response: Response): Promise<void> {
-  try {
-    await response.body?.cancel();
-  } catch {
-    // The response is already being discarded; never expose an upstream
-    // cancellation message through the provider error boundary.
-  }
-}
-
-async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch {
-    // See cancelBody: cancellation failures are deliberately not observable.
-  }
-}
-
-async function raceReader<T>(
-  reader: ReadableStreamDefaultReader<T>,
-  signal: AbortSignal,
-): Promise<ReadableStreamReadResult<T>> {
-  if (signal.aborted) throw new DOMException("The request was aborted.", "AbortError");
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<ReadableStreamReadResult<T>>((_resolve, reject) => {
-        onAbort = () => reject(new DOMException("The request was aborted.", "AbortError"));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-  }
-}
-
-/**
- * Read a response before parsing it. The declared content length and every
- * streamed chunk are checked so JSON.parse never sees an oversized payload.
- */
-export async function readBoundedWebSearchJsonResponse(
-  response: Response,
-  signal: AbortSignal,
-  maximumBytes: number,
-  providerId: WebSearchProviderId,
-): Promise<Uint8Array> {
-  const declared = responseContentLength(response);
-  if (declared !== undefined && declared > maximumBytes) {
-    await cancelBody(response);
-    throw webSearchError("invalid-response", providerId);
-  }
-  if (!response.body || typeof response.body.getReader !== "function") {
-    throw webSearchError("invalid-response", providerId);
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const chunk = await raceReader(reader, signal);
-      if (chunk.done) break;
-      if (!(chunk.value instanceof Uint8Array)) {
-        await cancelReader(reader);
-        throw webSearchError("invalid-response", providerId);
-      }
-      total += chunk.value.byteLength;
-      if (total > maximumBytes) {
-        await cancelReader(reader);
-        throw webSearchError("invalid-response", providerId);
-      }
-      chunks.push(chunk.value);
-    }
-  } catch (error) {
-    await cancelReader(reader);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
 }
 
 function decodeJsonBody(
@@ -396,7 +306,7 @@ export function createWebSearchJsonAdapter(
         throw webSearchError("invalid-response", definition.providerId);
       }
       if (response.status < 200 || response.status >= 300) {
-        await cancelBody(response);
+        cancelWebSearchResponse(response.body);
         throw statusError(definition.providerId, response.status, definition.quotaStatuses);
       }
 
