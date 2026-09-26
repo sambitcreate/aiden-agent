@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -264,7 +265,7 @@ test("forwards the chat identity through Pi Agent options into the native stream
     () =>
       agentOptions.streamFn?.(
         model,
-        { messages: [] },
+        normalizeContext({ messages: [] }),
         { sessionId: agentOptions.sessionId },
       ),
     /captured/u,
@@ -356,9 +357,10 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(
     () =>
-      new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   );
   const address = server.address();
   if (!address || typeof address === "string")
@@ -379,10 +381,10 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
   const result = await openAICompletionsApi()
     .streamSimple(
       model,
-      {
+      normalizeContext({
         systemPrompt: "Reply briefly.",
         messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
-      },
+      }),
       {
         apiKey: PI_AUTH_COMPATIBILITY_TOKEN,
         headers: resolveRuntimeHeaders({ kind: "openai", needsKey: false }),
@@ -409,7 +411,7 @@ test("uses Anthropic's single version path without sending keyless auth headers"
   const server = createServer((request, response) => {
     authorization = request.headers.authorization;
     apiKey = request.headers["x-api-key"];
-    assert.equal(request.url, "/v1/messages");
+    assert.equal(new URL(request.url ?? "", "http://localhost").pathname, "/v1/messages");
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
       [
@@ -460,9 +462,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(
     () =>
-      new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   );
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -487,10 +490,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
   const result = await anthropicMessagesApi()
     .streamSimple(
       model,
-      {
+      normalizeContext({
         systemPrompt: "Reply briefly.",
         messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
-      },
+      }),
       {
         apiKey: PI_AUTH_COMPATIBILITY_TOKEN,
         headers: resolveRuntimeHeaders({ kind: "anthropic", needsKey: false }),
@@ -559,9 +562,10 @@ test("sends adaptive Claude thinking with the selected native effort", async (t)
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(
     () =>
-      new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   );
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -585,10 +589,10 @@ test("sends adaptive Claude thinking with the selected native effort", async (t)
   await anthropicMessagesApi()
     .streamSimple(
       model,
-      {
+      normalizeContext({
         systemPrompt: "Reply briefly.",
         messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
-      },
+      }),
       { apiKey: "test-key", reasoning: "xhigh" },
     )
     .result();

@@ -564,7 +564,7 @@ enum AidenAgentActivityPresentation {
         "web_search": ("Searching the web", "Searched the web"),
         "schedule_task": ("Scheduling", "Scheduled"),
         "edit_automation": ("Editing automation", "Edited automation"),
-        "computer_use": ("Using Mac", "Used Mac"),
+        "computer_use": ("Using Computer Use", "Used Computer Use"),
         "browser": ("Loading browser tools", "Loaded browser tools"),
         "browser_status": ("Checking browser", "Checked browser"),
         "browser_open": ("Opening browser", "Opened browser"),
@@ -583,6 +583,13 @@ enum AidenAgentActivityPresentation {
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
     ]
+
+    /// Exactly one compaction: its line carries every metric. Repeated compactions
+    /// keep the step list so each run's metrics stay reachable.
+    static func isCompactContextOnly(_ steps: [AidenAgentStep]) -> Bool {
+        guard steps.count == 1, let only = steps.first else { return false }
+        return only.kind == .tool && only.toolName == "compact_context"
+    }
 
     static func duration(_ milliseconds: Double?) -> String {
         guard let milliseconds, milliseconds >= 2_000 else { return "briefly" }
@@ -695,7 +702,7 @@ enum AidenAgentActivityPresentation {
         if changes > 0 { clauses.append("\(running ? "editing" : "edited") \(changes) file\(changes == 1 ? "" : "s")") }
         if commands > 0 { clauses.append("\(running ? "running" : "ran") \(commands) command\(commands == 1 ? "" : "s")") }
         if web > 0 { clauses.append("\(web) web search\(web == 1 ? "" : "es")") }
-        if mac > 0 { clauses.append("\(mac) Mac action\(mac == 1 ? "" : "s")") }
+        if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
         if clauses.isEmpty { return running ? "Working" : "Used \(tools.count) tool\(tools.count == 1 ? "" : "s")" }

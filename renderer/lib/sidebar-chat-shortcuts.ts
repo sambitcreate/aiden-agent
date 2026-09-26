@@ -1,12 +1,17 @@
+import { detectedKeyboardPlatform, type KeyboardPlatform } from "../shared/keybindings";
+
 export const COMMAND_CHAT_SHORTCUT_LIMIT = 9;
 export const COMMAND_CHAT_SHORTCUT_REVEAL_MS = 500;
 
-const ACCELERATOR_TO_EVENT_MODIFIER: Record<string, string> = {
-  Command: "Meta",
-  Control: "Control",
-  Alt: "Alt",
-  Shift: "Shift",
-};
+// Accelerators store the primary modifier as "Command"; outside macOS it is
+// matched against Ctrl and "Control" against Super (see
+// acceleratorFromKeyboardEvent), so the held keys must follow suit.
+function eventModifierForAcceleratorPart(part: string, platform: KeyboardPlatform): string | null {
+  if (part === "Command") return platform === "darwin" ? "Meta" : "Control";
+  if (part === "Control") return platform === "darwin" ? "Control" : "Meta";
+  if (part === "Alt" || part === "Shift") return part;
+  return null;
+}
 
 export interface SidebarChatSection<T> {
   chats: readonly T[];
@@ -81,13 +86,14 @@ export function commandChatShortcutNumber(event: CommandChatShortcutEvent): numb
 /** Complete modifier sets that can invoke at least one chat-jump binding. */
 export function chatShortcutRevealModifierSets(
   bindings: readonly (string | null)[],
+  platform: KeyboardPlatform = detectedKeyboardPlatform(),
 ): string[][] {
   const unique = new Map<string, string[]>();
   for (const binding of bindings) {
     if (!binding) continue;
     const modifiers: string[] = [];
     for (const part of binding.split("+").slice(0, -1)) {
-      const modifier = ACCELERATOR_TO_EVENT_MODIFIER[part];
+      const modifier = eventModifierForAcceleratorPart(part, platform);
       if (modifier) modifiers.push(modifier);
     }
     modifiers.sort();

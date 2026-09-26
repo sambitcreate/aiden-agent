@@ -1,6 +1,16 @@
 # Hermes-inspired Bot run control
 
 Status: Active (Telegram slice under review; shared foreground admission next)
+
+September 23 desktop composer slice: Steer is exposed through exact-stream,
+document-owned IPC to Pi's existing queue, with text-only validation and a
+host-visible user append awaited before the next model step. Queue keeps the
+Mac-local editor; Redirect confirms and replaces that queue before stopping;
+Stop clears queued follow-ups and retains the independent draft. This is not
+the durable, idempotent foreground admission boundary below: accepted Steer
+can still be lost if the Mac exits before Pi emits it. Remote API v1 and both
+native composers remain send/cancel only. The audited gap table is in
+`docs/chat-composer-busy-controls.md`.
 Owner: Hermes runtime task; native consumers coordinated with the Bot mobile task.
 
 ## Evidence and scope

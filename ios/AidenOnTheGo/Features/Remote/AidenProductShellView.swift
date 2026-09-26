@@ -1,5 +1,29 @@
 import SwiftUI
 
+/// A rejected response may have lost to a newer snapshot or deletion. Use the
+/// currently cached chat for navigation, and never republish the rejected one.
+@MainActor
+func aidenPersistBotChatForPresentation(
+    _ chat: AidenChat,
+    context: AidenRemoteRequestContext,
+    coordinator: AidenRemoteCoordinator,
+    cache: AidenChatCache = .shared
+) async -> AidenChat? {
+    let writeToken = cache.reserveChatWrite()
+    var candidate: AidenChat?
+    let retained = await coordinator.withRetainedInstallationData(for: context) {
+        let accepted = (try? await cache.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)) ?? true
+        if accepted {
+            candidate = chat
+        } else {
+            candidate = await cache.loadChat(instanceId: context.instanceId, chatId: chat.id)
+        }
+    }
+    guard retained, coordinator.isCurrent(context),
+          let candidate, candidate.id == chat.id, candidate.botId == chat.botId else { return nil }
+    return candidate
+}
+
 enum AidenChromeSymbols {
     static let overflowMenu = "ellipsis"
     static let productSwitcherDisclosure = "chevron.down"
@@ -56,9 +80,9 @@ enum AidenBotsAvailability: Equatable, Sendable {
         case .mobileDisabled:
             "Bots aren’t available in this version of Aiden On The Go."
         case .unsupported:
-            "Bots need a newer version of Aiden Agent on your Mac."
+            "Bots need a newer version of Aiden Agent on your paired desktop."
         case .notGranted:
-            "Approve Bot access on your Mac, or pair this phone again."
+            "Approve Bot access on your paired desktop, or pair this phone again."
         }
     }
 
@@ -140,7 +164,7 @@ func aidenBotSwitcherCoachmarkDetail(canWrite: Bool) -> String {
     if canWrite {
         return "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
     }
-    return "This Mac shared Bots as read-only. You can open their conversations here, then change Bot access on your Mac if you want to let them act."
+    return "This desktop shared Bots as read-only. You can open their conversations here, then change Bot access on your paired desktop if you want to let them act."
 }
 
 func aidenBotChatAllowsMutations(
@@ -825,13 +849,13 @@ private struct AidenBotShellView: View {
             guard coordinator.connectionState == .connected else {
                 if cached == nil {
                     path = []
-                    coordinator.presentedError = "Reconnect to your Mac to open this Bot chat."
+                    coordinator.presentedError = "Reconnect to your paired desktop to open this Bot chat."
                 }
                 return
             }
 
             let client = try coordinator.remoteClient(for: context)
-            let chat = if let cached {
+            var chat = if let cached {
                 cached
             } else {
                 try await client.chat(id: item.chatId)
@@ -840,10 +864,12 @@ private struct AidenBotShellView: View {
                   chat.botId == item.botId, presentationScope == scope,
                   path.last == item.chatId else { return }
             if cached == nil {
-                let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else {
+                    if coordinator.isCurrent(context), presentationScope == scope, path.last == item.chatId { path = [] }
+                    return
                 }
-                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                chat = admitted
+                guard coordinator.isCurrent(context), presentationScope == scope,
                       path.last == item.chatId else { return }
                 chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                     chat: chat,
@@ -908,7 +934,7 @@ private struct AidenBotShellView: View {
             )
             retainedCreateAttempt = attempt
             sentAttempt = attempt
-            let chat = try await client.createBotChat(
+            var chat = try await client.createBotChat(
                 botId: bot.id,
                 request: request,
                 idempotencyKey: attempt.idempotencyKey
@@ -916,10 +942,9 @@ private struct AidenBotShellView: View {
             guard coordinator.isCurrent(context), chat.botId == bot.id,
                   retainedCreateAttempt == attempt else { return }
             retainedCreateAttempt = nil
-            let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
-            }
-            guard retained, coordinator.isCurrent(context) else { return }
+            guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else { return }
+            chat = admitted
+            guard coordinator.isCurrent(context) else { return }
             let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
             chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                 chat: chat,
@@ -1018,7 +1043,7 @@ private struct AidenBotShellView: View {
             }
 
             let client = try coordinator.remoteClient(for: context)
-            let chat = if let cached {
+            var chat = if let cached {
                 cached
             } else {
                 try await client.chat(id: chatID)
@@ -1028,10 +1053,12 @@ private struct AidenBotShellView: View {
                 return
             }
             if cached == nil {
-                let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else {
+                    if coordinator.isCurrent(context), presentationScope == scope, path.last == chatID { path = [] }
+                    return
                 }
-                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                chat = admitted
+                guard coordinator.isCurrent(context), presentationScope == scope,
                       path.last == chatID else { return }
                 chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                     chat: chat,
@@ -1165,10 +1192,10 @@ private struct AidenFullAccessNoticeView: View {
                         .foregroundStyle(.tint)
                         .accessibilityHidden(true)
 
-                    Text("Bots can use your Mac")
+                    Text("Bots can use your paired desktop")
                         .font(.largeTitle.bold())
 
-                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
+                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired desktop. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
                         .font(.body)
 
                     if includesMigrationCopy {
@@ -1195,7 +1222,7 @@ private struct AidenFullAccessNoticeView: View {
                     .disabled(isSaving)
 
                     if isSaving {
-                        ProgressView("Saving on your Mac…")
+                        ProgressView("Saving on your paired desktop…")
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -1456,7 +1483,7 @@ struct AidenProductShellView: View {
         case .coaching:
             EmptyView()
         case .checking:
-            ProgressView("Checking Bot access on your Mac…")
+            ProgressView("Checking Bot access on your paired desktop…")
                 .padding()
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         case .failed(let message):

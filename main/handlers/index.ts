@@ -31,7 +31,9 @@ import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
+import { registerDeviceHandlers } from "./devices.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 
 import { ipcMain, logger } from "../platform.js";
@@ -72,8 +74,9 @@ export function registerHandlers(): void {
   registerAssistantLiveHandlers();
   registerAidenRemoteHandlers();
   registerPeerHostHandlers();
-  registerBotHandlers();
+  if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
+  registerDeviceHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

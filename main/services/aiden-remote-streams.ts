@@ -9,6 +9,7 @@ import {
   isScheduledTaskApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import {
@@ -183,6 +184,7 @@ function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
     || isSubagentWorkspaceWriteApprovalDetails(value)
     || isSubagentMcpMutationApprovalDetails(value)
     || isSubagentShellApprovalDetails(value)
+    || isSubagentRunGrantApprovalDetails(value)
     ? structuredClone(value)
     : undefined;
 }
@@ -1200,7 +1202,7 @@ export class AidenRemoteStreamService {
           if (decision === "allow" && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
             throw new AidenRemoteServiceError(
               "capability_denied",
-              "This approval can only be allowed from the Mac.",
+              "This approval can only be allowed from the Aiden desktop app.",
               403,
             );
           }

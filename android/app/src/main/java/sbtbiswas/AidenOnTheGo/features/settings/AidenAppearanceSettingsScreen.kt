@@ -5,13 +5,17 @@ import android.os.Build
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +25,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.config.*
@@ -56,14 +62,14 @@ fun AidenAppearanceSettingsScreen(
         }
         runCatching { client.speechStatus() }
             .onSuccess { speechStatus = it; speechError = null }
-            .onFailure { speechError = it.message ?: "Mac transcription is unavailable." }
+            .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
     }
 
     fun runSpeechAction(action: suspend () -> AidenSpeechStatus) {
         scope.launch {
             runCatching { action() }
                 .onSuccess { speechStatus = it; speechError = null }
-                .onFailure { speechError = it.message ?: "Mac transcription is unavailable." }
+                .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
         }
     }
 
@@ -111,7 +117,7 @@ fun AidenAppearanceSettingsScreen(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Installations", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
-                        Text("Pair or switch your Aiden Agent Mac", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        Text("Pair or switch your Aiden Agent desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                     }
                 }
             }
@@ -165,7 +171,7 @@ fun AidenAppearanceSettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Choose where speech is transcribed. Paired Mac sends microphone audio over Aiden's encrypted pinned connection and does not retain it.",
+            text = "Choose where speech is transcribed. Paired desktop sends microphone audio over Aiden's encrypted pinned connection and does not retain it.",
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
@@ -181,7 +187,7 @@ fun AidenAppearanceSettingsScreen(
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Text(mode.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                     Text(
-                        if (mode == AidenVoiceInputMode.ON_DEVICE) "Android SpeechRecognizer; speech stays on this device." else "Parakeet on your connected Aiden Agent Mac; final text appears after you stop.",
+                        if (mode == AidenVoiceInputMode.ON_DEVICE) "Android SpeechRecognizer; speech stays on this device." else "Parakeet on your connected Aiden Agent desktop; final text appears after you stop.",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
                     )
@@ -217,7 +223,7 @@ fun AidenAppearanceSettingsScreen(
         } else {
             val status = speechStatus
             if (remoteClient == null) {
-                Text("Connect to a paired Mac to configure transcription.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
+                Text("Connect to a paired desktop to configure transcription.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
             } else if (status == null && speechError == null) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             } else if (status != null) {
@@ -271,53 +277,6 @@ fun AidenAppearanceSettingsScreen(
         )
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Preset theme cards
-        Text(
-            text = "Theme Palette",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.secondary
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AidenThemePresetID.entries.forEach { preset ->
-                val p = AidenThemeCatalog.palette(preset, false)
-                Card(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .tactilePress { appearanceStore?.updatePreset(preset) },
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (currentConfig.preset == preset) MaterialTheme.colorScheme.primaryContainer else palette.canvas
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(p.accent))
-                            Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(p.secondary))
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = preset.title,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.foreground
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
         // Mode selector (System, Light, Dark)
         Text(
             text = "Mode",
@@ -342,72 +301,123 @@ fun AidenAppearanceSettingsScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Contrast slider
+        // Theme tile grid
         Text(
-            text = "Contrast (${currentConfig.contrast}%)",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.secondary
-        )
-        Slider(
-            value = currentConfig.contrast.toFloat(),
-            onValueChange = { appearanceStore?.updateContrast(it.toInt()) },
-            valueRange = 0f..100f,
-            colors = SliderDefaults.colors(
-                thumbColor = palette.accent,
-                activeTrackColor = palette.accent
-            )
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Font Size selector
-        Text(
-            text = "Text Size",
+            text = "Themes",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = palette.secondary
         )
         Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AidenFontSize.values().forEach { size ->
-                AidenSettingsChoice(
-                    label = size.title,
-                    selected = currentConfig.fontSize == size,
-                    onClick = { appearanceStore?.updateFontSize(size) },
-                    modifier = Modifier.weight(1f)
-                )
+
+        Column(modifier = Modifier.selectableGroup()) {
+            AidenThemePresetID.entries.toList().chunked(3).forEach { rowPresets ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowPresets.forEach { preset ->
+                        AidenThemeTile(
+                            preset = preset,
+                            selected = currentConfig.preset == preset,
+                            onClick = { appearanceStore?.updatePreset(preset) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - rowPresets.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Current theme: ${currentConfig.preset.title}",
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.secondary
+        )
+    }
+}
 
-        // Reduce Motion switch
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+/** Scheme whose palette visually defines this preset on its tile. */
+private val AidenThemePresetID.signatureIsDark: Boolean
+    get() = this == AidenThemePresetID.GRAPHITE || this == AidenThemePresetID.DUSK || this == AidenThemePresetID.MIDNIGHT
+
+@Composable
+private fun AidenThemeTile(
+    preset: AidenThemePresetID,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val preview = AidenThemeCatalog.palette(preset, preset.signatureIsDark)
+    Column(
+        modifier = modifier.selectable(
+            selected = selected,
+            enabled = true,
+            role = Role.RadioButton,
+            onClick = onClick
+        ),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.52f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(preview.canvas)
+                    .tactilePress()
+            ) {
                 Text(
-                    text = "Reduce Motion",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.foreground
+                    text = "Aa",
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = preview.foreground,
+                    modifier = Modifier.align(Alignment.Center)
                 )
-                Text(
-                    text = "Minimize animated thinking orbs and transitions",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.secondary
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .size(11.dp)
+                        .clip(CircleShape)
+                        .background(preview.accent)
+                        .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape)
                 )
             }
-            Switch(
-                checked = currentConfig.reduceMotion,
-                onCheckedChange = { appearanceStore?.updateReduceMotion(it) }
-            )
+            if (selected) {
+                Surface(
+                    color = palette.raised,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 6.dp, y = (-6).dp)
+                        .size(21.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.padding(4.dp)
+                    )
+                }
+            }
         }
+        Spacer(modifier = Modifier.height(7.dp))
+        Text(
+            text = preset.title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (selected) palette.foreground else palette.secondary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                .padding(horizontal = 9.dp, vertical = 3.dp)
+        )
     }
 }
 

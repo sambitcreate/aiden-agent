@@ -1,23 +1,15 @@
 import * as React from "react";
 import {
-  Copy,
-  FileUp,
+  Check,
   Monitor,
   Moon,
   Sun,
 } from "lucide-react";
 import {
   Button,
-  InlineMetadata,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Switch,
   toast,
 } from "../ui";
-import { appApi, settingsApi } from "../../lib/ipc";
+import { settingsApi } from "../../lib/ipc";
 import {
   APPEARANCE_CHANGE_EVENT,
   APPEARANCE_INTENT_FAILED_EVENT,
@@ -34,33 +26,21 @@ import {
   type AppliedAppearance,
 } from "../../lib/appearance-runtime";
 import {
-  CODE_FONT_OPTIONS,
   THEME_PRESETS,
-  UI_FONT_OPTIONS,
   createDefaultAppearanceConfig,
   getPresetVariant,
-  isHexColor,
   normalizeAppearanceConfig,
-  parseThemeVariantJson,
   resolveThemeTokens,
-  serializeThemeVariant,
   themeVariantSafetyIssues,
   type AppearanceConfig,
   type AppearanceMode,
   type AppearanceScheme,
-  type CodeFontId,
-  type DiffMarkerPreference,
-  type DockIconPreference,
-  type ReduceMotionPreference,
   type ThemePresetId,
   type ThemeVariantConfig,
-  type UiFontId,
 } from "../../shared/appearance";
 import type { NativeThemeInfo } from "../../preload";
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
-const AIDEN_DOCK_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
-const MONOCHROME_DOCK_ICON_URL = new URL("../../../resources/app-icon-monochrome.png", import.meta.url).href;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -151,374 +131,93 @@ function previewStyle(variant: ThemeVariantConfig, scheme: AppearanceScheme): Cs
     "--preview-muted": tokens["--text-tertiary"],
     "--preview-accent": tokens["--accent"],
     "--preview-border": tokens["--border-separator"],
-    "--preview-danger": tokens["--support-red"],
-    "--preview-success": tokens["--support-green"],
-    "--preview-keyword": tokens["--syntax-keyword"],
-    "--preview-string": tokens["--syntax-string"],
-    "--preview-number": tokens["--syntax-number"],
   };
 }
 
-function CodeLine({ number, children }: { number: number; children: React.ReactNode }) {
+type ThemePreset = (typeof THEME_PRESETS)[number];
+
+/** The scheme that visually defines each preset on its tile. */
+const TILE_SIGNATURE_SCHEME: Record<ThemePresetId, AppearanceScheme> = {
+  aiden: "light",
+  slate: "light",
+  berry: "light",
+  moss: "light",
+  paper: "light",
+  calm: "light",
+  graphite: "dark",
+  dusk: "dark",
+  midnight: "dark",
+};
+
+function ThemeTile({
+  preset,
+  index,
+  selected,
+  tabbable,
+  onChange,
+}: {
+  preset: ThemePreset;
+  index: number;
+  selected: boolean;
+  tabbable: boolean;
+  onChange: (preset: ThemePresetId) => void;
+}) {
+  const palette = preset[TILE_SIGNATURE_SCHEME[preset.id]];
   return (
-    <div className="appearance-code-line">
-      <span className="appearance-code-number">{number}</span>
-      <code>{children}</code>
-    </div>
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      tabIndex={tabbable ? 0 : -1}
+      className="appearance-tile"
+      onClick={() => onChange(preset.id)}
+      onKeyDown={(event) =>
+        handleRadioNavigation(
+          event,
+          index,
+          THEME_PRESETS.map((entry) => ({ value: entry.id })),
+          onChange,
+        )
+      }
+    >
+      <span
+        className="appearance-tile-swatch"
+        aria-hidden="true"
+        style={{ backgroundColor: palette.canvas, color: palette.foreground }}
+      >
+        Aa
+        <span className="appearance-tile-accent" style={{ backgroundColor: palette.accent }} />
+        {selected ? (
+          <span className="appearance-tile-check"><Check strokeWidth={3} /></span>
+        ) : null}
+      </span>
+      <span className="appearance-tile-label">{preset.label}</span>
+    </button>
   );
 }
 
-function ThemeCodePreview({ light, dark }: { light: ThemeVariantConfig; dark: ThemeVariantConfig }) {
-  return (
-    <div className="appearance-code-preview" aria-label="Live light and dark theme diff preview">
-      <div className="appearance-code-pane appearance-code-pane-deletion" style={previewStyle(light, "light")}>
-        <CodeLine number={1}><b>const</b> themePreview: <em>ThemeConfig</em> = {"{"}</CodeLine>
-        <CodeLine number={2}>  surface: <q>sidebar</q>,</CodeLine>
-        <CodeLine number={3}>  accent: <q>{light.accent}</q>,</CodeLine>
-        <CodeLine number={4}>  contrast: <strong>{light.contrast}</strong>,</CodeLine>
-        <CodeLine number={5}>{"};"}</CodeLine>
-      </div>
-      <div className="appearance-code-pane appearance-code-pane-addition" style={previewStyle(dark, "dark")}>
-        <CodeLine number={1}><b>const</b> themePreview: <em>ThemeConfig</em> = {"{"}</CodeLine>
-        <CodeLine number={2}>  surface: <q>sidebar-elevated</q>,</CodeLine>
-        <CodeLine number={3}>  accent: <q>{dark.accent}</q>,</CodeLine>
-        <CodeLine number={4}>  contrast: <strong>{dark.contrast}</strong>,</CodeLine>
-        <CodeLine number={5}>{"};"}</CodeLine>
-      </div>
-    </div>
-  );
-}
-
-function ColorControl({
-  label,
+function ThemeTileGrid({
   value,
   onChange,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
+  value: ThemePresetId | null;
+  onChange: (preset: ThemePresetId) => void;
 }) {
-  const [text, setText] = React.useState(value);
-  React.useEffect(() => setText(value), [value]);
-  const valid = isHexColor(text);
-  const commit = (next: string) => {
-    const normalized = next.toUpperCase();
-    setText(normalized);
-    if (isHexColor(normalized)) onChange(normalized);
-  };
+  const selectedIndex = THEME_PRESETS.findIndex((preset) => preset.id === value);
+  const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
   return (
-    <div className="appearance-color-control">
-      <label className="appearance-color-swatch" style={{ backgroundColor: value }}>
-        <span className="sr-only">Choose {label.toLocaleLowerCase()}</span>
-        <input
-          type="color"
-          value={value}
-          onChange={(event) => commit(event.target.value)}
+    <div className="appearance-theme-grid" role="radiogroup" aria-label="Themes">
+      {THEME_PRESETS.map((preset, index) => (
+        <ThemeTile
+          key={preset.id}
+          preset={preset}
+          index={index}
+          selected={preset.id === value}
+          tabbable={index === focusIndex}
+          onChange={onChange}
         />
-      </label>
-      <input
-        aria-label={`${label} hex color`}
-        aria-invalid={!valid}
-        value={text}
-        spellCheck={false}
-        maxLength={7}
-        onChange={(event) => commit(event.target.value)}
-        onBlur={() => {
-          if (!valid) setText(value);
-        }}
-      />
-    </div>
-  );
-}
-
-function ThemeEditorRow({ label, children }: React.PropsWithChildren<{ label: string }>) {
-  return (
-    <div className="appearance-editor-row">
-      <span>{label}</span>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function ThemeEditor({
-  scheme,
-  variant,
-  onChange,
-}: {
-  scheme: AppearanceScheme;
-  variant: ThemeVariantConfig;
-  onChange: (variant: ThemeVariantConfig) => void;
-}) {
-  const fileRef = React.useRef<HTMLInputElement>(null);
-  const update = <Key extends keyof ThemeVariantConfig>(key: Key, value: ThemeVariantConfig[Key]) => {
-    onChange({ ...variant, [key]: value, preset: "custom" });
-  };
-  const importTheme = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      if (file.size > 64 * 1024) throw new Error("Theme files must be smaller than 64 KB.");
-      onChange(parseThemeVariantJson(await file.text(), scheme));
-      toast.success(`${scheme === "light" ? "Light" : "Dark"} theme imported.`);
-    } catch (error) {
-      toast.error(errorMessage(error, "Aiden could not import that theme."));
-    } finally {
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  };
-  const copyTheme = async () => {
-    try {
-      await navigator.clipboard.writeText(serializeThemeVariant(variant, scheme));
-      toast.success(`${scheme === "light" ? "Light" : "Dark"} theme copied as JSON.`);
-    } catch (error) {
-      toast.error(errorMessage(error, "Aiden could not copy that theme."));
-    }
-  };
-  const activePreset = variant.preset;
-  return (
-    <section className="appearance-editor-card" aria-labelledby={`appearance-${scheme}-title`}>
-      <header className="appearance-editor-header">
-        <h3 id={`appearance-${scheme}-title`}>{scheme === "light" ? "Light theme" : "Dark theme"}</h3>
-        <div className="appearance-editor-actions">
-          <input
-            ref={fileRef}
-            className="sr-only"
-            type="file"
-            accept="application/json,.json"
-            tabIndex={-1}
-            onChange={(event) => void importTheme(event.target.files?.[0])}
-          />
-          <Button variant="transparent" size="small" onClick={() => fileRef.current?.click()}>
-            <FileUp /> Import
-          </Button>
-          <Button variant="transparent" size="small" onClick={() => void copyTheme()}>
-            <Copy /> Copy theme
-          </Button>
-          <Select
-            value={activePreset}
-            onValueChange={(value) => {
-              if (value !== "custom") onChange(getPresetVariant(value as ThemePresetId, scheme));
-            }}
-          >
-            <SelectTrigger size="small" className="appearance-preset-trigger" aria-label={`${scheme} theme preset`}>
-              <span className="appearance-preset-glyph" style={{ backgroundColor: variant.accent }} />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {variant.preset === "custom" ? <SelectItem value="custom" disabled>Custom</SelectItem> : null}
-              {THEME_PRESETS.map((preset) => (
-                <SelectItem key={preset.id} value={preset.id}>{preset.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </header>
-      <div className="appearance-editor-body">
-        <ThemeEditorRow label="Accent">
-          <ColorControl label="Accent" value={variant.accent} onChange={(value) => update("accent", value)} />
-        </ThemeEditorRow>
-        <ThemeEditorRow label="Background">
-          <ColorControl label="Background" value={variant.background} onChange={(value) => update("background", value)} />
-        </ThemeEditorRow>
-        <ThemeEditorRow label="Foreground">
-          <ColorControl label="Foreground" value={variant.foreground} onChange={(value) => update("foreground", value)} />
-        </ThemeEditorRow>
-        <ThemeEditorRow label="UI font">
-          <Select value={variant.uiFont} onValueChange={(value) => update("uiFont", value as UiFontId)}>
-            <SelectTrigger size="small" className="appearance-value-select" aria-label={`${scheme} UI font`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {UI_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} <InlineMetadata>· {font.preview}</InlineMetadata></SelectItem>)}
-            </SelectContent>
-          </Select>
-        </ThemeEditorRow>
-        <ThemeEditorRow label="Code font">
-          <Select value={variant.codeFont} onValueChange={(value) => update("codeFont", value as CodeFontId)}>
-            <SelectTrigger size="small" className="appearance-value-select appearance-code-font" aria-label={`${scheme} code font`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CODE_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} <InlineMetadata>· {font.preview}</InlineMetadata></SelectItem>)}
-            </SelectContent>
-          </Select>
-        </ThemeEditorRow>
-        <ThemeEditorRow label="Translucent sidebar">
-          <Switch
-            checked={variant.translucentSidebar}
-            onCheckedChange={(checked) => update("translucentSidebar", checked)}
-            aria-label={`${scheme} translucent sidebar`}
-          />
-        </ThemeEditorRow>
-        <ThemeEditorRow label="Contrast">
-          <div className="appearance-range-control">
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={variant.contrast}
-              aria-label={`${scheme} theme contrast`}
-              onChange={(event) => update("contrast", Number(event.target.value))}
-            />
-            <output>{variant.contrast}</output>
-          </div>
-        </ThemeEditorRow>
-      </div>
-    </section>
-  );
-}
-
-function PreferenceRow({
-  label,
-  description,
-  children,
-}: React.PropsWithChildren<{ label: string; description?: string }>) {
-  return (
-    <div className="appearance-preference-row">
-      <div>
-        <div className="appearance-preference-label">{label}</div>
-        {description ? <div className="appearance-preference-description">{description}</div> : null}
-      </div>
-      <div className="appearance-preference-control">{children}</div>
-    </div>
-  );
-}
-
-function SegmentedControl<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<{ value: Value; label: string }>;
-  onChange: (value: Value) => void;
-}) {
-  return (
-    <div className="appearance-segmented" role="radiogroup" aria-label={label}>
-      {options.map((option, index) => (
-        <button
-          key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={value === option.value}
-          tabIndex={value === option.value ? 0 : -1}
-          onClick={() => onChange(option.value)}
-          onKeyDown={(event) => handleRadioNavigation(event, index, options, onChange)}
-        >
-          {option.label}
-        </button>
       ))}
     </div>
-  );
-}
-
-function Preferences({
-  config,
-  disabled,
-  dockPending,
-  onChange,
-  onDockChange,
-}: {
-  config: AppearanceConfig;
-  disabled: boolean;
-  dockPending: boolean;
-  onChange: (patch: Partial<AppearanceConfig>) => void;
-  onDockChange: (preference: DockIconPreference) => void;
-}) {
-  return (
-    <section
-      className="appearance-preferences"
-      aria-labelledby="appearance-preferences-title"
-      aria-disabled={disabled || undefined}
-      inert={disabled ? true : undefined}
-    >
-      <h2 id="appearance-preferences-title">Preferences</h2>
-      <div className="appearance-preferences-card">
-        <PreferenceRow label="Auto-hide workspace bar" description="Slide the workspace and Local bar away after your first message. Turn off to keep it above the composer.">
-          <Switch checked={config.autoHideComposerContext} onCheckedChange={(checked) => onChange({ autoHideComposerContext: checked })} aria-label="Auto-hide workspace bar" />
-        </PreferenceRow>
-        <PreferenceRow label="Show workspace folder paths" description="Show folder locations below workspace names in the sidebar and workspace picker.">
-          <Switch checked={config.showWorkspacePaths} onCheckedChange={(checked) => onChange({ showWorkspacePaths: checked })} aria-label="Show workspace folder paths" />
-        </PreferenceRow>
-        <PreferenceRow label="Workspace path format" description="Choose which part of a long folder path stays visible.">
-          <Select value={config.workspacePathFormat} onValueChange={(value) => onChange({ workspacePathFormat: value as AppearanceConfig["workspacePathFormat"] })} disabled={!config.showWorkspacePaths}>
-            <SelectTrigger size="small" className="appearance-value-select" aria-label="Workspace path format"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="middle">Beginning and end · /Users/xyz/…/aiden</SelectItem>
-              <SelectItem value="end">Last folders · …/projects/aiden</SelectItem>
-              <SelectItem value="start">Beginning · /Users/xyz/…</SelectItem>
-            </SelectContent>
-          </Select>
-        </PreferenceRow>
-        <PreferenceRow label="Use pointer cursors" description="Show a pointer when hovering over interactive elements.">
-          <Switch checked={config.pointerCursors} onCheckedChange={(checked) => onChange({ pointerCursors: checked })} aria-label="Use pointer cursors" />
-        </PreferenceRow>
-        <PreferenceRow label="Dock icon" description="Choose the icon Aiden uses in the macOS Dock.">
-          <div className="appearance-dock-options" role="radiogroup" aria-label="Dock icon">
-            {([
-              { value: "aiden", label: "Color Aiden Dock icon", src: AIDEN_DOCK_ICON_URL },
-              { value: "monochrome", label: "Monochrome Aiden Dock icon", src: MONOCHROME_DOCK_ICON_URL },
-            ] satisfies ReadonlyArray<{ value: DockIconPreference; label: string; src: string }>).map((option, index, options) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-label={option.label}
-                aria-checked={config.dockIcon === option.value}
-                disabled={dockPending}
-                tabIndex={config.dockIcon === option.value ? 0 : -1}
-                onClick={() => onDockChange(option.value)}
-                onKeyDown={(event) => handleRadioNavigation(event, index, options, onDockChange)}
-              >
-                <img src={option.src} alt="" />
-              </button>
-            ))}
-          </div>
-        </PreferenceRow>
-        <PreferenceRow label="Reduce motion" description="Reduce animations or match the macOS preference.">
-          <SegmentedControl<ReduceMotionPreference>
-            label="Reduce motion"
-            value={config.reduceMotion}
-            options={[
-              { value: "system", label: "System" },
-              { value: "on", label: "On" },
-              { value: "off", label: "Off" },
-            ]}
-            onChange={(value) => onChange({ reduceMotion: value })}
-          />
-        </PreferenceRow>
-        <PreferenceRow label="UI font size" description="Adjust the base size used throughout Aiden.">
-          <label className="appearance-number-control">
-            <span className="sr-only">UI font size</span>
-            <input type="number" min={12} max={18} value={config.uiFontSize} onChange={(event) => onChange({ uiFontSize: Number(event.target.value) })} />
-            <span>px</span>
-          </label>
-        </PreferenceRow>
-        <PreferenceRow label="Code font size" description="Adjust code in chats, diffs, files, and terminals.">
-          <label className="appearance-number-control">
-            <span className="sr-only">Code font size</span>
-            <input type="number" min={10} max={18} value={config.codeFontSize} onChange={(event) => onChange({ codeFontSize: Number(event.target.value) })} />
-            <span>px</span>
-          </label>
-        </PreferenceRow>
-        <PreferenceRow label="Diff markers" description="Show changes with color alone or add explicit +/− markers.">
-          <SegmentedControl<DiffMarkerPreference>
-            label="Diff markers"
-            value={config.diffMarkers}
-            options={[
-              { value: "color", label: "Color" },
-              { value: "symbols", label: "+/−" },
-            ]}
-            onChange={(value) => onChange({ diffMarkers: value })}
-          />
-        </PreferenceRow>
-        <PreferenceRow label="Font smoothing" description="Use native macOS font anti-aliasing.">
-          <Switch checked={config.fontSmoothing} onCheckedChange={(checked) => onChange({ fontSmoothing: checked })} aria-label="Font smoothing" />
-        </PreferenceRow>
-      </div>
-    </section>
   );
 }
 
@@ -527,7 +226,6 @@ export function AppearanceSettings() {
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [modePending, setModePending] = React.useState(false);
-  const [dockPending, setDockPending] = React.useState(false);
   const configRef = React.useRef(config);
   const nativeInfoRef = React.useRef<NativeThemeInfo | null>(null);
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -537,8 +235,7 @@ export function AppearanceSettings() {
   } | null>(null);
   const dirtyRef = React.useRef(false);
   const mountedRef = React.useRef(true);
-  const safetyIssues = React.useMemo(() => appearanceSafetyIssues(config), [config]);
-  const hasSafetyIssues = safetyIssues.length > 0;
+  const hasSafetyIssues = React.useMemo(() => appearanceSafetyIssues(config).length > 0, [config]);
   configRef.current = config;
 
   const queueSave = React.useCallback((next: AppearanceConfig, revision: number) => {
@@ -728,7 +425,7 @@ export function AppearanceSettings() {
         apply(configRef.current);
       } catch (error) {
         if (isCurrent()) {
-          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the macOS appearance state."));
+          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the system appearance state."));
         }
       }
     }).finally(() => {
@@ -736,46 +433,28 @@ export function AppearanceSettings() {
     });
   };
 
-  const changeDock = (dockIcon: DockIconPreference) => {
-    if (dockPending || dockIcon === configRef.current.dockIcon || appearanceSafetyIssues(configRef.current).length > 0) return;
-    const revision = beginAppearanceIntent();
-    setDockPending(true);
-    void runAppearanceIntent(revision, async (isCurrent) => {
-      try {
-        const applied = await appApi.setDockIcon(dockIcon);
-        if (!applied) throw new Error("Dock icons are unavailable on this platform.");
-        if (!isCurrent()) {
-          await appApi.setDockIcon(configRef.current.dockIcon);
-          return;
-        }
-        update((current) => ({ ...current, dockIcon }), revision);
-      } catch (error) {
-        if (isCurrent()) {
-          toast.error(errorMessage(error, "Aiden could not change the Dock preference."));
-          announceAppearanceIntentFailure(revision);
-        }
-      }
-    }).finally(() => {
-      if (mountedRef.current) setDockPending(false);
-    });
+  const changeTheme = (preset: ThemePresetId) => {
+    update((current) => ({
+      ...current,
+      light: getPresetVariant(preset, "light"),
+      dark: getPresetVariant(preset, "dark"),
+    }));
   };
+
+  const selectedPreset =
+    config.light.preset !== "custom" && config.light.preset === config.dark.preset
+      ? config.light.preset
+      : null;
+  const currentThemeLabel = selectedPreset
+    ? (THEME_PRESETS.find((preset) => preset.id === selectedPreset)?.label ?? "Custom")
+    : "Custom";
 
   return (
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
       <div className="settings-page-heading appearance-heading">
         <h1>Appearance</h1>
-        <p>Shape Aiden’s light and dark interfaces independently. Changes apply live.</p>
+        <p>Pick a theme and choose when Aiden uses its light or dark look.</p>
       </div>
-
-      {safetyIssues.length > 0 ? (
-        <div className="appearance-page-status" role="alert">
-          <div>
-            <strong>These colors are not readable yet.</strong>
-            <ul>{safetyIssues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
-            <div>Live preview and saving are paused; choose safer colors or restore a preset.</div>
-          </div>
-        </div>
-      ) : null}
 
       {saveError ? (
         <div className="appearance-page-status" data-kind="error" role="alert">
@@ -798,20 +477,9 @@ export function AppearanceSettings() {
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
         <ThemeModePicker config={config} value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
-        <ThemeCodePreview light={config.light} dark={config.dark} />
-        <div className="appearance-theme-editors">
-          <ThemeEditor scheme="light" variant={config.light} onChange={(light) => update((current) => ({ ...current, light }))} />
-          <ThemeEditor scheme="dark" variant={config.dark} onChange={(dark) => update((current) => ({ ...current, dark }))} />
-        </div>
+        <ThemeTileGrid value={selectedPreset} onChange={changeTheme} />
+        <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
       </section>
-
-      <Preferences
-        config={config}
-        disabled={hasSafetyIssues}
-        dockPending={dockPending}
-        onChange={(patch) => update((current) => ({ ...current, ...patch }))}
-        onDockChange={changeDock}
-      />
     </div>
   );
 }

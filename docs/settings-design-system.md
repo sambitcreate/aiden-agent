@@ -19,7 +19,7 @@ Model Pad measures the actual scrollport and remaining column. Axis captions and
 
 ## Workspace labels
 
-Appearance owns `showWorkspacePaths` (default false) and `workspacePathFormat` (`middle`, `end`, or `start`). Older v1 preferences normalize to hidden paths. The sidebar and picker follow persisted/live-preview changes, and measure their own text allocation so CSS does not replace the selected truncation with end clipping. Preserve legal whitespace, emoji, and combining characters. These strings are display-only; filesystem operations always use the full original path.
+`AppearanceConfig` owns `showWorkspacePaths` (default false) and `workspacePathFormat` (`middle`, `end`, or `start`). The Appearance page no longer renders controls for them — the fields stay in the schema so stored preferences keep applying. Older v1 preferences normalize to hidden paths. The sidebar and picker follow persisted/live-preview changes, and measure their own text allocation so CSS does not replace the selected truncation with end clipping. Preserve legal whitespace, emoji, and combining characters. These strings are display-only; filesystem operations always use the full original path.
 
 Duplicate workspace names receive a short stable ID suffix in both visible and accessible names. Worktree branches and folderless workspace identity remain available when paths are hidden. Destructive confirmation and permission-scope review still identify their exact filesystem target.
 

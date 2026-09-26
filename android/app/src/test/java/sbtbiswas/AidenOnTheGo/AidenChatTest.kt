@@ -97,6 +97,118 @@ class AidenChatTest {
     }
 
     @Test
+    fun coldReplayRebuildsPrefixWarmReconnectUsesMemoryAndTerminalRejectsLateEvents() = assertStreamRecovery()
+
+    @Test
+    fun heldInitialLoadCannotOverwriteSettledTranscriptOrCache() = assertStreamRecovery(holdInitialLoad = true)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertStreamRecovery(holdInitialLoad: Boolean = false) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-stream-recovery-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val requests = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val chatReads = java.util.concurrent.atomic.AtomicInteger()
+        val eventReads = java.util.concurrent.atomic.AtomicInteger()
+        val releaseInitialLoad = CountDownLatch(1)
+        val initial = AidenChat(
+            id = "chat-recovery", workspaceId = "workspace-recovery", title = "Recovery",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        // Match the host's public projection: absent optional private fields
+        // must be omitted, not serialized as forbidden `reasoning: null` keys.
+        val wireJson = Json(json) { explicitNulls = false }
+        val final = initial.copy(messages = listOf(AidenChatMessage(
+            id = "final-reply", role = AidenChatRole.ASSISTANT, text = "Authoritative final", createdAt = Instant.EPOCH
+        )))
+        fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":$sequence,\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                requests.add(request.path!!)
+                return when {
+                    path.endsWith("/events") -> {
+                        val body = if (eventReads.incrementAndGet() == 1) {
+                            event(1, "text_delta", "{\"text\":\"prefix \"}")
+                        } else {
+                            event(2, "text_delta", "{\"text\":\"suffix\"}") +
+                                event(3, "done", "{\"messageId\":\"reply\"}", true) +
+                                event(4, "text_delta", "{\"text\":\"LATE\"}")
+                        }
+                        MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body)
+                    }
+                    path.endsWith("/streams/stream-recovery") -> MockResponse().setBody(
+                        """{"streamId":"stream-recovery","chatId":"chat-recovery","turnId":"turn-recovery","state":"running","lastSequence":1}"""
+                    )
+                    path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
+                        if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
+                        MockResponse().setBody(wireJson.encodeToString(initial))
+                    }
+                    path.endsWith("/chats/chat-recovery") && holdInitialLoad ->
+                        MockResponse().setBody(wireJson.encodeToString(final))
+                    else -> MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"""
+                    )
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-recovery", deviceId = "device-recovery",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                    credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ)
+                ), null)
+                val cache = AidenChatCache(directory)
+                cache.saveChat(initial, "instance-recovery")
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-recovery", "stream-recovery", "turn-recovery", 27), "instance-recovery", initial.id)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                viewModels.put("chat", model)
+                withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
+                if (holdInitialLoad) {
+                    withTimeout(5_000) { model.hasActiveStream.first { !it } }
+                    assertEquals("final-reply", model.chat.value!!.messages.last().id)
+                    releaseInitialLoad.countDown()
+                    withTimeout(5_000) { model.isLoading.first { !it } }
+                    assertEquals("final-reply", model.chat.value!!.messages.last().id)
+                    assertEquals("final-reply", cache.loadChat("instance-recovery", initial.id)!!.messages.last().id)
+                    assertEquals("", model.liveText.value)
+                } else {
+                    // Let the terminal reconciliation attempt and any illegally queued late frame run.
+                    withTimeout(5_000) { model.presentedError.first { it == "Offline transcript" } }
+                    kotlinx.coroutines.delay(100)
+                    assertEquals("prefix suffix", model.liveText.value)
+                }
+                val eventPaths = synchronized(requests) { requests.filter { it.contains("/events") } }
+                assertEquals(2, eventPaths.size)
+                assertFalse(eventPaths[0].contains("after="))
+                assertTrue(eventPaths[1].endsWith("after=1"))
+                assertEquals(if (holdInitialLoad) null else 27, AidenChatCache(directory).loadActiveStream("instance-recovery", initial.id)?.lastSequence)
+                assertEquals(AidenStreamState.DONE, model.streamState.value)
+                model.updateDraft("Next turn")
+                assertEquals(holdInitialLoad, model.canSend)
+                assertTrue(requests.none { it.endsWith("/turns") })
+            }
+        } finally {
+            releaseInitialLoad.countDown()
+            runBlocking(dispatcher) { viewModels.clear() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
 
     @Test
@@ -163,6 +275,11 @@ class AidenChatTest {
                 assertEquals("", model.draft.value)
                 // Sending intentionally clears persistence until a response is known.
                 assertNull(AidenChatDraftStore(directory).getDraft(installation.instanceId, initialChat.id))
+                // A foreground reload during POST must not erase the local message.
+                model.loadChat()
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                assertEquals("Original unsent text", model.chat.value!!.messages.single().text)
                 if (newerText.isNotEmpty()) model.updateDraft(newerText)
                 if (purgeWhileSending) coordinator.removeInstallation(installation.id)
                 releaseTurn.countDown()
@@ -816,7 +933,7 @@ class AidenChatTest {
             }
         )
         assertEquals(
-            "1 web search, 1 Mac action, compacted context, 1 tool call",
+            "1 web search, 1 Computer Use action, compacted context, 1 tool call",
             AidenAgentActivityPresentation.summary(multiTimeline)
         )
 
@@ -994,8 +1111,8 @@ class AidenChatTest {
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
         assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
         assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
-        assertTrue(AidenApprovalPresentation.requiresMacConfirmation(approval))
-        assertFalse(AidenApprovalPresentation.requiresMacConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
+        assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
         assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
     }
 
@@ -1035,7 +1152,7 @@ class AidenChatTest {
         assertTrue(readOnlySchedule!!.canRespond)
         assertFalse(readOnlySchedule.hasRequiredWriteCapability)
         assertFalse(readOnlySchedule.canAllow)
-        assertFalse(AidenApprovalPresentation.requiresMacConfirmation(readOnlySchedule))
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(readOnlySchedule))
 
         val cannotRespond = AidenPendingApprovalResolution.resolve(
             valid,
@@ -1220,6 +1337,17 @@ class AidenChatTest {
             durationMs = 1000.0, detail = "pi-vcc · 0.4s · ~25900 → 6758 tokens"
         )
         assertEquals("Compacted context pi-vcc · 0.4s · ~25900 → 6758 tokens", AidenAgentActivityPresentation.line(step))
+        assertTrue(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step)))
+        val read = AidenAgentStep(
+            id = "read-1", order = 1, kind = AidenAgentStep.Kind.TOOL,
+            toolName = "read_file", label = "Read file",
+            status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0,
+            updatedAt = 2000.0, finishedAt = 2000.0, contentOffset = 0,
+            durationMs = 1000.0, target = "README.md"
+        )
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, read)))
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, step.copy(id = "compact-2", order = 1))))
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(emptyList()))
         assertEquals(step.detail, json.decodeFromString<AidenAgentStep>(json.encodeToString(step)).detail)
     }
 }

@@ -177,7 +177,7 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
     const tool: AgentTool = {
       name, label, description, parameters,
       execute: async (callId, raw, callSignal) => {
-        const args = validateToolArguments(tool, { type: "toolCall", id: callId, name, arguments: raw as Args }) as Args;
+        const args = validateToolArguments(tool, { type: "toolCall", id: callId, name, arguments: raw as Record<string, never> }) as Args;
         const signal = callSignal ? AbortSignal.any([context.signal, callSignal]) : context.signal;
         const ensureLive = () => { if (signal.aborted) throw signal.reason ?? new Error("Browser generation was cancelled."); };
         const admittedRevision = queueRevision;
