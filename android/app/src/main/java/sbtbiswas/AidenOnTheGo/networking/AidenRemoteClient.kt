@@ -1548,6 +1548,7 @@ class AidenRemoteClient(
     suspend fun writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
+        displayPath: String,
         content: String,
         expectedVersion: String
     ): AidenWorkspaceFileDocument = executeRequest(
@@ -1556,11 +1557,11 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenWorkspaceFileWriteRequest(content = content, expectedVersion = expectedVersion))
     ) { bytes ->
         val doc = json.decodeFromString<AidenWorkspaceFileDocument>(String(bytes, Charsets.UTF_8))
-        AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
+        AidenWorkspaceEnvironmentValidation.validatedSave(doc, displayPath)
     }
 
-    suspend fun writeFile(workspaceId: String, fileId: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
-        writeWorkspaceFile(workspaceId, fileId, content, expectedVersion)
+    suspend fun writeFile(workspaceId: String, fileId: String, displayPath: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
+        writeWorkspaceFile(workspaceId, fileId, displayPath, content, expectedVersion)
 
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"

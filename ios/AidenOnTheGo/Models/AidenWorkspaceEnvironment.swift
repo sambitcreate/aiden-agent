@@ -25,6 +25,28 @@ struct AidenWorkspaceFileIndex: Codable, Equatable, Sendable {
     var nextCursor: String? = nil
 }
 
+extension AidenWorkspaceFileIndex {
+    /// Replaces a superseded file handle (for example after a lazy save
+    /// rotated it) so reopening or reloading the entry uses the live handle.
+    func rebinding(fileID: String, to newID: String) -> AidenWorkspaceFileIndex {
+        guard fileID != newID else { return self }
+        var copy = AidenWorkspaceFileIndex(
+            snapshotId: snapshotId,
+            entries: entries.map { entry in
+                guard entry.id == fileID else { return entry }
+                return AidenWorkspaceFileEntry(
+                    id: newID, displayPath: entry.displayPath, name: entry.name,
+                    kind: entry.kind, size: entry.size, language: entry.language
+                )
+            },
+            truncated: truncated, maxEntries: maxEntries, maxDepth: maxDepth
+        )
+        copy.directoryPath = directoryPath
+        copy.nextCursor = nextCursor
+        return copy
+    }
+}
+
 struct AidenWorkspaceFileDocument: Codable, Equatable, Sendable {
     let id: String
     let displayPath: String
@@ -223,6 +245,15 @@ enum AidenWorkspaceEnvironmentValidation {
             throw AidenRemoteClientError.invalidResponse
         }
         return document
+    }
+
+    /// Lazy saves install a new inode, so the Mac returns a fresh opaque handle.
+    /// Bind the response to the requested file by path instead of by handle.
+    static func validatedSave(_ document: AidenWorkspaceFileDocument, expectedDisplayPath: String) throws -> AidenWorkspaceFileDocument {
+        guard document.displayPath == expectedDisplayPath else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return try validated(document, expectedID: document.id)
     }
 
     static func validated(_ git: AidenGitResult) throws -> AidenGitResult {

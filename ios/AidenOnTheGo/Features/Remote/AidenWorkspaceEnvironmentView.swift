@@ -319,12 +319,21 @@ final class AidenWorkspaceFilesModel {
             let saved = try await coordinator.remoteClient(for: context).writeWorkspaceFile(
                 workspaceId: workspace.id,
                 fileId: document.id,
+                displayPath: document.displayPath,
                 content: draft,
                 expectedVersion: document.version
             )
             guard coordinator.isCurrent(context) else { return false }
             self.document = saved
             draft = saved.content
+            // Lazy saves rotate the file handle; keep the tree bound to it.
+            if let current = index {
+                let rebound = current.rebinding(fileID: document.id, to: saved.id)
+                if rebound != current {
+                    index = rebound
+                    try? await cache.store(index: rebound, instanceId: instanceId, workspaceId: workspace.id)
+                }
+            }
             try? await cache.store(document: saved, instanceId: instanceId, workspaceId: workspace.id)
             coordinator.haptics.play(
                 .success,

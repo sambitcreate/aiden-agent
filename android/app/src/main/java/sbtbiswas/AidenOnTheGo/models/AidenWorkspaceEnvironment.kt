@@ -338,6 +338,13 @@ object AidenWorkspaceEnvironmentValidation {
         return document
     }
 
+    /** Lazy saves install a new inode, so the Mac returns a fresh opaque handle.
+     *  Bind the response to the requested file by path instead of by handle. */
+    fun validatedSave(document: AidenWorkspaceFileDocument, expectedDisplayPath: String): AidenWorkspaceFileDocument {
+        if (document.displayPath != expectedDisplayPath) throw AidenRemoteClientException.InvalidResponse()
+        return validated(document, document.id)
+    }
+
     fun validated(git: AidenGitResult): AidenGitResult {
         if (!git.operationId.startsWith("op_") || git.operationId.length > 128) {
             throw AidenRemoteClientException.InvalidResponse()
@@ -383,6 +390,12 @@ data class AidenWorkspaceFileAvailability(val indexOffline: Boolean, val documen
 }
 
 object AidenWorkspaceFileTree {
+    /** Replaces a superseded file handle (for example after a lazy save rotated
+     *  it) so reopening the entry uses the live handle. */
+    fun rebind(index: AidenWorkspaceFileIndex, fileId: String, newId: String): AidenWorkspaceFileIndex =
+        if (fileId == newId || index.entries.none { it.id == fileId }) index
+        else index.copy(entries = index.entries.map { if (it.id == fileId) it.copy(id = newId) else it })
+
     fun visible(entries: List<AidenWorkspaceFileEntry>, expanded: Set<String>, search: String): List<AidenWorkspaceFileEntry> {
         val groups = entries.groupBy { it.displayPath.substringBeforeLast('/', "") }
         val matchingPaths = mutableSetOf<String>()

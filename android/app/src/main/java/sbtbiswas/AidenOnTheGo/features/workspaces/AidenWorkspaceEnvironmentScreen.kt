@@ -258,10 +258,19 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                                                 val updated = client.writeWorkspaceFile(
                                                     workspaceId = workspaceId,
                                                     fileId = doc.id,
+                                                    displayPath = doc.displayPath,
                                                     content = draftContent,
                                                     expectedVersion = doc.version
                                                 )
                                                 selectedFile = updated
+                                                // Lazy saves rotate the file handle; keep the tree bound to it.
+                                                fileIndex?.let { current ->
+                                                    val rebound = AidenWorkspaceFileTree.rebind(current, doc.id, updated.id)
+                                                    if (rebound !== current) {
+                                                        fileIndex = rebound
+                                                        if (activeInstanceId != null) cache.store(rebound, activeInstanceId, workspaceId)
+                                                    }
+                                                }
                                                 originalContent = updated.content
                                                 draftContent = updated.content
                                                 isDirty = false

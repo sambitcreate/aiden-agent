@@ -194,6 +194,9 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
   const relative = path.relative(canonicalRootPath, canonicalPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new AidenOpaqueHandleError("path_outside_root");
   const identity = await stat(canonicalPath);
+  // Another name for a multiply-linked regular file can live outside the root,
+  // so the in-root name would expose or mutate that outside file.
+  if (identity.isFile() && identity.nlink !== 1) throw new AidenOpaqueHandleError("path_outside_root");
   return {
     canonicalRootPath,
     canonicalPath,

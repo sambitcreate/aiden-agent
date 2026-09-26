@@ -156,6 +156,37 @@ class AidenWorkspaceEnvironmentTest {
     }
 
     @Test
+    fun testLazySaveAcceptsRotatedHandleAndRebindsTreeEntry() {
+        val rotatedId = "file_" + "r".repeat(43)
+        val otherId = "file_" + "o".repeat(43)
+        val saved = AidenWorkspaceFileDocument(
+            id = rotatedId, displayPath = "src/main.kt", content = "x", version = "v2", truncated = false
+        )
+        assertEquals(saved, AidenWorkspaceEnvironmentValidation.validatedSave(saved, "src/main.kt"))
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            AidenWorkspaceEnvironmentValidation.validatedSave(saved, "src/other.kt")
+        }
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            AidenWorkspaceEnvironmentValidation.validatedSave(saved.copy(id = "../escape"), "src/main.kt")
+        }
+
+        val index = AidenWorkspaceFileIndex(
+            snapshotId = "files-1",
+            entries = listOf(
+                AidenWorkspaceFileEntry(validFileId, "src/main.kt", "main.kt", AidenWorkspaceFileKind.FILE, 1, "Kotlin"),
+                AidenWorkspaceFileEntry(otherId, "src/other.kt", "other.kt", AidenWorkspaceFileKind.FILE)
+            ),
+            truncated = false, maxEntries = 4_000, maxDepth = 20, directoryPath = ""
+        )
+        val rebound = AidenWorkspaceFileTree.rebind(index, validFileId, rotatedId)
+        assertEquals(listOf(rotatedId, otherId), rebound.entries.map { it.id })
+        assertEquals("Kotlin", rebound.entries.first().language)
+        assertEquals("", rebound.directoryPath)
+        assertSame(index, AidenWorkspaceFileTree.rebind(index, validFileId, validFileId))
+        assertSame(index, AidenWorkspaceFileTree.rebind(index, "file_" + "z".repeat(43), rotatedId))
+    }
+
+    @Test
     fun testGitProjectionsValidation() {
         val validReview = AidenGitResult(
             operationId = "op_review_01",

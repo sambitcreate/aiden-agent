@@ -167,6 +167,26 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     assert.equal(saved.content, "let value = 3\n");
     assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
 
+    // Snapshot handles also refuse multiply-linked files: another name for the
+    // inode may live outside the workspace.
+    await fs.link(outside, path.join(root, "linked-secret.txt"));
+    const linkedIndex = await service.list("device-1", workspace.id);
+    assert.equal(linkedIndex.entries.some((entry) => entry.displayPath === "linked-secret.txt"), false);
+    assert.equal(linkedIndex.truncated, true);
+    await fs.rm(path.join(root, "linked-secret.txt"));
+    const outsideAlias = path.join(temporary, "outside-alias.swift");
+    await fs.link(path.join(root, "Sources", "App.swift"), outsideAlias);
+    await assert.rejects(
+      () => service.read("device-1", workspace.id, file.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
+    );
+    await assert.rejects(
+      () => service.write("device-1", workspace.id, file.id, { content: "must not save\n", expectedVersion: saved.version }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
+    );
+    assert.equal(await fs.readFile(outsideAlias, "utf8"), "let value = 3\n");
+    await fs.rm(outsideAlias);
+
     await fs.rm(path.join(root, "Sources", "App.swift"));
     await fs.symlink(outside, path.join(root, "Sources", "App.swift"));
     await assert.rejects(

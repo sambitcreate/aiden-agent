@@ -1566,6 +1566,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     func writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
+        displayPath: String,
         content: String,
         expectedVersion: String
     ) async throws -> AidenWorkspaceFileDocument {
@@ -1578,7 +1579,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: AidenWorkspaceFileWriteRequest(content: content, expectedVersion: expectedVersion),
             maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
         )
-        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+        return try AidenWorkspaceEnvironmentValidation.validatedSave(value, expectedDisplayPath: displayPath)
     }
 
     func gitReview(workspaceId: String) async throws -> AidenGitResult {

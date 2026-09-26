@@ -88,3 +88,9 @@ Merged origin/main7a4d9d0bd into the feature branch. Resolved four conflicts by 
 Validation:60 onboarding,29 lifecycle,105 service-boundary,466 remote tests passed (1skip), TypeScript/scoped ESLint/whitespace pass. Mobile compilation/tests and final native checks follow below. Prior-head CI is historical; merged-head CI must run after push.
 
 Final merge checks:11 native tests,198 Android unit tests and Android lint passed; generic unsigned iOS device-platform app/test compilation passed. No physical/simulator tests launched.
+
+## Hermes (4adce5c8) and hardlink follow-up — 2026-09-25
+
+Hermes P1/P2 on the merged head were real: lazy saves return a rotated file handle, but iOS/Android `writeWorkspaceFile` validated the response against the pre-save handle (every lazy save reported failure) and left the loaded tree bound to the superseded handle (reopen/reload/offline cache lookup missed). Clients now take the requested `displayPath`, accept any valid opaque id whose `displayPath` matches (`validatedSave`), and rebind the tree entry (`AidenWorkspaceFileIndex.rebinding` / `AidenWorkspaceFileTree.rebind`) and persist the rebound index.
+
+Pullfrog's hardlink CAUTION (review on f90d42d) was already fixed for lazy handles by 722a2dd8. The same escape remained on the legacy snapshot (`GET /files`) handles and shared bot/browser identity inspection: `inspectAidenFilesystemIdentity` now rejects regular files with `nlink !== 1` (`path_outside_root`), so snapshot listing omits them (marks `truncated`) and read/write re-resolution fails closed. The snapshot read still has a path-based window between that check and `readRegularFile`, like its existing symlink handling.

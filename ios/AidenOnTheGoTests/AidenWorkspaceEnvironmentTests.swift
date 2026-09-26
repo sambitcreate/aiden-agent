@@ -107,6 +107,37 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         ))
     }
 
+    func testLazySaveAcceptsRotatedHandleAndRebindsTreeEntry() throws {
+        let oldID = "file_\(String(repeating: "a", count: 43))"
+        let newID = "file_\(String(repeating: "b", count: 43))"
+        let otherID = "file_\(String(repeating: "c", count: 43))"
+        let saved = AidenWorkspaceFileDocument(
+            id: newID, displayPath: "Sources/App.swift", content: "x", version: "v2", truncated: false, warning: nil
+        )
+        XCTAssertEqual(try AidenWorkspaceEnvironmentValidation.validatedSave(saved, expectedDisplayPath: "Sources/App.swift"), saved)
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedSave(saved, expectedDisplayPath: "Sources/Other.swift"))
+        let unsafe = AidenWorkspaceFileDocument(
+            id: "../escape", displayPath: "Sources/App.swift", content: "x", version: "v2", truncated: false, warning: nil
+        )
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedSave(unsafe, expectedDisplayPath: "Sources/App.swift"))
+
+        var index = AidenWorkspaceFileIndex(
+            snapshotId: "files-1",
+            entries: [
+                .init(id: oldID, displayPath: "Sources/App.swift", name: "App.swift", kind: .file, size: 1, language: "Swift"),
+                .init(id: otherID, displayPath: "Sources/Other.swift", name: "Other.swift", kind: .file, size: nil, language: nil),
+            ],
+            truncated: false, maxEntries: 4_000, maxDepth: 20
+        )
+        index.directoryPath = ""
+        let rebound = index.rebinding(fileID: oldID, to: newID)
+        XCTAssertEqual(rebound.entries.map(\.id), [newID, otherID])
+        XCTAssertEqual(rebound.entries[0].displayPath, "Sources/App.swift")
+        XCTAssertEqual(rebound.entries[0].language, "Swift")
+        XCTAssertEqual(rebound.directoryPath, "")
+        XCTAssertEqual(index.rebinding(fileID: oldID, to: oldID), index)
+    }
+
     func testEnvironmentCacheIsInstallationAndWorkspaceScoped() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -167,6 +198,7 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
 
     func testClientUsesOpaqueFileRoutesAndConfirmedGitMutationHeaders() async throws {
         let fileID = "file_\(String(repeating: "f", count: 43))"
+        let savedFileID = "file_\(String(repeating: "g", count: 43))"
         let snapshotID = "snap_\(String(repeating: "s", count: 43))"
         let recorder = EnvironmentRequestRecorder()
         EnvironmentMockURLProtocol.handler = { request in
@@ -182,8 +214,9 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
                 {"id":"\(fileID)","displayPath":"App.swift","content":"let value = 1\\n","version":"version-1","truncated":false}
                 """)
             case ("PUT", "/api/aiden/v1/workspaces/workspace-1/files/\(fileID)"):
+                // Lazy saves install a new inode and return a fresh handle.
                 return Self.response(request, 200, """
-                {"id":"\(fileID)","displayPath":"App.swift","content":"let value = 2\\n","version":"version-2","truncated":false}
+                {"id":"\(savedFileID)","displayPath":"App.swift","content":"let value = 2\\n","version":"version-2","truncated":false}
                 """)
             case ("GET", "/api/aiden/v1/workspaces/workspace-1/git/review"):
                 return Self.response(request, 200, """
@@ -211,12 +244,14 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
 
         _ = try await client.workspaceFiles(workspaceId: "workspace-1")
         let document = try await client.workspaceFile(workspaceId: "workspace-1", fileId: fileID)
-        _ = try await client.writeWorkspaceFile(
+        let saved = try await client.writeWorkspaceFile(
             workspaceId: "workspace-1",
             fileId: fileID,
+            displayPath: document.displayPath,
             content: "let value = 2\n",
             expectedVersion: document.version
         )
+        XCTAssertEqual(saved.id, savedFileID)
         _ = try await client.gitReview(workspaceId: "workspace-1")
         _ = try await client.createGitWorktree(
             workspaceId: "workspace-1",
