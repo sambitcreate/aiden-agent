@@ -11,6 +11,7 @@ import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
+import { resolveGitExecutable } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -990,21 +991,34 @@ export class GitService {
       options.worktreeRemovalManifestInspector ?? managedWorktreeRemovalManifestPresent;
   }
 
-  private run(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitCommandResult> {
+  private async run(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitCommandResult> {
     if (options.signal?.aborted) {
       return Promise.reject(new GitServiceError("aborted", "Git operation was cancelled."));
     }
     const timeoutMs =
       options.timeoutMs ?? (options.mutation ? this.mutationTimeoutMs : this.readTimeoutMs);
+    const env = gitEnvironment(options.mutation === true);
+    let binary: string;
+    try {
+      binary = await resolveGitExecutable(this.gitBinary, cwd, env, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw new GitServiceError("aborted", "Git operation was cancelled.");
+      }
+      throw new GitServiceError("command_failed", publicGitMessage(error, cwd), error);
+    }
+    if (options.signal?.aborted) {
+      throw new GitServiceError("aborted", "Git operation was cancelled.");
+    }
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
         const commandConfigEnvironment = gitCommandConfigEnvironment(options);
-        child = spawn(this.gitBinary, args, {
+        child = spawn(binary, args, {
           cwd,
           detached: process.platform !== "win32",
           env: {
-            ...gitEnvironment(options.mutation === true),
+            ...env,
             ...commandConfigEnvironment,
             ...(options.prePushProxy
               ? {

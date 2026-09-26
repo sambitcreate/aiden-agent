@@ -1404,3 +1404,7 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-26 no-Xcode chat fix
+- A new worktree initially resolved the parent checkout's older node_modules, causing unrelated Pi API and bonjour-service type errors. Run `npm ci` in the new worktree before validation; the locked install restores a passing typecheck without changing dependencies.
+- Read-only subagent file tools could not access the nested `.worktrees` path. Independently verified the new-worktree source with foreground tools; the final independent review was explicitly limited to the supplied implementation description, not a source review.
