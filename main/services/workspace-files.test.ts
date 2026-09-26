@@ -6,7 +6,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
+  linuxRecoveryUse,
   listWorkspaceFiles,
+  listWorkspaceDirectory,
   readWorkspaceFile,
   WorkspaceFileError,
   writeWorkspaceFile,
@@ -286,3 +288,57 @@ test("workspace editor still follows a stable symlink to a file inside the works
   assert.equal(document.path, "linked.txt");
   assert.equal(document.content, "linked content\n");
 });
+
+test("lazy directory scan rejects a directory symlink", { skip: process.platform !== "darwin" }, async (t) => {
+  const root = await workspace(t);
+  const outside = await workspace(t);
+  await fs.writeFile(path.join(outside, "secret"), "private");
+  await fs.symlink(outside, path.join(root, "child"));
+  await assert.rejects(listWorkspaceDirectory(root, "child"));
+});
+
+test("lazy directory scan includes files at the legacy depth boundary", { skip: process.platform !== "darwin" }, async (t) => {
+  const root = await workspace(t);
+  const directory = Array.from({ length: 20 }, () => "a").join("/");
+  await fs.mkdir(path.join(root, directory), { recursive: true });
+  await fs.writeFile(path.join(root, directory, "last.txt"), "last");
+  assert.equal((await listWorkspaceDirectory(root, directory)).entries[0]?.name, "last.txt");
+});
+
+
+test("lazy listing preserves supplied root and directory identities across replacement", { skip: process.platform !== "darwin" }, async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "inside"));
+  const rootStat = await fs.stat(root, { bigint: true });
+  const directoryStat = await fs.stat(path.join(root, "inside"), { bigint: true });
+  const identities = {
+    root: { path: await fs.realpath(root), device: rootStat.dev.toString(), inode: rootStat.ino.toString() },
+    directory: { device: directoryStat.dev.toString(), inode: directoryStat.ino.toString() },
+  };
+  await fs.rename(path.join(root, "inside"), path.join(root, "original"));
+  await fs.mkdir(path.join(root, "inside"));
+  await fs.writeFile(path.join(root, "inside", "private.txt"), "private");
+  await assert.rejects(listWorkspaceDirectory(root, "inside", undefined, identities));
+  await fs.rm(path.join(root, "inside"), { recursive: true });
+  await fs.rename(path.join(root, "original"), path.join(root, "inside"));
+  const moved = root + "-original";
+  await fs.rename(root, moved);
+  t.after(() => fs.rm(moved, { recursive: true, force: true }));
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "private.txt"), "private");
+  await assert.rejects(listWorkspaceDirectory(root, "", undefined, { root: identities.root, directory: identities.root }));
+});
+
+test(
+  "Linux recovery inspection detects current-user open descriptors",
+  { skip: process.platform !== "linux" || !process.getuid },
+  async (t) => {
+    const root = await workspace(t);
+    const file = path.join(root, "recovery.txt");
+    await fs.writeFile(file, "original");
+    const handle = await fs.open(file, "r");
+    assert.equal(await linuxRecoveryUse(file), "open");
+    await handle.close();
+    assert.equal(await linuxRecoveryUse(file), "clear");
+  },
+);

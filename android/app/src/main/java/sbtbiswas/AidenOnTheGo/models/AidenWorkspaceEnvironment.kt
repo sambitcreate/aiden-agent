@@ -150,7 +150,9 @@ data class AidenWorkspaceFileIndex(
     val entries: List<AidenWorkspaceFileEntry>,
     val truncated: Boolean,
     val maxEntries: Int,
-    val maxDepth: Int
+    val maxDepth: Int,
+    val directoryPath: String? = null,
+    val nextCursor: String? = null
 )
 
 @Serializable
@@ -316,6 +318,17 @@ object AidenWorkspaceEnvironmentValidation {
         return index
     }
 
+    fun validatedPage(index: AidenWorkspaceFileIndex): AidenWorkspaceFileIndex {
+        val directory = index.directoryPath ?: throw AidenRemoteClientException.InvalidResponse()
+        if ((directory.isNotEmpty() && !safeDisplayPath(directory)) || index.entries.size > 200 ||
+            (index.nextCursor != null && !index.nextCursor.matches(Regex("^cur_[A-Za-z0-9_-]{43}$"))) ||
+            index.entries.map { it.displayPath }.toSet().size != index.entries.size ||
+            index.entries.any { it.displayPath.substringBeforeLast('/', "") != directory }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return validated(index)
+    }
+
     fun validated(document: AidenWorkspaceFileDocument, expectedId: String): AidenWorkspaceFileDocument {
         if (document.id != expectedId || !opaqueFileID(document.id) || !safeDisplayPath(document.displayPath) ||
             document.version.isEmpty() || document.truncated
@@ -323,6 +336,13 @@ object AidenWorkspaceEnvironmentValidation {
             throw AidenRemoteClientException.InvalidResponse()
         }
         return document
+    }
+
+    /** Lazy saves install a new inode, so the Mac returns a fresh opaque handle.
+     *  Bind the response to the requested file by path instead of by handle. */
+    fun validatedSave(document: AidenWorkspaceFileDocument, expectedDisplayPath: String): AidenWorkspaceFileDocument {
+        if (document.displayPath != expectedDisplayPath) throw AidenRemoteClientException.InvalidResponse()
+        return validated(document, document.id)
     }
 
     fun validated(git: AidenGitResult): AidenGitResult {
@@ -361,5 +381,59 @@ object AidenWorkspaceEnvironmentValidation {
             }
         }
         return git
+    }
+}
+
+data class AidenWorkspaceFileAvailability(val indexOffline: Boolean, val documentOffline: Boolean, val connected: Boolean) {
+    val canLoadPage: Boolean get() = !indexOffline && connected
+    val canEditDocument: Boolean get() = !documentOffline && connected
+}
+
+object AidenWorkspaceFileTree {
+    /** Replaces a superseded file handle (for example after a lazy save rotated
+     *  it) so reopening the entry uses the live handle. */
+    fun rebind(index: AidenWorkspaceFileIndex, fileId: String, newId: String): AidenWorkspaceFileIndex =
+        if (fileId == newId || index.entries.none { it.id == fileId }) index
+        else index.copy(entries = index.entries.map { if (it.id == fileId) it.copy(id = newId) else it })
+
+    fun visible(entries: List<AidenWorkspaceFileEntry>, expanded: Set<String>, search: String): List<AidenWorkspaceFileEntry> {
+        val groups = entries.groupBy { it.displayPath.substringBeforeLast('/', "") }
+        val matchingPaths = mutableSetOf<String>()
+        if (search.isNotEmpty()) entries.filter { it.displayPath.contains(search, ignoreCase = true) }.forEach { entry ->
+            val parts = entry.displayPath.split("/")
+            (1..parts.size).forEach { matchingPaths.add(parts.take(it).joinToString("/")) }
+        }
+        val result = mutableListOf<AidenWorkspaceFileEntry>()
+        fun visit(parent: String, depth: Int) {
+            if (depth > 20) return
+            val children = groups[parent].orEmpty().sortedWith(compareBy<AidenWorkspaceFileEntry> { it.kind != AidenWorkspaceFileKind.DIRECTORY }.thenBy { it.name.lowercase() })
+            children.forEach { entry ->
+                if (search.isEmpty() || entry.displayPath in matchingPaths) {
+                    result.add(entry)
+                    if (entry.displayPath in expanded || search.isNotEmpty()) visit(entry.displayPath, depth + 1)
+                }
+            }
+        }
+        visit("", 0)
+        return result
+    }
+}
+
+object AidenWorkspaceSourcePreview {
+    fun lines(content: String): List<String> {
+        val rows = content.lineSequence().take(2_001).toList()
+        return rows.take(2_000).map { it.take(2_000) + if (it.length > 2_000) " … [line clipped]" else "" } +
+            if (rows.size > 2_000) listOf("Preview limited to 2,000 lines. Choose Edit to view the full document.") else emptyList()
+    }
+}
+
+object AidenWorkspaceFileLink {
+    fun path(raw: String): String? {
+        if (!raw.startsWith("./") || raw.toByteArray(Charsets.UTF_8).size > 4_096) return null
+        val decoded = try { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") } catch (_: Exception) { return null }
+        if (decoded.any { it.code < 32 || it.code == 127 || it in "\\?:#" }) return null
+        val path = decoded.drop(2)
+        val parts = path.split("/")
+        return path.takeIf { parts.size <= 21 && parts.all { it.isNotEmpty() && it != "." && it != ".." } }
     }
 }

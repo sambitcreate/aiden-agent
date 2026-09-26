@@ -54,7 +54,7 @@ const featurePresentation = sourceSection("const featureBentos", "const FEATURE_
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
   assert.match(source, /<ProviderIcon/u);
-  for (const providerId of ["openai", "openai-codex", "anthropic", "lmstudio", "ollama"]) {
+  for (const providerId of ["openai", "openai-codex", "anthropic", "lmstudio", "ollama", "tailscale"]) {
     assert.match(providerPresentation, new RegExp(`iconProviderId: "${providerId}"`, "u"));
   }
   assert.match(source, /aria-pressed=\{choice === item\.id\}/u);
@@ -239,30 +239,32 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 
-test("pre-workspace Web Search disclosure is default-aware, explicit, and request-free", () => {
-  assert.match(source, /data-onboarding-web-search/u);
-  assert.match(source, /const webSearch = useWebSearch\(\)/u);
-  assert.match(source, /const next = await webSearchApi\.setEnabled\(enabled\)/u);
-  assert.match(source, /queryClient\.setQueryData\(queryKeys\.webSearch, next\)/u);
+test("Other ways OpenAI, Anthropic, and Tailscale choices reuse ProviderIcon wells", () => {
+  const moreWays = sourceSection("data-onboarding-more-providers", "{moreProviders.map((provider) => {");
   assert.match(
-    source,
-    /Fresh profiles start with Web Search on; anonymous Exa is the initial\s+recipient/u,
+    moreWays,
+    /\["openai-key", "anthropic", "tailscale"\][\s\S]*providerId=\{item\.iconProviderId\}/u,
   );
+  assert.match(moreWays, /rounded-control bg-popover text-primary shadow-control/u);
+  assert.match(providerPresentation, /iconProviderId: "openai"/u);
+  assert.match(providerPresentation, /iconProviderId: "anthropic"/u);
+  assert.match(providerPresentation, /iconProviderId: "tailscale"/u);
+});
+
+test("profile onboarding keeps Web Search default-on without a first-run toggle", () => {
+  const profileStep = source.slice(
+    source.indexOf('step === "profile"'),
+    source.indexOf('step === "provider"'),
+  );
+  assert.doesNotMatch(profileStep, /data-onboarding-web-search/u);
+  assert.doesNotMatch(profileStep, /Allow Web Search in attended chats/u);
+  assert.doesNotMatch(source, /useWebSearch\(/u);
+  assert.doesNotMatch(source, /webSearchApi/u);
+  assert.doesNotMatch(source, /setWebSearchEnabled/u);
   assert.match(
-    source,
-    /send\s+that query and your network\s+address to Exa only when the model\s+invokes search/u,
+    featurePresentation,
+    /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
-  assert.match(source, /This screen makes no\s+network\s+request/u);
-  assert.match(source, /Existing opt-outs and routes stay unchanged/u);
-  assert.match(
-    source,
-    /disabled=\{!webSearch\.data \|\| webSearch\.isFetching \|\| webSearchSaving\}/u,
-  );
-  assert.match(source, /aria-label="Allow Web Search in attended chats"/u);
-  assert.match(source, /aria-describedby="onboarding-web-search-description"/u);
-  assert.match(source, /motion-reduce:transition-none/u);
-  assert.doesNotMatch(source, /exaApi\.(setEnabled|setKey)/u);
-  assert.doesNotMatch(source, /setWebSearchEnabled\(true\)/u);
 });
 
 test("hosted keys validate before selection and endpoint routes require discovered models", () => {
@@ -308,7 +310,12 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
-  assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
+  assert.match(source, /if \(!capabilities\.bots && feature\.id === "bots"\) continue/u);
+  assert.match(source, /data-onboarding-feature-count=\{visibleFeatureBentos\.length\}/u);
+  assert.match(
+    source,
+    /if \(!capabilities\.computerUse && feature\.id === "computerUse"\) continue/u,
+  );
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
   assert.match(source, /FEATURE_LAYOUTS[\s\S]*?col-span-4 row-span-2/u);
   assert.match(source, /group-hover:opacity-100/u);
@@ -317,6 +324,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     source,
     /Use Command-K or \/ for app commands, and \$ to attach a reusable skill\./u,
   );
+  assert.match(source, /Use Ctrl-K or \/ for app commands/u);
   assert.match(
     source,
     /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
@@ -445,4 +453,8 @@ test("blocked form filling is not advertised as a shipped tour feature", () => {
 
 test("workspace tour discloses AGENTS instruction loading and refresh", () => {
   assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
+});
+
+test("feature tour introduces native folder browsing and source previews", () => {
+  assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
 });

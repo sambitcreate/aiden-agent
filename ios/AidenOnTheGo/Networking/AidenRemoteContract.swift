@@ -65,7 +65,7 @@ enum AidenManualPairingError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCode:
-            return String(localized: "Enter the 20-character setup code shown on your Mac.")
+            return String(localized: "Enter the 20-character setup code shown on your desktop.")
         case .invalidBootstrap:
             return String(localized: "Aiden Agent returned an invalid manual pairing response.")
         case .decryptionFailed:
@@ -1356,6 +1356,7 @@ enum AidenRemoteChatAgentRole: String, Codable, Sendable {
     case scout
     case planner
     case reviewer
+    case implementer
 }
 
 enum AidenRemoteChatAgentMilestone: String, Codable, Sendable {

@@ -2,14 +2,32 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { COMMANDS } from "../../renderer/shared/keybindings";
+import { applicationMenuTemplate } from "./application-menu-core";
 
 test("catalog native-menu ownership exactly matches derived Electron accelerators", () => {
-  const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  const menuCommandIds = [
-    ...main.matchAll(/accelerator:\s*command\("([^"]+)"\)/gu),
-  ]
-    .map((match) => match[1])
-    .sort();
+  const delivered = new Set<string>();
+  const menu = applicationMenuTemplate({
+    platform: "darwin",
+    appName: "Aiden Agent",
+    bindings: Object.fromEntries(COMMANDS.map((command) => [command.id, command.defaultBinding])),
+    actions: {
+      checkForUpdates() {},
+      deliverCommand(commandId) {
+        delivered.add(commandId);
+      },
+      reload() {},
+    },
+  });
+  const invokeItems = (items: typeof menu): void => {
+    for (const item of items) {
+      if (typeof item.click === "function") {
+        item.click({} as never, {} as never, {} as never);
+      }
+      if (Array.isArray(item.submenu)) invokeItems(item.submenu);
+    }
+  };
+  invokeItems(menu);
+  const menuCommandIds = [...delivered].sort();
   const catalogCommandIds = COMMANDS.filter((command) => command.nativeMenu)
     .map((command) => command.id)
     .sort();
@@ -56,4 +74,12 @@ test("startup persists semantic V1 repair before runtime registration can fail",
   const persist = shortcut.indexOf("await configStore.setSettings({ keybindings })", start);
   const apply = shortcut.indexOf("return applyNow({ ...settings, keybindings })", start);
   assert.ok(start >= 0 && persist > start && apply > persist);
+});
+
+test("portal dictation stays owned until a replacement shortcut registers", () => {
+  const shortcut = readFileSync(new URL("./shortcut.ts", import.meta.url), "utf8");
+  const reconcile = shortcut.indexOf("const result = await reconcileGlobalShortcuts");
+  const failure = shortcut.indexOf("if (!result.ok && result.failedCommandId)", reconcile);
+  const close = shortcut.indexOf("if (releaseLinuxPortal)", failure);
+  assert.ok(reconcile >= 0 && failure > reconcile && close > failure);
 });

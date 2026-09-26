@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
@@ -50,6 +52,12 @@ import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
+import {
+  AIDEN_REMOTE_SIMULATOR_HUB_PREFIX,
+  simulatorsUnavailable,
+  type AidenRemoteSimulatorRelay,
+} from "./aiden-remote-simulators.js";
+import { refuseUpgrade } from "./devices/device-hub-proxy.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import {
   parseBotNoticeAcknowledgement,
@@ -78,8 +86,10 @@ export interface AidenRemoteServerProjection {
 
 type AidenRemoteRouterAuthenticatedDevice = Omit<
   AidenRemoteAuthenticatedDevice,
-  "acceptsBotCapabilities" | "acceptsProgressCapabilities" | "name"
+  "acceptsBotCapabilities" | "acceptsProgressCapabilities" | "name" | "type"
 > & {
+  /** Omitted by legacy dependency adapters and treated as a non-desktop device. */
+  type?: AidenRemoteAuthenticatedDevice["type"];
   /** Omitted by legacy dependency adapters and treated as not negotiated. */
   acceptsBotCapabilities?: boolean;
   /** Omitted by legacy dependency adapters and treated as not negotiated. */
@@ -146,7 +156,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemoteStreamService,
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   >;
-  files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+  files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
@@ -182,6 +192,11 @@ export interface AidenRemoteRouterDependencies {
     AidenRemoteBotService,
     "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
   >>;
+  /**
+   * Simulator sharing with paired Macs (Simulator devices Phase 5). Absent
+   * when the feature is off; `/simulators` routes then return `not_found`.
+   */
+  simulators?: AidenRemoteSimulatorRelay;
   connectionMode(): AidenRemoteConnectionMode;
   now(): number;
   /** Tailscale Serve strips the public API prefix before loopback proxying. */
@@ -248,6 +263,8 @@ export type AidenRemoteRouteLabel =
   | "streamEvents"
   | "streamCancel"
   | "approvalRespond"
+  | "simulators"
+  | "simulatorHub"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
@@ -308,6 +325,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   streamEvents: ["/streams/:streamId/events"],
   streamCancel: ["/streams/:streamId/cancel"],
   approvalRespond: ["/approvals/:approvalId/respond"],
+  simulators: ["/simulators", "/simulators/:action"],
+  simulatorHub: ["/simulators/hub/:path"],
   unknown: [],
 };
 
@@ -531,7 +550,9 @@ function negotiatedDeviceCapabilities(
       (capability !== "bot:read" && capability !== "bot:write" ||
         device.acceptsBotCapabilities === true) &&
       (capability !== "tasks:read" && capability !== "agents:read" ||
-        device.acceptsProgressCapabilities === true),
+        device.acceptsProgressCapabilities === true) &&
+      (capability !== "simulators:control" ||
+        device.type === "mac" || device.type === "linux"),
     ),
   );
 }
@@ -1016,6 +1037,11 @@ function advertisedServerCapabilities(
           progressCapabilitySupported(dependencies, capability),
         )
       : []),
+    // Desktop-only: phones and tablets are never told this vocabulary exists.
+    ...((device.type === "mac" || device.type === "linux") &&
+    dependencies.simulators?.host()
+      ? AIDEN_REMOTE_SIMULATOR_CAPABILITIES
+      : []),
   ];
 }
 
@@ -1149,10 +1175,11 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticateCredential(request, dependencies.devices, capability);
         // Every authenticated operation crosses the synchronous revocation
         // fence. Only mutations participate in the drain; SSE/read lifetimes
-        // must not postpone durable revocation or cleanup.
+        // must not postpone durable revocation or cleanup. Simulator controls
+        // can wait minutes on a boot and are closed by `revokeDevice` instead.
         releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
           device.id,
-          request.method !== "GET",
+          request.method !== "GET" && path !== "/simulators" && !path.startsWith("/simulators/"),
         );
         return device;
       };
@@ -1274,16 +1301,24 @@ export function createAidenRemoteRequestHandler(
             400,
           );
         }
-        if (
-          input.accepts.some(
-            (capability) => !progressCapabilitySupported(dependencies, capability),
-          )
-        ) {
-          throw new AidenRemoteServiceError(
-            "not_found",
-            "This progress capability is unavailable on this Aiden installation.",
-            404,
-          );
+        for (const capability of input.accepts) {
+          if (capability === "simulators:control") {
+            // Refuse non-desktops first so they never learn whether this Mac has simulators.
+            if (device.type !== "mac" && device.type !== "linux") {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "Only paired desktops may control this Mac's simulators.",
+                403,
+              );
+            }
+            if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
+          } else if (!progressCapabilitySupported(dependencies, capability)) {
+            throw new AidenRemoteServiceError(
+              "not_found",
+              "This progress capability is unavailable on this Aiden installation.",
+              404,
+            );
+          }
         }
         const updated = await dependencies.devices.upgradeDeviceCapabilities(
           device.id,
@@ -1783,12 +1818,21 @@ export function createAidenRemoteRequestHandler(
       }
       const workspaceFilesMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files$/u.exec(path);
       if (workspaceFilesMatch && request.method === "GET") {
-        requireNoQuery(query);
+        const params = new URLSearchParams(query);
+        if (query && (params.get("tree") !== "1" || [...params.keys()].some(key =>
+          !["tree", "directory", "cursor"].includes(key) || params.getAll(key).length !== 1) ||
+          (params.has("directory") && !/^file_[A-Za-z0-9_-]{43}$/u.test(params.get("directory")!)) ||
+          (params.has("cursor") && !/^cur_[A-Za-z0-9_-]{43}$/u.test(params.get("cursor")!)))) {
+          throw new AidenRemoteServiceError("invalid_request", "The file page request is invalid.", 400);
+        }
         route = "workspaceFiles";
         const device = await authenticate(request, dependencies.devices, "files:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
+        if (query && !dependencies.files.children) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, query
+          ? await dependencies.files.children!(device.id, workspaceFilesMatch[1]!, params.get("directory") ?? undefined, params.get("cursor") ?? undefined)
+          : await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
         return;
       }
       const workspaceFileMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
@@ -2564,6 +2608,25 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      if (path === "/simulators" || path.startsWith("/simulators/")) {
+        const relay = dependencies.simulators;
+        route = path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)
+          ? "simulatorHub"
+          : "simulators";
+        const device = await authenticate(request, dependencies.devices, "simulators:control");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!relay) throw simulatorsUnavailable();
+        await relay.handle({
+          request,
+          response,
+          path,
+          query,
+          deviceId: device.id,
+          readJson: (maximumBytes) => readJsonBody(request, maximumBytes),
+          writeJson: (status, value) => writeJson(response, status, value),
+        });
+        return;
+      }
       throw new AidenRemoteServiceError(
         "not_found",
         "This Aiden Remote endpoint does not exist.",
@@ -2579,6 +2642,69 @@ export function createAidenRemoteRequestHandler(
         if (!response.headersSent) writeError(response, id, safe);
         else response.destroy();
         logRequest(safe.status, { errorCode: safe.code });
+      });
+  };
+}
+
+/**
+ * WebSocket upgrades are accepted only for the simulator hub relay. The
+ * same Origin, URL, protocol-version, credential and capability checks as
+ * HTTP apply; refusals are a bare status line.
+ */
+export function createAidenRemoteUpgradeHandler(
+  dependencies: Pick<
+    AidenRemoteRouterDependencies,
+    "devices" | "simulators" | "acceptStrippedBasePath" | "log" | "now"
+  >,
+): (request: IncomingMessage, socket: Duplex, head: Buffer) => void {
+  return (request, socket, head) => {
+    const id = requestId();
+    const startedAt = dependencies.now();
+    let deviceIdSuffix: string | undefined;
+    socket.on("error", () => socket.destroy());
+    void (async () => {
+      if (request.headers.origin !== undefined) {
+        throw new AidenRemoteServiceError(
+          "invalid_request",
+          "Browser-origin requests are not accepted by Aiden Remote.",
+          403,
+        );
+      }
+      const { path, query } = requestTarget(request, dependencies.acceptStrippedBasePath === true);
+      if (request.method !== "GET" || !path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
+        throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
+      }
+      const device = await authenticateCredential(request, dependencies.devices, "simulators:control");
+      deviceIdSuffix = device.id.slice(-8);
+      // Cross the revocation fence; a long-lived socket must not delay revocation,
+      // which closes it through `revokeDevice` instead.
+      dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+      const relay = dependencies.simulators;
+      if (!relay?.host()) throw simulatorsUnavailable();
+      relay.upgrade({ request, socket, head, path, query, deviceId: device.id });
+    })()
+      .then(() => {
+        dependencies.log({
+          requestId: id,
+          route: "simulatorHub",
+          method: request.method,
+          status: 101,
+          latencyMs: Math.max(0, dependencies.now() - startedAt),
+          ...(deviceIdSuffix ? { deviceIdSuffix } : {}),
+        });
+      })
+      .catch((error: unknown) => {
+        const safe = asAidenRemoteServiceError(error);
+        refuseUpgrade(socket, safe.status, safe.status === 404 ? "Not Found" : "Refused");
+        dependencies.log({
+          requestId: id,
+          route: "simulatorHub",
+          method: request.method,
+          status: safe.status,
+          latencyMs: Math.max(0, dependencies.now() - startedAt),
+          ...(deviceIdSuffix ? { deviceIdSuffix } : {}),
+          errorCode: safe.code,
+        });
       });
   };
 }

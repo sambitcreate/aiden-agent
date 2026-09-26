@@ -9,7 +9,7 @@ import {
   EncryptedPeerHostStorage,
   type PeerEncryptedDocument,
 } from "./peer-host-storage.js";
-import { peerRequestUrl } from "./peer-transport.js";
+import { PeerTransportError, peerRequestUrl } from "./peer-transport.js";
 import { hostResourceKey } from "../../renderer/shared/peer-host.js";
 
 const trust = {
@@ -377,4 +377,42 @@ test("shutdown rejects future operations and cancels pending pairing", async () 
   release({});
   await rejected;
   await assert.rejects(store.list(), /closed/);
+});
+
+test("an answered client error keeps the peer connected; auth and transport failures do not", async () => {
+  let failure: Error = new PeerTransportError("request_failed", 404);
+  const store = registry([saved()], {
+    json: async () => {
+      throw failure;
+    },
+    events: async () => {
+      throw new Error("Unexpected event request");
+    },
+  });
+  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  assert.equal((await store.list())[0]?.state, "connected");
+  failure = new PeerTransportError("authentication_required", 403);
+  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  assert.equal((await store.list())[0]?.state, "unavailable");
+  failure = new PeerTransportError("unavailable");
+  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  assert.equal((await store.list())[0]?.state, "unavailable");
+});
+
+test("relay targets exist only for enabled hosts and carry pinned trust", async () => {
+  const unused: PeerClient = {
+    json: async () => {
+      throw new Error("Unexpected request");
+    },
+    events: async () => {
+      throw new Error("Unexpected event request");
+    },
+  };
+  const store = registry([saved(), { ...saved("host_b"), enabled: false }], unused);
+  assert.deepEqual(await store.relayTarget("host_a"), {
+    trust: { endpoint: trust.endpoint, serverSpkiSha256: trust.serverSpkiSha256 },
+    credential: "a".repeat(43),
+  });
+  assert.equal(await store.relayTarget("host_b"), null);
+  assert.equal(await store.relayTarget("missing"), null);
 });

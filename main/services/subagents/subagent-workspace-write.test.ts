@@ -11,10 +11,11 @@ import {
   SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT,
   SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT,
   type SubagentWorkspaceWriteApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
 } from "../../../renderer/shared/assistant.js";
 import type { Workspace } from "../types.js";
 import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
-import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
+import { SubagentApprovalLedgerV2, SubagentRunGrantV2 } from "./approval-v2.js";
 import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import {
   createSubagentWorkspaceWriteApprovalBrokerV2,
@@ -115,6 +116,38 @@ function brokerInput(
   };
 }
 
+test("run grant singleflights concurrent calls and cannot revive after revoke", async (t) => {
+  const workspace = await testWorkspace(t);
+  const granted = authority(workspace);
+  let settle!: (allowed: boolean) => void;
+  let requests = 0;
+  const grant = new SubagentRunGrantV2(granted, "ask", undefined, () => 1_000);
+  const request = () => {
+    requests += 1;
+    return new Promise<boolean>((resolve) => { settle = resolve; });
+  };
+  const first = grant.ensure(granted, "ask", request);
+  const second = grant.ensure(granted, "ask", request);
+  await Promise.resolve();
+  assert.equal(requests, 1);
+  grant.revoke();
+  settle(true);
+  assert.equal(await first, false);
+  assert.equal(await second, false);
+  assert.equal(grant.valid(granted, "ask"), false);
+  assert.equal(await grant.ensure(granted, "ask", request), false);
+  assert.equal(requests, 1);
+
+  let clock = 1_000;
+  let expiryRequests = 0;
+  const expiring = new SubagentRunGrantV2(granted, "ask", undefined, () => clock);
+  const approve = async () => { expiryRequests += 1; return true; };
+  assert.equal(await expiring.ensure(granted, "ask", approve), true);
+  clock = granted.expiresAt;
+  assert.equal(await expiring.ensure(granted, "ask", approve), false);
+  assert.equal(expiryRequests, 1);
+});
+
 test("attended write binds structured preview and commits exactly once", async (t) => {
   if (process.platform !== "darwin") return;
   const workspace = await testWorkspace(t);
@@ -151,6 +184,75 @@ test("attended write binds structured preview and commits exactly once", async (
     }),
     /one-shot approval/u,
   );
+  await broker.shutdown();
+});
+
+test("implementer Ask grants writes once across independent file mutations and refuses workspace drift", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  let prompts = 0;
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
+    implementerRunGrant: true,
+    parentPermission: "ask",
+    requestApproval: async (prompt) => {
+      prompts += 1;
+      assert.equal(isSubagentRunGrantApprovalDetails(prompt.details), true);
+      assert.equal((prompt.details as { lane: string }).lane, "write");
+      return true;
+    },
+  }));
+  for (const [index, name] of ["first.txt", "second.txt"].entries()) {
+    const id = `call-write-${index}`;
+    const args = { path: name, content: `value ${index}\n` };
+    assert.equal(await broker.beforeToolCall(call("write_file", args, id)), undefined);
+    await broker.execute({ toolCallId: id, toolName: "write_file", arguments: args });
+    assert.equal(await readFile(path.join(workspace.folderPath!, name), "utf8"), args.content);
+  }
+  assert.equal(prompts, 1);
+  workspace.updatedAt += 1;
+  assert.equal((await broker.beforeToolCall(call("write_file", {
+    path: "third.txt", content: "blocked\n",
+  }, "call-write-third")))?.block, true);
+  assert.equal(prompts, 1);
+  await broker.shutdown();
+});
+
+test("implementer Full makes multiple edits without approval cards", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  workspace.permission = "full";
+  await writeFile(path.join(workspace.folderPath!, "notes.txt"), "one\n");
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
+    implementerRunGrant: true,
+    parentPermission: "full",
+    requestApproval: async () => { throw new Error("Full must not request approval"); },
+  }));
+  for (const [index, oldString, newString] of [
+    [0, "one", "two"], [1, "two", "three"],
+  ] as const) {
+    const id = `call-edit-${index}`;
+    const args = { path: "notes.txt", old_string: oldString, new_string: newString };
+    assert.equal(await broker.beforeToolCall(call("edit_file", args, id)), undefined);
+    await broker.execute({ toolCallId: id, toolName: "edit_file", arguments: args });
+  }
+  assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), "three\n");
+  await broker.shutdown();
+});
+
+test("stored Full workspace still asks when the parent turn is Ask", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  workspace.permission = "full";
+  let prompts = 0;
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
+    implementerRunGrant: true,
+    parentPermission: "ask",
+    requestApproval: async () => { prompts += 1; return true; },
+  }));
+  const args = { path: "narrowed.txt", content: "authorized\n" };
+  assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
+  await broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args });
+  assert.equal(prompts, 1);
   await broker.shutdown();
 });
 

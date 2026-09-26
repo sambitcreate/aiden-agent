@@ -133,12 +133,14 @@ export interface SubagentMcpMutationApprovalDetails {
 }
 
 /** Renderer-safe exact facts for one attended full-host child command. */
+export type SubagentShellApprovalShell = "/bin/zsh -f -c" | "/bin/sh -c";
+
 export interface SubagentShellApprovalDetails {
   kind: "subagent-shell";
   childLabel: string;
   command: string;
   initialCwd: string;
-  shell: "/bin/zsh -f -c";
+  shell: SubagentShellApprovalShell;
   argumentDigestPrefix: string;
   rootDigestPrefix: string;
   effectDigestPrefix: string;
@@ -154,6 +156,20 @@ export interface SubagentShellApprovalDetails {
   outputSentToModel: true;
   arbitraryNetworkAvailable: true;
   detachedProcessesMaySurvive: true;
+}
+
+/** One Mac-owned write or shell grant for a single implementer run. */
+export interface SubagentRunGrantApprovalDetails {
+  kind: "subagent-run-grant";
+  lane: "write" | "shell";
+  runId: string;
+  childLabel: string;
+  workspaceLabel: string;
+  worktreeLabel: string | null;
+  isManagedWorktree: boolean;
+  workspaceRevisionPrefix: string;
+  fullHostAccess: boolean;
+  noRollback: boolean;
 }
 
 /** Renderer-safe facts for one Form Fill Specialist batch approval card. */
@@ -184,12 +200,17 @@ export interface FormFillBatchApprovalDetails {
   submitExcluded: true;
 }
 
+export function isSubagentShellApprovalShell(value: unknown): value is SubagentShellApprovalShell {
+  return value === "/bin/zsh -f -c" || value === "/bin/sh -c";
+}
+
 export type ToolApprovalDetails =
   | AssistantAutomationApprovalDetails
   | ScheduledTaskApprovalDetails
   | SubagentWorkspaceWriteApprovalDetails
   | SubagentMcpMutationApprovalDetails
   | SubagentShellApprovalDetails
+  | SubagentRunGrantApprovalDetails
   | FormFillBatchApprovalDetails;
 
 function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean {
@@ -463,7 +484,7 @@ export function isSubagentShellApprovalDetails(
     safeShellCommand(details.command) &&
     safeApprovalText(details.initialCwd, 1024) &&
     details.initialCwd.startsWith("/") &&
-    details.shell === "/bin/zsh -f -c" &&
+    isSubagentShellApprovalShell(details.shell) &&
     safeMutationDigestPrefix(details.argumentDigestPrefix) &&
     safeMutationDigestPrefix(details.rootDigestPrefix) &&
     safeMutationDigestPrefix(details.effectDigestPrefix) &&
@@ -484,6 +505,29 @@ export function isSubagentShellApprovalDetails(
     details.arbitraryNetworkAvailable === true &&
     details.detachedProcessesMaySurvive === true
   );
+}
+
+export function isSubagentRunGrantApprovalDetails(
+  value: unknown,
+): value is SubagentRunGrantApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  if (!hasExactApprovalKeys(details, [
+    "kind", "lane", "runId", "childLabel", "workspaceLabel", "worktreeLabel",
+    "isManagedWorktree", "workspaceRevisionPrefix", "fullHostAccess", "noRollback",
+  ])) return false;
+  return details.kind === "subagent-run-grant" &&
+    (details.lane === "write" || details.lane === "shell") &&
+    typeof details.runId === "string" && /^[A-Za-z0-9._:-]{1,160}$/u.test(details.runId) &&
+    safeApprovalText(details.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT) &&
+    safeApprovalText(details.workspaceLabel, SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT) &&
+    ((details.isManagedWorktree === false && details.worktreeLabel === null) ||
+      (details.isManagedWorktree === true &&
+        safeApprovalText(details.worktreeLabel, SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT))) &&
+    typeof details.workspaceRevisionPrefix === "string" &&
+    /^[a-f0-9]{12}$/u.test(details.workspaceRevisionPrefix) &&
+    details.fullHostAccess === (details.lane === "shell") &&
+    details.noRollback === (details.lane === "shell");
 }
 
 function safeByteCount(value: unknown): value is number {

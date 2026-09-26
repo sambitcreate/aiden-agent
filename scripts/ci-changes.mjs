@@ -21,7 +21,8 @@ const NO_AREAS = Object.freeze({
   ios: false,
 });
 
-const SAFE_ROOT_DOCUMENT = /^(?:README|CHANGELOG)\.(?:md|markdown)$/u;
+const SAFE_ROOT_DOCUMENT =
+  /^(?:README|CHANGELOG|AGENTS|CLAUDE|PRODUCT|LICENSE|THIRD_PARTY_NOTICES)\.(?:md|markdown)$/u;
 const SAFE_PAPERCUT_DOCUMENT = /^\.papercuts\/.+\.md$/u;
 const LOCK_FILE = /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE = /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;

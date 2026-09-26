@@ -120,7 +120,7 @@ private enum AidenBotPrototypeChatAccess: String, CaseIterable, Identifiable, Ha
 }
 
 private enum AidenBotPrototypeFileAccess: String, CaseIterable, Identifiable, Hashable {
-    case fullMac = "Full Mac"
+    case fullMac = "Full desktop"
     case botFolderOnly = "Bot folder only"
     case chosenLocations = "Chosen locations"
     case off = "Off"
@@ -711,9 +711,9 @@ private struct AidenBotPrototypeFullAccessNoticeView: View {
                         .background(palette.accent.opacity(0.12), in: Circle())
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Bots can use your Mac")
+                        Text("Bots can use your paired desktop")
                             .font(.largeTitle.bold())
-                        Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
+                        Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired desktop. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
                             .font(.body)
                             .foregroundStyle(palette.secondary)
                     }
@@ -790,7 +790,7 @@ private struct AidenBotPrototypeWorkspacesView: View {
                 } header: {
                     Text("Workspaces")
                 } footer: {
-                    Text("This fixture root stays mounted separately from Bots and never connects to a Mac.")
+                    Text("This fixture root stays mounted separately from Bots and never connects to a desktop.")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -1091,7 +1091,7 @@ private struct AidenBotPrototypeInboxView: View {
             AidenBotPrototypeBanner(
                 symbol: "exclamationmark.triangle",
                 title: "Some selected access is unavailable.",
-                detail: "Review it on your Mac.",
+                detail: "Review it on your paired desktop.",
                 tone: palette.warning
             )
         default:
@@ -1140,7 +1140,7 @@ private struct AidenBotPrototypeInboxView: View {
                 AidenBotPrototypeEmptyView(
                     symbol: "arrow.clockwise.circle",
                     title: "Bots didn’t load",
-                    detail: "The paired Mac did not return a complete Bot list.",
+                    detail: "The paired desktop did not return a complete Bot list.",
                     actionTitle: "Retry",
                     action: { fixtureState = .ready }
                 )
@@ -1506,7 +1506,7 @@ private struct AidenBotPrototypeProfileView: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 380)
                     Label(
-                        isArchived ? "Archived bots are read-only until restored." : "Ready on your Mac",
+                        isArchived ? "Archived bots are read-only until restored." : "Ready on your paired desktop",
                         systemImage: isArchived ? "archivebox.fill" : "checkmark.circle.fill"
                     )
                         .font(.caption.weight(.semibold))
@@ -1801,7 +1801,7 @@ private struct AidenBotPrototypeEditorView: View {
                 } header: {
                     Text("How this bot helps")
                 } footer: {
-                    Text("Write this in everyday language. Aiden adds the private operating details on your Mac.")
+                    Text("Write this in everyday language. Aiden adds the private operating details on your paired desktop.")
                 }
 
                 Section {
@@ -1847,7 +1847,7 @@ private struct AidenBotPrototypeEditorView: View {
                     LabeledContent("Look", value: lookStyle.rawValue)
                     LabeledContent("Access", value: accessPolicy.mode.title)
                     Text(accessPolicy.mode == .full
-                         ? "Can use your Mac, shell, enabled connections, and skills."
+                         ? "Can use your paired desktop, shell, enabled connections, and skills."
                          : "Uses only the access you select. This chat can reduce it further.")
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
@@ -1941,9 +1941,9 @@ private struct AidenBotPrototypeAccessView: View {
     }
 
     private static let locationCatalog = [
-        CatalogItem(id: "documents", title: "Documents", detail: "Chosen on your Mac"),
-        CatalogItem(id: "desktop", title: "Desktop", detail: "Chosen on your Mac"),
-        CatalogItem(id: "downloads", title: "Downloads", detail: "Chosen on your Mac"),
+        CatalogItem(id: "documents", title: "Documents", detail: "Chosen on your paired desktop"),
+        CatalogItem(id: "desktop", title: "Desktop", detail: "Chosen on your paired desktop"),
+        CatalogItem(id: "downloads", title: "Downloads", detail: "Chosen on your paired desktop"),
     ]
     private static let connectionCatalog = [
         CatalogItem(id: "calendar", title: "Calendar", detail: "Events and availability"),
@@ -2033,7 +2033,7 @@ private struct AidenBotPrototypeAccessView: View {
                 }
 
                 if showsCustomCapabilities {
-                    Section("Mac files") {
+                    Section("Desktop files") {
                         Picker("Files", selection: $files) {
                             ForEach(AidenBotPrototypeFileAccess.allCases) { option in
                                 Text(option.rawValue)
@@ -2077,7 +2077,7 @@ private struct AidenBotPrototypeAccessView: View {
                     } header: {
                         Text("Connections")
                     } footer: {
-                        Text("Choose external apps and services already configured in Aiden. Some connections are powered by MCP; account details stay on your Mac.")
+                        Text("Choose external apps and services already configured in Aiden. Some connections are powered by MCP; account details stay on your paired desktop.")
                     }
 
                     Section {
@@ -2109,7 +2109,7 @@ private struct AidenBotPrototypeAccessView: View {
                         if scope == .bot {
                             Label("Full Access", systemImage: "checkmark.shield.fill")
                                 .foregroundStyle(palette.accent)
-                            Text("Can use your Mac, shell, enabled connections, and skills.")
+                            Text("Can use your paired desktop, shell, enabled connections, and skills.")
                                 .font(.subheadline)
                                 .foregroundStyle(palette.secondary)
                         } else {

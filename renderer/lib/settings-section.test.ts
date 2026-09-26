@@ -1,10 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  availableSettingsDestinations,
   parseSettingsSearch,
   parseSettingsSection,
   SETTINGS_DESTINATIONS,
 } from "./settings-section.js";
+
+test("capability-aware settings destinations hide Computer Use everywhere", () => {
+  assert.equal(
+    availableSettingsDestinations({ computerUse: false, devices: true }).some(
+      (destination) => destination.id === "computerUse",
+    ),
+    false,
+  );
+  assert.equal(
+    availableSettingsDestinations({ computerUse: true, devices: true }).some(
+      (destination) => destination.id === "computerUse",
+    ),
+    true,
+  );
+});
+
+test("capability-aware settings destinations hide Simulator without the devices capability", () => {
+  const ids = (capabilities: { computerUse: boolean; devices: boolean }) =>
+    availableSettingsDestinations(capabilities).map((destination) => destination.id);
+  assert.equal(ids({ computerUse: true, devices: false }).includes("simulator"), false);
+  assert.equal(ids({ computerUse: true, devices: true }).includes("simulator"), true);
+  const linux = ids({ computerUse: false, devices: false });
+  assert.equal(linux.includes("simulator"), false);
+  assert.equal(linux.includes("computerUse"), false);
+  assert.equal(linux.length, SETTINGS_DESTINATIONS.length - 2);
+});
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
   assert.equal(parseSettingsSection("modelData"), "modelData");

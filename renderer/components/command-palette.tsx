@@ -38,7 +38,8 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { providersApi, settingsApi } from "../lib/ipc";
 import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
-import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
+import { availableSettingsDestinations } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   createDefaultAppearanceConfig,
   normalizeAppearanceConfig,
@@ -118,6 +119,7 @@ export function AppCommandPalette({
 }: {
   navigationBlockedReason: string | null;
 }) {
+  const capabilities = useAppCapabilities();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { activeId } = useActiveWorkspace();
@@ -222,14 +224,14 @@ export function AppCommandPalette({
     disabled: busy,
   });
   const appearanceResults = [
-    { mode: "system" as const, title: "Follow macOS appearance", icon: Palette },
+    { mode: "system" as const, title: "Follow system appearance", icon: Palette },
     { mode: "light" as const, title: "Use light appearance", icon: Sun },
     { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
   ].map((item) => ({
     ...item,
     result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
   }));
-  const settingsResults = SETTINGS_DESTINATIONS.map((destination) => ({
+  const settingsResults = availableSettingsDestinations(capabilities).map((destination) => ({
     destination,
     result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")}`),
   }));
@@ -410,7 +412,7 @@ export function AppCommandPalette({
           if (!isCurrent()) return;
           toast.success(
             mode === "system"
-              ? "Appearance now follows macOS"
+              ? "Appearance now follows the system"
               : `${mode === "dark" ? "Dark" : "Light"} appearance enabled`,
           );
         } catch (error) {

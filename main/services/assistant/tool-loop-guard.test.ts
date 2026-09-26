@@ -36,8 +36,7 @@ test("a successful or text-only turn resets the attended tool error streak", () 
 test("repeated attended tool errors recover with one host-directed text-only turn", () => {
   const context = recoverAttendedToolErrorContext(
     {
-      systemPrompt: "Aiden",
-      messages: [{ role: "user", content: "Create a briefing", timestamp: 1 }],
+      messages: [{ role: "system", content: "Aiden", timestamp: 0 }, { role: "user", content: "Create a briefing", timestamp: 1 }],
       tools: [{ name: "schedule_task" } as never],
     },
     2,

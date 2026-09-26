@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 // Optional dictation polish via the user's current chat model. Failures return
 // the original transcript so paste still succeeds.
 
@@ -49,7 +50,7 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
     const result = await runtime.streams
       .streamSimple(
         runtime.model,
-        {
+        normalizeContext({
           systemPrompt: DICTATION_CLEANUP_SYSTEM_PROMPT,
           messages: [
             {
@@ -58,7 +59,7 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
               timestamp: Date.now(),
             },
           ],
-        },
+        }),
         {
           apiKey: runtime.apiKey,
           headers: runtime.headers,

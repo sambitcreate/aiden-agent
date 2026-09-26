@@ -826,6 +826,7 @@ export function ScrollArea({
   autoScrollResetKey,
   showScrollToBottomButton,
   scrollToBottomButtonOffset = 0,
+  scrollContentBottomOffset = 0,
   className,
   children,
 }: React.PropsWithChildren<{
@@ -840,6 +841,7 @@ export function ScrollArea({
   autoScrollResetKey?: unknown;
   showScrollToBottomButton?: boolean;
   scrollToBottomButtonOffset?: number;
+  scrollContentBottomOffset?: number;
   className?: string;
 }>) {
   const viewport = React.useRef<HTMLDivElement>(null);
@@ -969,7 +971,7 @@ export function ScrollArea({
       followFrameRef.current = 0;
       resizeObserver.disconnect();
     };
-  }, [autoScrollToBottom, scheduleFollowBottom, scrollToBottom, updateScrollEdges]);
+  }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges]);
 
   const resolvedToolbar =
     toolbar ??
@@ -997,7 +999,10 @@ export function ScrollArea({
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
-        style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
+        style={{
+          paddingTop: toolbarHeight,
+          paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+        }}
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
         }}

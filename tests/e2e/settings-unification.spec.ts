@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -109,43 +111,144 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
       .click();
   };
   await openAppearance();
-  const showPaths = () => page.getByRole("switch", { name: "Show workspace folder paths" });
-  const format = () => page.getByRole("combobox", { name: "Workspace path format" });
-  await expect(showPaths()).not.toBeChecked();
-  await expect(format()).toBeDisabled();
-  await showPaths().click();
-  await format().click();
-  await page.getByRole("option", { name: /Last folders/u }).click();
-  // Wait for main-process persistence, not merely the optimistic preview.
-  await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const { ipc } = (
-          window as unknown as {
-            aidenAPI: {
-              ipc: {
-                invoke(channel: string): Promise<{
-                  appearance: { showWorkspacePaths: boolean; workspacePathFormat: string };
-                }>;
-              };
+  // The Appearance page no longer exposes workspace-path controls; the
+  // underlying settings fields still round-trip through settings:set.
+  // settings:get returns the sparse store; settings:getAppearance returns the
+  // normalized config with defaults applied.
+  const readAppearance = () =>
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(
+                channel: string,
+                patch?: unknown,
+              ): Promise<{
+                showWorkspacePaths: boolean;
+                workspacePathFormat: string;
+              }>;
             };
-          }
-        ).aidenAPI;
-        return (await ipc.invoke("settings:get")).appearance;
-      }),
-    )
-    .toMatchObject({ showWorkspacePaths: true, workspacePathFormat: "end" });
-  await page.getByRole("button", { name: "Back to app", exact: true }).click();
-  await expect(workspaceRow()).toContainText("…/");
-
+          };
+        }
+      ).aidenAPI;
+      return ipc.invoke("settings:getAppearance");
+    });
+  const writeAppearance = (patch: {
+    showWorkspacePaths: boolean;
+    workspacePathFormat: "middle" | "end" | "start";
+  }) =>
+    page.evaluate(async (value) => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: { invoke(channel: string, patch?: unknown): Promise<unknown> };
+          };
+        }
+      ).aidenAPI;
+      const current = await ipc.invoke("settings:getAppearance");
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current as object), ...value },
+      });
+    }, patch);
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: false,
+    workspacePathFormat: "middle",
+  });
+  await writeAppearance({ showWorkspacePaths: true, workspacePathFormat: "end" });
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: true,
+    workspacePathFormat: "end",
+  });
+  // Live application runs through the real bootstrap path: on relaunch
+  // useTheme hydrates the persisted config and applies it.
   page = await aiden.relaunch();
   await expect(workspaceRow()).toContainText("…/");
+
   await openAppearance();
-  await expect(showPaths()).toBeChecked();
-  await expect(format()).toContainText("Last folders");
-  await showPaths().click();
-  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: true,
+    workspacePathFormat: "end",
+  });
+  await writeAppearance({ showWorkspacePaths: false, workspacePathFormat: "middle" });
+  page = await aiden.relaunch();
   await expect(workspaceRow()).toHaveText(workspaceName);
+});
+
+test("theme tiles select a preset for both schemes, persist it, and reflow to the content width", async ({
+  aiden,
+}) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
+  };
+  // settings:getAppearance reports the live preview, which leads the
+  // debounced durable write. Read the persisted file so a relaunch cannot
+  // race the save.
+  const readPresets = async () => {
+    try {
+      const appearance = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      ).settings?.appearance;
+      return { light: appearance?.light?.preset, dark: appearance?.dark?.preset };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+  const themes = () => page.getByRole("radiogroup", { name: "Themes", exact: true });
+  const tile = (name: string) => themes().getByRole("radio", { name, exact: true });
+
+  await openAppearance();
+  await expect(themes().getByRole("radio")).toHaveCount(9);
+  await expect(page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio")).toHaveCount(3);
+
+  await tile("Dusk").click();
+  await expect(tile("Dusk")).toHaveAttribute("aria-checked", "true");
+  await expect(themes().locator('[aria-checked="true"]')).toHaveCount(1);
+  await expect(page.getByText("Current theme: Dusk", { exact: true })).toBeVisible();
+  await expect.poll(readPresets).toEqual({ light: "dusk", dark: "dusk" });
+
+  // Roving focus: arrow keys move focus and selection together.
+  await tile("Dusk").press("ArrowRight");
+  await expect(tile("Midnight")).toBeFocused();
+  await expect(tile("Midnight")).toHaveAttribute("aria-checked", "true");
+  await expect.poll(readPresets).toEqual({ light: "midnight", dark: "midnight" });
+
+  page = await aiden.relaunch();
+  await openAppearance();
+  await expect(tile("Midnight")).toHaveAttribute("aria-checked", "true");
+
+  const resizeWindow = (width: number) =>
+    aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900),
+      width,
+    );
+  const tileColumns = () =>
+    themes().evaluate(
+      (grid) =>
+        new Set(
+          [...grid.querySelectorAll('[role="radio"]')].map((radio) =>
+            Math.round(radio.getBoundingClientRect().left),
+          ),
+        ).size,
+    );
+  const modeIcon = () =>
+    page
+      .getByRole("radiogroup", { name: "Theme mode", exact: true })
+      .getByRole("radio", { name: "System", exact: true })
+      .locator("svg");
+  await resizeWindow(1280);
+  await expect.poll(tileColumns).toBe(3);
+  await expect(modeIcon()).toBeVisible();
+  await resizeWindow(390);
+  await expect.poll(tileColumns).toBe(2);
+  await expect(modeIcon()).toBeHidden();
 });
 
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({

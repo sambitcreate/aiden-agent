@@ -567,6 +567,7 @@ private fun roleLabel(role: AidenChatAgentRole): String = when (role) {
     AidenChatAgentRole.SCOUT -> "Scout"
     AidenChatAgentRole.PLANNER -> "Planner"
     AidenChatAgentRole.REVIEWER -> "Reviewer"
+    AidenChatAgentRole.IMPLEMENTER -> "Implementer"
 }
 
 private fun agentStateLabel(state: AidenChatAgentState): String = when (state) {

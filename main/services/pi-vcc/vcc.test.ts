@@ -1,6 +1,7 @@
+import { InMemorySessionRepo } from "../pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InMemorySessionRepo, prepareCompaction } from "@earendil-works/pi-agent-core";
+import { prepareCompaction } from "@earendil-works/pi-agent-core";
 import { createModels, fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { createPiSessionPort } from "../pi-session-port.js";
 import { PiCompactionCoordinator } from "../pi-compaction-core.js";
@@ -489,7 +490,7 @@ test("tool arguments and text omit inline binary payloads while keeping attachme
       arguments: {
         image: { type: "image", data: "private-small-binary", mimeType: "image/png" },
         dataUrl: "data:image/png;base64,cHJpdmF0ZQ==",
-        bytes: new Uint8Array([12, 34, 56]),
+        bytes: new Uint8Array([12, 34, 56]) as never,
         caption: "Diagram for the architecture",
       },
     },
@@ -504,7 +505,7 @@ test("worker preserves safe compilation failure reasons and gives recall-specifi
   const { input } = await fixture();
   await assert.rejects(
     compileVccInWorker({ ...input, contextWindow: 1 }),
-    /produced no usable summary/,
+    (error: unknown) => error instanceof VccError && error.code === "empty_summary",
   );
   await assert.rejects(
     compileVccInWorker({

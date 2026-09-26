@@ -19,7 +19,7 @@ import {
   AIDEN_REMOTE_PRODUCTION_LAN_PORT,
 } from "./aiden-remote-ports.js";
 
-function fixture(initial?: unknown) {
+function fixture(initial?: unknown, botCapabilitiesSupported = true) {
   let stored = initial ?? createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
   const writes: AidenRemoteStateDocument[] = [];
   let failNextSave = false;
@@ -41,6 +41,8 @@ function fixture(initial?: unknown) {
     randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
     deriveCredentialDigest: async (credential, salt) =>
       createHash("sha256").update(credential).update(salt).digest(),
+  }, {
+    botCapabilitiesSupported: () => botCapabilitiesSupported,
   });
   return {
     registry,
@@ -250,6 +252,38 @@ test("legacy devices cannot hold progress grants they never negotiated", async (
   await restored.registry.initialize();
   const authenticated = await restored.registry.authenticate(issued.credential);
   assert.equal(authenticated?.capabilities.has("tasks:read"), false);
+});
+
+test("Linux host policy removes persisted Bot negotiation and grants", async () => {
+  const darwin = fixture();
+  const issued = await darwin.registry.issueDevice({
+    name: "Previously Bot-aware iPhone",
+    type: "iphone",
+    clientVersion: "2.0",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+
+  const linux = fixture(darwin.stored(), false);
+  const initialized = await linux.registry.initialize();
+  assert.equal(initialized.devices[0]?.acceptsBotCapabilities, false);
+  assert.deepEqual(initialized.devices[0]?.capabilities, ["server:read"]);
+  assert.equal(linux.writes.length, 1);
+
+  const authenticated = await linux.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, false);
+  assert.deepEqual([...authenticated!.capabilities], ["server:read"]);
+
+  await assert.rejects(
+    linux.registry.issueDevice({
+      name: "New Bot-aware iPhone",
+      type: "iphone",
+      clientVersion: "2.0",
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+    }),
+    /device capabilities/u,
+  );
 });
 
 test("device issuance checks pairing authorization inside the durable mutation", async () => {
@@ -804,4 +838,46 @@ test("revocation completed during credential verification wins before authentica
 
   assert.equal((await authentication)?.revoked, true);
   assert.equal((await registry.listDevices())[0]?.lastSeenAt, 0);
+});
+
+test("simulator control is negotiable only by paired desktops and never implies progress grants", async () => {
+  const state = fixture();
+  const mac = await state.registry.issueDevice({ name: "Studio", type: "mac", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const writesAfterPairing = state.writes.length;
+
+  assert.equal(await state.registry.upgradeDeviceCapabilities(phone.device.id, ["simulators:control"]), null);
+  assert.equal(
+    await state.registry.upgradeDeviceCapabilities(phone.device.id, ["tasks:read", "simulators:control"]),
+    null,
+  );
+  assert.equal(state.writes.length, writesAfterPairing);
+
+  const upgraded = await state.registry.upgradeDeviceCapabilities(mac.device.id, ["simulators:control"]);
+  assert.equal(upgraded?.capabilities.includes("simulators:control"), true);
+  const stored = state.stored().devices.find((device) => device.id === mac.device.id);
+  assert.equal(stored?.acceptsProgressCapabilities, false);
+  const authenticated = await state.registry.authenticate(mac.credential);
+  assert.equal(authenticated?.type, "mac");
+  assert.equal(authenticated?.capabilities.has("simulators:control"), true);
+  assert.equal(authenticated?.capabilities.has("tasks:read"), false);
+
+  const writes = state.writes.length;
+  assert.ok(await state.registry.upgradeDeviceCapabilities(mac.device.id, ["simulators:control"]));
+  assert.equal(state.writes.length, writes);
+});
+
+test("a persisted phone record can never hold simulator control", async () => {
+  const state = fixture();
+  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const stored = state.stored();
+  stored.devices[0]!.capabilities = [
+    ...(stored.devices[0]!.capabilities as string[]),
+    "simulators:control",
+  ] as never;
+  const restored = fixture(stored);
+  await restored.registry.initialize();
+  const authenticated = await restored.registry.authenticate(phone.credential);
+  assert.ok(authenticated);
+  assert.equal(authenticated.capabilities.has("simulators:control"), false);
 });
