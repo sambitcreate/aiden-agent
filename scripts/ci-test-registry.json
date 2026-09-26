@@ -576,7 +576,9 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/lib/composer-type-focus.test.ts",
+        "renderer/lib/held-modifier-reveal.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
