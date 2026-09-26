@@ -297,10 +297,10 @@ test("scroll area still pads the viewport for its overlaid chrome", () => {
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height or the composer overlaps the transcript.
+  // their measured height plus any clearance for chrome floating above the footer.
   assert.match(
     scrollArea,
-    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: footerHeight \+ Math\.max\(0, scrollContentBottomOffset\),\s*\}\}/u,
   );
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
