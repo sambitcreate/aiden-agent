@@ -70,6 +70,23 @@ test("AltGr printable characters can still type-to-focus", () => {
     action: "focus-and-insert",
     text: "{",
   });
+  assert.deepEqual(
+    decideComposerTypeFocus(
+      { key: "@", metaKey: false, ctrlKey: true, altKey: true, altGraph: true },
+      { ...writable, macOS: true },
+    ),
+    { action: "focus-and-insert", text: "@" },
+  );
+});
+
+test("Control+Option chords on macOS stay with the command system", () => {
+  assert.deepEqual(
+    decideComposerTypeFocus(
+      { key: "k", metaKey: false, ctrlKey: true, altKey: true },
+      { ...writable, macOS: true },
+    ),
+    { action: "ignore" },
+  );
 });
 
 test("type-to-focus stays out of overlays, other editors, and an already focused composer", () => {

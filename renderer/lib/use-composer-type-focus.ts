@@ -1,4 +1,5 @@
 import * as React from "react";
+import { isMacPlatform } from "./ghostty-terminal/host-platform";
 import {
   composerCanAcceptTyping,
   decideComposerTypeFocus,
@@ -17,7 +18,18 @@ export function useComposerTypeFocus(
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const composer = inputRef.current;
-      const decision = decideComposerTypeFocus(event, {
+      const decision = decideComposerTypeFocus({
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        altGraph: event.getModifierState("AltGraph"),
+        defaultPrevented: event.defaultPrevented,
+        isComposing: event.isComposing,
+        repeat: event.repeat,
+        keyCode: event.keyCode,
+      }, {
+        macOS: isMacPlatform(),
         composerFocused: composer !== null && document.activeElement === composer,
         composerAvailable: composerCanAcceptTyping(composer),
         composerWritable: Boolean(composer && !composer.disabled && !composer.readOnly),

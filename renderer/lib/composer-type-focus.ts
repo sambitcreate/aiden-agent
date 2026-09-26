@@ -6,6 +6,8 @@ export interface ComposerTypeFocusEvent {
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
+  /** True when the platform reports a real AltGraph modifier for this key. */
+  altGraph?: boolean;
   defaultPrevented?: boolean;
   isComposing?: boolean;
   repeat?: boolean;
@@ -21,6 +23,8 @@ export interface ComposerTypeFocusContext {
   reservedSurface: boolean;
   composing: boolean;
   activationControl: boolean;
+  /** macOS has no AltGr: Control+Option chords belong to the command system. */
+  macOS?: boolean;
 }
 
 export type ComposerTypeFocusDecision =
@@ -153,7 +157,8 @@ export function decideComposerTypeFocus(
   event: ComposerTypeFocusEvent,
   context: ComposerTypeFocusContext,
 ): ComposerTypeFocusDecision {
-  const altGr = event.ctrlKey && event.altKey;
+  const altGr =
+    event.altGraph === true || (!context.macOS && event.ctrlKey && event.altKey);
   if (
     !context.composerAvailable ||
     context.composerFocused ||
@@ -184,9 +189,10 @@ export function insertTextIntoTextarea(textarea: HTMLTextAreaElement, text: stri
   const next = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
   const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
   descriptor?.set?.call(textarea, next);
+  // Place the caret first so the input handler records the real selection.
+  const caret = start + text.length;
+  textarea.setSelectionRange(caret, caret);
   textarea.dispatchEvent(
     new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
   );
-  const caret = start + text.length;
-  textarea.setSelectionRange(caret, caret);
 }
