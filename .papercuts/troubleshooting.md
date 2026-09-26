@@ -1062,3 +1062,6 @@ because their native file-mutator test binary had not been built. Run
 - `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
 - Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
 - The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.
+
+- 2026-09-26 (PR217 integration): `xcodebuild test` on the iPhone 17 Pro simulator often hangs after the run in `simctl diagnose` or after a "failed to launch ... No such process" retry. Read results from the log (`Test Case ... failed`) and kill the hung `simctl diagnose`; reboot the simulator between runs. Run with `-parallel-testing-enabled NO` because clone devices fail to launch.
+- 2026-09-26 (PR217 integration): the worktree guard rejects commands containing `$HOME` or compound git pipelines; pass `ANDROID_HOME` as an absolute path to `./gradlew`.

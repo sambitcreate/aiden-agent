@@ -57,6 +57,9 @@ class AidenChatTest {
     }
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    // Mac wire shape: absent optionals are omitted, never sent as null. A regular chat that
+    // carries `botId: null` beside `reasoning` is refused by the private-field validator.
+    private val wireJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     @Test
     fun coldReplayRebuildsPrefixWarmReconnectUsesMemoryAndTerminalRejectsLateEvents() = assertStreamRecovery()
@@ -113,10 +116,10 @@ class AidenChatTest {
                     path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
                         initialLoadArrived.countDown()
                         if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
-                        MockResponse().setBody(json.encodeToString(initial))
+                        MockResponse().setBody(wireJson.encodeToString(initial))
                     }
                     path.endsWith("/chats/chat-recovery") && holdInitialLoad ->
-                        MockResponse().setBody(json.encodeToString(final))
+                        MockResponse().setBody(wireJson.encodeToString(final))
                     else -> MockResponse().setResponseCode(503).setBody(
                         """{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"""
                     )
@@ -223,7 +226,7 @@ class AidenChatTest {
                                 val count = postCount.incrementAndGet()
                                 if (count == 1) { arrived.countDown(); check(release.await(8, TimeUnit.SECONDS)) }
                                 if (count == 2 && mode == "ordered_posts") { secondPostArrived.countDown(); check(getRelease.await(8, TimeUnit.SECONDS)) }
-                                MockResponse().setResponseCode(202).setBody("""{"turnId":"accepted-turn-$count","streamId":"accepted-stream-$count","status":"queued","message":${json.encodeToString(if (count == 1) accepted else second)}}""")
+                                MockResponse().setResponseCode(202).setBody("""{"turnId":"accepted-turn-$count","streamId":"accepted-stream-$count","status":"queued","message":${wireJson.encodeToString(if (count == 1) accepted else second)}}""")
                             }
                             request.requestUrl!!.encodedPath.endsWith("/events") -> MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE)
                             request.requestUrl!!.encodedPath.endsWith("/chats/" + initial.id) -> {
@@ -231,7 +234,7 @@ class AidenChatTest {
                                 if (mode.startsWith("inverse") && snapshot != initial) {
                                     getArrived.countDown(); check(getRelease.await(8, TimeUnit.SECONDS))
                                 }
-                                MockResponse().setBody(json.encodeToString(snapshot))
+                                MockResponse().setBody(wireJson.encodeToString(snapshot))
                             }
                             else -> MockResponse().setResponseCode(404)
                         }
@@ -542,6 +545,15 @@ class AidenChatTest {
     @Test
     fun mismatchedStopAcknowledgementShowsFailure() = exerciseRunControl("stop-mismatch")
 
+    @Test
+    fun lateStopAcknowledgementAfterUnpairCannotControlOrReport() = exerciseRunControl("stop-revoked")
+
+    @Test
+    fun droppedStopRequestIsNotRetriedAndLeavesRunControllable() = exerciseRunControl("stop-disconnect")
+
+    @Test
+    fun approvalSnapshotHeldAcrossUnpairCannotRestoreCard() = exerciseRunControl("approval-snapshot-revoked")
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
         val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
@@ -577,7 +589,7 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
                     if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
                     val id = snapshotId.get()
-                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap", "approval-snapshot-revoked") && id != "approval-current") ||
                         (scenario == "approval-fallback-before" && id == "approval-old")) {
                         (if (id == "approval-old") oldRead else newRead).countDown()
                         check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
@@ -588,6 +600,9 @@ class AidenChatTest {
                     writes.incrementAndGet()
                     arrived.countDown()
                     check(release.await(10, TimeUnit.SECONDS))
+                    if (scenario == "stop-disconnect") {
+                        return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                    }
                     if (scenario.startsWith("stop-")) {
                         val responseStatus = if (scenario == "stop-mismatch") status.replace("stream-control", "stream-other") else status.replace("waiting_for_approval", "reconciling")
                         return MockResponse().setResponseCode(202).setBody(responseStatus)
@@ -648,6 +663,22 @@ class AidenChatTest {
                     assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
                     return@runBlocking
                 }
+                if (scenario == "approval-snapshot-revoked") {
+                    // A snapshot read that was admitted before unpair must not paint a card
+                    // for an installation whose credentials are gone.
+                    snapshotId.set("approval-old")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    coordinator.removeInstallation(installation.id)
+                    releaseOld.countDown()
+                    read.await()
+                    assertNotEquals("approval-old", model.pendingApproval.value?.id)
+                    assertFalse(model.canControlCurrentRun)
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-old")
+                    model.stop()
+                    assertEquals(0, writes.get())
+                    return@runBlocking
+                }
                 if (scenario == "approval-overlap") {
                     snapshotId.set("approval-old")
                     val old = async { model.restorePendingApproval("stream-control") }
@@ -690,7 +721,7 @@ class AidenChatTest {
                 }
                 withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
                 assertEquals(1, writes.get())
-                if (scenario == "revoked") coordinator.removeInstallation(installation.id)
+                if (scenario == "revoked" || scenario == "stop-revoked") coordinator.removeInstallation(installation.id)
                 if (scenario.endsWith("terminal")) {
                     terminal.set(true)
                     withTimeout(5_000) { model.streamState.first { it?.isTerminal == true } }
@@ -699,9 +730,22 @@ class AidenChatTest {
                 if (scenario.startsWith("stop")) {
                     withTimeout(5_000) { model.isStopping.first { !it } }
                     if (scenario.endsWith("terminal")) assertTrue(model.streamState.value!!.isTerminal)
-                    else {
+                    else if (scenario == "stop-revoked") {
+                        // The late 202 belongs to a revoked client: no reconcile, no error, no controls.
+                        assertNotEquals(AidenStreamState.RECONCILING, model.streamState.value)
+                        assertNull(model.presentedError.value)
+                        assertFalse(model.canControlCurrentRun)
+                        model.stop()
+                        assertFalse(model.isStopping.value)
+                    } else {
                         assertTrue(model.presentedError.value!!.contains("Stop was not confirmed"))
                         assertFalse(model.streamState.value!!.isTerminal)
+                        if (scenario == "stop-disconnect") {
+                            // No optimistic cancel: the run stays live and the user may retry.
+                            assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                            assertEquals("approval-current", model.pendingApproval.value?.id)
+                            assertTrue(model.canControlCurrentRun)
+                        }
                     }
                 } else {
                     withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
