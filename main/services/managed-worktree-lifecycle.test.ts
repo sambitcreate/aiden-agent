@@ -985,6 +985,34 @@ test(".worktreeinclude provisions only ignored+untracked files with mode preserv
   });
 });
 
+test(".worktreeinclude provisioning is a no-op without the macOS transfer helper", async (t) => {
+  const repository = await createRepository(t);
+  const worktreePath = await temporaryDirectory(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), ".env\n");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "ignore"]);
+  await fs.writeFile(path.join(repository, ".env"), "SECRET=42\n");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env\n");
+
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "linux" });
+  try {
+    const service = new GitService({ cacheTtlMs: 0 });
+    // The Darwin-only transfer helper cannot exist on Linux; provisioning must
+    // degrade to an empty record instead of failing worktree creation.
+    assert.deepEqual(
+      await provisionWorktreeIncludedFiles(
+        { listFiles: (cwd, args) => service.listFiles(cwd, args) },
+        { sourceRoot: repository, worktreePath },
+      ),
+      [],
+    );
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  await assert.rejects(fs.lstat(path.join(worktreePath, ".env")), { code: "ENOENT" });
+});
+
 test("provisioning refuses symlinked sources, escapes, and existing destinations", async (t) => {
   const repository = await createRepository(t);
   const outside = await temporaryDirectory(t);

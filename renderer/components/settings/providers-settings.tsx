@@ -51,6 +51,8 @@ import {
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
     return p.hasKey ? <Badge color="green" icon={<Check />}>Ready</Badge> : null;
@@ -152,9 +154,10 @@ function BuiltinProviderRows({
 
 export function ProvidersSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const providers = useProviders();
   const settings = useSettings();
-  const foundationModels = useFoundationModelsConnection();
+  const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const modelCatalogStatus = useModelCatalogStatus();
   const [editing, setEditing] = React.useState<Provider | null>(null);
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
@@ -346,7 +349,7 @@ export function ProvidersSettings() {
             Connect models to Aiden and manage the providers you already use.
           </Text>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
           <Button
             variant="muted"
             size="small"
@@ -468,7 +471,7 @@ export function ProvidersSettings() {
 
       <CodexProviderSettings />
 
-      {foundationModels.data ? (
+      {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
           className="settings-card rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
@@ -523,7 +526,7 @@ export function ProvidersSettings() {
             </summary>
             <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
               <Text variant="small" color="tertiary" as="p" className="max-w-md">
-                Automatic prefers this Mac, then uses the selected chat model only when Apple is
+                Automatic prefers this device, then uses the selected chat model only when Apple is
                 unavailable. On-device only never falls back to a network provider.
               </Text>
               <Select
@@ -546,6 +549,41 @@ export function ProvidersSettings() {
               </Select>
             </div>
           </details>
+        </div>
+      ) : !capabilities.appleFoundationModels ? (
+        <div className="rounded-card border border-separator px-3.5 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <Text variant="small-strong" as="p">
+                Chat title provider
+              </Text>
+              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+                {titleProviderId === "apple-foundation-models"
+                  ? "On-device titles are unavailable on this computer. Choose Automatic or Selected chat model to allow your selected model to generate titles."
+                  : "Automatic uses your selected chat model. Choose Selected chat model to make that preference explicit."}
+              </Text>
+            </div>
+            <Select
+              value={titleProviderId}
+              disabled={savingTitleProvider}
+              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+            >
+              <SelectTrigger
+                size="small"
+                className="w-full shrink-0 sm:w-48"
+                aria-label="Chat title provider"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {titleProviderId === "apple-foundation-models" ? (
+                  <SelectItem value="apple-foundation-models" disabled>On-device only (unavailable)</SelectItem>
+                ) : null}
+                <SelectItem value="automatic">Automatic</SelectItem>
+                <SelectItem value="chat-model">Selected chat model</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       ) : null}
 

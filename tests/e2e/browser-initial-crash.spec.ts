@@ -17,6 +17,7 @@ test("current native crash before the first commit retries its pending URL", asy
   const root = testInfo.outputPath("native");
   await mkdir(path.resolve("build"), { recursive: true });
   const temporaryBuild = await mkdtemp(path.resolve("build/native-crash-"));
+  let output = "";
   const entry = path.join(temporaryBuild, "initial-crash.mjs");
   try {
     await build({
@@ -31,20 +32,38 @@ test("current native crash before the first commit retries its pending URL", asy
       logLevel: "silent",
     });
     const electron = createRequire(import.meta.url)("electron") as string;
-    await promisify(execFile)(electron, [entry], {
+    // Match the Aiden Electron fixture's GPU switch; hosted runners have no GPU.
+    // SIGKILL on timeout: Chromium turns SIGTERM into a clean exit 0, which
+    // would hide a hang behind a missing result file instead of its stderr.
+    const run = await promisify(execFile)(electron, ["--disable-gpu", entry], {
       timeout: 30_000,
+      killSignal: "SIGKILL",
       env: {
         PATH: process.env.PATH,
         AIDEN_BROWSER_CRASH_ROOT: root,
         AIDEN_CONFIG_DIR: path.join(root, "config"),
+        // The crash fixture bypasses the Electron fixture's environment
+        // assembly, so forward the display session itself on Linux.
+        ...(process.platform === "linux"
+          ? Object.fromEntries(
+              ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE"]
+                .filter((name) => process.env[name] !== undefined)
+                .map((name) => [name, process.env[name]]),
+            )
+          : {}),
       },
     });
+    output = `${run.stdout}${run.stderr}`;
   } finally {
     await rm(temporaryBuild, { recursive: true, force: true });
   }
-  const report = JSON.parse(
-    await readFile(path.join(root, "result.json"), "utf8"),
+  const result = await readFile(path.join(root, "result.json"), "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      throw new Error(`Native crash fixture exited without a result:\n${output}`);
+    },
   );
+  const report = JSON.parse(result);
   expect(report.before).toEqual({
     nativeCrashed: true,
     nativeLoading: true,

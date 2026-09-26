@@ -13,6 +13,7 @@ import {
   summarizeToolCall,
 } from "./coding-tools.js";
 import { createShareImageTool } from "./share-image-tool.js";
+import { agentCommandEnvironment } from "./agent-command-environment.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1320,6 +1321,71 @@ test("run_command cancellation kills the shell process group", async () => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("agent commands find user CLIs from a macOS GUI launch PATH", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agent-path-"));
+  try {
+    const localBin = path.join(home, ".local", "bin");
+    const commandName = `aiden-cli-${path.basename(home)}`;
+    await fs.mkdir(localBin, { recursive: true });
+    await fs.writeFile(path.join(localBin, commandName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const env = agentCommandEnvironment({ HOME: home, PATH: "/usr/bin:/bin" }, "darwin");
+    const result = await execFileAsync("/bin/sh", ["-c", `command -v ${commandName}`], { env });
+    assert.equal(result.stdout.trim(), path.join(localBin, commandName));
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("run_command applies the macOS agent PATH to its spawned shell", async () => {
+  if (process.platform !== "darwin") return;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-run-command-path-"));
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
+  try {
+    const localBin = path.join(home, ".local", "bin");
+    const commandName = `aiden-cli-${path.basename(home)}`;
+    await fs.mkdir(localBin, { recursive: true });
+    await fs.writeFile(path.join(localBin, commandName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.HOME = home;
+    process.env.PATH = "/usr/bin:/bin";
+    const runCommand = buildCodingTools(home).find((tool) => tool.name === "run_command");
+    assert.ok(runCommand);
+    const result = await runCommand.execute("test", { command: `command -v ${commandName}` });
+    assert.equal(result.content[0]?.type, "text");
+    assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(path.join(localBin, commandName)));
+    // A device shim prefix still wins lookup while the GUI directories stay reachable.
+    const pinned = buildCodingTools(home, undefined, { pathPrefix: "/aiden/devices/bin" }).find(
+      (tool) => tool.name === "run_command",
+    );
+    assert.ok(pinned);
+    const pinnedResult = await pinned.execute("pinned", { command: `printf '%s\\n' "$PATH"; command -v ${commandName}` });
+    const [pinnedPath, pinnedLookup] = (pinnedResult.content[0]?.type === "text" ? pinnedResult.content[0].text : "")
+      .trim()
+      .split("\n");
+    assert.ok(pinnedPath?.startsWith("/aiden/devices/bin:/usr/bin:/bin:"));
+    assert.equal(pinnedLookup, path.join(localBin, commandName));
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("agent command PATH preserves inherited entries and non-macOS environments", () => {
+  const parent = { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" };
+  const mac = agentCommandEnvironment(parent, "darwin");
+  assert.equal(mac.PATH?.split(":").filter((part) => part === "/Users/example/.local/bin").length, 1);
+  assert.ok(mac.PATH?.startsWith(parent.PATH));
+  assert.ok(agentCommandEnvironment({ HOME: "/Users/example" }, "darwin").PATH?.startsWith("/usr/bin:/bin:/usr/sbin:/sbin"));
+  const withEmptyEntries = ":/usr/bin::/bin:";
+  assert.ok(agentCommandEnvironment({ ...parent, PATH: withEmptyEntries }, "darwin").PATH?.startsWith(`${withEmptyEntries}:`));
+  assert.ok(agentCommandEnvironment({ ...parent, PATH: "" }, "darwin").PATH?.startsWith(":"));
+  assert.deepEqual(agentCommandEnvironment(parent, "linux"), parent);
+  assert.deepEqual(parent, { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" });
 });
 
 test("run_command keeps PATH unless a device shim directory is attached", async () => {

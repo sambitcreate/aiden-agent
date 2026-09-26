@@ -63,6 +63,7 @@ import {
   compactDesktopChat,
 } from "../services/context-lifecycle-adapters.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
@@ -321,6 +322,9 @@ export function registerChatHistoryHandlers(): void {
       }
       const runCopy = async () => {
         if (source.botId) {
+          if (!hostPlatformCapabilities().bots) {
+            throw new Error("Bot chats are not available on this platform.");
+          }
           const assertCurrent = () => {
             if (owner.isDestroyed()) {
               throw new Error("The application changed before the Bot chat was copied.");
@@ -549,7 +553,7 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:remove", async (_event, id: unknown) => {
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    const result = chat?.botId
+    const result = chat?.botId && hostPlatformCapabilities().bots
       ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
       : await chatApplicationService.remove(chatId);
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });

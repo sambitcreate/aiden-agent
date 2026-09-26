@@ -1,0 +1,78 @@
+name: Build Linux installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiden-linux-installers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }} installers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install Linux package dependencies
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify Linux contracts and installer selection
+        run: npm run type-check && npm run lint && npm run test:linux-contracts && node --test scripts/install.test.mjs
+
+      - name: Build and verify Linux installers
+        run: |
+          set -euo pipefail
+          npm run models:refresh
+          npm run dist:linux
+          node scripts/verify-linux-package.mjs release/linux-distribution
+          node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
+          sudo apt-get install --yes ./release/linux-distribution/*.deb
+          dpkg --verify aiden-agent
+          expected_version="$(node -p 'require("./package.json").version')"
+          test "$(aiden-agent --no-sandbox --version)" = "$expected_version"
+          chmod +x ./release/linux-distribution/*.AppImage
+          ./release/linux-distribution/*.AppImage --appimage-extract-and-run --no-sandbox --version | grep -F "$expected_version"
+
+      - name: Stage installer artifacts
+        run: |
+          set -euo pipefail
+          cp install.sh release/linux-distribution/install.sh
+          cd release/linux-distribution
+          sha256sum -- *.AppImage *.deb *.rpm latest-linux*.yml install.sh > SHA256SUMS
+
+      - name: Upload verified Linux installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aiden-linux-installers-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            release/linux-distribution/*.AppImage
+            release/linux-distribution/*.deb
+            release/linux-distribution/*.rpm
+            release/linux-distribution/latest-linux*.yml
+            release/linux-distribution/install.sh
+            release/linux-distribution/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
