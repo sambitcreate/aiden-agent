@@ -27,9 +27,25 @@ final class AidenBotPresentationOwner {
     struct Presentation {
         var chat: AidenChat
         let allowsMutations: Bool
+        /// Notice policy a live permission check granted mutations under;
+        /// nil when the grant did not come from such a check.
+        var grantedFullAccessAllowed: Bool? = nil
 
         static func awaitingPermission(_ chat: AidenChat) -> Self {
             Self(chat: chat, allowsMutations: false)
+        }
+
+        static func resolved(_ chat: AidenChat, allowsMutations: Bool, fullAccessAllowed: Bool) -> Self {
+            Self(chat: chat, allowsMutations: allowsMutations,
+                 grantedFullAccessAllowed: allowsMutations ? fullAccessAllowed : nil)
+        }
+
+        /// Restoration revalidates an already-presented chat. A live grant made
+        /// under the same write and notice policy stays usable while that check
+        /// runs or fails transiently; any policy change fails closed.
+        func revalidating(canWrite: Bool, fullAccessAllowed: Bool) -> Self {
+            let keeps = allowsMutations && canWrite && grantedFullAccessAllowed == fullAccessAllowed
+            return Self(chat: chat, allowsMutations: keeps, grantedFullAccessAllowed: keeps ? fullAccessAllowed : nil)
         }
     }
 
@@ -40,13 +56,39 @@ final class AidenBotPresentationOwner {
         let chatID: String
         let writeToken: UInt64
         let fullAccessAllowed: Bool
+        let canWrite: Bool
     }
     private var current: Attempt?
+    /// True while `current` is a user-initiated open that restoration adopts.
+    private var currentAdoptable = false
 
-    func begin(instanceID: String, deviceID: String, chatID: String, cache: AidenChatCache = .shared, fullAccessAllowed: Bool = false) -> Attempt {
-        let attempt = Attempt(instanceID: instanceID, deviceID: deviceID, chatID: chatID, writeToken: cache.reserveChatWrite(), fullAccessAllowed: fullAccessAllowed)
+    func begin(
+        instanceID: String,
+        deviceID: String,
+        chatID: String,
+        cache: AidenChatCache = .shared,
+        canWrite: Bool = false,
+        fullAccessAllowed: Bool = false,
+        adoptable: Bool = false
+    ) -> Attempt {
+        let attempt = Attempt(instanceID: instanceID, deviceID: deviceID, chatID: chatID, writeToken: cache.reserveChatWrite(), fullAccessAllowed: fullAccessAllowed, canWrite: canWrite)
         current = attempt
+        currentAdoptable = adoptable
         return attempt
+    }
+
+    /// The path change made by an in-flight open re-runs restoration. It must
+    /// not supersede that open when both would load under the same inputs.
+    func adoptsRestoration(instanceID: String, deviceID: String, chatID: String, canWrite: Bool, fullAccessAllowed: Bool) -> Bool {
+        guard currentAdoptable, let current else { return false }
+        return current.instanceID == instanceID && current.deviceID == deviceID && current.chatID == chatID
+            && current.canWrite == canWrite && current.fullAccessAllowed == fullAccessAllowed
+    }
+
+    /// A settled open keeps ownership of its published state but no longer
+    /// stands in for restoration, so later restoration inputs reload.
+    func finish(_ attempt: Attempt) {
+        if owns(attempt) { currentAdoptable = false }
     }
 
     func owns(_ attempt: Attempt) -> Bool { current == attempt }
@@ -57,7 +99,10 @@ final class AidenBotPresentationOwner {
         retain(instanceID: instanceID, deviceID: deviceID, chatID: path.last)
         store.setCompactBotPath(path, for: instanceID)
     }
-    func invalidate() { current = nil }
+    func invalidate() {
+        current = nil
+        currentAdoptable = false
+    }
     func retain(instanceID: String?, deviceID: String?, chatID: String?) {
         guard current?.instanceID == instanceID, current?.deviceID == deviceID, current?.chatID == chatID else {
             invalidate()
@@ -743,9 +788,13 @@ private struct AidenBotShellView: View {
             connectionState: coordinator.connectionState,
             chatID: path.last,
             isBotSurfaceActive: isBotSurfaceActive,
-            canWrite: AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation).canWrite,
+            canWrite: currentCanWrite,
             fullAccessAllowed: fullAccessActionsAllowed()
         )
+    }
+
+    private var currentCanWrite: Bool {
+        AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation).canWrite
     }
 
     private var isBotSurfaceActive: Bool {
@@ -784,10 +833,9 @@ private struct AidenBotShellView: View {
                         chat: presentation.chat,
                         allowsMutations: presentation.allowsMutations,
                         onChatUpdated: {
-                            chatsByScope[scope, default: [:]][$0.id] = ChatPresentation(
-                                chat: $0,
-                                allowsMutations: chatsByScope[scope]?[$0.id]?.allowsMutations ?? presentation.allowsMutations
-                            )
+                            var updated = chatsByScope[scope]?[$0.id] ?? presentation
+                            updated.chat = $0
+                            chatsByScope[scope, default: [:]][$0.id] = updated
                         }
                     )
                 } else if isBotSurfaceActive {
@@ -877,8 +925,16 @@ private struct AidenBotShellView: View {
             capturedContext = context
             let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
             guard presentationScope == scope else { return }
-            let attempt = presentationOwner.begin(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: item.chatId, fullAccessAllowed: fullAccessActionsAllowed())
+            let attempt = presentationOwner.begin(
+                instanceID: scope.instanceID,
+                deviceID: scope.deviceID,
+                chatID: item.chatId,
+                canWrite: currentCanWrite,
+                fullAccessAllowed: fullAccessActionsAllowed(),
+                adoptable: true
+            )
             capturedAttempt = attempt
+            defer { presentationOwner.finish(attempt) }
 
             // Navigation is intentionally first. A warm cache will replace the
             // layout-shaped skeleton on the next actor hop; a cold request can
@@ -939,11 +995,12 @@ private struct AidenBotShellView: View {
             )
             guard presentationOwner.owns(attempt), coordinator.isCurrent(context), presentationScope == scope,
                   path.last == item.chatId else { return }
-            chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
-                chat: chatsByScope[scope]?[chat.id]?.chat ?? chat,
+            chatsByScope[scope, default: [:]][chat.id] = .resolved(
+                chatsByScope[scope]?[chat.id]?.chat ?? chat,
                 allowsMutations: allowsMutations && presentationOwner.ownsPermission(attempt,
-                    canWrite: AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation).canWrite,
-                    fullAccessAllowed: fullAccessActionsAllowed())
+                    canWrite: currentCanWrite,
+                    fullAccessAllowed: fullAccessActionsAllowed()),
+                fullAccessAllowed: attempt.fullAccessAllowed
             )
         } catch is CancellationError {
             return
@@ -1073,15 +1130,22 @@ private struct AidenBotShellView: View {
         }
         guard let chatID = path.last,
               let scope = presentationScope else { return }
+        let canWrite = currentCanWrite
+        let fullAccessAllowed = fullAccessActionsAllowed()
+        // An open that is already loading this chat under the same policy
+        // owns it; its own path change must not restart the load.
+        if presentationOwner.adoptsRestoration(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: chatID,
+                                               canWrite: canWrite, fullAccessAllowed: fullAccessAllowed) { return }
         var capturedContext: AidenRemoteRequestContext?
-        let attempt = presentationOwner.begin(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: chatID, fullAccessAllowed: fullAccessActionsAllowed())
+        let attempt = presentationOwner.begin(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: chatID,
+                                              canWrite: canWrite, fullAccessAllowed: fullAccessAllowed)
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
             guard context.instanceId == scope.instanceID, context.deviceId == scope.deviceID else { return }
 
-            let existing = chatsByScope[scope]?[chatID]?.chat
-            let cached = if let existing { existing } else { aidenAdmittedCachedBotChat(
+            let existing = chatsByScope[scope]?[chatID]
+            let cached = if let existing { existing.chat } else { aidenAdmittedCachedBotChat(
                 await AidenChatCache.shared.admittedChat(
                     instanceId: context.instanceId,
                     chatId: chatID
@@ -1090,11 +1154,13 @@ private struct AidenBotShellView: View {
             ) }
             guard presentationOwner.owns(attempt), coordinator.isCurrent(context), presentationScope == scope,
                   path.last == chatID else { return }
-            if let cached {
-                chatsByScope[scope, default: [:]][cached.id] = ChatPresentation(
-                    chat: cached,
-                    allowsMutations: false
+            if let existing {
+                chatsByScope[scope, default: [:]][chatID] = existing.revalidating(
+                    canWrite: currentCanWrite,
+                    fullAccessAllowed: fullAccessActionsAllowed()
                 )
+            } else if let cached {
+                chatsByScope[scope, default: [:]][cached.id] = .awaitingPermission(cached)
             }
             guard coordinator.connectionState == .connected else {
                 if cached == nil { path = [] }
@@ -1125,11 +1191,12 @@ private struct AidenBotShellView: View {
             let allowed = try await allowsMutations(for: chat, client: client, context: context)
             guard presentationOwner.owns(attempt), coordinator.isCurrent(context), presentationScope == scope,
                   path.last == chatID else { return }
-            chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
-                chat: chatsByScope[scope]?[chat.id]?.chat ?? chat,
+            chatsByScope[scope, default: [:]][chat.id] = .resolved(
+                chatsByScope[scope]?[chat.id]?.chat ?? chat,
                 allowsMutations: allowed && presentationOwner.ownsPermission(attempt,
-                    canWrite: AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation).canWrite,
-                    fullAccessAllowed: fullAccessActionsAllowed())
+                    canWrite: currentCanWrite,
+                    fullAccessAllowed: fullAccessActionsAllowed()),
+                fullAccessAllowed: attempt.fullAccessAllowed
             )
         } catch is CancellationError {
             return

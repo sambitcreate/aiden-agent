@@ -1375,6 +1375,57 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRestorationAdoptsOnlyInFlightOpenUnderSamePolicy() {
+        let owner = AidenBotPresentationOwner()
+        func adopts(chat: String = "chat", device: String = "device", canWrite: Bool = true, fullAccess: Bool = false) -> Bool {
+            owner.adoptsRestoration(instanceID: "one", deviceID: device, chatID: chat, canWrite: canWrite, fullAccessAllowed: fullAccess)
+        }
+        // The open's own path change re-runs restoration mid-load.
+        let open = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, fullAccessAllowed: false, adoptable: true)
+        XCTAssertTrue(adopts())
+        XCTAssertTrue(owner.owns(open))
+        XCTAssertFalse(adopts(chat: "other"))
+        XCTAssertFalse(adopts(device: "new-device"))
+        XCTAssertFalse(adopts(canWrite: false))
+        XCTAssertFalse(adopts(fullAccess: true))
+        // A settled open keeps ownership but later restoration inputs reload.
+        owner.finish(open)
+        XCTAssertTrue(owner.owns(open))
+        XCTAssertFalse(adopts())
+        // Restoration's own attempts are cancelled by SwiftUI, so never adopted.
+        let restoring = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true)
+        XCTAssertFalse(adopts())
+        let reopened = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, adoptable: true)
+        owner.finish(restoring)
+        XCTAssertTrue(adopts(), "finishing a superseded attempt cannot clear the current one")
+        XCTAssertTrue(owner.owns(reopened))
+        owner.invalidate()
+        XCTAssertFalse(adopts())
+    }
+
+    @MainActor
+    func testRestorationRevalidationKeepsOnlySamePolicyLiveGrant() {
+        typealias Presentation = AidenBotPresentationOwner.Presentation
+        let chat = sampleChat()
+        for fullAccess in [false, true] {
+            let granted = Presentation.resolved(chat, allowsMutations: true, fullAccessAllowed: fullAccess)
+            let kept = granted.revalidating(canWrite: true, fullAccessAllowed: fullAccess)
+            XCTAssertTrue(kept.allowsMutations)
+            XCTAssertEqual(kept.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations, true)
+            XCTAssertFalse(granted.revalidating(canWrite: false, fullAccessAllowed: fullAccess).allowsMutations)
+            let noticeChanged = granted.revalidating(canWrite: true, fullAccessAllowed: !fullAccess)
+            XCTAssertFalse(noticeChanged.allowsMutations)
+            XCTAssertFalse(noticeChanged.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations,
+                           "a revoked grant cannot come back without a fresh live check")
+        }
+        XCTAssertFalse(Presentation.resolved(chat, allowsMutations: false, fullAccessAllowed: false)
+            .revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        XCTAssertFalse(Presentation.awaitingPermission(chat).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        // Grants that did not come from a live check (deep links) fail closed.
+        XCTAssertFalse(Presentation(chat: chat, allowsMutations: true).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+    }
+
+    @MainActor
     func testHeldBotCreateReceiptAwaitsFreshPermission() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-bot-create-permission-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
