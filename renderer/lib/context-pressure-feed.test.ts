@@ -222,8 +222,28 @@ test("a workspace scope change clears the old reading even if the re-read fails"
   h.requests[2].reply.resolve(Promise.reject(new Error("offline")) as never);
   await settle();
   assert.deepEqual(h.published, [null, 70, null]);
-  // A chat switch sets a fresh baseline instead of counting as a change.
+  // Switching to another chat in a different workspace just repeats the clear.
   h.feed.showChat("b");
   h.feed.setScope("ask:/other");
-  assert.deepEqual(h.published, [null, 70, null, null]);
+  assert.deepEqual(h.published, [null, 70, null, null, null]);
+});
+
+test("a scope change still clears after switching between chats in the same workspace", async () => {
+  const h = harness();
+  h.feed.showChat("a");
+  h.feed.setScope("ask:/repo");
+  // ChatPane only re-reports the scope when it changes, so switching to a
+  // sibling chat (or a draft chat saving its first message) sends no setScope.
+  h.feed.showChat(null);
+  h.feed.showChat("b");
+  void h.feed.refresh();
+  h.requests[0].reply.resolve(reading(80));
+  await settle();
+  assert.deepEqual(h.published, [null, null, null, 80]);
+  h.feed.setScope("full:/repo");
+  assert.deepEqual(
+    h.published,
+    [null, null, null, 80, null],
+    "the first permission change after the switch must clear chat b's reading",
+  );
 });

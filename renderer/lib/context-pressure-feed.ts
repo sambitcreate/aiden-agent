@@ -49,10 +49,10 @@ export class ContextPressureFeed<Draft> {
   showChat(chatId: string | null): void {
     if (chatId === this.chatId) return;
     this.chatId = chatId;
-    // The incoming chat's composer re-reports its own draft after mounting,
-    // and its workspace scope is a fresh baseline, not a change.
+    // The incoming chat's composer re-reports its own draft after mounting.
+    // The workspace scope is kept: ChatPane only re-reports it when it
+    // changes, so it stays the baseline across chats in the same workspace.
     this.draft = undefined;
-    this.scope = undefined;
     this.invalidate();
     this.options.publish(null);
   }
@@ -61,7 +61,8 @@ export class ContextPressureFeed<Draft> {
    * The chat's workspace scope (permission + folder) shapes the next request's
    * prompt and tools. On a change, clear the reading at once so the previous
    * scope's pressure is never shown as current while the re-read is pending
-   * or if it fails.
+   * or if it fails. The scope belongs to the pane, not the shown chat, so a
+   * change that coincides with a chat switch just repeats showChat's clear.
    */
   setScope(scope: string): void {
     const previous = this.scope;

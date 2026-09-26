@@ -766,8 +766,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     contextFeed.setLive(contextLiveGeneration);
   }, [contextFeed, contextLiveGeneration]);
-  // Runs after the chat-switch showChat effect, so a new chat's first scope is
-  // a baseline; later permission/folder changes clear the stale reading.
+  // Permission/folder changes clear the stale reading. The feed keeps the
+  // scope across chat switches, so this only needs to run when it changes.
   React.useLayoutEffect(() => {
     contextFeed.setScope(
       `${effectiveWorkspace?.permission ?? ""}\u0000${effectiveWorkspace?.folderPath ?? ""}`,

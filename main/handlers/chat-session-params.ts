@@ -151,8 +151,10 @@ export function parseChatContextPressureRequest(value: unknown): ParsedChatConte
     chatId: boundedId(record.chatId, "chat id"),
     draftText: record.draftText as string | undefined,
   };
-  if (record.providerId !== undefined) parsed.providerId = record.providerId as string;
-  if (record.modelId !== undefined) parsed.modelId = record.modelId as string;
+  // An empty id means "no live selection yet": omit it so the chat's saved
+  // provider/model price the request instead.
+  if (record.providerId) parsed.providerId = record.providerId as string;
+  if (record.modelId) parsed.modelId = record.modelId as string;
   if (record.attachments !== undefined) {
     parsed.attachments = (record.attachments as unknown[]).map(parseContextPressureAttachment);
     // The projection materializes each text length, so bound the draft as a

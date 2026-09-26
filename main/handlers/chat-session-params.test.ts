@@ -98,6 +98,15 @@ test("context pressure requests accept a bounded optional draft", () => {
   assert.throws(() =>
     parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }),
   );
+  // An empty live selection must not shadow the chat's saved provider/model.
+  assert.deepEqual(
+    parseChatContextPressureRequest({ chatId: "chat-1", providerId: "", modelId: "" }),
+    { chatId: "chat-1", draftText: undefined },
+  );
+  assert.deepEqual(
+    parseChatContextPressureRequest({ chatId: "chat-1", providerId: "openai", modelId: "" }),
+    { chatId: "chat-1", draftText: undefined, providerId: "openai" },
+  );
   // Each text length is individually allowed, but the draft as a whole is
   // bounded by the same 16 MiB aggregate the composer enforces.
   const textAttachment = (id: string, textLength: number) => ({

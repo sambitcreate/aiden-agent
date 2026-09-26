@@ -214,8 +214,9 @@ export async function chatContextPressure(
   if (!chat) return null;
   // The composer selection leads the persisted chat pair — a model the user
   // just picked in the picker must price the next request before it commits.
-  const providerId = draft?.providerId ?? chat.providerId;
-  const modelId = draft?.modelId ?? chat.model;
+  // An empty selection id (picker not settled) falls back like an absent one.
+  const providerId = draft?.providerId || chat.providerId;
+  const modelId = draft?.modelId || chat.model;
   if (!providerId || !modelId) return null;
   let model;
   try {
