@@ -634,9 +634,9 @@ Status: Implemented (2026-08-29); live credential-backed installed acceptance re
 - Roll out registry/Settings behind a kill switch while keeping Exa anonymous as
   the recoverable baseline.
 
-Exit result: onboarding now discloses the default anonymous Exa recipient before
-workspace use, offers a request-free toggle, and advertises the shipped provider
-zoo in the tested bento gallery. The provider zoo is default-on behind the
+Exit result: fresh profiles keep default-on anonymous Exa without an onboarding
+toggle; the shipped provider zoo is advertised in the tested bento gallery and
+configured in Settings. The provider zoo is default-on behind the
 startup-bound `AIDEN_WEB_SEARCH_PROVIDER_ZOO_ENABLED` switch; exact `0` projects a
 fixed Exa-only baseline without destroying hidden routes, provider configuration,
 credentials, or the global enabled state. Rollback rejects hidden route/config
@@ -707,13 +707,15 @@ cover the new disclosure and navigation contract.
 - Full-width key inputs never repopulate saved values; failed mutations preserve
   the last durable snapshot and restore focus.
 - Narrow/light/dark/reduced-motion states use semantic tokens.
-- Default-on onboarding disclosure appears before first workspace use, offers the
-  enabled toggle, causes no request, and updates the tested bento asset/copy.
+- Default-on Web Search remains a fresh-profile main-owned default. Onboarding
+  no longer presents a first-run toggle; users change the setting in Settings →
+  Web Search. The bento gallery still advertises default-on anonymous Exa.
 
 ### Manual packaged acceptance
 
-1. Fresh install: observe default-on disclosure, enter workspace, and confirm no
-   request occurs until a question actually invokes search.
+1. Fresh install: confirm Web Search is on by default without an onboarding
+   toggle, enter workspace, and confirm no request occurs until a question
+   actually invokes search.
 2. Run a current-information query without a key; confirm Exa attribution and a
    useful result.
 3. Save another provider key; confirm it remains unselected and no test request

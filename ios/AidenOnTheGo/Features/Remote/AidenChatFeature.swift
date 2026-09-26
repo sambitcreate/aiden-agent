@@ -3587,61 +3587,32 @@ private struct AidenActivityFeed: View {
     private var visibleSteps: [AidenAgentStep] { steps ?? timeline.steps }
     private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
+    private var compactOnly: Bool { AidenAgentActivityPresentation.isCompactContextOnly(visibleSteps) }
+    /// A healthy lone compaction is fully told by its own line in the header, so the
+    /// expanded list would only repeat it; progress text still needs the disclosure.
+    private var stepInHeader: Bool { compactOnly && timeline.issueCount == 0 }
+    private var allowsDisclosure: Bool {
+        !stepInHeader || !(progressText ?? "").isEmpty
+    }
+    private var showsCollapsedTicker: Bool {
+        isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed
+    }
+    private var headline: String {
+        if stepInHeader, let last = visibleSteps.last {
+            return AidenAgentActivityPresentation.line(for: last)
+        }
+        return AidenAgentActivityPresentation.summary(timeline)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isExpanded ? 4 : 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(
-                    alignment: isRunning && !isExpanded && showsRunningRowsWhenCollapsed ? .bottom : .center,
-                    spacing: 8
-                ) {
-                    Group {
-                        if isRunning && !isExpanded && showsRunningRowsWhenCollapsed {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows) { step in
-                                    AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
-                                        .frame(height: 24)
-                                        .id(step.id)
-                                        .transition(.opacity)
-                                }
-                            }
-                            .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
-                            .clipped()
-                        } else {
-                            Text(AidenAgentActivityPresentation.summary(timeline))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondary)
-                                .lineLimit(1)
-                                .aidenActivityShimmer(isRunning)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if timeline.issueCount > 0 {
-                        Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.warning)
-                    }
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(AidenAgentActivityPresentation.summary(timeline))
-            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
-
-            if isExpanded {
+        VStack(alignment: .leading, spacing: isExpanded && allowsDisclosure ? 4 : 0) {
+            header
+            if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(visibleSteps) { step in
-                        AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    if !stepInHeader {
+                        ForEach(visibleSteps) { step in
+                            AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                        }
                     }
                     if let progressText, !progressText.isEmpty {
                         Divider()
@@ -3665,6 +3636,65 @@ private struct AidenActivityFeed: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: timeline.steps.last?.id)
         .onAppear {
             if timeline.issueCount > 0 { isExpanded = true }
+        }
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if allowsDisclosure {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                headerRow.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(headline)
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+        } else {
+            headerRow
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(headline)
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: showsCollapsedTicker ? .bottom : .center, spacing: 8) {
+            Group {
+                if showsCollapsedTicker {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { step in
+                            AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                                .frame(height: 24)
+                                .id(step.id)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
+                    .clipped()
+                } else {
+                    Text(headline)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                        .aidenActivityShimmer(isRunning)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if timeline.issueCount > 0 {
+                Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+            }
+
+            if allowsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
         }
     }
 }
