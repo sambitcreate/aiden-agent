@@ -7,7 +7,7 @@
  * to PATH while device tools are attached, so the agent gets the version the
  * `device_open` guidance was written for, whatever is installed globally.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentDeviceEndpoint } from "./device-host.js";
@@ -82,7 +82,7 @@ async function writeIfChanged(file: string, content: string, mode: number): Prom
     await chmod(file, mode);
     return;
   }
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, content, { mode });
     await chmod(temporary, mode);

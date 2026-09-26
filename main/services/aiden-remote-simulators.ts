@@ -287,6 +287,8 @@ export class AidenRemoteSimulatorRelay {
     await new Promise<void>((resolve, reject) => {
       const upstream = httpRequest(`${target.hubOrigin}${target.upstreamPath}`, { method, headers }, (hubResponse) => {
         response.writeHead(hubResponse.statusCode ?? 502, hubResponseHeaders(hubResponse.headers));
+        // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
+        hubResponse.once("error", () => response.destroy());
         hubResponse.pipe(response);
         response.once("close", () => hubResponse.destroy());
       });

@@ -46,6 +46,12 @@ async function startFakeHub(): Promise<FakeHub> {
     });
     request.on("end", () => {
       records.push({ method: request.method!, url: request.url!, headers: request.headers, body, upgrade: false });
+      if (request.url?.includes("reset=1")) {
+        // Promise more than is sent, then reset mid-body, as a hub that dies while streaming would.
+        response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000" });
+        response.write("partial", () => setTimeout(() => request.socket.destroy(), 10));
+        return;
+      }
       response.writeHead(200, {
         "content-type": "application/json",
         "set-cookie": "hub=1",
@@ -328,6 +334,28 @@ test("closing a host ends its open sockets and leaves other hosts alone", async 
     assert.equal(connection.socket!.destroyed, false);
     proxy.closeHost("local");
     await closed;
+  });
+});
+
+test("a hub that resets mid-response ends that response without crashing the proxy", async () => {
+  await withProxy(async ({ proxy }) => {
+    const { token } = proxy.mintGrant();
+    await new Promise<void>((resolve) => {
+      const request = httpRequest(`${proxy.origin}/api/devices?t=${token}&reset=1`, {
+        headers: { origin: "file://" },
+      });
+      request.once("response", (response) => {
+        assert.equal(response.statusCode, 200);
+        response.on("data", () => undefined);
+        response.once("error", () => resolve());
+        response.once("close", () => resolve());
+      });
+      request.once("error", () => resolve());
+      request.end();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Still serving: the reset reached only that one response.
+    assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
   });
 });
 

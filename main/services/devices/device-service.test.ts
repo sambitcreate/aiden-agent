@@ -344,6 +344,34 @@ test("turning off agent access or sharing while a local simulator boots still op
   );
 });
 
+test("closing a simulator while it is still opening wins over the open", async () => {
+  for (const closeWith of ["session", "chat"] as const) {
+    let release!: () => void;
+    const bootGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await withService(
+      async ({ service, hub }) => {
+        await service.refresh();
+        const opening = service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+        await waitFor(() => hub.calls.some((call) => call.url.endsWith("/boot")));
+        if (closeWith === "session") {
+          await service.close({ chatId: "chat-1", hostId: "local", deviceId: IPHONE_OLD });
+        } else {
+          service.closeChat("chat-1");
+        }
+        release();
+        await assert.rejects(opening, /closed while it was opening/u);
+        assert.deepEqual(service.sessionsForChat("chat-1"), [], closeWith);
+        // A fresh open after the close still works.
+        await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+        assert.equal(service.sessionsForChat("chat-1").length, 1);
+      },
+      { bootGate, consent: { streaming: true } },
+    );
+  }
+});
+
 test("concurrent opens of one simulator in a chat share a single session", async () => {
   let release!: () => void;
   const bootGate = new Promise<void>((resolve) => {

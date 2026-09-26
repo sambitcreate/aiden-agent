@@ -237,6 +237,14 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   const sharingListeners = new Set<(sharing: boolean) => void>();
   let sharingWas = false;
   let sessions: DeviceSession[] = [];
+  /** Bumped per session and per chat by every close, so an open still booting never undoes one. */
+  const closes = new Map<string, number>();
+  const sessionKey = (chatId: string, hostId: string, deviceId: string) =>
+    JSON.stringify([chatId, hostId, deviceId]);
+  const chatCloseKey = (chatId: string) => JSON.stringify([chatId]);
+  const closeCount = (chatId: string, hostId: string, deviceId: string) =>
+    (closes.get(sessionKey(chatId, hostId, deviceId)) ?? 0) + (closes.get(chatCloseKey(chatId)) ?? 0);
+  const bumpClose = (key: string) => closes.set(key, (closes.get(key) ?? 0) + 1);
   let loaded: Promise<void> | null = null;
   let starting: Promise<DeviceHostReady | null> | null = null;
   let proxy: Promise<DeviceHubProxy> | null = null;
@@ -830,6 +838,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       const ready = requireReady(hostId);
       const epoch = streamingEpoch;
+      const closed = closeCount(input.chatId, hostId, input.deviceId);
       let device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
       if (!device) {
         await listDevices(ready);
@@ -840,6 +849,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       // A revoke while the simulator booted wins; never register a session after it.
       if (epoch !== streamingEpoch || !consent.streaming) {
         throw new Error("Simulator streaming was turned off while opening.");
+      }
+      if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
+        throw new Error("The simulator was closed while it was opening.");
       }
       // Looked up after the boot, so concurrent opens share one session and a close meanwhile sticks.
       const existing = sessions.find(
@@ -857,6 +869,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async close(input) {
       await load();
+      bumpClose(sessionKey(input.chatId, input.hostId, input.deviceId));
       sessions = sessions.filter(
         (session) =>
           !(session.chatId === input.chatId && session.hostId === input.hostId && session.deviceId === input.deviceId),
@@ -880,6 +893,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       void rm(path.join(deps.baseDir, "screenshots", chatKey(chatId)), { recursive: true, force: true }).catch(
         () => undefined,
       );
+      bumpClose(chatCloseKey(chatId));
       const remaining = sessions.filter((session) => session.chatId !== chatId);
       if (remaining.length === sessions.length) return;
       sessions = remaining;

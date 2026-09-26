@@ -384,6 +384,8 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       const headers = hubResponseHeaders(hubResponse.headers);
       Object.assign(headers, corsHeaders(origin));
       response.writeHead(hubResponse.statusCode ?? 502, headers);
+      // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
+      hubResponse.once("error", () => response.destroy());
       hubResponse.pipe(response);
       response.once("close", () => hubResponse.destroy());
     };
