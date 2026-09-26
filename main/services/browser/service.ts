@@ -47,6 +47,8 @@ import {
   browserDisplayUrl,
   browserRedactPreviewUrls,
   browserPageCaptureBounds,
+  applyBrowserGuestIdentityHeaders,
+  browserGuestUserAgent,
   browserLocalServers,
   BrowserActionQueue,
   BROWSER_MAX_TABS,
@@ -383,12 +385,8 @@ export class BrowserService {
     let browserSession = this.sessions.get(partition);
     if (!browserSession) {
       browserSession = session.fromPartition(partition);
-      browserSession.setUserAgent(
-        browserSession
-          .getUserAgent()
-          .replace(/\s*Electron\/[\d.]+/g, "")
-          .replace(/\s*aiden[^\s]*\/[\d.]+/gi, ""),
-      );
+      const guestUserAgent = browserGuestUserAgent(browserSession.getUserAgent());
+      browserSession.setUserAgent(guestUserAgent);
       configureBrowserPermissionHandlers(browserSession, (contents) => {
         if (!contents || contents.isDestroyed()) return undefined;
         const owned = [...this.tabs.values()].some(
@@ -449,7 +447,13 @@ export class BrowserService {
         } catch {
           // Navigation/disposal can invalidate frame handles synchronously.
         }
-        callback({ requestHeaders: browserPreviewRequestHeaders(details.requestHeaders, authorization) });
+        callback({
+          requestHeaders: applyBrowserGuestIdentityHeaders(
+            browserPreviewRequestHeaders(details.requestHeaders, authorization),
+            guestUserAgent,
+            details.url,
+          ),
+        });
       });
       browserSession.on("will-download", (_event, item, wc) => {
         if (![...this.tabs.values()].some((t) => t.view.webContents === wc)) {
@@ -796,9 +800,10 @@ export class BrowserService {
     if (workspace.state.tabs.length >= BROWSER_MAX_TABS)
       throw new Error(`Close a browser tab before opening more than ${BROWSER_MAX_TABS}.`);
     const normalized = browserUrl(url);
+    const browserSession = this.browserSession(profileId);
     const view = new WebContentsView({
       webPreferences: {
-        session: this.browserSession(profileId),
+        session: browserSession,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -807,6 +812,7 @@ export class BrowserService {
         backgroundThrottling: false,
       },
     });
+    view.webContents.setUserAgent(browserSession.getUserAgent());
     const state: BrowserTab = {
       id: `browser-${randomUUID()}`,
       workspaceId,

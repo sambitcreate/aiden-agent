@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SubagentMcpScopeV2 } from "./authority-v2.js";
 import { subagentMcpEffectProfileFingerprintV2 } from "./authority-v2.js";
+import { DEVICE_TOOL_NAMES, isDeviceToolName } from "../devices/device-tools.js";
+import { buildSubagentCapabilityTools } from "./capability-tools.js";
 import { effectiveSubagentTaskCapabilities, parseSubagentToolRequest } from "./contracts.js";
 import {
   MAX_SUBAGENT_MODEL_MCP_NAME_BYTES,
@@ -103,6 +105,25 @@ test("legacy calls keep the workspace-read-only default", () => {
       }),
     /capability request/u,
   );
+});
+
+test("implementer omission requests write and shell without widening omitted read roles", () => {
+  const request = parseSubagentToolRequest({ tasks: [
+    { role: "implementer", label: "Code", task: "Make the change." },
+    { role: "scout", label: "Inspect", task: "Inspect the tree." },
+  ] });
+  assert.equal(request.capabilities?.workspaceWrite, true);
+  assert.equal(request.capabilities?.shell, true);
+  assert.deepEqual(effectiveSubagentTaskCapabilities(request, request.tasks[0]!), {
+    workspaceRead: true, workspaceWrite: true, shell: true, delegate: false,
+    web: false, mcp: [],
+  });
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).workspaceWrite, false);
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).shell, false);
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[0]!).delegate, false);
+  assert.throws(() => parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Code.", maxTurns: 72 }],
+  }), /read-only capabilities/u);
 });
 
 test("omitted root capabilities infer the exact mixed child lanes", () => {
@@ -613,4 +634,27 @@ test("hostile inventories stay within per-scope, total, and model-context byte c
   assert.ok(toolCount <= MAX_SUBAGENT_MODEL_MCP_TOOLS);
   assert.ok(nameBytes <= MAX_SUBAGENT_MODEL_MCP_NAME_BYTES);
   assert.equal(JSON.stringify(projection).length < 8_000, true);
+});
+
+test("subagents can never request or receive simulator device tools", () => {
+  for (const extra of [{ devices: true }, { device: true }, { device_open: true }]) {
+    assert.throws(
+      () =>
+        parseSubagentToolRequest({
+          capabilities: { workspaceRead: true, web: false, mcp: [], ...extra },
+          tasks: [{ role: "scout", label: "Device", task: "Open a simulator." }],
+        }),
+      // The closed capability shape rejects any device key, not a generic parse failure.
+      /^Error: Invalid subagent capability request\.$/u,
+      JSON.stringify(extra),
+    );
+  }
+  for (const role of ["scout", "planner", "reviewer"]) {
+    const { tools } = buildSubagentCapabilityTools({
+      workspaceRoot: process.cwd(),
+      permission: "full",
+      capabilityProfile: { kind: "subagent", role, featurePolicy: [...DEVICE_TOOL_NAMES] },
+    });
+    assert.deepEqual(tools.filter(({ name }) => isDeviceToolName(name)), [], role);
+  }
 });

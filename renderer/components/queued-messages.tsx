@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   ArrowDown,
   ArrowUp,
-  CornerDownRight,
   FileText,
   GripVertical,
   MoreHorizontal,
@@ -13,13 +12,9 @@ import { type ChatMessageQueue, type QueuedChatMessage } from "../lib/chat-messa
 
 export function QueuedMessages({
   queue,
-  canSteer,
-  onSteer,
   returnFocus,
 }: {
   queue: ChatMessageQueue;
-  canSteer: boolean;
-  onSteer: (id: string) => void;
   returnFocus: () => HTMLElement | null;
 }) {
   const state = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot);
@@ -99,17 +94,6 @@ export function QueuedMessages({
             <span className="min-w-0 flex-1 truncate text-regular" title={message.text}>
               {message.text || message.attachments.map((attachment) => attachment.name).join(", ")}
             </span>
-            <Button
-              variant="transparent"
-              size="small"
-              disabled={!canSteer || Boolean(state.sendingId || editing)}
-              onClick={() => onSteer(message.id)}
-              aria-label={`Steer with queued message ${index + 1}`}
-              title="Stop the current response, wait for it to save, then send this message next"
-            >
-              <CornerDownRight aria-hidden="true" />
-              Steer
-            </Button>
             <Button
               variant="transparent"
               size="small"

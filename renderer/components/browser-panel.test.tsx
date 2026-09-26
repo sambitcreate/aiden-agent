@@ -35,11 +35,16 @@ test("native browser hides behind app overlays and never closes tabs on panel hi
   const source = readFileSync(new URL("./browser-panel.tsx", import.meta.url), "utf8");
   assert.ok(source.includes('action: "present", tabId, visible: false'));
   assert.ok(source.includes('enqueueBrowserPresentation(presentationKey'));
-  assert.ok(source.includes('[role="dialog"], [role="alertdialog"], [data-slot="popover-content"]'));
+  assert.ok(source.includes("browserNativeViewObstructed"));
+  assert.ok(source.includes("visibleBrowserNativeOccluders"));
   assert.ok(source.includes('action: "annotate", tabId: tab.id, enabled: false'));
   assert.ok(source.includes('aria-keyshortcuts="Meta+."'));
   assert.ok(source.includes('aria-label="Browser tabs"'));
   assert.equal(DEFAULT_BROWSER_SETTINGS.agentAccess, "allow");
+  const main = readFileSync(new URL("../../main/services/browser/service.ts", import.meta.url), "utf8");
+  assert.ok(main.includes("browserGuestUserAgent"));
+  assert.ok(main.includes("applyBrowserGuestIdentityHeaders"));
+  assert.ok(main.includes("view.webContents.setUserAgent"));
 });
 
 test("HTML and PDF files expose a saved workspace file preview through the browser service", () => {
