@@ -2218,6 +2218,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </>
         }
         autoScrollToBottom
+        autoScrollResetKey={chatId}
         autoScrollDeps={[
           messages.length,
           displayedStreamingText,

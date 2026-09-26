@@ -4,6 +4,77 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    @MainActor
+    func testCachedDocumentDoesNotDisableLiveTreePaging() {
+        let model = AidenWorkspaceFilesModel(workspace: AidenWorkspace(
+            id: "workspace", name: "Workspace", permission: .ask, hasFolder: true,
+            isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
+            createdAt: .now, updatedAt: .now, revision: "r1"
+        ))
+        model.isOfflineIndex = false
+        model.isOfflineDocument = true
+        XCTAssertTrue(model.canLoadPage)
+        XCTAssertFalse(model.canEditDocument)
+        model.isOfflineIndex = true
+        model.isOfflineDocument = false
+        XCTAssertFalse(model.canLoadPage)
+        XCTAssertTrue(model.canEditDocument)
+    }
+
+    func testLazyTreeVisibilitySearchAndBoundedPreview() {
+        let entries: [AidenWorkspaceFileEntry] = [
+            .init(id: "dir", displayPath: "src", name: "src", kind: .directory, size: nil, language: nil),
+            .init(id: "file", displayPath: "src/main.swift", name: "main.swift", kind: .file, size: nil, language: nil)
+        ]
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "").map(\.id), ["dir"])
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: ["src"], search: "").count, 2)
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "main").count, 2)
+        XCTAssertTrue(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "missing").isEmpty)
+        XCTAssertEqual(AidenWorkspaceSourcePreview.lines(String(repeating: "line\n", count: 10_000)).count, 2_001)
+        XCTAssertTrue(AidenWorkspaceSourcePreview.lines(String(repeating: "x", count: 10_000))[0].hasSuffix("[line clipped]"))
+    }
+
+    func testWorkspaceLinksNeverAcceptOutsidePathsOrSchemes() {
+        XCTAssertEqual(AidenWorkspaceFileLink.path("./src/hello%20world.swift"), "src/hello world.swift")
+        for value in ["../secret", "./../secret", "./%2e%2e/secret", "./%2Fsecret", "file:///secret", "/secret", "~/secret", "https://example.com", "./a%00b", "./a\\b", "./a#L2", "./a?x=y", "./a//b"] {
+            XCTAssertNil(AidenWorkspaceFileLink.path(value), value)
+        }
+    }
+
+    func testLazyPageContractRejectsForeignChildrenAndBadCursors() throws {
+        var page = AidenWorkspaceFileIndex(snapshotId: "page", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20, directoryPath: "")
+        XCTAssertNoThrow(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        page.nextCursor = "../secret"
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        page.nextCursor = nil
+        page.directoryPath = "../secret"
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+    }
+
+    func testSharedLazyPageFixtureDecodes() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["filePage"]))
+        let page = try AidenRemoteJSONDecoder.decode(AidenWorkspaceFileIndex.self, from: data)
+        XCTAssertNoThrow(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        XCTAssertEqual(page.entries.first?.kind, .directory)
+    }
+
+    func testRelativeLinksCacheWithoutIndexAndSurvivePartialRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = AidenWorkspaceEnvironmentCache(directory: directory)
+        let document = AidenWorkspaceFileDocument(id: "file_" + String(repeating: "a", count: 43), displayPath: "src/App.swift", content: "cached", version: "v1", truncated: false, warning: nil)
+        try await cache.store(document: document, instanceId: "mac", workspaceId: "workspace")
+        try await cache.store(index: AidenWorkspaceFileIndex(snapshotId: "fresh", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20, directoryPath: ""), instanceId: "mac", workspaceId: "workspace")
+        let cached = await cache.document(reference: "./src/App.swift", instanceId: "mac", workspaceId: "workspace")
+        XCTAssertEqual(cached, document)
+        let other = await cache.document(reference: "./src/App.swift", instanceId: "other", workspaceId: "workspace")
+        XCTAssertNil(other)
+        let escape = await cache.document(reference: "./../src/App.swift", instanceId: "mac", workspaceId: "workspace")
+        XCTAssertNil(escape)
+    }
+
     override func tearDown() {
         EnvironmentMockURLProtocol.handler = nil
         super.tearDown()
@@ -34,6 +105,37 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
             {"snapshotId":"files-1","entries":[],"truncated":false,"maxEntries":4000,"maxDepth":20,"repositoryPath":"/private/project"}
             """.utf8)
         ))
+    }
+
+    func testLazySaveAcceptsRotatedHandleAndRebindsTreeEntry() throws {
+        let oldID = "file_\(String(repeating: "a", count: 43))"
+        let newID = "file_\(String(repeating: "b", count: 43))"
+        let otherID = "file_\(String(repeating: "c", count: 43))"
+        let saved = AidenWorkspaceFileDocument(
+            id: newID, displayPath: "Sources/App.swift", content: "x", version: "v2", truncated: false, warning: nil
+        )
+        XCTAssertEqual(try AidenWorkspaceEnvironmentValidation.validatedSave(saved, expectedDisplayPath: "Sources/App.swift"), saved)
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedSave(saved, expectedDisplayPath: "Sources/Other.swift"))
+        let unsafe = AidenWorkspaceFileDocument(
+            id: "../escape", displayPath: "Sources/App.swift", content: "x", version: "v2", truncated: false, warning: nil
+        )
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedSave(unsafe, expectedDisplayPath: "Sources/App.swift"))
+
+        var index = AidenWorkspaceFileIndex(
+            snapshotId: "files-1",
+            entries: [
+                .init(id: oldID, displayPath: "Sources/App.swift", name: "App.swift", kind: .file, size: 1, language: "Swift"),
+                .init(id: otherID, displayPath: "Sources/Other.swift", name: "Other.swift", kind: .file, size: nil, language: nil),
+            ],
+            truncated: false, maxEntries: 4_000, maxDepth: 20
+        )
+        index.directoryPath = ""
+        let rebound = index.rebinding(fileID: oldID, to: newID)
+        XCTAssertEqual(rebound.entries.map(\.id), [newID, otherID])
+        XCTAssertEqual(rebound.entries[0].displayPath, "Sources/App.swift")
+        XCTAssertEqual(rebound.entries[0].language, "Swift")
+        XCTAssertEqual(rebound.directoryPath, "")
+        XCTAssertEqual(index.rebinding(fileID: oldID, to: oldID), index)
     }
 
     func testEnvironmentCacheIsInstallationAndWorkspaceScoped() async throws {
@@ -96,6 +198,7 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
 
     func testClientUsesOpaqueFileRoutesAndConfirmedGitMutationHeaders() async throws {
         let fileID = "file_\(String(repeating: "f", count: 43))"
+        let savedFileID = "file_\(String(repeating: "g", count: 43))"
         let snapshotID = "snap_\(String(repeating: "s", count: 43))"
         let recorder = EnvironmentRequestRecorder()
         EnvironmentMockURLProtocol.handler = { request in
@@ -111,8 +214,9 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
                 {"id":"\(fileID)","displayPath":"App.swift","content":"let value = 1\\n","version":"version-1","truncated":false}
                 """)
             case ("PUT", "/api/aiden/v1/workspaces/workspace-1/files/\(fileID)"):
+                // Lazy saves install a new inode and return a fresh handle.
                 return Self.response(request, 200, """
-                {"id":"\(fileID)","displayPath":"App.swift","content":"let value = 2\\n","version":"version-2","truncated":false}
+                {"id":"\(savedFileID)","displayPath":"App.swift","content":"let value = 2\\n","version":"version-2","truncated":false}
                 """)
             case ("GET", "/api/aiden/v1/workspaces/workspace-1/git/review"):
                 return Self.response(request, 200, """
@@ -140,12 +244,14 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
 
         _ = try await client.workspaceFiles(workspaceId: "workspace-1")
         let document = try await client.workspaceFile(workspaceId: "workspace-1", fileId: fileID)
-        _ = try await client.writeWorkspaceFile(
+        let saved = try await client.writeWorkspaceFile(
             workspaceId: "workspace-1",
             fileId: fileID,
+            displayPath: document.displayPath,
             content: "let value = 2\n",
             expectedVersion: document.version
         )
+        XCTAssertEqual(saved.id, savedFileID)
         _ = try await client.gitReview(workspaceId: "workspace-1")
         _ = try await client.createGitWorktree(
             workspaceId: "workspace-1",

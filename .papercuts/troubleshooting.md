@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- 2026-09-25 transcript open-at-bottom: Hermex's `defaultScrollAnchor(.bottom, for: .initialOffset)` plus a size-change bottom anchor is the first-paint solution; `ScrollViewProxy.scrollTo` in `onAppear` is only a fallback after the destination is visible. Desktop long-chat follow should observe one content wrapper, not a subtree MutationObserver.
 - 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
 - 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
 - 2026-09-21 Subagents layout: this fresh worktree had no `node_modules`; focused `tsx`, TypeScript, and ESLint commands failed on missing packages until `npm ci`. Check dependency installation before interpreting those failures as code regressions.
@@ -1021,6 +1022,17 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
 
+## 2026-09-22 — Native workspace browser validation
+
+- The isolated worktree retained workspace-write restrictions despite the global full-access preference. Git common-directory writes, gh network, tsx IPC, and native tool services needed tool-level escalation. Routine work remained authorized; no policy overrides were written.
+- An initially borrowed node_modules directory had thinking-orbs 0.1.1 while this branch locks 0.3.1, causing unrelated aiden-live-orb type failures. Removed only the symlink and ran local `npm ci --ignore-scripts`; do not modify the coordinator's dependencies.
+- Missed nested `ios/AGENTS.md` before initially using a simulator destination. One simulator XCTest run completed before coordinator flagged the prohibition. Its results are explicitly excluded from permitted acceptance. Read the nested agreement, stopped further simulator work, switched to generic physical-platform compile, and joined the coordinated physical-device queue. Check nested AGENTS before any next native command.
+- Canonical Remote fixture changes require copying to `android/app/src/test/resources/contract.json`; the byte-for-byte guard caught the initially stale copy.
+
+- 2026-09-22 PR222 incremental review: managed sandbox blocks Git worktree index writes, gh network, router-test localhost binds, and Gradle's home lock. Connector reads still work. Build helper strips TMPDIR; direct clang with TMPDIR=/private/tmp successfully builds within allowed paths. Keep local fixes uncommitted and report restrictions; never bypass permissions or count blocked suites as passed.
+
+- 2026-09-23: Strict native ancestor traversal exposed persisted worktree /var alias paths during snapshot capture (PR222 CI). Canonicalize transfer identity paths but preserve saved dev/inode; cover alias compatibility and post-canonicalization substitutions. Lifecycle capacity test also transiently failed exact equality between two live statfs samples; focused recheck passed.
+
 ## MCP resources — 2026-09-22
 SDK UriTemplate.variableNames preserves duplicates: deduplicate before exact input-key validation. resources/read content URIs may differ from the requested URI; bound/project as data without minting handles. Cache only successful inventory or clear the same failed discovery promise so cancellation does not poison later calls.
 
@@ -1126,6 +1138,9 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+
+- 2026-09-25 PR #250 review fix: Pullfrog can drop an inline finding whose line misses a diff hunk; the review body only names the file and line. The full comment text is in the Pullfrog workflow log (`gh run view <run> --log`, search the posted `"line":` payloads). Also, a fresh agent worktree without its own `node_modules` resolves the parent checkout's packages and reports false `tsc` errors; run `npm ci --ignore-scripts` first.
+- 2026-09-25 PR #222 fixer: fresh worktrees lack `build/native/aiden-worktree-file-io{,-test}`, so lazy remote-file and native tests fail with ENOENT/"cannot currently be listed" until `npm run build:worktree-file-io` and `node scripts/build-worktree-file-io.mjs --test` run. Android Gradle needs `JAVA_HOME` (Android Studio jbr) and `ANDROID_HOME=~/Library/Android/sdk` on this host.
 # Pi 0.87.1 pin migration
 
 - The 0.87.1 typecheck exposed a larger session API break than the digest listed: `InMemorySessionRepo`, `buildSessionContext`, v4 JSONL header shape, and append/move methods changed. Recheck persisted journal compatibility before treating a clean prompt migration as shippable.
