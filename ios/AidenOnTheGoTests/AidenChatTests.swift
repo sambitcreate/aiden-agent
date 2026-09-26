@@ -912,6 +912,121 @@ final class AidenChatTests: XCTestCase {
         model.stopProgressObservation()
     }
 
+    /// Makes the winner's chat file write fail after its memory admission:
+    /// "missing" leaves no readable file, "stale" leaves an older snapshot.
+    private func failWinnerDiskWrite(root: URL, mode: String) throws {
+        let chats = root.appending(path: "chats")
+        if mode == "missing" {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: chats)
+            try Data("blocked directory".utf8).write(to: chats)
+        } else {
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: chats.path(percentEncoded: false))
+        }
+    }
+
+    private func restoreChatsDirectory(root: URL) {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appending(path: "chats").path(percentEncoded: false))
+    }
+
+    @MainActor
+    func testSupersededSendRebasesOnAdmittedWinnerWhenItsDiskWriteFails() async throws {
+        for mode in ["missing", "stale"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-superseded-turn-io-\(UUID())")
+            defer { restoreChatsDirectory(root: root); try? FileManager.default.removeItem(at: root) }
+            let gate = AidenChatWriteTestGate()
+            let cache = AidenChatCache(root: root, beforeChatWrite: { await gate.waitIfArmed() })
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+            let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                if request.url?.path.hasSuffix("/turns") == true {
+                    return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+                }
+                return fixture.response(request)
+            }
+            await model.load()
+            let instance = "instance-progress-lifecycle"
+            if mode == "stale" {
+                var older = model.chat
+                older.title = "Older disk snapshot"
+                try await cache.saveChat(older, instanceId: instance, writeToken: cache.reserveChatWrite())
+            }
+            model.draft = "Hello"
+            XCTAssertTrue(model.canSend, mode)
+            await gate.arm()
+            let sending = Task { await model.send() }
+            await waitForChatWrite(gate)
+            try failWinnerDiskWrite(root: root, mode: mode)
+            var newer = model.chat
+            newer.title = "Newer snapshot"
+            do {
+                try await cache.saveChat(newer, instanceId: instance, writeToken: cache.reserveChatWrite())
+                XCTFail("The winner's disk write must fail (\(mode))")
+            } catch {}
+            let disk = await cache.loadChat(instanceId: instance, chatId: model.chat.id)
+            XCTAssertEqual(disk?.title, mode == "stale" ? "Older disk snapshot" : nil, mode)
+            await gate.release()
+            await sending.value
+            let stream = await cache.loadActiveStream(instanceId: instance, chatId: model.chat.id)
+            XCTAssertEqual(stream?.streamId, "stream-recovery", mode)
+            let admitted = await cache.admittedChat(instanceId: instance, chatId: model.chat.id)
+            XCTAssertEqual(admitted?.title, "Newer snapshot", mode)
+            XCTAssertTrue(admitted?.messages.contains { $0.id == "accepted-message" } == true, mode)
+            XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" }, mode)
+            fixture.allowReconciliation = true
+            for _ in 0..<200 {
+                if await cache.loadActiveStream(instanceId: instance, chatId: model.chat.id) == nil { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            model.stopProgressObservation()
+        }
+    }
+
+    @MainActor
+    func testSupersededCreateKeepsAdmittedWinnerRowWhenItsDiskWriteFails() async throws {
+        for mode in ["missing", "stale"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-superseded-create-io-\(UUID())")
+            defer { restoreChatsDirectory(root: root); try? FileManager.default.removeItem(at: root) }
+            let gate = AidenChatWriteTestGate()
+            let cache = AidenChatCache(root: root, beforeChatWrite: { await gate.waitIfArmed() })
+            var workspace: AidenWorkspaceChatsModel!
+            var publications: [AidenChat] = []
+            var removals: [String] = []
+            let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
+            })
+            let instance = "instance-progress-lifecycle"
+            if mode == "stale" {
+                var older = detail.chat
+                older.title = "Older disk snapshot"
+                try await cache.saveChat(older, instanceId: instance, writeToken: cache.reserveChatWrite())
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(detail.chat)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                guard request.url?.path.hasSuffix("/chats") == true, request.httpMethod == "POST" else { return nil }
+                return (201, "application/json", data)
+            }
+            await gate.arm()
+            let creating = Task { await workspace.create() }
+            await waitForChatWrite(gate)
+            try failWinnerDiskWrite(root: root, mode: mode)
+            var newer = detail.chat
+            newer.title = "Newer snapshot"
+            do {
+                try await cache.saveChat(newer, instanceId: instance, writeToken: cache.reserveChatWrite())
+                XCTFail("The winner's disk write must fail (\(mode))")
+            } catch {}
+            await gate.release()
+            let created = await creating.value
+            XCTAssertEqual(created?.title, newer.title, mode)
+            XCTAssertEqual(workspace.chats.first { $0.id == newer.id }?.title, newer.title, mode)
+            XCTAssertEqual(publications.map(\.title), [newer.title], mode)
+            XCTAssertEqual(removals, [], mode)
+        }
+    }
+
     @MainActor
     func testAcceptedCreateSurvivesUnrelatedRowAndEmptyListUpdates() async throws {
         for refresh in [false, true] {
