@@ -143,6 +143,12 @@ test("clone and fork copy visible linear history with fresh identities", async (
     }),
     /workspace changed/iu,
   );
+  await store.remove(chat.id);
+  const afterDeletion = createChatStore(async () => directory);
+  for (const copy of [clone, fork]) {
+    assert.deepEqual((await afterDeletion.get(copy.id))?.messages[0]?.attachments,
+      [{ id: "attachment-one", name: "note.txt", mimeType: "text/plain", kind: "text", size: 4, text: "note" }]);
+  }
 });
 
 test("bulk copies use collision-resistant identities even when Math.random repeats", async (t) => {

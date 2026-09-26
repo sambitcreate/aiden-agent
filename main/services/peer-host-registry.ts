@@ -13,6 +13,7 @@ import {
 } from "./peer-pairing.js";
 import {
   PeerTransport,
+  PeerTransportError,
   validatePeerTrust,
   type PeerRequest,
   type PeerTrust,
@@ -370,7 +371,17 @@ export class PeerHostRegistry {
       this.states.set(id, "connected");
       return result;
     } catch (error) {
-      if (current()) {
+      // A 4xx is an answer from a reachable, verified peer, e.g. an older Aiden
+      // without an optional route. 401/403 arrive as authentication_required.
+      const answered =
+        error instanceof PeerTransportError &&
+        error.code === "request_failed" &&
+        error.status !== undefined &&
+        error.status >= 400 &&
+        error.status < 500;
+      if (current() && answered) {
+        this.states.set(id, "connected");
+      } else if (current()) {
         this.states.set(id, "unavailable");
         this.verified.delete(id);
       }
@@ -380,6 +391,29 @@ export class PeerHostRegistry {
       this.active.get(id)?.delete(controller);
       if (this.active.get(id)?.size === 0) this.active.delete(id);
     }
+  }
+
+  /**
+   * Pinned trust and credential for an enabled host, for main's simulator relay
+   * upstream. Callers must never pass either to a renderer.
+   */
+  relayTarget(
+    id: string,
+  ): Promise<{ trust: PeerTrust; credential: string } | null> {
+    return this.locked(async () => {
+      const found = (await this.load()).find((host) => host.id === id);
+      if (!found?.enabled) return null;
+      return {
+        trust: {
+          endpoint: found.endpoint,
+          serverSpkiSha256: found.serverSpkiSha256,
+          ...(found.caCertificateDerBase64
+            ? { caCertificateDerBase64: found.caCertificateDerBase64 }
+            : {}),
+        },
+        credential: found.credential,
+      };
+    });
   }
 
   close(): void {

@@ -7,6 +7,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Smartphone,
   X,
 } from "lucide-react";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
 import { BrowserPanel } from "./browser-panel";
+import { DevicesPanel } from "./devices-panel";
 import { ReviewPanel } from "./review-panel";
 import { SubagentOrb } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
@@ -41,7 +43,7 @@ import {
 } from "../lib/environment-panel-layout";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
-import { browserApi, subagentsApi } from "../lib/ipc";
+import { browserApi, devicesApi, subagentsApi } from "../lib/ipc";
 import { type SubagentEffectActivityV1, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   buildSubagentRunViews,
@@ -72,6 +74,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   availableEnvironmentPanelTabs,
   normalizeEnvironmentPanelTab,
+  parseEnvironmentPanelTab,
   reduceEnvironmentSurfaceState,
   shouldRestoreEnvironmentFocus,
   type EnvironmentSurfaceMode,
@@ -106,14 +109,23 @@ interface EnvironmentFileRequest {
   workspaceId: string;
 }
 
+interface EnvironmentActiveChat {
+  chatId: string | null;
+  workspaceId: string | null;
+}
+
 interface EnvironmentPanelContextValue {
   toolsOpen: boolean;
+  /** Chat currently presented in the main pane; drives chat-scoped PR actions. */
+  activeChat: EnvironmentActiveChat;
+  setActiveChat: (chatId: string | null, workspaceId: string | null) => void;
   quickViewOpen: boolean;
   frontSurface: EnvironmentSurface | null;
   surfaceMode: EnvironmentSurfaceMode;
   dockRightInset: number;
   tab: EnvironmentPanelTab;
   subagentsEnabled: boolean;
+  devicesEnabled: boolean;
   reviewMode: EnvironmentReviewMode;
   fileRequest: EnvironmentFileRequest | null;
   closeAll: () => void;
@@ -178,6 +190,8 @@ const EMPTY_EDITOR_STATE: FilesEditorState = {
   dirty: false,
   saving: false,
 };
+const EMPTY_ACTIVE_CHAT: EnvironmentActiveChat = { chatId: null, workspaceId: null };
+
 const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   chatId: null,
   workspaceId: null,
@@ -196,19 +210,28 @@ function storedPanelWidth(): number {
     : DEFAULT_PANEL_WIDTH;
 }
 
-function storedLastToolsTab(currentTab: EnvironmentPanelTab, subagentsEnabled: boolean) {
-  const stored = localStorage.getItem(LAST_TOOLS_TAB_STORAGE_KEY);
-  if (stored === "files" || stored === "review" || stored === "browser") return stored;
-  if (stored === "subagents" && subagentsEnabled) return stored;
-  return normalizeEnvironmentPanelTab(currentTab, subagentsEnabled);
+interface EnvironmentTabCapabilities {
+  subagentsEnabled: boolean;
+  devicesEnabled: boolean;
 }
 
-function initialEnvironmentSurfaceState(subagentsEnabled: boolean): EnvironmentSurfaceState {
+function storedLastToolsTab(
+  currentTab: EnvironmentPanelTab,
+  { subagentsEnabled, devicesEnabled }: EnvironmentTabCapabilities,
+) {
+  const stored = parseEnvironmentPanelTab(localStorage.getItem(LAST_TOOLS_TAB_STORAGE_KEY));
+  if (stored && normalizeEnvironmentPanelTab(stored, subagentsEnabled, devicesEnabled) === stored) {
+    return stored;
+  }
+  return normalizeEnvironmentPanelTab(currentTab, subagentsEnabled, devicesEnabled);
+}
+
+function initialEnvironmentSurfaceState(
+  capabilities: EnvironmentTabCapabilities,
+): EnvironmentSurfaceState {
   const rawTab = localStorage.getItem(TAB_STORAGE_KEY);
   const storedTab: EnvironmentPanelTab =
-    rawTab === "review" || rawTab === "subagents" || rawTab === "files" || rawTab === "browser"
-      ? rawTab
-      : storedLastToolsTab("review", subagentsEnabled);
+    parseEnvironmentPanelTab(rawTab) ?? storedLastToolsTab("review", capabilities);
   const migrated = localStorage.getItem(SURFACE_STORAGE_VERSION_KEY) === "2";
   if (!migrated) {
     const legacyOpen = localStorage.getItem(OPEN_STORAGE_KEY) === "1";
@@ -243,20 +266,36 @@ function initialEnvironmentSurfaceState(subagentsEnabled: boolean): EnvironmentS
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
   const { activeId } = useActiveWorkspace();
   useBrowserLinks(activeId);
-  const { subagents: subagentsEnabled } = useAppCapabilities();
+  const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
   const [surfaceState, dispatchSurface] = React.useReducer(
     reduceEnvironmentSurfaceState,
-    subagentsEnabled,
+    { subagentsEnabled, devicesEnabled },
     initialEnvironmentSurfaceState,
   );
   const [surfaceLayout, setSurfaceLayout] = React.useState({ inline: false, width: 0 });
-  const tab = normalizeEnvironmentPanelTab(surfaceState.toolsTab, subagentsEnabled);
+  const tab = normalizeEnvironmentPanelTab(
+    surfaceState.toolsTab,
+    subagentsEnabled,
+    devicesEnabled,
+  );
   const [reviewMode, setReviewMode] = React.useState<EnvironmentReviewMode>("changes");
   const [fileRequest, setFileRequest] = React.useState<EnvironmentFileRequest | null>(null);
   const [editorState, setEditorState] = React.useState<FilesEditorState>(EMPTY_EDITOR_STATE);
   const [agentBusy, setAgentBusy] = React.useState(false);
   const [subagents, setRenderedSubagents] =
     React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
+  const [activeChat, setActiveChatState] =
+    React.useState<EnvironmentActiveChat>(EMPTY_ACTIVE_CHAT);
+  const setActiveChat = React.useCallback(
+    (chatId: string | null, workspaceId: string | null) => {
+      setActiveChatState((current) =>
+        current.chatId === chatId && current.workspaceId === workspaceId
+          ? current
+          : { chatId, workspaceId },
+      );
+    },
+    [],
+  );
   const subagentsRef = React.useRef<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
   const commitSubagents = React.useCallback(
     (
@@ -366,7 +405,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
 
   const showTools = React.useCallback(
     (nextTab?: EnvironmentPanelTab) => {
-      const resolvedTab = nextTab ? normalizeEnvironmentPanelTab(nextTab, subagentsEnabled) : tab;
+      const resolvedTab = nextTab
+        ? normalizeEnvironmentPanelTab(nextTab, subagentsEnabled, devicesEnabled)
+        : tab;
       const activeElement = document.activeElement;
       const focusOutsideSurface =
         activeElement instanceof HTMLElement &&
@@ -374,7 +415,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       if (!surfaceState.toolsOpen || focusOutsideSurface) rememberFocus("tools");
       dispatchSurface({ type: "show-tools", tab: resolvedTab });
     },
-    [rememberFocus, subagentsEnabled, surfaceState.toolsOpen, tab],
+    [devicesEnabled, rememberFocus, subagentsEnabled, surfaceState.toolsOpen, tab],
   );
 
   const restoreSurfaceFocus = React.useCallback((surface: EnvironmentSurface) => {
@@ -436,10 +477,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
 
   const setTab = React.useCallback(
     (nextTab: EnvironmentPanelTab) => {
-      const resolvedTab = normalizeEnvironmentPanelTab(nextTab, subagentsEnabled);
+      const resolvedTab = normalizeEnvironmentPanelTab(nextTab, subagentsEnabled, devicesEnabled);
       dispatchSurface({ type: "show-tools", tab: resolvedTab });
     },
-    [subagentsEnabled],
+    [devicesEnabled, subagentsEnabled],
   );
 
   const toggleTools = React.useCallback(() => {
@@ -479,6 +520,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   React.useEffect(() => browserApi.onEvent((event) => {
     if (event.type === "show" && event.workspaceId === (activeId ?? "default")) showTools("browser");
   }), [activeId, showTools]);
+
+  const revealChatId = activeChat.chatId;
+  React.useEffect(() => {
+    if (!devicesEnabled) return undefined;
+    return devicesApi.onReveal((chatId) => {
+      if (chatId === revealChatId) showTools("devices");
+    });
+  }, [devicesEnabled, revealChatId, showTools]);
 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
@@ -943,12 +992,15 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const value = React.useMemo(
     () => ({
       toolsOpen: surfaceState.toolsOpen,
+      activeChat,
+      setActiveChat,
       quickViewOpen: surfaceState.quickViewOpen,
       frontSurface: surfaceState.frontSurface,
       surfaceMode,
       dockRightInset,
       tab,
       subagentsEnabled,
+      devicesEnabled,
       reviewMode,
       fileRequest,
       closeAll,
@@ -1008,6 +1060,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       setCreateWorktreeHandler,
     }),
     [
+      activeChat,
+      setActiveChat,
       activeEditorState,
       agentBusy,
       announceSubagentDetail,
@@ -1050,6 +1104,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentCounts,
       subagentViews,
       subagentsEnabled,
+      devicesEnabled,
       surfaceMode,
       surfaceState.frontSurface,
       surfaceState.quickViewOpen,
@@ -1112,7 +1167,7 @@ function EnvironmentPanelSurface({
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
   const representativeSubagent =
     panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
-  const panelTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled);
+  const panelTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled, panel.devicesEnabled);
   widthRef.current = width;
 
   React.useLayoutEffect(() => {
@@ -1253,8 +1308,24 @@ function EnvironmentPanelSurface({
         >
           {panelTabs.map((tab) => {
             const selected = panel.tab === tab;
-            const Icon = tab === "review" ? GitCompareArrows : tab === "browser" ? Globe : Files;
-            const label = tab === "review" ? "Review" : tab === "subagents" ? "Subagents" : tab === "browser" ? "Browser" : "Files";
+            const Icon =
+              tab === "review"
+                ? GitCompareArrows
+                : tab === "browser"
+                  ? Globe
+                  : tab === "devices"
+                    ? Smartphone
+                    : Files;
+            const label =
+              tab === "review"
+                ? "Review"
+                : tab === "subagents"
+                  ? "Subagents"
+                  : tab === "browser"
+                    ? "Browser"
+                    : tab === "devices"
+                      ? "Simulator"
+                      : "Files";
             return (
               <button
                 key={tab}
@@ -1331,6 +1402,7 @@ function EnvironmentPanelSurface({
         >
           <ReviewPanel
             workspace={active}
+            chatId={panel.activeChat.chatId ?? undefined}
             active={presented && panel.tab === "review"}
             mode={panel.reviewMode}
             onModeChange={panel.openReview}
@@ -1403,6 +1475,24 @@ function EnvironmentPanelSurface({
             onDock={() => panel.showTools("browser")}
           />}
         </div>
+        {panel.devicesEnabled ? (
+          <div
+            id="environment-devices-panel"
+            role="tabpanel"
+            aria-labelledby="environment-devices-tab"
+            hidden={panel.tab !== "devices"}
+            className="h-full min-h-0"
+          >
+            {active && (
+              <DevicesPanel
+                workspaceId={active.id}
+                chatId={panel.activeChat.chatId ?? undefined}
+                active={presented && panel.tab === "devices"}
+                compact={width < 540}
+              />
+            )}
+          </div>
+        ) : null}
       </div>
     </aside>
   );
@@ -1564,6 +1654,7 @@ function QuickViewCard({
             <div className="min-h-0 flex-1">
               <EnvironmentOverview
                 workspace={active}
+                chatId={panel.activeChat.chatId ?? undefined}
                 active={open && presented}
                 presentation="card"
                 mutationBlockedReason={panel.gitMutationBlockedReason}

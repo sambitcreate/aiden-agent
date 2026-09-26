@@ -437,7 +437,10 @@ for (const delivery of ["pending", "committed"] as const) {
       await expect.poll(() => Boolean(releaseNext)).toBe(true);
       if (delivery === "committed") {
         releaseNext!();
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)?.getTitle(), `${url}/next`)).toBe("Next document");
+        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
+          const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === target);
+          return guest && !guest.isLoadingMainFrame() && guest.getTitle();
+        }, `${url}/next`)).toBe("Next document");
       }
       const late = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
       expect(late, `Native state at ${delivery} delivery`).toMatchObject({ loading: delivery === "pending", timers: 0 });

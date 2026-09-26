@@ -305,24 +305,29 @@ object AidenBotPrivateResponseValidator {
         element: kotlinx.serialization.json.JsonElement,
         root: String,
         path: List<String>,
-        rejectPrivateChildFields: Boolean
+        rejectPrivateChildFields: Boolean,
+        regularChat: Boolean = false
     ) {
         when (element) {
             is kotlinx.serialization.json.JsonObject -> {
+                val knownRegularChat = root == "chatProjection" &&
+                    (path.isEmpty() || path == listOf("chats", "[]")) && element.containsKey("messages") &&
+                    element.containsKey("id") && !element.containsKey("botId")
+                val reasoningAllowed = regularChat || knownRegularChat
                 for ((key, child) in element) {
                     if ((normalizedPrivateKeys.contains(normalize(key)) ||
                             (rejectPrivateChildFields &&
                                 (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
-                        !isAllowedKnownIdentityKey(key, root, path)
+                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
-                    validateElement(child, root, path + key, rejectPrivateChildFields)
+                    validateElement(child, root, path + key, rejectPrivateChildFields, reasoningAllowed)
                 }
             }
             is kotlinx.serialization.json.JsonArray -> {
                 for (child in element) {
-                    validateElement(child, root, path + "[]", rejectPrivateChildFields)
+                    validateElement(child, root, path + "[]", rejectPrivateChildFields, regularChat)
                 }
             }
             else -> {}
@@ -372,8 +377,12 @@ object AidenBotPrivateResponseValidator {
     private fun isAllowedKnownIdentityKey(
         key: String,
         root: String,
-        parentPath: List<String>
+        parentPath: List<String>,
+        regularChat: Boolean
     ): Boolean {
+        if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
+            (parentPath == listOf("messages", "[]") ||
+                parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
         if (key != "instructions" && key != "openingGreeting") return false
         if (root in listOf("botDetail", "botArchive", "botRestore")) {
             return parentPath.isEmpty()

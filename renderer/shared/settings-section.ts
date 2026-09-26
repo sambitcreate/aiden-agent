@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "simulator",
   "memory",
   "scheduledTasks",
   "geminiLive",
@@ -104,6 +105,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Computer Use",
     group: "Agent",
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
+  },
+  {
+    id: "simulator",
+    title: "Simulator",
+    group: "Agent",
+    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs"],
   },
   {
     id: "memory",

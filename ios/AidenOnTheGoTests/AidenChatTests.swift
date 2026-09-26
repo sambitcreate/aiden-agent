@@ -1,10 +1,65 @@
+import AVFoundation
 import Foundation
+import Photos
 import SwiftUI
 import UIKit
 import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
+        let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
+        XCTAssertTrue(file.isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: "foo:bar.txt", operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: String(repeating: "😀", count: 121), operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertFalse(AidenProducedFile(relativePath: String(repeating: "😀", count: 241), operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertFalse(file.isValid(toolName: "mcp_write"))
+        XCTAssertFalse(file.isValid(toolName: "edit_file"))
+        for path in ["C:/private", "/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname"] {
+            XCTAssertFalse(AidenProducedFile(relativePath: path, operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        }
+        let data = try JSONEncoder().encode(file)
+        XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
+    }
+
+    func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
+        let regular = """
+        {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}
+        """
+        let decoder = JSONDecoder.aidenRemote()
+        XCTAssertEqual(try decoder.decodeAidenRemote(AidenChat.self, from: Data(regular.utf8)).messages[0].reasoning, "Visible")
+        let bot = regular.replacingOccurrences(of: "\"workspaceId\"", with: "\"botId\":\"bot-1\",\"workspaceId\"")
+        XCTAssertThrowsError(try decoder.decodeAidenRemote(AidenChat.self, from: Data(bot.utf8)))
+    }
+
+    func testChronologicalReasoningSurvivesRemoteDecodeAndKeepsToolOrder() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let message = try decoder.decode(AidenChatMessage.self, from: Data(
+            #"{"id":"message-1","role":"assistant","text":"Before.After.","reasoning":"First\n\nSecond","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1200,"finishedAt":1200,"contentOffset":0,"reasoningStartOffset":0,"reasoningEndOffset":5},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1200,"updatedAt":1400,"finishedAt":1400,"contentOffset":0},{"id":"think-2","order":2,"kind":"thinking","startedAt":1400,"updatedAt":1600,"finishedAt":1600,"contentOffset":7,"reasoningStartOffset":7,"reasoningEndOffset":13}]}}"#.utf8
+        ))
+        XCTAssertTrue(message.isWireSafe)
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: message.text, reasoning: message.reasoning ?? "", timeline: message.timeline)?
+                .map { ($0.kind, $0.text) }
+                .map { "\($0.0):\($0.1)" },
+            ["reasoning:First", "tool:", "text:Before.", "reasoning:Second", "text:After."]
+        )
+        XCTAssertNil(AidenChronologicalProjection.rows(text: message.text, reasoning: "First", timeline: message.timeline))
+        let noReasoningTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: noReasoningTimeline)?
+                .map(\.kind),
+            [.text, .reasoning, .tool, .text]
+        )
+        let legacyTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":2,"generationId":"stream-old","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000}]}"#.utf8
+        ))
+        XCTAssertNil(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: legacyTimeline))
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -220,10 +275,200 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalTapUsesDisplayedIDAndBlocksDuplicateDecisions() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current")
+    }
+
+    @MainActor
+    func testUnknownApprovalResponseRefreshesCurrentRequestWithoutResending() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next")
+    }
+
+    @MainActor
+    func testStopWaitsForHostAndBlocksDuplicateTaps() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current")
+    }
+
+    @MainActor
+    func testLegacyWorkspaceRunStillOffersStop() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .legacyControls)
+    }
+
+    @MainActor
+    func testMismatchedStopAcknowledgementShowsFailure() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .mismatchedStop)
+    }
+
+    @MainActor
+    func testRevokedInstallationCannotRestoreApprovalAfterLateFailure() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current", mode: .revokedControls)
+    }
+
+    @MainActor
+    func testUnsupportedApprovalCapabilityNeverSendsDecision() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current", mode: .unsupportedControls)
+    }
+
+    @MainActor
+    func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let arrived = expectation(description: "pre-response approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { arrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [arrived], timeout: 5)
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        await model.respondToApproval(.allow, approvalID: "approval-current")
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
+    func testAmbiguousResponseDoesNotSupersedeHeldAuthoritativeApproval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let responseArrived = expectation(description: "A response held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/respond") { responseArrived.fulfill() }
+        let response = Task { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        await fulfillment(of: [responseArrived], timeout: 5)
+        let releaseResponse = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let readArrived = expectation(description: "authoritative B read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { readArrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // Any redundant fallback would fail, but must not supersede this admitted read.
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        releaseResponse?()
+        await response.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
+    func testLatestAdmittedApprovalSnapshotWinsOverOlderCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let firstArrived = expectation(description: "older approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { firstArrived.fulfill() }
+        let first = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [firstArrived], timeout: 5)
+        let releaseFirst = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let secondArrived = expectation(description: "newer approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { secondArrived.fulfill() }
+        let second = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        await model.restorePendingApproval(streamID: "stale-stream", context: context)
+        releaseFirst?()
+        await first.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await second.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
+    func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
+    }
+
+    @MainActor
+    private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator?
+        let model = try await makeProgressLifecycleModel(mode: mode, cache: cache) { coordinator = $0 }
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+        await model.respondToApproval(.allow, approvalID: "approval-stale")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+        if mode == .unsupportedControls {
+            await model.respondToApproval(.allow, approvalID: "approval-current")
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+            XCTAssertEqual(model.pendingApproval?.canRespond, false)
+            return
+        }
+        let arrived = expectation(description: "Control request is held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: stop ? "/cancel" : "/respond") { arrived.fulfill() }
+        let task = Task { @MainActor in
+            if stop { await model.stop() }
+            else { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        }
+        await fulfillment(of: [arrived], timeout: 5)
+        if stop {
+            XCTAssertTrue(model.canControlCurrentRun)
+            XCTAssertTrue(model.isStopping)
+            XCTAssertEqual(model.streamState, .waitingForApproval)
+            await model.stop()
+        } else {
+            XCTAssertTrue(model.isRespondingToApproval)
+            await model.respondToApproval(.deny, approvalID: "approval-current")
+        }
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+        if mode == .revokedControls, let coordinator,
+           let installation = coordinator.installationStore.activeInstallation {
+            await coordinator.removeInstallation(installation.id)
+        }
+        AidenChatProgressLifecycleURLProtocol.setApprovalID(nextApproval)
+        if mode == .mismatchedApproval {
+            await model.load(observeProgress: false)
+            XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await task.value
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+        if stop {
+            XCTAssertFalse(model.isStopping)
+            XCTAssertEqual(model.streamState, .waitingForApproval)
+            XCTAssertTrue(model.presentedError?.contains("Stop was not confirmed") == true)
+        } else {
+            XCTAssertFalse(model.isRespondingToApproval)
+            if mode == .revokedControls {
+                XCTAssertNil(model.pendingApproval)
+                XCTAssertFalse(model.canControlCurrentRun)
+            } else {
+                XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            }
+        }
+    }
+
+    @MainActor
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
-        draftStore: AidenChatDraftStore = .shared
+        draftStore: AidenChatDraftStore = .shared,
+        onCoordinator: ((AidenRemoteCoordinator) -> Void)? = nil
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
         let keychain = AidenChatProgressMemoryKeychain()
@@ -234,7 +479,7 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -259,6 +504,7 @@ final class AidenChatTests: XCTestCase {
         )
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
+        onCoordinator?(coordinator)
 
         let chat = try AidenRemoteJSONDecoder.decode(
             AidenChat.self,
@@ -746,6 +992,13 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
     }
 
+    func testFormFillActivityDecodesCountOnlyOutcome() throws {
+        let step = try JSONDecoder().decode(AidenAgentStep.self, from: Data(
+            #"{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"form_fill","label":"Form fill","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"detail":"1 filled · 1 not attempted · stopped early"}"#.utf8
+        ))
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Form fill 1 filled · 1 not attempted · stopped early")
+    }
+
     func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -946,6 +1199,16 @@ final class AidenChatTests: XCTestCase {
             durationMs: 1_000, target: nil, detail: "pi-vcc · 0.4s · ~25900 → 6758 tokens", lineChanges: nil
         )
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Compacted context pi-vcc · 0.4s · ~25900 → 6758 tokens")
+        XCTAssertTrue(AidenAgentActivityPresentation.isCompactContextOnly([step]))
+        let read = AidenAgentStep(
+            id: "read-1", order: 1, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .completed, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: 1_000, target: "README.md", detail: nil, lineChanges: nil
+        )
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, read]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, step]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([]))
         let decoded = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
         XCTAssertEqual(decoded.detail, step.detail)
     }
@@ -1187,6 +1450,7 @@ final class AidenChatTests: XCTestCase {
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "tailscale"), "tailscale")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "gemini"), "google")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "moonshot"), "moonshotai")
@@ -2778,7 +3042,7 @@ final class AidenChatTests: XCTestCase {
             .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
         ])
         await model.stop()
-        await model.respondToApproval(.allow)
+        await model.respondToApproval(.allow, approvalID: "stale")
 
         XCTAssertEqual(rejectedUploads, 1)
         XCTAssertEqual(model.chat, chat)
@@ -2898,9 +3162,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case finite
         case rosterFailsAfterFirst
         case rosterEpochRotates
+        case controls
+        case legacyControls
+        case mismatchedStop
+        case mismatchedApproval
+        case revokedControls
+        case unsupportedControls
     }
 
     private static let lock = NSLock()
+    nonisolated(unsafe) private static var _controlWriteCount = 0
+    nonisolated(unsafe) private static var approvalID = "approval-current"
+    nonisolated(unsafe) private static var approvalReadFails = false
+    static func failApprovalReads() { lock.withLock { approvalReadFails = true } }
+    static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
+    static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
@@ -2917,14 +3193,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() {
-        let completion = lock.withLock {
+    static func takeHeldRequest() -> (@Sendable () -> Void)? {
+        lock.withLock {
             let completion = heldCompletion
             heldCompletion = nil
             return completion
         }
-        completion?()
     }
+
+    static func releaseHeldRequest() { takeHeldRequest()?() }
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -2942,6 +3219,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         releaseHeldRequest()
         lock.lock()
         self.mode = mode
+        _controlWriteCount = 0
+        approvalID = "approval-current"
+        approvalReadFails = false
         _progressRequestCount = 0
         _agentRequestCount = 0
         _turnRequestCount = 0
@@ -2961,16 +3241,46 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         var shouldFinish = true
         switch path {
         case "/api/aiden/v1/server":
-            result = Self.response(
-                for: request,
-                status: 200,
-                contentType: "application/json",
-                data: Data(
-                    """
-                    {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"features":["chat-tasks-v1","chat-agents-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}
-                    """.utf8
-                )
-            )
+            var body: [String: Any] = [
+                "protocolVersion": 1, "instanceId": "instance-progress-lifecycle",
+                "name": "Progress Lifecycle Mac", "appVersion": "1.0",
+                "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write", "tasks:read", "agents:read", "approval:respond"],
+                "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write", "tasks:read", "agents:read", "approval:respond"],
+                "features": ["chat-tasks-v1", "chat-agents-v1"],
+                "connectionMode": "lan", "serverTime": "2026-09-14T12:00:00Z",
+            ]
+            if Self.lock.withLock({ Self.mode == .unsupportedControls }) {
+                body["capabilities"] = (body["capabilities"] as! [String]).filter { $0 != "approval:respond" }
+            }
+            if Self.lock.withLock({ Self.mode == .legacyControls }) {
+                body.removeValue(forKey: "serverCapabilities")
+                body["features"] = [String]()
+                body["capabilities"] = ["server:read", "workspace:read", "chat:read", "chat:write", "approval:respond"]
+            }
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: try! JSONSerialization.data(withJSONObject: body))
+        case "/api/aiden/v1/streams/stream-control":
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+        case "/api/aiden/v1/streams/stream-control/events":
+            shouldFinish = false
+            result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
+        case "/api/aiden/v1/streams/stream-control/approval":
+            if Self.lock.withLock({ Self.approvalReadFails }) {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
+            let id = Self.lock.withLock { Self.approvalID }
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
+                {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
+                """.utf8))
+        case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
+            Self.lock.withLock { Self._controlWriteCount += 1 }
+            if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            } else if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
+                result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-other","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"reconciling","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            } else {
+            result = Self.response(for: request, status: 503, contentType: "application/json", data: Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8))
+            }
         case "/api/aiden/v1/workspaces":
             result = Self.response(
                 for: request,
@@ -3946,5 +4256,276 @@ final class AidenAppearanceTests: XCTestCase {
         let restored = AidenWorkspaceArchiveStore(defaults: defaults)
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["keep"])
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["other-installation"])
+    }
+
+    func testPhotoLibraryUsageDescriptionCoversPickerAndSaveActions() throws {
+        let saveValue = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription") as? String
+        )
+        XCTAssertTrue(saveValue.contains("only when you choose"))
+        XCTAssertTrue(saveValue.contains("Save Image"))
+
+        let pickerValue = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryUsageDescription") as? String
+        )
+        XCTAssertTrue(pickerValue.contains("when you open the attachment picker"))
+        XCTAssertTrue(pickerValue.contains("paired Mac"))
+    }
+
+    func testAttachmentPickerSelectionPreservesTapOrderAndHonorsCapacity() {
+        var selected: [String] = []
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-2", capacity: 2)
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-1", capacity: 2)
+        XCTAssertEqual(selected, ["photo-2", "photo-1"])
+
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-3", capacity: 2)
+        XCTAssertEqual(selected, ["photo-2", "photo-1"])
+
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-2", capacity: 2)
+        XCTAssertEqual(selected, ["photo-1"])
+    }
+
+    func testAttachmentPickerRefreshDropsInaccessibleSelectionAndKeepsOrder() {
+        let selected = ["first", "removed", "last"]
+        XCTAssertEqual(
+            AidenAttachmentPickerPolicy.visibleSelection(selected, visibleIDs: ["last", "first"]),
+            ["first", "last"]
+        )
+        XCTAssertTrue(AidenAttachmentPickerPolicy.visibleSelection(selected, visibleIDs: []).isEmpty)
+    }
+
+    func testPhotoLibraryBoundedRenderingKeepsTransparency() throws {
+        XCTAssertEqual(AidenPhotoLibraryImageLoader.maximumRequestedPixelDimension, 2_048)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        let transparent = UIGraphicsImageRenderer(
+            size: CGSize(width: 32, height: 32), format: format
+        ).image { context in
+            UIColor.red.withAlphaComponent(0.5).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let data = try AidenPhotoLibraryImageLoader.encodedData(from: transparent)
+        XCTAssertTrue(data.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+
+        let opaqueFormat = UIGraphicsImageRendererFormat.default()
+        opaqueFormat.opaque = true
+        let opaque = UIGraphicsImageRenderer(
+            size: CGSize(width: 32, height: 32), format: opaqueFormat
+        ).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let jpeg = try AidenPhotoLibraryImageLoader.encodedData(from: opaque)
+        XCTAssertTrue(jpeg.starts(with: [0xFF, 0xD8]))
+    }
+
+    func testPhotoLibraryTerminalCallbacksAreNotDiscardedAsDegraded() {
+        let degraded: [AnyHashable: Any] = [PHImageResultIsDegradedKey: true]
+        XCTAssertTrue(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult(degraded))
+        XCTAssertFalse(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult([
+            PHImageResultIsDegradedKey: true,
+            PHImageCancelledKey: true,
+        ]))
+        XCTAssertFalse(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult([
+            PHImageResultIsDegradedKey: true,
+            PHImageErrorKey: NSError(domain: "PhotoKitTest", code: 1),
+        ]))
+    }
+
+    func testAttachmentPickerCapacityAndConfirmationCopyAreBounded() {
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 0), 10)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 9), 1)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 12), 0)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 1), "Add 1 Photo")
+        XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 3), "Add 3 Photos")
+    }
+
+    func testAttachmentPickerPresentationIsSubtleAsymmetricAndReducedMotionAware() {
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.hiddenScale, 0.96, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.hiddenVerticalOffset, 8, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.entranceDuration, 0.2, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.exitDuration, 0.16, accuracy: 0.001)
+        XCTAssertLessThan(
+            AidenAttachmentPickerPresentationMotion.exitDuration,
+            AidenAttachmentPickerPresentationMotion.entranceDuration
+        )
+        XCTAssertNil(AidenAttachmentPickerPresentationMotion.transition(
+            isPresented: true,
+            reduceMotion: true
+        ))
+        XCTAssertNotNil(AidenAttachmentPickerPresentationMotion.transition(
+            isPresented: false,
+            reduceMotion: false
+        ))
+    }
+
+    func testAttachmentLifecycleFenceRejectsLateWorkWithoutClearingANewerOperation() {
+        var fence = AidenAttachmentLifecycleFence()
+        let first = fence.begin()
+        fence.invalidate()
+        let second = fence.begin()
+
+        XCTAssertFalse(fence.consume(first))
+        XCTAssertEqual(fence.activeID, second)
+        XCTAssertTrue(fence.consume(second))
+        XCTAssertNil(fence.activeID)
+    }
+
+    func testAttachmentPickerRespectsReadOnlyAndBusyStates() {
+        XCTAssertTrue(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: true,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: true,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: true,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 0
+        ))
+    }
+
+    func testAttachmentPickerLayoutStaysBoundedAcrossIPadWindowSizes() {
+        let fullSize = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 1_024, height: 1_260),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 1_224),
+            isPad: true
+        )
+        XCTAssertEqual(fullSize.panelSize.width, 620, accuracy: 0.001)
+        XCTAssertEqual(fullSize.panelSize.height, 700, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerLayout.photoCellSide(panelWidth: fullSize.panelSize.width), 205)
+
+        let splitView = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 540, height: 720),
+            mode: .camera,
+            attachmentButtonCenter: CGPoint(x: 50, y: 684),
+            isPad: true
+        )
+        XCTAssertEqual(splitView.panelSize.width, 516, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(splitView.panelSize.height + splitView.bottomPadding, 720)
+        XCTAssertEqual(AidenAttachmentPickerLayout.photoColumnCount, 3)
+
+        let narrowDetailInLandscapeWindow = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 540, height: 720),
+            windowSize: CGSize(width: 1_024, height: 768),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 684),
+            isPad: true
+        )
+        XCTAssertEqual(narrowDetailInLandscapeWindow.panelSize.width, 488, accuracy: 0.001)
+        XCTAssertEqual(narrowDetailInLandscapeWindow.leadingPadding, 26, accuracy: 0.001)
+
+        let unknownWindow = AidenChatReadableLayout.contentWidth(
+            containerSize: CGSize(width: 1_024, height: 768),
+            windowSize: .zero,
+            isPad: true
+        )
+        XCTAssertEqual(unknownWindow, 512, accuracy: 0.001)
+    }
+
+    func testAttachmentPickerLayoutHandlesRotationAndCompactHeight() {
+        let landscape = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 1_366, height: 900),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 864),
+            isPad: true
+        )
+        XCTAssertEqual(landscape.panelSize.width, 620, accuracy: 0.001)
+        XCTAssertEqual(landscape.panelSize.height, 594, accuracy: 0.001)
+
+        let compactHeight = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 375, height: 300),
+            mode: .camera,
+            attachmentButtonCenter: CGPoint(x: 50, y: 264),
+            isPad: false
+        )
+        XCTAssertEqual(compactHeight.panelSize.width, 351, accuracy: 0.001)
+        XCTAssertEqual(compactHeight.panelSize.height, 280, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(compactHeight.panelSize.height + compactHeight.bottomPadding, 300)
+    }
+
+    @MainActor
+    func testAttachmentPickerMovesBetweenMenuCameraAndPhotos() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        XCTAssertEqual(picker.mode, .menu)
+
+        picker.beginShowingCamera()
+        XCTAssertEqual(picker.mode, .camera)
+
+        picker.backToMenu()
+        picker.beginShowingPhotos()
+        XCTAssertEqual(picker.mode, .photos)
+        picker.markLibraryForRefresh()
+        XCTAssertEqual(picker.libraryStatus, .loading)
+    }
+
+    @MainActor
+    func testAttachmentPickerDismissalImmediatelyInvalidatesLibraryLoad() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let generation = picker.markLibraryForRefresh()
+
+        picker.dismiss()
+
+        XCTAssertEqual(picker.mode, .closed)
+        XCTAssertFalse(picker.isPresented)
+        XCTAssertFalse(picker.isCurrentLibraryLoad(generation))
+        XCTAssertTrue(picker.selectedAssetIDs.isEmpty)
+    }
+
+    @MainActor
+    func testAttachmentPickerIgnoresSupersededAndDismissedLibraryLoads() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let first = picker.markLibraryForRefresh()
+        let second = picker.markLibraryForRefresh()
+        picker.applyLibraryResult([], authorization: .denied, generation: first)
+        XCTAssertEqual(picker.libraryStatus, .loading)
+        picker.applyLibraryResult([], authorization: .authorized, generation: second)
+        XCTAssertEqual(picker.libraryStatus, .empty)
+
+        picker.dismiss()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let reopened = picker.markLibraryForRefresh()
+        picker.applyLibraryResult([], authorization: .denied, generation: second)
+        XCTAssertEqual(picker.libraryStatus, .loading)
+        picker.applyLibraryResult([], authorization: .denied, generation: reopened)
+        XCTAssertEqual(picker.libraryStatus, .denied)
+    }
+
+    func testCameraAuthorizationPolicyMapsEveryKnownState() {
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .authorized), .configuring)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .notDetermined), .requestingPermission)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
     }
 }

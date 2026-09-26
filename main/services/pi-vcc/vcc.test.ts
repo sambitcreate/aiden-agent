@@ -504,7 +504,7 @@ test("worker preserves safe compilation failure reasons and gives recall-specifi
   const { input } = await fixture();
   await assert.rejects(
     compileVccInWorker({ ...input, contextWindow: 1 }),
-    /produced no usable summary/,
+    (error: unknown) => error instanceof VccError && error.code === "empty_summary",
   );
   await assert.rejects(
     compileVccInWorker({

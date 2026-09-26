@@ -12,6 +12,7 @@ import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 
 const endpoint = "https://aiden.example.test/api/aiden/v1";
@@ -272,7 +273,14 @@ test("pairing grants progress authority only to clients that explicitly accept i
     exchange(fullWindow.bootstrap.secret, true, true, true),
     "fully-aware-client",
   );
-  assert.deepEqual(fullResult.capabilities, AIDEN_REMOTE_CAPABILITIES);
+  // Simulator control is never granted by pairing: only a desktop peer can negotiate it afterwards.
+  assert.deepEqual(
+    fullResult.capabilities,
+    AIDEN_REMOTE_CAPABILITIES.filter(
+      (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+    ),
+  );
+  assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);
 });
 
 test("an expired, closed, or invalid pairing window fails with stable safe codes", async () => {

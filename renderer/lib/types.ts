@@ -278,6 +278,11 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
+export type GitHubPullRequestReviewDecision =
+  | "approved"
+  | "changes-requested"
+  | "review-required";
+
 export interface GitHubPullRequestSummary {
   number: number;
   title: string;
@@ -286,6 +291,11 @@ export interface GitHubPullRequestSummary {
   isDraft?: boolean;
   headBranch: string;
   baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
   checksState?: GitHubPullRequestChecksState | null;
   checks: GitHubPullRequestCheck[];
 }
@@ -428,6 +438,8 @@ export interface GitPushInput {
 }
 
 export interface GitPushResult {
+  /** Credential-free repository captured from the reviewed push endpoint. */
+  pullRequestRepository?: string;
   branch: string;
   commit: string;
   destinationBranch: string;
@@ -879,6 +891,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
+  formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
   /** Global skill discovery/invocation gate. Omitted means enabled. */
   skillsEnabled?: boolean;
@@ -943,8 +957,31 @@ export interface ComputerUseStatus {
   driverVersion?: string;
   permissions: {
     accessibility: boolean | null;
+
     screenRecording: boolean | null;
   };
+}
+
+export type FormFillArtifactState =
+  | "not-downloaded"
+  | "downloading"
+  | "preparing"
+  | "ready"
+  | "update-required"
+  | "unsupported"
+  | "error";
+
+export interface FormFillArtifactStatus {
+  state: FormFillArtifactState;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  error?: string;
+}
+
+export interface FormFillSettingsView {
+  enabled: boolean;
+  status: FormFillArtifactStatus;
 }
 
 export interface Profile {
@@ -1028,14 +1065,7 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export interface McpStatus {
-  connected: boolean;
-  toolCount: number;
-  tools: string[];
-  error?: string;
-  /** For OAuth servers: whether valid tokens are stored. */
-  authorized?: boolean;
-}
+export type { McpStatus } from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;

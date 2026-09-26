@@ -125,6 +125,9 @@ export function formatPreparedSkillInvocation(
   workspaceId: string,
   userMessageId: string,
 ): PreparedSkillInvocation {
+  if (skill.userInvocable === false) {
+    throw new SkillInvocationError("skill_unavailable", "This skill does not allow user invocation.");
+  }
   const unsafePathCharacter = skill.path
     ? Array.from(skill.path).some((character) => {
         const code = character.codePointAt(0) ?? 0;

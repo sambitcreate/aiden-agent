@@ -52,6 +52,53 @@ export function browserBoundsFromRect(rect: Pick<DOMRect, "x" | "y" | "width" | 
   return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) };
 }
 
+/** Floating chrome that can sit above the native WebContentsView. */
+export const BROWSER_NATIVE_OCCLUDER_SELECTOR = [
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="menu"]',
+  '[role="listbox"]',
+  '[data-slot="popover-content"]',
+  '[data-slot="dialog-overlay"]',
+  '[data-slot="dialog-content"]',
+  "[data-browser-occluder]",
+  "[popover]",
+].join(", ");
+
+export function browserNativeViewObstructed(
+  host: Pick<DOMRect, "x" | "y" | "width" | "height">,
+  overlays: Array<Pick<DOMRect, "x" | "y" | "width" | "height">>,
+): boolean {
+  const page = browserBoundsFromRect(host);
+  if (!page) return false;
+  return overlays.some((overlay) => {
+    const cover = browserBoundsFromRect(overlay);
+    if (!cover) return false;
+    return page.x < cover.x + cover.width
+      && page.x + page.width > cover.x
+      && page.y < cover.y + cover.height
+      && page.y + page.height > cover.y;
+  });
+}
+
+export function visibleBrowserNativeOccluders(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter((element) => {
+    // A modal's `hideOthers` isolation (aria-hidden plus its `data-aria-hidden`
+    // marker) only hides siblings from assistive tech; they remain painted,
+    // including the modal's own full-window overlay, so they still occlude.
+    if (element.closest('[data-state="closed"], [aria-hidden="true"]:not([data-aria-hidden="true"]), [inert]')) return false;
+    if (element.hasAttribute("popover")) {
+      try {
+        if (!element.matches(":popover-open")) return false;
+      } catch {
+        return false;
+      }
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+}
+
 /** Save-dialog cancellation is a successful command without a written file. */
 export function savedBrowserScreenshotPath(result: BrowserCommandResult | null): string | null {
   const value = result?.value;

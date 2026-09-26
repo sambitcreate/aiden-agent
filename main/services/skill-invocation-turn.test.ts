@@ -215,3 +215,12 @@ test("an explicit skill never downgrades to an ordinary message without a worksp
     );
   }
 });
+
+test("user formatting refuses model-only skills and permits explicitly requested user-only bodies", () => {
+  assert.throws(
+    () => formatPreparedSkillInvocation(skill({ userInvocable: false }), "", "one", "message"),
+    /does not allow user invocation/u,
+  );
+  const prepared = formatPreparedSkillInvocation(skill({ modelInvocable: false }), "", "one", "message");
+  assert.match(prepared.formattedPrompt, /Inspect the diff carefully/u);
+});

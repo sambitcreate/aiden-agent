@@ -56,6 +56,7 @@ export const PROVIDER_ICON_SLUGS = [
   "opencode",
   "opencode-go",
   "openrouter",
+  "tailscale",
   "together",
   "vercel-ai-gateway",
   "xai",

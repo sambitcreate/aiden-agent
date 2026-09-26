@@ -20,6 +20,8 @@ its Xcode asset catalog so native provider surfaces use the same identity map.
 - Simple Icons via jsDelivr: OpenAI, Anthropic/Claude, Google Gemini, DeepSeek,
   NVIDIA, OpenRouter, Hugging Face, Mistral, Cloudflare, Vercel, Amazon, Azure,
   GitHub Copilot, MiniMax, Xiaomi, LM Studio, Ollama, and their provider aliases.
+- Compact mesh mark for Tailscale custom-model identity; Tailscale remains a
+  custom endpoint, not a Pi builtin provider id.
 - Official provider sites: Ant Ling, Fireworks, Groq, Together, Z.AI, OpenCode,
   Kimi/Moonshot, and their regional or product aliases.
 - Wikimedia Commons: xAI and Grok.
