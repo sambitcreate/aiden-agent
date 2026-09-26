@@ -1,3 +1,4 @@
+import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, type AppImageIdentity } from "./app-updater-linux.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import electronUpdater, {
@@ -14,6 +15,7 @@ import { isPackagedRuntime } from "../runtime-mode.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import {
   AppUpdateController,
+  AppUpdateInstallHandoff,
   appUpdateRetryDelay,
   configureAppUpdater,
   shouldEnableAppUpdates,
@@ -22,14 +24,55 @@ import {
 const INITIAL_CHECK_DELAY_MS = 15_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DOWNLOAD_STALL_TIMEOUT_MS = 2 * 60 * 1_000;
-const { autoUpdater, CancellationToken } = electronUpdater;
+const { CancellationToken } = electronUpdater;
+class GuardedAppImageUpdater extends electronUpdater.AppImageUpdater {
+  private originalImage: AppImageIdentity | undefined;
+  private readonly installHandoff = new AppUpdateInstallHandoff();
 
-function updaterEnabled(): boolean {
+  override install(isSilent = false, isForceRunAfter = false): boolean {
+    return this.installHandoff.recordInstall(() => super.install(isSilent, isForceRunAfter));
+  }
+
+  quitAndInstallWithResult(): boolean {
+    return this.installHandoff.run(() => this.quitAndInstall(false, true));
+  }
+
+  pinCurrentImage(): void {
+    this.originalImage = appImageIdentity(process.env.APPIMAGE!);
+  }
+
+  protected override doInstall(options: { isForceRunAfter: boolean }): boolean {
+    if (!this.originalImage || !this.installerPath) return false;
+    const sha512 = this.downloadedUpdateHelper?.downloadedFileInfo?.sha512;
+    if (!sha512) return false;
+    const destination = replaceAppImageAtomically({
+      current: this.originalImage,
+      installer: this.installerPath,
+      sha512,
+      eligible: () => process.env.APPIMAGE === this.originalImage?.path && supportsAppUpdates(),
+    });
+    // Upstream download/checksum behavior is retained; replace without shell tools
+    // and preserve the current filename. A normal quit needs no helper execution.
+    if (options.isForceRunAfter) void this.spawnLog(destination, [], { ...process.env, APPIMAGE_SILENT_INSTALL: "true" });
+    return true;
+  }
+}
+// Never let electron-updater select a DEB/RPM installer from package-type.
+const autoUpdater = process.platform === "linux" ? new GuardedAppImageUpdater() : electronUpdater.autoUpdater;
+
+export function supportsAppUpdates(): boolean {
   return shouldEnableAppUpdates({
     isPackaged: isPackagedRuntime(),
     platform: process.platform,
     runtimeProfile: currentRuntimeProfile().id,
-    updateConfigExists: existsSync(path.join(process.resourcesPath, "app-update.yml")),
+    updateConfigExists: typeof process.resourcesPath === "string" && existsSync(path.join(process.resourcesPath, "app-update.yml")),
+    linuxAppImageEligible: process.platform === "linux" && canUpdateLinuxAppImage({
+      appImage: process.env.APPIMAGE,
+      appDir: process.env.APPDIR,
+      resourcesPath: process.resourcesPath,
+      executablePath: process.execPath,
+      uid: process.getuid?.(),
+    }),
   });
 }
 
@@ -111,13 +154,14 @@ export class AppUpdateService {
   }
 
   canInstallDownloadedUpdate(): boolean {
-    return this.snapshot().status === "ready";
+    return supportsAppUpdates() && this.snapshot().status === "ready";
   }
 
   installDownloadedUpdateAndRestart(): boolean {
     if (!this.canInstallDownloadedUpdate()) return false;
     try {
       autoUpdater.autoRunAppAfterInstall = true;
+      if (autoUpdater instanceof GuardedAppImageUpdater) return autoUpdater.quitAndInstallWithResult();
       autoUpdater.quitAndInstall(false, true);
       return true;
     } catch (error) {
@@ -127,7 +171,11 @@ export class AppUpdateService {
   }
 
   start(): void {
-    if (this.disposed || this.started || !updaterEnabled()) return;
+    if (this.disposed || this.started || !supportsAppUpdates()) return;
+    if (autoUpdater instanceof GuardedAppImageUpdater) {
+      try { autoUpdater.pinCurrentImage(); }
+      catch { return; }
+    }
     this.started = true;
     autoUpdater.logger = updaterLogger();
     configureAppUpdater(autoUpdater);
@@ -142,12 +190,14 @@ export class AppUpdateService {
 
   async checkNow(manual: boolean): Promise<AppUpdateCheckResult> {
     if (this.disposed) return { outcome: "unavailable" };
-    if (!updaterEnabled()) {
+    if (!supportsAppUpdates()) {
       if (manual) {
         await dialog.showMessageBox({
           type: "info",
           title: "Updates unavailable in this build",
-          message: "Automatic updates are available in signed Aiden Agent distribution builds.",
+          message: process.platform === "linux"
+            ? "In-app updates require a mounted, writable Aiden Agent AppImage. Update distro packages with your package manager."
+            : "Automatic updates are available in signed Aiden Agent distribution builds.",
           buttons: ["OK"],
           defaultId: 0,
           noLink: true,
@@ -156,6 +206,7 @@ export class AppUpdateService {
       return { outcome: "unavailable" };
     }
     if (!this.started) this.start();
+    if (!this.started) return { outcome: "unavailable" };
     if (this.checkPromise) return this.checkPromise;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;

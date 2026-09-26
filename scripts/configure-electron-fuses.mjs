@@ -24,7 +24,7 @@ export const AIDEN_FUSE_VALUES = Object.freeze({
   // protocol; all model-controlled Node entry points are disabled above.
   [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
   // Explicit bounds checks are slower and do not harden Aiden's Node entry
-  // points. Retain Electron's supported trap handler on 64-bit macOS.
+  // points. Retain Electron's supported trap handler on 64-bit desktop hosts.
   [FuseV1Options.WasmTrapHandlers]: true,
 });
 
@@ -67,36 +67,73 @@ export async function verifyAidenFuses(appPath) {
 }
 
 /**
- * Make node-pty's `spawn-helper` executable inside a packaged macOS app.
+ * Make node-pty's macOS `spawn-helper` executable inside a packaged app.
  *
- * node-pty 1.1.0's npm prebuilt tarball restores the helper without its
+ * node-pty 1.1.0's macOS prebuilt tarball restores the helper without its
  * execute bit, and `posix_spawn` of a non-executable file is exactly what
  * surfaces to users as `posix_spawnp failed.` the first time they open the
  * terminal drawer. electron-builder unpacks node-pty (`asarUnpack`) into
  * `app.asar.unpacked`, so we walk that tree, chmod each helper, and verify.
  * A broken build must fail here in CI rather than at the user's first PTY.
  */
-export async function makeSpawnHelpersExecutable(appPath) {
-  const nodePtyPrebuilds = path.join(
-    appPath,
-    "Contents",
-    "Resources",
+export function packagedResourcesDirectory(appPath, platform = "darwin") {
+  return platform === "darwin"
+    ? path.join(appPath, "Contents", "Resources")
+    : path.join(appPath, "resources");
+}
+
+export function packagedElectronExecutable(context) {
+  if (context.electronPlatformName === "darwin") {
+    return path.join(
+      context.appOutDir,
+      `${context.packager.appInfo.productFilename}.app`,
+    );
+  }
+  if (context.electronPlatformName === "linux") {
+    const executableName =
+      context.packager.platformSpecificBuildOptions?.executableName ??
+      context.packager.config?.linux?.executableName ??
+      "aiden-agent";
+    return path.join(context.appOutDir, executableName);
+  }
+  return null;
+}
+
+export async function makeSpawnHelpersExecutable(appPath, platform = "darwin") {
+  const nodePtyRoot = path.join(
+    packagedResourcesDirectory(appPath, platform),
     "app.asar.unpacked",
     "node_modules",
     "node-pty",
-    "prebuilds",
   );
-  let archDirs;
   try {
-    archDirs = await readdir(nodePtyPrebuilds, { withFileTypes: true });
+    await stat(nodePtyRoot);
   } catch (error) {
     if (error?.code === "ENOENT") return; // No node-pty in this package layout.
     throw error;
   }
+
+  // Source builds place native outputs in build/Release. Published macOS
+  // node-pty builds use prebuilds/<platform>-<arch>. Linux node-pty 1.1.0 uses
+  // forkpty directly and deliberately does not build a spawn-helper, so its
+  // absence is valid even though we still harden one if a later release ships
+  // it. Ignore prebuilds for a different operating system.
+  const helperDirectories = [path.join(nodePtyRoot, "build", "Release")];
+  const prebuilds = path.join(nodePtyRoot, "prebuilds");
+  try {
+    const archDirs = await readdir(prebuilds, { withFileTypes: true });
+    for (const entry of archDirs) {
+      if (entry.isDirectory() && entry.name.startsWith(`${platform}-`)) {
+        helperDirectories.push(path.join(prebuilds, entry.name));
+      }
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
   let fixedAny = false;
-  for (const entry of archDirs) {
-    if (!entry.isDirectory()) continue;
-    const helper = path.join(nodePtyPrebuilds, entry.name, "spawn-helper");
+  for (const directory of helperDirectories) {
+    const helper = path.join(directory, "spawn-helper");
     let info;
     try {
       info = await stat(helper);
@@ -116,19 +153,23 @@ export async function makeSpawnHelpersExecutable(appPath) {
     }
     fixedAny = true;
   }
-  if (!fixedAny) {
+  if (!fixedAny && platform === "darwin") {
     throw new Error(
-      `No node-pty spawn-helper was found under ${nodePtyPrebuilds}. Terminal creation will fail with "posix_spawnp failed." unless node-pty ships a helper.`,
+      `No node-pty spawn-helper for ${platform} was found under ${nodePtyRoot}. Terminal creation will fail with "posix_spawnp failed." unless node-pty ships a helper.`,
     );
   }
 }
 
 export async function configureElectronFuses(context) {
-  if (context.electronPlatformName !== "darwin") return;
-  const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
-  await flipFuses(appPath, AIDEN_FUSE_CONFIG);
-  await verifyAidenFuses(appPath);
-  await makeSpawnHelpersExecutable(appPath);
+  const executable = packagedElectronExecutable(context);
+  if (!executable) return;
+  await flipFuses(executable, AIDEN_FUSE_CONFIG);
+  await verifyAidenFuses(executable);
+  const packageRoot =
+    context.electronPlatformName === "darwin"
+      ? executable
+      : context.appOutDir;
+  await makeSpawnHelpersExecutable(packageRoot, context.electronPlatformName);
 }
 
 export default configureElectronFuses;

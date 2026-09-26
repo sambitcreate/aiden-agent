@@ -111,6 +111,10 @@ export interface AidenRemoteStateDependencies {
   deriveCredentialDigest(credential: string, salt: Buffer): Promise<Buffer>;
 }
 
+export interface AidenRemoteStateHostPolicy {
+  botCapabilitiesSupported(): boolean;
+}
+
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -549,6 +553,9 @@ export class AidenRemoteStateRegistry {
     private readonly storage: AidenRemoteStateStorage,
     private readonly dependencies: AidenRemoteStateDependencies =
       defaultAidenRemoteStateDependencies(),
+    private readonly hostPolicy: AidenRemoteStateHostPolicy = {
+      botCapabilitiesSupported: () => true,
+    },
   ) {}
 
   private serialized<T>(operation: () => Promise<T>): Promise<T> {
@@ -565,6 +572,20 @@ export class AidenRemoteStateRegistry {
       if (this.document) return structuredClone(this.document);
       const raw = await this.storage.load();
       const loaded = parseAidenRemoteStateDocument(raw);
+      const botCapabilitiesSupported = this.hostPolicy.botCapabilitiesSupported();
+      const devicesNeedHostPolicyMigration = !botCapabilitiesSupported
+        && loaded.devices.some(
+          (device) =>
+            device.acceptsBotCapabilities || device.capabilities.some(isBotCapability),
+        );
+      if (devicesNeedHostPolicyMigration) {
+        for (const device of loaded.devices) {
+          device.acceptsBotCapabilities = false;
+          device.capabilities = device.capabilities.filter(
+            (capability) => !isBotCapability(capability),
+          );
+        }
+      }
       const rawRecord = ownRecord(raw);
       const storageNeedsSave = this.storage.needsSaveAfterLoad
         ? await this.storage.needsSaveAfterLoad()
@@ -588,7 +609,11 @@ export class AidenRemoteStateRegistry {
               )
             );
         });
-      if (storageNeedsSave || devicesNeedVocabularyMigration) {
+      if (
+        storageNeedsSave ||
+        devicesNeedVocabularyMigration ||
+        devicesNeedHostPolicyMigration
+      ) {
         await this.storage.save(loaded);
       }
       this.document = loaded;
@@ -777,7 +802,9 @@ export class AidenRemoteStateRegistry {
       !capabilities ||
       (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
       (input.acceptsProgressCapabilities !== true &&
-        capabilities.some(isProgressCapability))
+        capabilities.some(isProgressCapability)) ||
+      (!this.hostPolicy.botCapabilitiesSupported() &&
+        (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
     ) {
       throw new Error("Invalid device capabilities.");
     }
@@ -852,9 +879,12 @@ export class AidenRemoteStateRegistry {
       // changed while the expensive credential digest was being derived.
       const current = draft.devices.find((candidate) => candidate.id === device.id);
       if (!current) return { changed: false, value: null };
+      const acceptsBotCapabilities =
+        this.hostPolicy.botCapabilitiesSupported() &&
+        current.acceptsBotCapabilities === true;
       const capabilities = parsePersistedCapabilities(
         current.capabilities,
-        current.acceptsBotCapabilities === true,
+        acceptsBotCapabilities,
         current.acceptsProgressCapabilities === true,
         current.type,
       );
@@ -864,7 +894,7 @@ export class AidenRemoteStateRegistry {
         name: current.name,
         type: current.type,
         capabilities: new Set(capabilities),
-        acceptsBotCapabilities: current.acceptsBotCapabilities === true,
+        acceptsBotCapabilities,
         acceptsProgressCapabilities:
           current.acceptsProgressCapabilities === true,
         revoked: current.revokedAt !== undefined,

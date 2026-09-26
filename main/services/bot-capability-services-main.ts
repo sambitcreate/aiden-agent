@@ -10,10 +10,9 @@ import {
 } from "./bot-capability-credential-signatures.js";
 import { createBotCapabilityOpaqueKeyStore } from "./bot-capability-key-store.js";
 import {
-  botCapabilityKeychainAccountForCanonicalRoot,
-  createBotCapabilityKeychainAnchor,
-  createBotCapabilityKeychainBootstrapMarker,
-} from "./bot-capability-keychain-anchor.js";
+  botCapabilityAuthorityAccountForCanonicalRoot,
+  createBotAuthorities,
+} from "./bot-capability-authority.js";
 import { createBotCapabilityMigrationSeal } from "./bot-capability-migration-seal.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
 import { createBotCapabilityStateCheckpoint } from "./bot-capability-state-checkpoint.js";
@@ -39,6 +38,7 @@ import {
 import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { webSearchService } from "./web-search-main.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 
 export const BOT_SERVICE_DIRECTORY = "bot-service";
 
@@ -86,26 +86,23 @@ export async function resolveBotRuntimeSkills(botId: string) {
   return skills;
 }
 
-let capabilityKeychainAccountPromise: Promise<string> | undefined;
-const capabilityKeychainAccount = (): Promise<string> => {
-  capabilityKeychainAccountPromise ??= fs
+let capabilityAuthorityAccountPromise: Promise<string> | undefined;
+const capabilityAuthorityAccount = (): Promise<string> => {
+  capabilityAuthorityAccountPromise ??= fs
     .realpath(app.getPath("userData"))
-    .then(botCapabilityKeychainAccountForCanonicalRoot)
+    .then(botCapabilityAuthorityAccountForCanonicalRoot)
     .catch((error) => {
-      capabilityKeychainAccountPromise = undefined;
+      capabilityAuthorityAccountPromise = undefined;
       throw error;
     });
-  return capabilityKeychainAccountPromise;
+  return capabilityAuthorityAccountPromise;
 };
+const capabilityAuthorities = createBotAuthorities({ account: capabilityAuthorityAccount });
 const capabilityStateCheckpoint = createBotCapabilityStateCheckpoint({
   root: botServiceRoot,
   keyStore: opaqueKeyStore,
-  anchor: createBotCapabilityKeychainAnchor({
-    account: capabilityKeychainAccount,
-  }),
-  bootstrapMarker: createBotCapabilityKeychainBootstrapMarker({
-    account: capabilityKeychainAccount,
-  }),
+  anchor: capabilityAuthorities.anchor,
+  bootstrapMarker: capabilityAuthorities.bootstrapMarker,
   inspectInitialBootstrap: async () => {
     const [bots, chats] = await Promise.all([botStore.list(true), chatStore.list()]);
     const botIds = new Set(bots.map(({ id }) => id));
@@ -206,6 +203,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       return { ready: availability.ready };
     },
     subagentsAvailable: () => subagentsEnabled(),
+    computerUseSupported: () => hostPlatformCapabilities().computerUse,
   }),
   {
     onRuntimeSnapshot: (botId, snapshot) => {

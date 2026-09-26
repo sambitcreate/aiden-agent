@@ -1,4 +1,8 @@
-#include <CommonCrypto/CommonDigest.h>
+#ifndef __APPLE__
+#define _GNU_SOURCE
+#endif
+
+#include "../shared/aiden-platform.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1306,14 +1310,19 @@ remove_contents(int directory_fd, dev_t root_device, int depth,
 }
 
 static int parse_uint64(const char *value, uint64_t *result) {
-  if (value == NULL || value[0] == '\0' || value[0] == '-')
+  if (value == NULL || value[0] == '\0')
     return 0;
-  char *end = NULL;
-  errno = 0;
-  unsigned long long parsed = strtoull(value, &end, 10);
-  if (errno != 0 || end == NULL || *end != '\0')
-    return 0;
-  *result = (uint64_t)parsed;
+  uint64_t parsed = 0;
+  for (const unsigned char *cursor = (const unsigned char *)value;
+       *cursor != '\0'; cursor += 1) {
+    if (*cursor < '0' || *cursor > '9')
+      return 0;
+    uint64_t digit = (uint64_t)(*cursor - '0');
+    if (parsed > (UINT64_MAX - digit) / 10U)
+      return 0;
+    parsed = parsed * 10U + digit;
+  }
+  *result = parsed;
   return 1;
 }
 

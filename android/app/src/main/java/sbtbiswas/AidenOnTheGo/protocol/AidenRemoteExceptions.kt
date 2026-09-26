@@ -20,7 +20,7 @@ sealed class AidenBotContractException(val reason: String, message: String = rea
     class InvalidCombination(val combination: String) : AidenBotContractException(
         combination,
         when (combination) {
-            "no available provider and model" -> "Set up a provider and model on your Mac. In Aiden Agent, open Settings → Providers, connect or refresh a provider, and make at least one chat model available. Then tap Try Again."
+            "no available provider and model" -> "Set up a provider and model on your paired desktop. In Aiden Agent, open Settings → Providers, connect or refresh a provider, and make at least one chat model available. Then tap Try Again."
             "unavailable custom access" -> "One or more selected AI, Files, Connections, or Skills are no longer available. Review this Bot’s access choices and try again."
             "chat access exceeds bot" -> "This chat is asking for more access than the Bot currently allows. Reduce the chat’s access or expand the Bot’s access, then try again."
             "full access notice" -> "Review and accept the Full Access notice before giving this Bot full access."
@@ -30,7 +30,7 @@ sealed class AidenBotContractException(val reason: String, message: String = rea
 }
 
 sealed class AidenManualPairingException(message: String) : Exception(message) {
-    object InvalidCode : AidenManualPairingException("Enter the 20-character setup code shown on your Mac.")
+    object InvalidCode : AidenManualPairingException("Enter the 20-character setup code shown on your desktop.")
     object InvalidBootstrap : AidenManualPairingException("Aiden Agent returned an invalid manual pairing response.")
     object DecryptionFailed : AidenManualPairingException("The setup code is incorrect or belongs to a different pairing window.")
     object EndpointMismatch : AidenManualPairingException("The setup code belongs to a different Aiden Agent address.")
@@ -63,7 +63,7 @@ sealed class AidenSSEParserException(message: String) : Exception(message) {
 sealed class AidenRemoteClientException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     object MissingCredential : AidenRemoteClientException("No credential available for this installation.")
     object MissingTrustConfiguration : AidenRemoteClientException("This Aiden installation must be paired again to establish secure server trust.")
-    object InstallationChanged : AidenRemoteClientException("The active Aiden Agent changed. Try again on the selected Mac.")
+    object InstallationChanged : AidenRemoteClientException("The active Aiden Agent changed. Try again on the selected desktop.")
     object InvalidEndpoint : AidenRemoteClientException("The Aiden Agent address is invalid.")
     class UnexpectedStatus(val statusCode: Int) : AidenRemoteClientException("Aiden Agent returned HTTP status $statusCode.")
     data class Server(val statusCode: Int, val body: AidenRemoteErrorEnvelope.Body) : AidenRemoteClientException(body.message) {

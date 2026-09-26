@@ -149,7 +149,7 @@ class ManagedWorktreeSnapshotCleanupError extends Error {
 
 /**
  * Shared renderer/remote orchestration for Aiden-owned Git worktrees. All
- * filesystem and Git-admin identity is reloaded from persisted Mac state.
+ * filesystem and Git-admin identity is reloaded from persisted desktop state.
  */
 export function createWorkspaceWorktreeApplicationService(
   dependencies: WorkspaceWorktreeApplicationDependencies,
@@ -172,9 +172,13 @@ export function createWorkspaceWorktreeApplicationService(
       // ensureWorktreeRoot may already have created the empty managed root.
       const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath);
       // Reserve the provisioner's enforced maximum, so changing source files
-      // cannot invalidate a smaller, racy pre-copy estimate.
+      // cannot invalidate a smaller, racy pre-copy estimate. Provisioning is a
+      // no-op off macOS until the transfer helper gains a Linux port, so the
+      // reserve is only needed where provisioning can actually run.
+      const provisionedReserve =
+        process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
       const repository = await dependencies.repositoryPaths(resolved.folderPath);
-      await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + MAX_PROVISIONED_BYTES);
+      await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
       const worktree = await dependencies.createWorktree(
         resolved.folderPath,
         worktreeRoot,
@@ -183,7 +187,7 @@ export function createWorkspaceWorktreeApplicationService(
       );
       const provisionedFiles: string[] = [];
       try {
-        await dependencies.checkCreateCapacity(worktree.path, MAX_PROVISIONED_BYTES);
+        await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
         const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
         await dependencies.provisionIncludedFiles({
           sourceRoot,

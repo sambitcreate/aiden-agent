@@ -203,7 +203,7 @@ export async function resolveCuaDriverInstallation(
   if (options.platform !== "darwin") {
     throw new CuaDriverError(
       "unsupported_platform",
-      "Aiden Computer Use currently supports macOS only.",
+      "Aiden Computer Use is not available on this platform.",
     );
   }
   const brokerAppPath = options.isPackaged

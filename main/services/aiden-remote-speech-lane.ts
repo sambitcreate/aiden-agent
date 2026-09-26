@@ -3,7 +3,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 /**
  * A small FIFO admission lane for memory-heavy local speech work. Admission is
  * synchronous, while operations settle serially, so callers cannot allocate or
- * decode multiple PCM buffers in parallel while another recognizer owns the Mac.
+ * decode multiple PCM buffers in parallel while another recognizer owns the desktop engine.
  */
 export class AidenRemoteSpeechLane {
   private tail: Promise<void> = Promise.resolve();
@@ -19,7 +19,7 @@ export class AidenRemoteSpeechLane {
     if (this.admitted >= this.maximumAdmitted) {
       throw new AidenRemoteServiceError(
         "rate_limited",
-        "The Mac speech engine is busy. Try again in a moment.",
+        "The desktop speech engine is busy. Try again in a moment.",
         429,
         true,
         { retryAfterSeconds: 2 },
