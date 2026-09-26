@@ -375,8 +375,11 @@ object AidenAgentActivityPresentation {
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
 
+    /** Exactly one compaction: its line carries every metric. Repeated compactions
+     *  keep the trail so each run's metrics stay reachable. */
     fun isCompactContextOnly(steps: List<AidenAgentStep>): Boolean {
-        return steps.isNotEmpty() && steps.all { it.kind == AidenAgentStep.Kind.TOOL && it.toolName == "compact_context" }
+        val only = steps.singleOrNull() ?: return false
+        return only.kind == AidenAgentStep.Kind.TOOL && only.toolName == "compact_context"
     }
 
     fun duration(milliseconds: Double?): String {

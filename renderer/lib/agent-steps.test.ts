@@ -284,6 +284,9 @@ test("summary leads with the work when nothing was explored", () => {
   );
   assert.equal(isCompactContextOnly(tools({ compact_context: 1 })), true);
   assert.equal(isCompactContextOnly(tools({ compact_context: 1, read_file: 1 })), false);
+  // Each repeated compaction carries its own metrics, so the trail must stay.
+  assert.equal(isCompactContextOnly(tools({ compact_context: 2 })), false);
+  assert.equal(isCompactContextOnly([]), false);
   assert.equal(
     isCompactContextOnly([thinking("think-1", 0, 1_000), step("compact", 1, "compact_context")]),
     false,

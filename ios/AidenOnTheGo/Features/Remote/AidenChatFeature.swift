@@ -3342,14 +3342,17 @@ private struct AidenActivityFeed: View {
     private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
     private var compactOnly: Bool { AidenAgentActivityPresentation.isCompactContextOnly(visibleSteps) }
+    /// A healthy lone compaction is fully told by its own line in the header, so the
+    /// expanded list would only repeat it; progress text still needs the disclosure.
+    private var stepInHeader: Bool { compactOnly && timeline.issueCount == 0 }
     private var allowsDisclosure: Bool {
-        !compactOnly || timeline.issueCount > 0 || !(progressText ?? "").isEmpty
+        !stepInHeader || !(progressText ?? "").isEmpty
     }
     private var showsCollapsedTicker: Bool {
         isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed
     }
     private var headline: String {
-        if compactOnly, !allowsDisclosure, let last = visibleSteps.last {
+        if stepInHeader, let last = visibleSteps.last {
             return AidenAgentActivityPresentation.line(for: last)
         }
         return AidenAgentActivityPresentation.summary(timeline)
@@ -3360,7 +3363,7 @@ private struct AidenActivityFeed: View {
             header
             if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    if !compactOnly || timeline.issueCount > 0 {
+                    if !stepInHeader {
                         ForEach(visibleSteps) { step in
                             AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
                         }

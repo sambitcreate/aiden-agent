@@ -134,7 +134,10 @@ export function ActivityFeed({
   const running = visible.status === "running";
   const issues = activityIssueCount(visible);
   const compactOnly = isCompactContextOnly(visible.steps);
-  const disclosure = !compactOnly || issues > 0 || Boolean(visible.claimCheck);
+  // A healthy lone compaction is fully told by its own line in the header, so a
+  // trail would only repeat it. A claim check still needs the disclosure body.
+  const stepInHeader = compactOnly && issues === 0;
+  const disclosure = !stepInHeader || Boolean(visible.claimCheck);
   const showTicker = running && (!open || !disclosure);
   const rows = visible.steps.slice(-TICKER_ROWS);
   const newest = visible.steps[visible.steps.length - 1];
@@ -163,7 +166,7 @@ export function ActivityFeed({
             running ? "agent-thinking-shimmer" : ""
           }`}
         >
-          {compactOnly && newest && !disclosure ? (
+          {stepInHeader && newest ? (
             <StepLine step={newest} />
           ) : (
             summarizeActivity(visible)
@@ -218,11 +221,13 @@ export function ActivityFeed({
         />
       </summary>
       <div className="mt-0.5 flex flex-col">
-        <div className="flex flex-col" role="list">
-          {visible.steps.map((step) => (
-            <TrailRow key={step.id} step={step} />
-          ))}
-        </div>
+        {stepInHeader ? null : (
+          <div className="flex flex-col" role="list">
+            {visible.steps.map((step) => (
+              <TrailRow key={step.id} step={step} />
+            ))}
+          </div>
+        )}
         {visible.claimCheck ? (
           <div
             className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"

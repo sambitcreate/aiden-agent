@@ -828,6 +828,8 @@ class AidenChatTest {
             durationMs = 1000.0, target = "README.md"
         )
         assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, read)))
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, step.copy(id = "compact-2", order = 1))))
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(emptyList()))
         assertEquals(step.detail, json.decodeFromString<AidenAgentStep>(json.encodeToString(step)).detail)
     }
 }

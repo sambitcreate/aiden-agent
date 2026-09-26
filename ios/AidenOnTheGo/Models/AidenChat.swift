@@ -461,8 +461,11 @@ enum AidenAgentActivityPresentation {
         "compact_context": ("Compacting context", "Compacted context"),
     ]
 
+    /// Exactly one compaction: its line carries every metric. Repeated compactions
+    /// keep the step list so each run's metrics stay reachable.
     static func isCompactContextOnly(_ steps: [AidenAgentStep]) -> Bool {
-        !steps.isEmpty && steps.allSatisfy { $0.kind == .tool && $0.toolName == "compact_context" }
+        guard steps.count == 1, let only = steps.first else { return false }
+        return only.kind == .tool && only.toolName == "compact_context"
     }
 
     static func duration(_ milliseconds: Double?) -> String {

@@ -723,6 +723,8 @@ final class AidenChatTests: XCTestCase {
             durationMs: 1_000, target: "README.md", detail: nil, lineChanges: nil
         )
         XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, read]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([step, step]))
+        XCTAssertFalse(AidenAgentActivityPresentation.isCompactContextOnly([]))
         let decoded = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
         XCTAssertEqual(decoded.detail, step.detail)
     }

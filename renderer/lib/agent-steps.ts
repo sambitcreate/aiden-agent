@@ -144,11 +144,14 @@ function countTools(steps: AgentStep[], names: string[]): number {
   return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
 }
 
-/** Compaction is already named in the summary; expanding it only repeats that label. */
+/**
+ * A trail that is exactly one compaction: its own line already carries every
+ * metric, so expanding it would only repeat the "Compacted context" label.
+ * Repeated compactions keep the trail so each run's metrics stay reachable.
+ */
 export function isCompactContextOnly(steps: readonly AgentStep[]): boolean {
-  return (
-    steps.length > 0 && steps.every((step) => isToolStep(step) && step.toolName === "compact_context")
-  );
+  const [only] = steps;
+  return steps.length === 1 && isToolStep(only) && only.toolName === "compact_context";
 }
 
 const TALLIED_TOOLS = [
