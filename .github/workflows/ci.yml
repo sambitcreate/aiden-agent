@@ -226,6 +226,51 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           CODE_SIGNING_ALLOWED=NO
 
+  # Hosted simulator XCTest is regression evidence only; physical-device
+  # acceptance (ios/AGENTS.md) still runs separately on real hardware.
+  ios-simulator:
+    name: iOS simulator tests
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Select the newest available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          def version(key):
+              return [int(part) for part in re.findall(r"\d+", key.rsplit(".", 1)[-1])]
+          for key in sorted((k for k in runtimes if ".SimRuntime.iOS-" in k), key=version, reverse=True):
+              phones = [d for d in runtimes[key] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"])
+                  break
+          ')"
+          if [[ -z "$udid" ]]; then
+            echo "No available iPhone simulator on this runner." >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Run Aiden On The Go XCTest on the simulator
+        run: >-
+          xcodebuild test -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoSimulatorDerivedData'
+          CODE_SIGNING_ALLOWED=NO
+
   android:
     name: Android build and APK
     needs: changes
@@ -348,7 +393,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, verify, unit, e2e, apple, ios, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, verify, unit, e2e, apple, ios, ios-simulator, android, cli-linux, cli-playground]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
