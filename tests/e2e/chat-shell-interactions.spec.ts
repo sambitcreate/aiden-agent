@@ -582,15 +582,16 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
 
   const hints = page.locator('[data-chat-shortcut-hint="true"]');
   await page.locator("body").click({ position: { x: 1, y: 1 } });
-  await page.keyboard.down("Meta");
+  const hintPrefix = process.platform === "darwin" ? "⌘" : "Ctrl+";
+  await page.keyboard.down(PRIMARY_MODIFIER);
   await expect(hints).toHaveCount(2);
-  await expect(hints.nth(0)).toHaveText("⌘1");
-  await expect(hints.nth(1)).toHaveText("⌘2");
-  await page.keyboard.up("Meta");
+  await expect(hints.nth(0)).toHaveText(`${hintPrefix}1`);
+  await expect(hints.nth(1)).toHaveText(`${hintPrefix}2`);
+  await page.keyboard.up(PRIMARY_MODIFIER);
   await expect(hints).toHaveCount(0);
 
   // A quick chord must not flash the badges.
-  await page.keyboard.press("Meta+1");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
   await expect(page.getByText(/^Opened palette-chat-/u)).toBeVisible();
   await expect(hints).toHaveCount(0);
 
