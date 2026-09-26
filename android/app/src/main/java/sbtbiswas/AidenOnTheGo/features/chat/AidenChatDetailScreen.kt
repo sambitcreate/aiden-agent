@@ -122,6 +122,7 @@ fun AidenChatDetailScreen(
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
+    val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val liveText by viewModel.liveText.collectAsState()
     val reasoning by viewModel.reasoning.collectAsState()
@@ -506,7 +507,7 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend,
+                    canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
