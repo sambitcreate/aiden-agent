@@ -9,6 +9,7 @@ import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
+import { parseChatRunInput } from "../../renderer/shared/chat-run-input.js";
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
@@ -96,6 +97,31 @@ export function registerChatGenerationHandlers(): void {
     return cancelled;
   });
 
+  // Shared foreground admission for mid-flight input (Remote Slice 2). The
+  // Remote API inputs route reaches the same Mac-owned boundary; the renderer
+  // document must own the generation just like chat:cancel.
+  ipcMain.handle(
+    "chat:admitRunInput",
+    async (event, streamId: unknown, input: unknown) => {
+      if (!isSafeSubagentIdentifier(streamId)) {
+        throw new Error("Invalid chat stream identifier.");
+      }
+      const parsed = parseChatRunInput(input);
+      const owner = chatGenerationOwner(event);
+      const result = await llmClient.admitChatRunInput({
+        streamId,
+        mode: parsed.mode,
+        text: parsed.text,
+        ownerDocumentId: owner.documentId,
+      });
+      // A committed input mutates the transcript for every observing document,
+      // matching the remote path's chats:changed broadcast.
+      if (result.committed) {
+        ipcMain.broadcast("chats:changed", {});
+      }
+      return result;
+    },
+  );
   ipcMain.handle("chat:steer", async (event, streamId: unknown, instruction: unknown) => {
     if (!isSafeSubagentIdentifier(streamId) || typeof instruction !== "string" ||
         !instruction.trim() ||

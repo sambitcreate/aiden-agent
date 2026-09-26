@@ -15,6 +15,10 @@ import {
   AidenRemoteAttachmentStore,
 } from "./aiden-remote-attachments.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/shared/slash-commands.js";
+import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
+import type { RegisteredSkill } from "./skill-registry.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -49,6 +53,16 @@ function fixture(
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
+    deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+    deviceSupportsSkillInvocation?: (deviceId: string) => Promise<boolean>;
+    skillCatalog?: (workspaceId: string) => Promise<readonly SkillCatalogEntry[]>;
+    botSkillCatalog?: (
+      deviceId: string,
+      botId: string,
+      chatId: string,
+      workspaceId: string,
+    ) => Promise<readonly SkillCatalogEntry[]>;
+    resolveSkillInvocation?: (workspaceId: string, invocationId: string) => Promise<RegisteredSkill>;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -57,6 +71,8 @@ function fixture(
   let notifications = 0;
   let begins = 0;
   let starts = 0;
+  let lastGenerationOptions: Record<string, unknown> | null = null;
+  const preparedInvocations: PreparedSkillInvocation[] = [];
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
     now: () => 10_000,
@@ -130,6 +146,7 @@ function fixture(
           content: message.content,
           createdAt: 3_000,
           ...(message.attachments ? { attachments: structuredClone(message.attachments) } : {}),
+          ...(message.skill ? { skill: structuredClone(message.skill) } : {}),
         };
         current.messages.push(stored);
         current.providerId = meta.providerId;
@@ -142,16 +159,44 @@ function fixture(
       beginChatTurn: (_chatId, _turnId, _ownerId) => {
         begins += 1;
         let active = true;
+        const releaseCleanups = new Set<() => void>();
         return {
           isActive: () => active,
-          reserveAppendPayload: () => undefined,
+          reserveAppendPayload: () => {
+            if (!active) throw new Error("This message turn is no longer available.");
+          },
+          reserveSkillPreparation: () => {
+            if (!active) {
+              throw new SkillInvocationError(
+                "turn_unavailable",
+                "This skill turn is no longer available.",
+              );
+            }
+          },
+          prepareSkillInvocation: (invocation: PreparedSkillInvocation) => {
+            if (!active) {
+              throw new SkillInvocationError(
+                "turn_unavailable",
+                "This skill turn is no longer available.",
+              );
+            }
+            preparedInvocations.push(invocation);
+          },
           settleAsyncWork: () => undefined,
-          onReleased: () => undefined,
-          release: () => { active = false; },
+          onReleased: (cleanup: () => void) => {
+            if (!active) cleanup();
+            else releaseCleanups.add(cleanup);
+          },
+          release: () => {
+            active = false;
+            for (const cleanup of releaseCleanups) cleanup();
+            releaseCleanups.clear();
+          },
         };
       },
       start: async (streamId, _params, owner, generationOptions) => {
         starts += 1;
+        lastGenerationOptions = generationOptions as Record<string, unknown>;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
         owner.send("chat:delta", { streamId, delta: "Answer" });
@@ -201,6 +246,17 @@ function fixture(
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
+    ...(fixtureOptions.deviceSupportsQuestionPrompts
+      ? { deviceSupportsQuestionPrompts: fixtureOptions.deviceSupportsQuestionPrompts }
+      : {}),
+    ...(fixtureOptions.deviceSupportsSkillInvocation
+      ? { deviceSupportsSkillInvocation: fixtureOptions.deviceSupportsSkillInvocation }
+      : {}),
+    ...(fixtureOptions.skillCatalog ? { skillCatalog: fixtureOptions.skillCatalog } : {}),
+    ...(fixtureOptions.botSkillCatalog ? { botSkillCatalog: fixtureOptions.botSkillCatalog } : {}),
+    ...(fixtureOptions.resolveSkillInvocation
+      ? { resolveSkillInvocation: fixtureOptions.resolveSkillInvocation }
+      : {}),
   });
   return {
     service,
@@ -210,6 +266,8 @@ function fixture(
     notifications: () => notifications,
     begins: () => begins,
     starts: () => starts,
+    lastGenerationOptions: () => lastGenerationOptions,
+    preparedInvocations: () => [...preparedInvocations],
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
   };
@@ -1585,4 +1643,286 @@ test("invalidated uploads remain bounded until their retained request bodies set
     lease.release();
   }
   store.beginUpload("device-2", "chat-2").release();
+});
+
+test("question tool is exposed only to devices granted the question capability", async () => {
+  const supported = fixture(chat(), {
+    deviceSupportsQuestionPrompts: async (deviceId) => deviceId === "device-1",
+  });
+  await supported.service.startTurn("device-1", "chat-1", "question-turn-001", {
+    text: "help me choose",
+  });
+  const supportedOptions = supported.lastGenerationOptions();
+  assert.equal(
+    supportedOptions?.excludeToolNames,
+    undefined,
+    "capable devices must keep ask_user_question available",
+  );
+
+  const unsupported = fixture(chat(), {
+    deviceSupportsQuestionPrompts: async () => false,
+  });
+  await unsupported.service.startTurn("device-1", "chat-1", "question-turn-002", {
+    text: "help me choose",
+  });
+  const excluded = unsupported.lastGenerationOptions()?.excludeToolNames;
+  assert.ok(excluded instanceof Set);
+  assert.ok((excluded as Set<string>).has("ask_user_question"));
+
+  const missingGate = fixture(chat());
+  await missingGate.service.startTurn("device-1", "chat-1", "question-turn-003", {
+    text: "help me choose",
+  });
+  const missingExcluded = missingGate.lastGenerationOptions()?.excludeToolNames;
+  assert.ok(missingExcluded instanceof Set);
+  assert.ok(
+    (missingExcluded as Set<string>).has("ask_user_question"),
+    "without a host capability lookup the question tool must stay excluded",
+  );
+});
+
+test("chat skill catalog revalidates the workspace projection and narrows Bot chats", async () => {
+  const entries = [
+    {
+      invocationId: `sk1_${"a".repeat(43)}`,
+      name: "review-code",
+      description: "Review changes.",
+      source: "workspace" as const,
+      available: true,
+    },
+  ];
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    skillCatalog: async (workspaceId) => {
+      assert.equal(workspaceId, "workspace-9");
+      return entries;
+    },
+  });
+  const catalog = await app.service.chatSkillCatalog("device-1", "chat-1");
+  assert.deepEqual(catalog, { skills: entries });
+
+  const botEntries = [
+    {
+      invocationId: `sk1_${"b".repeat(43)}`,
+      name: "bot-skill",
+      description: "Bot scoped.",
+      source: "configured" as const,
+      available: true,
+    },
+  ];
+  const botApp = fixture(chat({ botId: "bot-1", workspaceId: "workspace-9" }), {
+    retainedBotChatAuthorizer: () => true,
+    skillCatalog: async () => {
+      throw new Error("bot chats must not read the raw workspace catalog");
+    },
+    botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
+      assert.equal(deviceId, "device-1");
+      assert.equal(botId, "bot-1");
+      assert.equal(chatId, "chat-1");
+      assert.equal(workspaceId, "workspace-9");
+      return botEntries;
+    },
+  });
+  const botCatalog = await botApp.service.chatSkillCatalog("device-1", "chat-1");
+  assert.deepEqual(botCatalog, { skills: botEntries });
+});
+
+test("chat skill catalog fails closed without a wired registry", async () => {
+  const app = fixture(chat());
+  await assert.rejects(
+    app.service.chatSkillCatalog("device-1", "chat-1"),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+});
+
+test("chat skill catalog returns empty for chats without a real workspace", async () => {
+  const app = fixture(chat({ workspaceId: "assistant" }), {
+    skillCatalog: async () => {
+      throw new Error("assistant chats must not reach the workspace catalog");
+    },
+  });
+  assert.deepEqual(
+    await app.service.chatSkillCatalog("device-1", "chat-1"),
+    { skills: [] },
+  );
+});
+
+test("remote skill turn requires the negotiated grant and rides the desktop lease", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async (workspaceId, invocationId) => {
+      assert.equal(workspaceId, "workspace-9");
+      assert.equal(invocationId, `sk1_${"a".repeat(43)}`);
+      return {
+        stableId: "skill:review",
+        name: "review-code",
+        description: "Review changes.",
+        instructions: "Review the diff carefully.",
+        source: "workspace",
+        enabled: true,
+        available: true,
+        invocationId,
+        toolKey: "skill_review_code",
+      };
+    },
+  });
+  const accepted = await app.service.startTurn("device-1", "chat-1", "skill-turn-00000001", {
+    text: "check this diff",
+    skill: {
+      version: 1,
+      invocationId: `sk1_${"a".repeat(43)}`,
+      displayName: "review-code",
+      source: "workspace",
+    },
+  });
+  assert.equal(accepted.status, "accepted");
+  const preparedCalls = app.preparedInvocations();
+  assert.equal(preparedCalls.length, 1, "the turn lease must receive the expanded prompt");
+  assert.ok(preparedCalls[0]!.formattedPrompt.includes("Review the diff carefully."));
+  const userMessage = app.current()?.messages.find(
+    (message) => message.content === "check this diff",
+  );
+  assert.deepEqual(userMessage?.skill, {
+    version: 1,
+    name: "review-code",
+    source: "workspace",
+  });
+
+  const denied = fixture(chat(), {
+    deviceSupportsSkillInvocation: async () => false,
+    resolveSkillInvocation: async () => {
+      throw new Error("must not resolve without the grant");
+    },
+  });
+  await assert.rejects(
+    denied.service.startTurn("device-1", "chat-1", "skill-denied-00001", {
+      text: "hi",
+      skill: {
+        version: 1,
+        invocationId: `sk1_${"a".repeat(43)}`,
+        displayName: "review-code",
+        source: "workspace",
+      },
+    }),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "capability_denied" &&
+      (error as { status?: number }).status === 403,
+  );
+  assert.equal(denied.appends(), 0);
+});
+
+test("remote skill turn maps lease failures onto the remote vocabulary", async () => {
+  const app = fixture(chat(), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => {
+      throw new SkillInvocationError("skill_changed", "The skill changed after it was listed.");
+    },
+  });
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "skill-stale-0000001", {
+      text: "hi",
+      skill: {
+        version: 1,
+        invocationId: `sk1_${"a".repeat(43)}`,
+        displayName: "review-code",
+        source: "workspace",
+      },
+    }),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "skill_unavailable" &&
+      (error as { status?: number }).status === 409,
+  );
+  assert.equal(app.appends(), 0);
+  // A failed preparation must release the turn so the next send is admitted.
+  const retry = await app.service.startTurn("device-1", "chat-1", "skill-retry-0000001", { text: "plain" });
+  assert.equal(retry.status, "accepted");
+});
+
+test("chat skill catalog maps registry failures onto the remote vocabulary", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    skillCatalog: async () => {
+      throw new SkillInvocationError("workspace_changed", "The workspace changed.");
+    },
+  });
+  await assert.rejects(
+    app.service.chatSkillCatalog("device-1", "chat-1"),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "skill_unavailable" &&
+      (error as { status?: number }).status === 409,
+  );
+});
+
+const resolvedSkill = {
+  stableId: "skill:review",
+  name: "review-code",
+  description: "Review changes.",
+  instructions: "Review the diff carefully.",
+  source: "workspace" as const,
+  enabled: true,
+  available: true,
+  invocationId: `sk1_${"a".repeat(43)}`,
+  toolKey: "skill_review_code",
+};
+
+const skillInvocation = {
+  version: 1 as const,
+  invocationId: `sk1_${"a".repeat(43)}`,
+  displayName: "review-code",
+  source: "workspace" as const,
+};
+
+test("remote skill turn rejects while its workspace is changing", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => resolvedSkill,
+  });
+  const endMutation = workspaceMutationGate.begin("workspace-9");
+  try {
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "skill-gated-000001", {
+        text: "check this diff",
+        skill: skillInvocation,
+      }),
+      (error: unknown) =>
+        (error as { code?: string; status?: number }).code === "rate_limited" &&
+        (error as { status?: number }).status === 429,
+    );
+    assert.equal(app.appends(), 0);
+  } finally {
+    endMutation();
+  }
+  // Once the workspace settles the same turn is admitted again.
+  const retry = await app.service.startTurn("device-1", "chat-1", "skill-gated-retry1", {
+    text: "check this diff",
+    skill: skillInvocation,
+  });
+  assert.equal(retry.status, "accepted");
+});
+
+test("remote skill turn aborts the append when its workspace changes mid-prepare", async () => {
+  let endMutation: (() => void) | undefined;
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => {
+      // The registry still resolves, but the workspace begins changing before
+      // the append commits; the admission abort must release the turn.
+      endMutation = workspaceMutationGate.begin("workspace-9");
+      return resolvedSkill;
+    },
+  });
+  try {
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "skill-abort-000001", {
+        text: "check this diff",
+        skill: skillInvocation,
+      }),
+      (error: unknown) =>
+        (error as { code?: string; status?: number }).code === "rate_limited" &&
+        (error as { status?: number }).status === 429,
+    );
+    assert.equal(app.appends(), 0);
+  } finally {
+    endMutation?.();
+  }
 });

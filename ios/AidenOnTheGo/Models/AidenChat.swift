@@ -1581,19 +1581,22 @@ struct AidenTurnStart: Encodable, Equatable, Sendable {
     let modelId: String?
     let thinkingLevel: String?
     let attachmentIds: [String]?
+    let skill: AidenSkillInvocation?
 
     init(
         text: String,
         providerId: String? = nil,
         modelId: String? = nil,
         thinkingLevel: String? = nil,
-        attachmentIds: [String]? = nil
+        attachmentIds: [String]? = nil,
+        skill: AidenSkillInvocation? = nil
     ) {
         self.text = text
         self.providerId = providerId
         self.modelId = modelId
         self.thinkingLevel = thinkingLevel
         self.attachmentIds = attachmentIds
+        self.skill = skill
     }
 }
 
@@ -1644,6 +1647,133 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
 
 struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
     let approval: AidenStreamPendingApproval?
+}
+
+/// Remote Slice 2 mid-flight input modes (POST /streams/{id}/inputs).
+enum AidenStreamInputMode: String, Codable, Sendable {
+    case steer
+    case queue
+}
+
+struct AidenStreamInputRequest: Codable, Equatable, Sendable {
+    let mode: AidenStreamInputMode
+    let text: String
+}
+
+enum AidenStreamInputQueue: String, Codable, Sendable {
+    case steer
+    case followUp = "follow-up"
+}
+
+enum AidenStreamInputRejectionReason: String, Codable, Sendable {
+    case runNotActive = "run_not_active"
+    case cancelled
+    case capacity
+    case invalid
+}
+
+struct AidenStreamInputResult: Codable, Equatable, Sendable {
+    let streamId: String
+    let chatId: String
+    let turnId: String
+    let mode: AidenStreamInputMode
+    let status: AidenStreamInputStatus
+    let queue: AidenStreamInputQueue?
+    let reason: AidenStreamInputRejectionReason?
+    let committed: Bool
+    let messageId: String?
+}
+
+enum AidenStreamInputStatus: String, Codable, Sendable {
+    case admitted
+    case rejected
+}
+
+/// Remote Slice 2 busy-composer presentation rules. A run input may only be
+/// offered while the displayed stream is controllable, the server negotiated
+/// `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+/// when the Mac durably committed the message (admitted or committed
+/// rejection); every other outcome keeps the draft untouched so a busy→idle
+/// race can never become an implicit Send.
+enum AidenRunInputPresentation {
+    struct Attempt: Equatable, Sendable {
+        let key: UUID
+        let streamId: String
+        let mode: AidenStreamInputMode
+        let text: String
+    }
+
+    static func offersRunInput(
+        isStreaming: Bool,
+        canControl: Bool,
+        supports: Bool,
+        hasDraft: Bool
+    ) -> Bool {
+        isStreaming && canControl && supports && hasDraft
+    }
+
+    static func consumesDraft(_ result: AidenStreamInputResult) -> Bool {
+        result.status == .admitted || result.committed
+    }
+
+    /// Removes the submitted text from the live draft. Text the user appended
+    /// while the submission was in flight is preserved; a draft that diverged
+    /// entirely is left untouched.
+    static func consumedDraft(submitted: String, current: String) -> String {
+        if current.trimmingCharacters(in: .whitespacesAndNewlines) == submitted { return "" }
+        if current.hasPrefix(submitted) {
+            return String(current.dropFirst(submitted.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return current
+    }
+
+    static func receipt(for result: AidenStreamInputResult) -> String? {
+        switch result.status {
+        case .admitted:
+            switch result.queue {
+            case .steer:
+                return String(localized: "Steering the current run")
+            case .followUp, .none:
+                return String(localized: "Queued to run next")
+            }
+        case .rejected:
+            guard result.committed else { return nil }
+            switch result.reason {
+            case .cancelled:
+                return String(localized: "Saved to the chat — the run was cancelled before it could use it")
+            case .capacity:
+                return String(localized: "Saved to the chat — the run queue was full")
+            case .runNotActive, .invalid, .none:
+                return String(localized: "Saved to the chat — the run ended before it could use it")
+            }
+        }
+    }
+
+    static func rejectionMessage(_ reason: AidenStreamInputRejectionReason?) -> String {
+        switch reason {
+        case .runNotActive:
+            String(localized: "The run already finished. Your draft is unchanged.")
+        case .cancelled:
+            String(localized: "The run was cancelled. Your draft is unchanged.")
+        case .capacity:
+            String(localized: "The follow-up queue is full. Your draft is unchanged — try again in a moment.")
+        case .invalid, .none:
+            String(localized: "That input was not accepted. Your draft is unchanged.")
+        }
+    }
+
+    /// A manual retry of the exact same submission replays the Mac's original
+    /// outcome instead of risking a duplicate committed message.
+    static func reusesIdempotencyKey(
+        last: Attempt?,
+        streamId: String,
+        mode: AidenStreamInputMode,
+        text: String
+    ) -> Bool {
+        guard let last else { return false }
+        return last.streamId == streamId && last.mode == mode && last.text == text
+    }
 }
 
 enum AidenApprovalDecision: String, Codable, Sendable {
@@ -1776,8 +1906,116 @@ enum AidenPendingApprovalResolution {
     }
 }
 
+/// Aiden On The Go pending question prompt. The card binds to the exact
+/// prompt/stream/chat identity from the Mac-owned snapshot.
+struct AidenPendingQuestion: Identifiable, Equatable, Sendable {
+    let id: String
+    let questions: [AidenRemoteQuestion]
+    let expiresAt: Date
+    let canRespond: Bool
+}
+
+enum AidenPendingQuestionResolution {
+    static func resolve(
+        _ question: AidenStreamPendingQuestion?,
+        streamId: String,
+        chatId: String,
+        canRespond: Bool = true,
+        now: Date = Date()
+    ) -> AidenPendingQuestion? {
+        guard let question,
+              question.streamId == streamId,
+              question.chatId == chatId,
+              question.expiresAt > now else { return nil }
+        return AidenPendingQuestion(
+            id: question.promptId,
+            questions: question.questions,
+            expiresAt: question.expiresAt,
+            canRespond: canRespond
+        )
+    }
+}
+
+/// Builds the wire answers from the card's selection state. A non-empty custom
+/// draft wins over option selections for that question; questions left
+/// unaddressed are omitted so the host records them as skipped.
+enum AidenQuestionAnswerDraft {
+    static func answers(
+        for questions: [AidenRemoteQuestion],
+        selections: [Int: Set<String>],
+        customAnswers: [Int: String]
+    ) -> [AidenQuestionAnswer] {
+        var answers: [AidenQuestionAnswer] = []
+        for (index, question) in questions.enumerated() {
+            let custom = (customAnswers[index] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !custom.isEmpty {
+                answers.append(.custom(questionIndex: index, answer: custom))
+                continue
+            }
+            let selected = selections[index] ?? []
+            let ordered = question.options.map(\.label).filter { selected.contains($0) }
+            guard !ordered.isEmpty else { continue }
+            if question.multiSelect {
+                answers.append(.multi(questionIndex: index, selected: ordered))
+            } else if let first = ordered.first {
+                answers.append(.option(questionIndex: index, answer: first))
+            }
+        }
+        return answers
+    }
+
+    /// Toggling a label keeps multi-select selections and replaces
+    /// single-select ones; clearing every selection drops the answer.
+    static func toggled(
+        selections: [Int: Set<String>],
+        questionIndex: Int,
+        label: String,
+        multiSelect: Bool
+    ) -> [Int: Set<String>] {
+        var next = selections
+        var current = next[questionIndex] ?? []
+        if current.contains(label) {
+            current.remove(label)
+        } else if multiSelect {
+            current.insert(label)
+        } else {
+            current = [label]
+        }
+        next[questionIndex] = current.isEmpty ? nil : current
+        return next
+    }
+}
+
 struct AidenLiveTool: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     var status: String?
+}
+
+/// Quiet Open Chat policy: while a conversation is on screen, its ambient
+/// surfaces (Live Activity, progress notifications) stay quiet — the user is
+/// already watching the live transcript. Blocking kinds that need attention
+/// (approvals, questions, errors) and terminal cleanup always publish.
+enum AidenQuietOpenChat {
+    /// Stream-state updates that merely report progress churn are suppressed
+    /// while the chat is foregrounded; waiting/terminal states always publish.
+    static func publishesStatus(
+        _ state: AidenStreamState,
+        isChatForegrounded: Bool
+    ) -> Bool {
+        guard isChatForegrounded else { return true }
+        switch state {
+        case .queued, .reconciling, .running:
+            return false
+        case .waitingForApproval, .done, .cancelled, .error, .interrupted:
+            return true
+        }
+    }
+
+    /// Token/tool progress events are ambient churn — suppressed while the
+    /// chat is foregrounded.
+    static func publishesAmbientProgress(isChatForegrounded: Bool) -> Bool {
+        !isChatForegrounded
+    }
 }

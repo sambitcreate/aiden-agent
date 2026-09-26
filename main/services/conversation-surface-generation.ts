@@ -57,6 +57,7 @@ export interface RemoteGenerationSurfaceInput {
   model: string;
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   botAudienceId?: string;
+  excludeToolNames?: ReadonlySet<string>;
   onTurnAccepted(): void;
 }
 
@@ -80,6 +81,7 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       usageSource: "chat" as const,
       turnId: input.turnId,
       ...(input.botAudienceId ? { botAudienceId: input.botAudienceId } : {}),
+      ...(input.excludeToolNames ? { excludeToolNames: input.excludeToolNames } : {}),
       onTurnAccepted: input.onTurnAccepted,
     },
   };

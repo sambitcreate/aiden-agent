@@ -1205,6 +1205,7 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-26: A timed-out `execFile(electron, …)` resolves with exit 0 because Chromium turns SIGTERM into a clean shutdown, so a hung fixture surfaces only as a missing result file. Use `killSignal: "SIGKILL"` so the rejection carries stderr.
 - 2026-09-26: Under Chromium's user-namespace sandbox, renderers are dumpable (`/proc/<pid>/mem` owned by the user); under the setuid sandbox they were not (owned by root). On Ubuntu runners an intentional `forcefullyCrashRenderer()` then pipes a full core to apport and `render-process-gone` stalls until it drains. The E2E step sets `kernel.core_pattern=core` and `ulimit -c 0`.
 
+- 2026-09-25 on-the-go slice D: the Android unit-test fixture is a checked-in copy at `android/app/src/test/resources/contract.json` — it does NOT track `protocol/aiden-remote/v1/fixtures/contract.json` automatically (iOS references the shared file directly via pbxproj). Every contract-revision bump must `cp` the canonical fixture into the Android copy; slice B's review and slice D both caught drift here.
 
 ## 2026-09-24 — Gemini TTS review hardening
 

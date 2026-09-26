@@ -56,6 +56,45 @@ class AidenChatProgressUiTest {
     }
 
     @Test
+    fun taskAndAgentChipsRenderAsActionableControls() {
+        val progress = AidenChatTaskProgress(
+            version = 1,
+            chatId = "chat_progress",
+            availability = AidenChatProgressAvailability.READY,
+            epoch = "epoch_progress",
+            revision = 2,
+            updatedAt = Instant.parse("2026-08-24T00:00:00Z"),
+            tasks = listOf(
+                AidenChatTask(1, "Done", AidenChatTaskStatus.COMPLETED),
+                AidenChatTask(2, "Working", AidenChatTaskStatus.IN_PROGRESS, activeForm = "Working")
+            )
+        )
+        val current = roster("turn_current", listOf(agent("agent-1")))
+        var taskClicks = 0
+        var agentClicks = 0
+
+        compose.setContent {
+            AidenTheme {
+                AidenChatProgressControls(
+                    taskProgress = progress,
+                    currentRoster = current,
+                    rosterHistory = listOf(current),
+                    connectionState = AidenChatViewModel.ProgressConnectionState.LIVE,
+                    onTasksClick = { taskClicks++ },
+                    onAgentsClick = { agentClicks++ }
+                )
+            }
+        }
+
+        compose.onNodeWithText("Step 2 / 2").assertExists().assertHasClickAction().performClick()
+        compose.onNodeWithText("1 agent").assertExists().assertHasClickAction().performClick()
+        compose.runOnIdle {
+            assertEquals(1, taskClicks)
+            assertEquals(1, agentClicks)
+        }
+    }
+
+    @Test
     fun allCompletedAndDeletedTasksDoNotLeaveTaskChrome() {
         val progress = AidenChatTaskProgress(
             version = 1,

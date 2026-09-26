@@ -42,33 +42,6 @@ private struct AidenLiquidGlassCapsuleModifier: ViewModifier {
     }
 }
 
-private struct AidenChromeGlassModifier<GlassShape: InsettableShape>: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.aidenPalette) private var palette
-
-    let isInteractive: Bool
-    let shape: GlassShape
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            if isInteractive {
-                content.glassEffect(.regular.interactive(), in: shape)
-            } else {
-                content.glassEffect(.regular, in: shape)
-            }
-        } else if reduceTransparency {
-            content
-                .background(palette.raised, in: shape)
-                .overlay(shape.stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
-        }
-    }
-}
-
 private struct AidenProminentGlassButtonModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
@@ -94,13 +67,6 @@ private struct AidenProminentGlassButtonModifier: ViewModifier {
 private extension View {
     func aidenLiquidGlassCapsule(tint: Color) -> some View {
         modifier(AidenLiquidGlassCapsuleModifier(tint: tint))
-    }
-
-    func aidenChromeGlass<GlassShape: InsettableShape>(
-        isInteractive: Bool = false,
-        in shape: GlassShape
-    ) -> some View {
-        modifier(AidenChromeGlassModifier(isInteractive: isInteractive, shape: shape))
     }
 
     func aidenProminentGlassButton() -> some View {

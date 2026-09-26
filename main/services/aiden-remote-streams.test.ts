@@ -221,16 +221,16 @@ test("cancel and approval decisions are bound to the owning device and owner ide
     summary: "Write a file",
   });
   await assert.rejects(
-    app.service.respondApproval("device-2", "approval-1", "allow", "wrong-device-key-0001"),
+    app.service.respondApproval("device-2", "approval-1", "allow", "wrong-device-key-0001", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
-  const resolved = await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001");
+  const resolved = await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough);
   assert.deepEqual(
-    await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001"),
+    await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough),
     resolved,
   );
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-1", "allow", "approval-deny-key-001"),
+    app.service.respondApproval("device-1", "approval-1", "allow", "approval-deny-key-001", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
   assert.equal(resolved.decision, "deny");
@@ -370,6 +370,7 @@ test("privileged approval details remain host-only and mobile can deny but canno
       "approval-1",
       "allow",
       "approval-host-only-allow-key",
+      inputPassthrough,
     ),
     (error: unknown) =>
       error instanceof AidenRemoteServiceError && error.code === "capability_denied",
@@ -382,6 +383,7 @@ test("privileged approval details remain host-only and mobile can deny but canno
     "approval-1",
     "deny",
     "approval-host-only-deny-key",
+    inputPassthrough,
   );
   assert.equal(denied.decision, "deny");
   assert.equal(service.pendingApproval("device-1", "stream-1"), null);
@@ -411,7 +413,7 @@ test("implementer run grants remain Mac-only approvals", async () => {
   assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, details);
   assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-run", "allow", "approval-run-grant-allow-key"),
+    app.service.respondApproval("device-1", "approval-run", "allow", "approval-run-grant-allow-key", inputPassthrough),
     (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
   );
   assert.deepEqual(app.approvals, []);
@@ -461,6 +463,7 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
     "approval-schedule",
     "allow",
     "approval-schedule-allow-key",
+    inputPassthrough,
   );
   assert.equal(allowed.decision, "allow");
   assert.match(app.approvals[0] ?? "", /:allow:/u);
@@ -482,7 +485,7 @@ test("multiple approvals remain queued and cancellation synchronously clears the
   assert.equal(app.service.pendingApprovalForChat("chat-1"), null);
   assert.equal(app.approvals.some((entry) => entry.includes("approval-2:deny")), true);
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1"),
+    app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
 });
@@ -1036,4 +1039,655 @@ test("stream capacity does not reclaim genuinely active generations", () => {
   );
   assert.equal(app.service.snapshot().streams.length, 256);
   assert.deepEqual(app.cancelled, []);
+});
+
+function inputPassthrough<T>(_chatId: string, action: () => Promise<T>): Promise<T> {
+  return action();
+}
+
+function inputFixture(submitInput?: (input: {
+  streamId: string;
+  chatId: string;
+  mode: "steer" | "queue";
+  text: string;
+  ownerDocumentId?: string;
+}) => Promise<{
+  admitted: boolean;
+  queue?: "steer" | "follow-up";
+  reason?: "run_not_active" | "cancelled" | "capacity" | "invalid";
+  committed: boolean;
+  messageId?: string;
+}>) {
+  let now = 1_000;
+  const calls: Array<Record<string, unknown>> = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    ...(submitInput
+      ? {
+          submitInput: async (input) => {
+            calls.push({ ...input });
+            return submitInput(input);
+          },
+        }
+      : {}),
+  });
+  return { service, calls };
+}
+
+test("run input admission binds to the stream owner and returns an accepted receipt", async () => {
+  const app = inputFixture(async (input) => ({
+    admitted: true,
+    queue: input.mode === "steer" ? "steer" : "follow-up",
+    committed: true,
+    messageId: "message_remote_1",
+  }));
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:status", { streamId: "stream-1" });
+  const result = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Follow up after this." },
+    "input-key-0000000001",
+    inputPassthrough);
+  assert.equal(result.status, "admitted");
+  assert.equal(result.queue, "follow-up");
+  assert.equal(result.committed, true);
+  assert.equal(result.messageId, "message_remote_1");
+  assert.equal(result.streamId, "stream-1");
+  assert.equal(result.chatId, "chat-1");
+  assert.equal(result.turnId, "turn-1");
+  assert.equal(result.mode, "queue");
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.calls[0]!.streamId, "stream-1");
+  assert.equal(app.calls[0]!.chatId, "chat-1");
+  assert.equal(app.calls[0]!.mode, "queue");
+  assert.equal(app.calls[0]!.text, "Follow up after this.");
+  assert.equal(app.calls[0]!.ownerDocumentId, owner.owner.documentId);
+});
+
+test("run input admission rejects terminal and cancelled streams without calling the host", async () => {
+  const app = inputFixture(async () => ({
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "m",
+  }));
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:done", {
+    streamId: "stream-1",
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+  });
+  const terminal = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "too late" },
+    "input-key-0000000002",
+    inputPassthrough);
+  assert.deepEqual(terminal, {
+    streamId: "stream-1",
+    chatId: "chat-1",
+    turnId: "turn-1",
+    mode: "steer",
+    status: "rejected",
+    reason: "run_not_active",
+    committed: false,
+  });
+  assert.equal(app.calls.length, 0);
+
+  const cancelling = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    submitInput: async () => {
+      app.calls.push({});
+      return { admitted: true, queue: "steer", committed: true, messageId: "m" };
+    },
+  });
+  cancelling.create("device-1", "stream-2", "chat-1", "turn-2");
+  await cancelling.cancel("device-1", "stream-2", "cancel-key-0000000001");
+  const cancelled = await cancelling.submitInput(
+    "device-1",
+    "stream-2",
+    { mode: "steer", text: "stop racing" },
+    "input-key-0000000003",
+    inputPassthrough);
+  assert.equal(cancelled.status, "rejected");
+  assert.equal(cancelled.reason, "cancelled");
+  assert.equal(cancelled.committed, false);
+  assert.equal(app.calls.length, 0);
+});
+
+test("run input admission replays the original outcome and rejects conflicting reuse", async () => {
+  let outcome = {
+    admitted: true,
+    queue: "follow-up" as const,
+    committed: true,
+    messageId: "message_remote_2",
+  };
+  const app = inputFixture(async () => outcome);
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { mode: "queue" as const, text: "Queue this." };
+  const first = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
+  const replay = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
+  assert.deepEqual(replay, first);
+  assert.equal(app.calls.length, 1);
+  await assert.rejects(
+    app.service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "queue", text: "Different text." },
+      "input-key-0000000004",
+      inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
+  );
+
+  // A host rejection is a recorded domain outcome: same request UUID replays it.
+  outcome = { admitted: false, reason: "capacity", committed: false } as never;
+  const rejected = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "Full queue." },
+    "input-key-0000000005",
+    inputPassthrough);
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.reason, "capacity");
+  const rejectedReplay = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "Full queue." },
+    "input-key-0000000005",
+    inputPassthrough);
+  assert.deepEqual(rejectedReplay, rejected);
+  assert.equal(app.calls.length, 2);
+});
+
+test("run input admission reports committed rejections and stays hidden when unwired", async () => {
+  const app = inputFixture(async () => ({
+    admitted: false,
+    reason: "run_not_active",
+    committed: true,
+    messageId: "message_orphaned_1",
+  }));
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const result = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "ended mid-flight" },
+    "input-key-0000000006",
+    inputPassthrough);
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "run_not_active");
+  assert.equal(result.committed, true);
+  assert.equal(result.messageId, "message_orphaned_1");
+
+  const unwired = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+  });
+  unwired.create("device-1", "stream-9", "chat-9", "turn-9");
+  assert.equal(unwired.supportsRunInput(), false);
+  await assert.rejects(
+    unwired.submitInput("device-1", "stream-9", { mode: "queue", text: "x" }, "input-key-0000000007", inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  assert.equal(app.service.supportsRunInput(), true);
+});
+
+test("run input admission validates the body and binds to the owning device", async () => {
+  const app = inputFixture(async () => ({
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "m",
+  }));
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "read", text: "x" }, "input-key-0000000008", inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "" }, "input-key-0000000008", inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-2", "stream-1", { mode: "steer", text: "x" }, "input-key-0000000008", inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "x" }, "short", inputPassthrough),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+});
+
+test("run input admission replays settled outcomes across a durable ledger restore", async () => {
+  const { AidenIdempotencyLedger } = await import("./aiden-remote-operation-contract.js");
+  const snapshots: unknown[] = [];
+  const calls: unknown[] = [];
+  const first = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistIdempotency: async (snapshot) => {
+      snapshots.push(snapshot);
+    },
+    submitInput: async (input) => {
+      calls.push(input);
+      return { admitted: false, reason: "capacity", committed: false };
+    },
+  });
+  first.create("device-1", "stream-1", "chat-1", "turn-1");
+  const original = await first.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Remember this." },
+    "input-key-durable-00001",
+    inputPassthrough);
+  assert.equal(original.status, "rejected");
+  assert.equal(original.reason, "capacity");
+  assert.equal(calls.length, 1);
+
+  // A restart rebuilds the ledger from the persisted snapshot; the stream
+  // record is gone, yet the settled rejection must still replay verbatim.
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    idempotency: new AidenIdempotencyLedger(snapshots[snapshots.length - 1] as never),
+    persistIdempotency: async (snapshot) => {
+      snapshots.push(snapshot);
+    },
+    submitInput: async (input) => {
+      calls.push(input);
+      return { admitted: true, queue: "follow-up", committed: true, messageId: "m" };
+    },
+  });
+  const replayed = await restored.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Remember this." },
+    "input-key-durable-00001",
+    inputPassthrough);
+  assert.deepEqual(replayed, original);
+  assert.equal(calls.length, 1);
+});
+
+test("run input admission reports an unknown outcome when outcome persistence fails", async () => {
+  let persists = 0;
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistIdempotency: async () => {
+      persists += 1;
+      if (persists > 1) throw new Error("disk lost");
+    },
+    submitInput: async () => ({
+      admitted: true,
+      queue: "steer",
+      committed: true,
+      messageId: "m",
+    }),
+  });
+  service.create("device-1", "stream-1", "chat-1", "turn-1");
+  await assert.rejects(
+    service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "steer", text: "x" },
+      "input-key-durable-00002",
+      inputPassthrough),
+    (error: unknown) =>
+      (error as { code?: string }).code === "idempotency_in_flight",
+  );
+});
+
+const QUESTION_PROMPT = {
+  version: 1,
+  promptId: "q-prompt-1",
+  streamId: "stream-1",
+  toolCallId: "tool-call-1",
+  questions: [
+    {
+      question: "Which chamfer?",
+      header: "Chamfer",
+      multiSelect: false,
+      options: [
+        { label: "0.5 mm", description: "Standard." },
+        { label: "1.0 mm", description: "Heavy." },
+      ],
+    },
+    {
+      question: "Which faces?",
+      header: "Faces",
+      multiSelect: true,
+      options: [
+        { label: "Front", description: "Front face." },
+        { label: "Back", description: "Back face." },
+      ],
+    },
+  ],
+};
+
+test("queued run input while a question is pending keeps the waiting state", async () => {
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: () => true,
+    submitInput: async () => ({
+      admitted: true,
+      queue: "follow-up",
+      committed: true,
+      messageId: "message_remote_queued",
+    }),
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+
+  const result = await service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Queue behind the prompt." },
+    "input-key-question-queued",
+    inputPassthrough,
+  );
+  assert.equal(result.status, "admitted");
+  // The queued admission commits, but the run is still parked on the pending
+  // question — reporting running would hide the prompt from clients.
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+});
+
+test("remote question prompts bind to their stream and resolve once", async () => {
+  const settled: string[] = [];
+  const changed: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response, ownerId) => {
+      settled.push(`${promptId}:${response.cancelled}:${ownerId}`);
+      return true;
+    },
+    notifyApprovalChanged: (chatId) => changed.push(chatId),
+  });
+  assert.equal(service.supportsQuestionPrompts(), true);
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+
+  const pending = service.pendingQuestion("device-1", "stream-1");
+  assert.equal(pending?.promptId, "q-prompt-1");
+  assert.equal(pending?.questions.length, 2);
+  assert.equal(pending?.expiresAt, "1970-01-01T00:05:01.000Z");
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+  assert.equal(service.questionChatId("device-1", "q-prompt-1"), "chat-1");
+  assert.throws(
+    () => service.questionChatId("device-2", "q-prompt-1"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+
+  const resolved = await service.respondQuestion(
+    "device-1",
+    "q-prompt-1",
+    {
+      cancelled: false,
+      answers: [
+        { questionIndex: 0, kind: "option", answer: "0.5 mm" },
+        { questionIndex: 1, kind: "multi", selected: ["Front", "Back"] },
+      ],
+    },
+    "question-answer-key-01",
+    inputPassthrough,
+  );
+  assert.equal(resolved.promptId, "q-prompt-1");
+  assert.equal(settled.length, 1);
+  assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
+  assert.equal(service.status("device-1", "stream-1").state, "running");
+  assert.deepEqual(changed, ["chat-1", "chat-1"]);
+  assert.deepEqual(
+    await service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      {
+        cancelled: false,
+        answers: [
+          { questionIndex: 0, kind: "option", answer: "0.5 mm" },
+          { questionIndex: 1, kind: "multi", selected: ["Front", "Back"] },
+        ],
+      },
+      "question-answer-key-01",
+    inputPassthrough,
+    ),
+    resolved,
+  );
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: true, answers: [] },
+      "question-answer-key-01",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
+  );
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "0.5 mm" }] },
+      "question-answer-key-02",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+});
+
+test("remote question responses are semantically validated against the stored prompt", async () => {
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: () => true,
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "2.0 mm" }] },
+      "question-answer-key-03",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: false, answers: [{ questionIndex: 0, kind: "multi", selected: ["Front"] }] },
+      "question-answer-key-04",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: false, answers: [{ questionIndex: 9, kind: "option", answer: "0.5 mm" }] },
+      "question-answer-key-05",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  const resolved = await service.respondQuestion(
+    "device-1",
+    "q-prompt-1",
+    { cancelled: true, answers: [] },
+    "question-answer-key-06",
+    inputPassthrough,
+  );
+  assert.equal(resolved.promptId, "q-prompt-1");
+});
+
+test("remote questions expire and are dropped on terminal state", async () => {
+  let now = 1_000;
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      settled.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  now = 1_000 + 5 * 60 * 1_000;
+  assert.throws(
+    () => service.questionChatId("device-1", "q-prompt-1"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+  assert.deepEqual(settled, ["q-prompt-1:true"]);
+
+  const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner2.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  assert.equal(service.pendingQuestion("device-1", "stream-2")?.promptId, "q-prompt-2");
+  owner2.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
+  assert.equal(service.pendingQuestion("device-1", "stream-2"), null);
+  assert.throws(
+    () => service.questionChatId("device-1", "q-prompt-2"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+});
+
+test("questionnaire publishes reject unbound prompts and duplicate stream prompts", () => {
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: () => true,
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  assert.throws(() =>
+    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, streamId: "stream-9" }));
+  assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.throws(() =>
+    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-3" }));
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+});
+
+test("question prompts stay unadvertised without a host responder", () => {
+  const app = fixture();
+  assert.equal(app.service.supportsQuestionPrompts(), false);
+});
+
+test("resolving one pending surface keeps the other's waiting prompt", async () => {
+  const questions: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      questions.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", { approvalId: "approval-1", summary: "Change a file" });
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+
+  // Resolving the approval must not drop the surviving question prompt.
+  await service.respondApproval("device-1", "approval-1", "deny", "approval-coexist-key-01", inputPassthrough);
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+
+  // Resolving the question then leaves no waiting surface.
+  await service.respondQuestion(
+    "device-1",
+    "q-prompt-1",
+    { cancelled: true, answers: [] },
+    "question-coexist-key-01",
+    inputPassthrough,
+  );
+  assert.equal(service.status("device-1", "stream-1").state, "running");
+
+  // The symmetric case: question first, approval second.
+  const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner2.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  owner2.owner.send("chat:approval", { approvalId: "approval-2", summary: "Run a command" });
+  await service.respondQuestion(
+    "device-1",
+    "q-prompt-2",
+    { cancelled: true, answers: [] },
+    "question-coexist-key-02",
+    inputPassthrough,
+  );
+  assert.equal(service.status("device-1", "stream-2").state, "waiting_for_approval");
+  assert.equal(service.pendingApproval("device-1", "stream-2")?.approvalId, "approval-2");
+});
+
+test("revocation settles a revoked device's pending question without waiting for expiry", async () => {
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      settled.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  const other = service.create("device-2", "stream-2", "chat-2", "turn-2");
+  other.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+
+  await service.revokeDevice("device-1");
+  assert.deepEqual(settled, ["q-prompt-1:true"]);
+  assert.throws(
+    () => service.questionChatId("device-1", "q-prompt-1"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+  assert.equal(service.pendingQuestion("device-2", "stream-2")?.promptId, "q-prompt-2");
+});
+
+test("cancellation settles a pending question with a cancelled response", async () => {
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      settled.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+
+  const cancelled = await service.cancel("device-1", "stream-1", "cancel-question-key-01");
+  assert.equal(cancelled.state, "reconciling");
+  assert.deepEqual(settled, ["q-prompt-1:true"]);
+  assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: true, answers: [] },
+      "question-after-cancel-01",
+    inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
 });

@@ -48,6 +48,7 @@ const appSourcePaths = [
   "AidenOnTheGo/AppIntents/AidenAppIntents.swift",
   "AidenOnTheGo/Auth/KeychainStore.swift",
   "AidenOnTheGo/Config/AidenAppearance.swift",
+  "AidenOnTheGo/Config/AidenChromeGlass.swift",
   "AidenOnTheGo/Config/AidenVoiceInput.swift",
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
@@ -654,6 +655,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     attachmentCamera,
     scheduledTasks,
     widget,
+    chromeGlass,
     project,
     logoDefinition,
     logoArtwork,
@@ -668,6 +670,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift`, "utf8"),
     readFile(`${iosRoot}AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Config/AidenChromeGlass.swift`, "utf8"),
     readFile(projectPath, "utf8"),
     readFile(`${sidebarLogoPath}Contents.json`, "utf8"),
     readFile(`${sidebarLogoPath}aiden-sidebar-logo.png`),
@@ -784,7 +787,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,
   );
   assert.match(shell, /aidenChromeGlass\(isInteractive: true, in: Capsule\(\)\)/u);
-  assert.match(shell, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
+  assert.match(chromeGlass, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
   assert.match(shell, /contentMargins\(\.bottom, 104, for: \.scrollContent\)/u);
   assert.doesNotMatch(
     shell,
