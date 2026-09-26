@@ -121,6 +121,7 @@ fun AidenChatDetailScreen(
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
+    val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isStopping by viewModel.isStopping.collectAsState()
@@ -539,7 +540,7 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend,
+                    canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
                     showsRunInputOptions = viewModel.showsRunInputOptions,
                     canSubmitRunInput = viewModel.canSubmitRunInput,

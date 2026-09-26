@@ -1114,6 +1114,27 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+## 2026-09-22 — native recovery verification
+
+- The initial isolated checkout was behind main; fetched `c8c09e0d2` before coding. The local Hermex study checkout also lacked the cited commits; verified/fetched upstream HEAD `aa7830b28a071769c2d26bc08949e38e09f4b388` into Git objects for read-only comparison.
+- Effective task policy still requires workspace-write escalations for shared `.git` metadata, Gradle cache and Xcode/CoreDevice despite the coordinator's global full-access preference; reused authorized commands without changing permissions.
+- Cursor-zero HTTP requests omit both `after` and Last-Event-ID; the first regression assertion was corrected to match that existing wire behavior. Original ViewModel then fails four enhanced regressions and the fixed implementation passes.
+- Physical iPhone 13 Pro is shared and locked (`com.apple.dt.deviceprep Code=-3: Unlock Sambit’s iPhone to Continue` from the preceding coordinated run). Generic unsigned build-for-testing is compilation evidence only. No simulator or device-unlock bypass.
+
+- PR #217 Pullfrog exposed three missing held-I/O scenarios after green initial CI. Added explicit cache/status/HTTP barriers instead of timing-only sleeps; native transcript generation now advances for terminal authority too. Follow-up Android old-head experiment fails exactly the held-load case; final 177-test run passes. The shared URLProtocol fixture withholds terminal delivery until the intended GET is captured, preventing it from accidentally holding the final reconciliation request.
+
+- 2026-09-22 mobile recovery: synchronous Swift actor disk writes do not imply FIFO queued-call ordering. Reserve ordering tokens before the actor hop and reject stale tokens inside persistence; a held GET test alone cannot prove already-admitted write ordering. Verify disk through a reopened cache after deliberately reversed write delivery.
+
+- 2026-09-22 PR217: gh run view --log-failed refuses logs while sibling jobs run; direct gh api jobs/{id}/logs with --allow-escape-sequences retrieves completed-job logs. Rerun also rejected until workflow completion. Local focused ESLint lacks @eslint/js in this checkout; focused Node harness tests remain runnable after building native helper.
+
+## 2026-09-23 native integration repair
+- Preserved integration compiles but chat tests expose independent list-token, premature Stop, approval fallback, and draft/recovery interleavings; compilation alone missed these regressions.
+- Physical devices are offline; asked for simulator exception because ios/AGENTS.md prohibits it despite the simulator-based handoff.
+- Android full JVM execution exposed a reproducible terminal-settlement timeout; isolated reproduction is being inspected before treating it as runner flakiness.
+- The preserved worktree had no Node dependencies; install its lockfile dependencies before running the integrated worktree test.
+- Android held-load recovery timeout concealed a fixture contract error: default JSON serialization emitted forbidden `reasoning: null`; omit null optional fields to match the public host projection, then the full chat class passes.
+- Direct worktree test execution needs `build:worktree-remover` and `build:worktree-file-io` first; missing native helpers caused ENOENT before the prerequisite builds and rerun.
+- First authorized simulator run caught the detail overlay admitting a re-created chat for metadata reserved during its deletion cleanup. Apply the existing per-chat deletion floor to overlay rows too; preserve the pending-era regression's expected exclusion.
 ## 2026-09-24 — origin/main merge into feature/linux-desktop-support
 
 - The lane38 linux external-editor memory describes the original 5-editor bounded support; the branch later expanded to a union model (21 executables, Flatpak fallback, `file-manager` id). Merge resolution kept the union model and ported main's `zeditor` alias plus PATH hardening (absolute roots only, regular-file check, PATH-major ordering) that linux's variant lacked.

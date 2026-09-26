@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -140,7 +141,15 @@ class AidenChatViewModel(
     val draft: StateFlow<String> = _draft.asStateFlow()
 
     private var draftSession: AidenChatDraftStore.Session? = null
+    private val _hasActiveStream = MutableStateFlow(false)
+    val hasActiveStream: StateFlow<Boolean> = _hasActiveStream.asStateFlow()
     private var activeStreamId: String? = null
+        set(value) {
+            field = value
+            _hasActiveStream.value = value != null
+        }
+    private var transcriptGeneration = 0L
+    private var recoveryWarning: String? = null
     private var streamJob: Job? = null
     private var titleRefreshJob: Job? = null
     private var terminalReconciliationJob: Job? = null
@@ -190,7 +199,7 @@ class AidenChatViewModel(
         } == true
 
     val canSend: Boolean
-        get() = !isReadOnlyPresentation && isConnected && !_isStarting.value &&
+        get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
 
@@ -686,14 +695,17 @@ class AidenChatViewModel(
     }
 
     fun loadChat() {
+        if (_isStarting.value) return
+        val generation = transcriptGeneration
         val client = activeClient() ?: return
         viewModelScope.launch {
             _isLoading.value = true
             try {
                 val remote = client.chat(chatId)
+                if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
                 acceptRemoteChat(remote)
             } catch (e: Exception) {
-                if (e !is CancellationException) {
+                if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
                 }
             } finally {
@@ -735,7 +747,9 @@ class AidenChatViewModel(
             chatCache.removeActiveStream(currentInstanceId, chatId, ifStreamId = activeStream.streamId)
             return
         }
-        startStreaming(activeStream)
+        // The cached cursor has no matching durable partial buffers. Reconstruct
+        // the cold view from the journal; warm reconnects retain their local cursor.
+        startStreaming(activeStream.copy(lastSequence = 0))
     }
 
     fun send() {
@@ -780,6 +794,9 @@ class AidenChatViewModel(
             createdAt = now
         )
 
+        transcriptGeneration++
+        titleRefreshJob?.cancel()
+        titleRefreshJob = null
         _isStarting.value = true
         _presentedError.value = null
         _draft.value = ""
@@ -836,6 +853,8 @@ class AidenChatViewModel(
                 }
             } finally {
                 _isStarting.value = false
+                transcriptGeneration++
+                if (activeClient() === client && _chat.value?.isTitlePending == true) schedulePendingTitleRefresh()
             }
         }
     }
@@ -952,9 +971,22 @@ class AidenChatViewModel(
         }
     }
 
+    private fun showRecoveryWarning(message: String?) {
+        _presentedError.value = message
+        recoveryWarning = message
+    }
+
+    private fun clearRecoveryWarning() {
+        if (recoveryWarning != null && _presentedError.value == recoveryWarning) _presentedError.value = null
+        recoveryWarning = null
+    }
+
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
+        if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
+        terminalReconciliationJob?.cancel()
+        terminalReconciliationJob = null
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             var stream = originalStream
@@ -963,25 +995,25 @@ class AidenChatViewModel(
 
             while (activeStreamId == stream.streamId) {
                 try {
-                    client.openStream(chatId, stream.streamId, lastEventId = stream.lastSequence).collect { event ->
-                        if (activeStreamId != stream.streamId) return@collect
-                        if (event.streamId != stream.streamId) return@collect
-                        if (event.sequence <= stream.lastSequence) return@collect
-                        if (event.sequence != stream.lastSequence + 1) {
-                            reconcileChat()
-                        }
+                    val terminal = client.openStream(chatId, stream.streamId, lastEventId = stream.lastSequence).firstOrNull { event ->
+                        if (activeStreamId != stream.streamId) return@firstOrNull true
+                        if (event.streamId != stream.streamId) return@firstOrNull false
+                        clearRecoveryWarning()
+                        if (event.sequence <= stream.lastSequence) return@firstOrNull false
+                        if (event.sequence != stream.lastSequence + 1) reconcileChat()
                         apply(event)
-                        if (activeStreamId != stream.streamId) return@collect
+                        // A terminal frame ends transport even if the authoritative
+                        // transcript fetch failed and needs independent retries.
+                        if (event.terminal || activeStreamId != stream.streamId) return@firstOrNull true
                         stream.lastSequence = event.sequence
-                        if (event.terminal) return@collect
-                        if (instanceId.isNotEmpty()) {
-                            chatCache.saveActiveStream(stream, instanceId, chatId)
-                        }
+                        false
                     }
+                    if (terminal != null || activeStreamId != stream.streamId) return@launch
 
                     val status = client.streamStatus(chatId, stream.streamId)
                     if (activeStreamId != stream.streamId) return@launch
                     retryAttempt = 0
+                    clearRecoveryWarning()
                     apply(status, stream.streamId)
                     if (status.state.isTerminal) {
                         if (terminalReplayGate.shouldReplay(status.state)) continue
@@ -994,6 +1026,8 @@ class AidenChatViewModel(
                     try {
                         val status = client.streamStatus(chatId, stream.streamId)
                         if (activeStreamId != stream.streamId) return@launch
+                        retryAttempt = 0
+                        clearRecoveryWarning()
                         apply(status, stream.streamId)
                         if (status.state.isTerminal) {
                             if (terminalReplayGate.shouldReplay(status.state)) continue
@@ -1006,7 +1040,7 @@ class AidenChatViewModel(
                         if (AidenTerminalReconciliation.isDefinitiveMissingStream(inner)) {
                             if (reconcileMissingStream(stream)) return@launch
                         }
-                        _presentedError.value = inner.localizedMessage
+                        showRecoveryWarning(inner.localizedMessage)
                         val retryDelay = AidenTerminalReconciliation.retryDelayMilliseconds(retryAttempt)
                         retryAttempt++
                         delay(retryDelay)
@@ -1758,20 +1792,25 @@ class AidenChatViewModel(
     }
 
     private suspend fun reconcileChat(): Boolean {
+        if (_isStarting.value) return false
+        val generation = transcriptGeneration
         val client = activeClient() ?: return false
         return try {
             val remote = client.chat(chatId)
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return false
             acceptRemoteChat(remote)
+            clearRecoveryWarning()
             true
         } catch (e: Exception) {
-            if (e !is CancellationException) {
-                _presentedError.value = e.localizedMessage
+            if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
+                showRecoveryWarning(e.localizedMessage)
             }
             false
         }
     }
 
     private fun acceptRemoteChat(remote: AidenChat, scheduleTitleRefresh: Boolean = true) {
+        if (_isStarting.value) return
         _chat.value = remote
         resolveModelSelection()
         if (instanceId.isNotEmpty()) {
@@ -1789,7 +1828,10 @@ class AidenChatViewModel(
             for (delayMs in AidenChatTitleReconciliation.retryMilliseconds) {
                 try {
                     delay(delayMs)
+                    if (_isStarting.value) continue
+                    val generation = transcriptGeneration
                     val remote = client.chat(chatId)
+                    if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) continue
                     acceptRemoteChat(remote, scheduleTitleRefresh = false)
                     if (!remote.isTitlePending) return@launch
                 } catch (e: Exception) {
@@ -1801,6 +1843,7 @@ class AidenChatViewModel(
 
     private suspend fun finishStream(expectedStreamId: String) {
         if (activeStreamId != expectedStreamId) return
+        transcriptGeneration++
         if (!reconcileChat()) {
             scheduleTerminalReconciliation(expectedStreamId)
             return
@@ -1810,7 +1853,13 @@ class AidenChatViewModel(
 
     private fun clearFinishedStream(expectedStreamId: String) {
         if (activeStreamId == expectedStreamId) {
+            transcriptGeneration++
             activeStreamId = null
+            _liveText.value = ""
+            _reasoning.value = ""
+            _tools.value = emptyList()
+            _activityTimeline.value = null
+            _pendingApproval.value = null
             if (instanceId.isNotEmpty()) {
                 chatCache.removeActiveStream(instanceId, chatId, ifStreamId = expectedStreamId)
             }
@@ -1819,6 +1868,7 @@ class AidenChatViewModel(
 
     private suspend fun reconcileMissingStream(stream: AidenChatCache.ActiveStream): Boolean {
         if (activeStreamId != stream.streamId) return false
+        transcriptGeneration++
         if (!reconcileChat()) return false
         if (activeStreamId != stream.streamId) return false
         val currentChat = _chat.value ?: return false
@@ -1841,6 +1891,7 @@ class AidenChatViewModel(
                     val delayMs = AidenTerminalReconciliation.retryDelayMilliseconds(attempt)
                     delay(delayMs)
                     if (activeStreamId != expectedStreamId) return@launch
+                    transcriptGeneration++
                     if (reconcileChat()) {
                         clearFinishedStream(expectedStreamId)
                         return@launch
