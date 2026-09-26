@@ -64,7 +64,7 @@ final class AidenScheduledRunNotifier {
                 // returned ids are marked delivered so nothing storms.
                 feed.notifications.forEach { delivered.insert($0.id) }
                 defaults.set(feed.serverNow.timeIntervalSince1970 * 1_000, forKey: cursorKey(instanceId))
-                defaults.set(Array(delivered).suffix(Self.maximumDeliveredIds), forKey: deliveredKey(instanceId))
+                defaults.set(Array(Array(delivered).suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
                 return
             }
             // Cursor advances only past CONTIGUOUSLY handled items (oldest
@@ -101,7 +101,7 @@ final class AidenScheduledRunNotifier {
                 }
             }
             defaults.set(nextCursor, forKey: cursorKey(instanceId))
-            defaults.set(Array(delivered).suffix(Self.maximumDeliveredIds), forKey: deliveredKey(instanceId))
+            defaults.set(Array(Array(delivered).suffix(Self.maximumDeliveredIds)), forKey: deliveredKey(instanceId))
         } catch {
             // Fetch/validation failure or cancellation: keep cursor state so a
             // later poll retries instead of silently skipping runs.
