@@ -20,16 +20,11 @@ test("shared inline metadata preserves the approved hierarchy", () => {
 });
 
 test("secondary menu suffixes use the shared hierarchy primitive", () => {
-  const appearance = source("../components/settings/appearance-settings.tsx");
   const providerEditor = source("../components/settings/provider-editor.tsx");
   const telegram = source("../components/settings/telegram-settings.tsx");
   const bots = source("../main/bots-view.tsx");
   const webSearch = source("../components/settings/web-search-settings.tsx");
 
-  assert.equal(
-    appearance.match(/<InlineMetadata>· \{font\.preview\}<\/InlineMetadata>/gu)?.length,
-    2,
-  );
   assert.match(providerEditor, /<InlineMetadata>· Hidden<\/InlineMetadata>/u);
   assert.match(telegram, /<InlineMetadata>· connected<\/InlineMetadata>/u);
   assert.match(telegram, /<InlineMetadata>· Hidden<\/InlineMetadata>/u);

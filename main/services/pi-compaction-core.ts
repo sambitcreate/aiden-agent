@@ -12,6 +12,8 @@ import {
   prepareCompaction,
   shouldCompact,
   uuidv7,
+  TODO_CONTEXT,
+  withAbortSignal,
   type AgentMessage,
   type CompactionSettings,
   type CompactionPreparation,
@@ -27,6 +29,7 @@ import {
   type RetryCallbacks,
   type RetryPolicy,
   type Usage,
+  normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
@@ -605,7 +608,6 @@ export class PiCompactionCoordinator {
           boundedCompactionModels(this.options.models),
           this.options.model,
           undefined,
-          abortController.signal,
           this.options.thinkingLevel,
           this.options.summaryRetry ?? {
             enabled: true,
@@ -613,6 +615,7 @@ export class PiCompactionCoordinator {
             baseDelayMs: 2_000,
           },
           this.options.summaryRetryCallbacks,
+          withAbortSignal(abortController.signal, TODO_CONTEXT),
         );
         if (!compactResult.ok) throw compactResult.error;
         return compactResult.value;
@@ -747,7 +750,7 @@ export class PiCompactionCoordinator {
         tokensBefore: result.tokensBefore,
         estimatedTokensAfter: estimatedMessageTokens(context.messages),
         ...(result.usage === undefined ? {} : { usage: result.usage }),
-        ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
+        ...(result.details ? { details: result.details as unknown as PiCompactionDetails } : {}),
       };
       if (budgetFailure) {
         writeDiagnosticEvent({
@@ -837,7 +840,7 @@ export function createPiCompactionModels(
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const stream = runtime.models.getModel(model.provider, model.id)
       ? runtime.models.streamSimple(model, context, options)
-      : runtime.streams.streamSimple(model, context, {
+      : runtime.streams.streamSimple(model, normalizeContext(context), {
           ...options,
           apiKey: options?.apiKey ?? runtime.apiKey,
           headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
@@ -915,11 +918,16 @@ async function summaryRequestSpareTokens(
     },
   } as unknown as Models;
   try {
-    await compact(input, probe, model, undefined, signal, thinkingLevel, {
-      enabled: false,
-      maxRetries: 0,
-      baseDelayMs: 0,
-    });
+    await compact(
+      input,
+      probe,
+      model,
+      undefined,
+      thinkingLevel,
+      { enabled: false, maxRetries: 0, baseDelayMs: 0 },
+      undefined,
+      withAbortSignal(signal, TODO_CONTEXT),
+    );
   } catch (error) {
     if (error instanceof SummaryRequestProbe) return error.spareTokens;
     throw error;

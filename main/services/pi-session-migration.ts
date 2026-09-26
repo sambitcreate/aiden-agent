@@ -22,6 +22,7 @@ import {
   type LegacyPiEntry,
 } from "./pi-legacy-session.js";
 import { createCurrentPiSessionRepository } from "./pi-session-repository-port.js";
+import { convertOldPiV4Journal, upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 
 export const PI_SESSION_MIGRATION_RECEIPT_VERSION = 1 as const;
 
@@ -303,8 +304,9 @@ function encodeV4Journal(contents: string): {
       : { legacyParentSessionPath: legacy.header.parentSession }),
     ...(legacy.header.metadata === undefined ? {} : { metadata: legacy.header.metadata }),
   };
+  const oldJournal = [header, ...mutations].map((value) => JSON.stringify(value)).join("\n") + "\n";
   return {
-    journal: [header, ...mutations].map((value) => JSON.stringify(value)).join("\n") + "\n",
+    journal: convertOldPiV4Journal(oldJournal).journal,
     receiptCounts: {
       entries: verification.entryCount,
       messages: verification.messageCount,
@@ -350,7 +352,7 @@ async function validateStagedJournal(
     session.getMetadata(),
   ]);
   const expected = buildProjectedPiV4Context(projection.entries, details.leafId);
-  if (JSON.stringify(actualContext) !== JSON.stringify(expected)) {
+  if (!isDeepStrictEqual(actualContext, expected)) {
     throw new Error("The staged Pi v4 journal changes provider context.");
   }
   const expectedEntries = projection.entries.filter(
@@ -407,6 +409,11 @@ export async function migratePiSessionJournal(
     ) {
       throw new Error("The Pi migration receipt does not own this chat journal.");
     }
+    const promotedHeader = JSON.parse((await readFile(resolvedSource, "utf8")).split("\n", 1)[0] ?? "{}") as { kind?: unknown; version?: unknown; v?: unknown };
+    if (promotedHeader.kind !== "header" || (promotedHeader.version !== 4 && promotedHeader.v !== 4)) {
+      throw new Error("The Pi migration target is not a header for the promoted v4 journal.");
+    }
+    await upgradeOldPiV4File(resolvedSource);
     const backup = await readValidBackup(backupPath, existingReceipt.sourceSha256);
     const legacy = decodeLegacyPiSession(backup.toString("utf8"));
     if (legacy.header.id !== expectedChatId) {
@@ -424,14 +431,14 @@ export async function migratePiSessionJournal(
 
   const current = await readFile(resolvedSource);
   const firstLine = current.toString("utf8").split("\n", 1)[0] ?? "";
-  let header: { kind?: unknown; version?: unknown } = {};
+  let header: { kind?: unknown; version?: unknown; v?: unknown } = {};
   try {
     header = JSON.parse(firstLine) as typeof header;
   } catch {
     // The independent decoder below provides the closed diagnostic.
   }
   let legacyBytes = current;
-  if (header.kind === "header" && header.version === 4) {
+  if (header.kind === "header" && (header.version === 4 || header.v === 4)) {
     legacyBytes = await readValidBackup(backupPath);
   }
   const contents = legacyBytes.toString("utf8");
@@ -441,7 +448,8 @@ export async function migratePiSessionJournal(
   }
   const details = encodeV4Journal(contents);
   const projection = projectLegacyPiMigration(legacy);
-  if (header.kind === "header" && header.version === 4) {
+  if (header.kind === "header" && (header.version === 4 || header.v === 4)) {
+    await upgradeOldPiV4File(resolvedSource);
     await validateStagedJournal(
       resolvedSource,
       expectedChatId,
@@ -526,7 +534,7 @@ export async function rollbackPiSessionMigration(
   } catch {
     // The v4 validator below provides the closed diagnostic.
   }
-  if (promotedHeader.kind !== "header" || promotedHeader.version !== 4) {
+  if (promotedHeader.kind !== "header" || (promotedHeader.version !== 4 && (promotedHeader as { v?: number }).v !== 4)) {
     if (sourceHash(promoted) !== receipt.sourceSha256) {
       throw new Error("The Pi rollback target is neither the promoted v4 journal nor its v3 source.");
     }

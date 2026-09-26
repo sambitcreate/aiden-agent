@@ -320,7 +320,7 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       description,
       parameters,
       execute: async (callId, raw, callSignal) => {
-        const args = validateToolArguments(tool, { type: "toolCall", id: callId, name, arguments: raw as Args }) as Args;
+        const args = validateToolArguments(tool, { type: "toolCall", id: callId, name, arguments: raw as Record<string, never> }) as Args;
         const signal = callSignal ? AbortSignal.any([context.signal, callSignal]) : context.signal;
         return run(name, args, signal);
       },
