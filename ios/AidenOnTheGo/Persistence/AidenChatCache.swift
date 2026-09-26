@@ -440,10 +440,13 @@ actor AidenChatCache {
     @discardableResult
     func admitCreatedWorkspaceChat(chatId: String, instanceId: String, workspaceId: String, writeToken: UInt64) async -> Bool {
         await beforeMetadataWrite?()
+        let owner = chatWriteGenerations[instanceId]?[chatId] ?? 0
         guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
               isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chatId),
               !isChatHidden(instanceId: instanceId, chatId: chatId),
-              chatWriteGenerations[instanceId]?[chatId] == writeToken,
+              // The create owns the detail, or a newer detail winner superseded
+              // it and no list admitted after that winner omitted the chat.
+              owner == writeToken || (owner > writeToken && owner > (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0)),
               var current = admittedChat(instanceId: instanceId, chatId: chatId),
               current.workspaceId == workspaceId, !current.isBotChat else { return false }
         current.localTitleOverride = nil

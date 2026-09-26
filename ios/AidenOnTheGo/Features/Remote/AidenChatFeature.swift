@@ -895,13 +895,18 @@ final class AidenWorkspaceChatsModel {
                     }
                     return nil
                 }
+                // The winner may be detail-only (or its file write failed), so
+                // keep the created row in the durable list for a cold reopen.
+                await cache.admitCreatedWorkspaceChat(chatId: chat.id, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
                 guard generation == (presentationGenerations[chat.id] ?? 0) else { return chats.first { $0.id == chat.id } }
                 upsert(current)
                 return current
             }
         } catch {
             // Disk failure remains best-effort; a normal fence rejection above
-            // instead means another owner invalidated this snapshot.
+            // instead means another owner invalidated this snapshot. The detail
+            // was admitted in memory, so still keep its list row durable.
+            await cache.admitCreatedWorkspaceChat(chatId: chat.id, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
             guard generation == (presentationGenerations[chat.id] ?? 0) else { return chats.first { $0.id == chat.id } }
             upsert(chat)
             return chat
