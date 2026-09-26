@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   refresh:
+    # workflow_dispatch can target any branch; only main may refresh or publish.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -111,7 +113,7 @@ jobs:
 
   publish:
     needs: refresh
-    if: needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
+    if: github.ref == 'refs/heads/main' && needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Pushes use the CATALOG_DEPLOY_KEY deploy key, which the main ruleset
@@ -160,9 +162,17 @@ jobs:
       - name: Push verified snapshot
         shell: bash
         env:
+          BASE_SHA: ${{ needs.refresh.outputs.base-sha }}
           CATALOG_DEPLOY_KEY: ${{ secrets.CATALOG_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          # The deploy key bypasses required checks, so it may only append the
+          # snapshot commit to history that is already on main.
+          git fetch --quiet "https://github.com/${GITHUB_REPOSITORY}.git" main
+          if ! git merge-base --is-ancestor "$BASE_SHA" FETCH_HEAD; then
+            echo "Base $BASE_SHA is not on main; refusing to publish the catalog." >&2
+            exit 1
+          fi
           if [[ -z "$CATALOG_DEPLOY_KEY" ]]; then
             echo "CATALOG_DEPLOY_KEY secret is missing; cannot publish the catalog." >&2
             exit 1
