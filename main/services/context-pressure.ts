@@ -15,6 +15,8 @@ import { resolveCompactionModelMetadata } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { buildSystemPrompt } from "./chat-system-prompt.js";
+import { aidenConfigDir } from "./aiden-config-dir.js";
+import { agentsInstructionFingerprint, withAgentsInstructionsEstimate } from "./agents-instructions.js";
 import { buildAgentTools } from "./tools.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
@@ -104,7 +106,14 @@ async function ambientContextOptions(
   const workspace = workspaceId ? await configStore.getWorkspace(workspaceId) : undefined;
   const folderPath = workspace?.folderPath;
   const permission = workspace?.permission ?? "ask";
-  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}`;
+  // Desktop generations append global and workspace AGENTS.md guidance before
+  // every provider request (llm-client); the estimate must price it too.
+  const instructionRoots = {
+    globalRoot: aidenConfigDir(),
+    workspaceRoot: permission !== "none" ? folderPath : undefined,
+  };
+  const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
+  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
   const cached = ambientProfiles.get(chatId);
   if (cached?.key === key) return cached.options;
   const settings = await configStore.getSettings();
@@ -130,7 +139,7 @@ async function ambientContextOptions(
     allowSubagents: false,
     includeCodingTools: true,
   });
-  const systemPrompt = await buildSystemPrompt(
+  const hostPrompt = await buildSystemPrompt(
     folderPath,
     branch,
     permission,
@@ -140,6 +149,7 @@ async function ambientContextOptions(
     skillSnapshot,
     new Set(tools.map((tool) => tool.name)),
   );
+  const systemPrompt = await withAgentsInstructionsEstimate(hostPrompt, instructionRoots);
   const options: GenerationContextOptions = {
     contextWindow,
     systemPrompt,

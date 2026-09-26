@@ -96,3 +96,52 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
     },
   };
 }
+
+export interface AgentsInstructionRoots {
+  globalRoot: string;
+  workspaceRoot?: string;
+}
+
+/**
+ * Cheap change detector for the root AGENTS.md files a generation would read,
+ * so an estimate built from them can be cached until either file changes.
+ */
+export async function agentsInstructionFingerprint(roots: AgentsInstructionRoots): Promise<string> {
+  const parts = await Promise.all(
+    [roots.globalRoot, roots.workspaceRoot].map(async (root) => {
+      if (!root) return "";
+      try {
+        const stat = await fs.lstat(path.join(root, "AGENTS.md"));
+        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return "-";
+      }
+    }),
+  );
+  return parts.join("|");
+}
+
+/**
+ * Read-only estimate of the prompt a desktop generation sends after appending
+ * AGENTS.md guidance, for surfaces (the composer context meter) that price the
+ * next request without starting one. It reuses the refresher so the block has
+ * the runtime's exact shape and length. Instructions the runtime would refuse
+ * (symlinked, oversized, unreadable) leave the host prompt unchanged: the real
+ * request fails closed on them rather than sending them.
+ */
+export async function withAgentsInstructionsEstimate(
+  systemPrompt: string,
+  roots: AgentsInstructionRoots,
+  read?: AgentsInstructionOptions["read"],
+): Promise<string> {
+  try {
+    const refresher = await createAgentsInstructionRefresher({
+      ...roots,
+      revalidate: async () => {},
+      ...(read ? { read } : {}),
+    });
+    return (await refresher.apply({ systemPrompt })).systemPrompt;
+  } catch {
+    return systemPrompt;
+  }
+}

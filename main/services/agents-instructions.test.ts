@@ -3,8 +3,13 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import os from "node:os";
-import { createAgentsInstructionRefresher, AGENTS_INSTRUCTION_BYTES } from "./agents-instructions.js";
-import { assertGenerationContextCapacity } from "./generation-context.js";
+import {
+  agentsInstructionFingerprint,
+  createAgentsInstructionRefresher,
+  AGENTS_INSTRUCTION_BYTES,
+  withAgentsInstructionsEstimate,
+} from "./agents-instructions.js";
+import { assertGenerationContextCapacity, projectChatContextPressure } from "./generation-context.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agents-"));
@@ -110,4 +115,51 @@ test("provider dispatch fence rejects scope changes after successful prompt prep
   assert.match(prepared.systemPrompt, /PRIVATE/);
   authorized = false;
   await assert.rejects(refresher.assertCurrent(), /Revoked/);
+});
+
+test("context-meter estimate prices the same AGENTS.md block the runtime appends", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.globalRoot, "AGENTS.md"), "GLOBAL_RULES ".repeat(400));
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "WORKSPACE_RULES ".repeat(400));
+  const roots = { globalRoot: f.globalRoot, workspaceRoot: f.workspaceRoot };
+  const estimate = await withAgentsInstructionsEstimate("HOST", roots, f.read);
+  const runtime = (await (await createAgentsInstructionRefresher(f)).apply({ systemPrompt: "HOST" })).systemPrompt;
+  assert.match(estimate, /GLOBAL_RULES/);
+  assert.match(estimate, /WORKSPACE_RULES/);
+  // Only the per-run nonce differs, so the priced length matches exactly.
+  assert.equal(estimate.length, runtime.length);
+  const options = { contextWindow: 32_000, tools: [], supportsImages: false };
+  const hostOnly = projectChatContextPressure([], { ...options, systemPrompt: "HOST" });
+  const withInstructions = projectChatContextPressure([], { ...options, systemPrompt: estimate });
+  assert.ok(withInstructions.staticTokens > hostOnly.staticTokens + 1_000);
+  // Without workspace access only global guidance applies, as in llm-client.
+  const globalOnly = await withAgentsInstructionsEstimate("HOST", { globalRoot: f.globalRoot }, f.read);
+  assert.ok(!globalOnly.includes("WORKSPACE_RULES"));
+  assert.match(globalOnly, /GLOBAL_RULES/);
+});
+
+test("context-meter estimate falls back to the host prompt for instructions the runtime refuses", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "secret"), "SECRET");
+  await fs.symlink(path.join(f.root, "secret"), path.join(f.workspaceRoot, "AGENTS.md"));
+  assert.equal(
+    await withAgentsInstructionsEstimate("HOST", { globalRoot: f.globalRoot, workspaceRoot: f.workspaceRoot }, f.read),
+    "HOST",
+  );
+});
+
+test("instruction fingerprint changes when either AGENTS.md is added, edited or removed", async (t) => {
+  const f = await fixture(t);
+  const roots = { globalRoot: f.globalRoot, workspaceRoot: f.workspaceRoot };
+  const file = path.join(f.workspaceRoot, "AGENTS.md");
+  const empty = await agentsInstructionFingerprint(roots);
+  await fs.writeFile(file, "ONE");
+  const added = await agentsInstructionFingerprint(roots);
+  assert.notEqual(added, empty);
+  assert.equal(await agentsInstructionFingerprint(roots), added);
+  await fs.writeFile(file, "ONE MORE");
+  const edited = await agentsInstructionFingerprint(roots);
+  assert.notEqual(edited, added);
+  await fs.rm(file);
+  assert.equal(await agentsInstructionFingerprint(roots), empty);
 });
