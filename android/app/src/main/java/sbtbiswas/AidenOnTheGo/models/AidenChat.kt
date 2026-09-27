@@ -628,6 +628,21 @@ enum class AidenChatSummaryActivity {
     @SerialName("active") ACTIVE
 }
 
+/**
+ * List-row state (contract revision 16), in display priority: a chat blocked
+ * on the user outranks one that is merely working.
+ */
+enum class AidenChatRowState(val wire: String, val accessibilityLabel: String) {
+    NEEDS_APPROVAL("needs_approval", "Needs approval"),
+    NEEDS_INPUT("needs_input", "Needs input"),
+    WORKING("working", "Working"),
+    IDLE("idle", "Idle");
+
+    companion object {
+        fun fromWire(value: String?): AidenChatRowState? = entries.firstOrNull { it.wire == value }
+    }
+}
+
 @Serializable
 data class AidenChatSummary(
     val id: String,
@@ -637,12 +652,37 @@ data class AidenChatSummary(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String,
-    val activity: AidenChatSummaryActivity
+    val activity: AidenChatSummaryActivity,
+    /**
+     * Raw additive row state. Kept as a string so an older client tolerates a
+     * future state instead of rejecting the whole summary page; absent on Macs
+     * older than contract revision 16.
+     */
+    @SerialName("rowState") val rowStateWire: String? = null,
+    /** True only when assistant output arrived after the chat was last viewed. */
+    val unread: Boolean = false
 ) {
+    val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
+
+    /**
+     * The state a list row renders. Local activity is authoritative for
+     * idleness (a prompt can only wait while a turn runs); the server supplies
+     * the richer attention states. Older Macs fall back to activity alone.
+     */
+    val displayRowState: AidenChatRowState
+        get() {
+            if (activity != AidenChatSummaryActivity.ACTIVE) return AidenChatRowState.IDLE
+            return when (val state = rowState) {
+                AidenChatRowState.NEEDS_APPROVAL, AidenChatRowState.NEEDS_INPUT -> state
+                else -> AidenChatRowState.WORKING
+            }
+        }
+
     init {
         if (id.isEmpty() || id.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
             workspaceId.isEmpty() || workspaceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
             !IDENTIFIER.matches(id) || !IDENTIFIER.matches(workspaceId) ||
+            (rowStateWire != null && rowStateWire.length > 64) ||
             revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
             title.codePointCount(0, title.length) > 1_024 ||
             updatedAt.isBefore(createdAt)

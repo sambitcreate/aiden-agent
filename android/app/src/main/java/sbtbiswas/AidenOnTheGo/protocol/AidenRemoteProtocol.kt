@@ -43,6 +43,7 @@ object AidenRemoteProtocol {
     const val CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1"
     const val CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1"
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
+    const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4

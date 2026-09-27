@@ -1404,3 +1404,9 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Chat row states (feature/chat-row-states)
+- The worktree guard refuses `cat > file <<EOF` heredocs and some compound commands (a `$VAR` in an argument position, multi-statement pipelines). Use the Write/Edit tools or `python3 - <<'EOF'` scripts, and spell paths out literally.
+- A fresh workflow worktree has no `node_modules`; module resolution then climbs to a parent checkout on a different pi version and `tsc` reports dozens of unrelated errors. Run `npm ci --ignore-scripts --no-audit --no-fund` in the worktree first.
+- `xcrun simctl` fails when `xcode-select` points at CommandLineTools; prefix iOS runs with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. Homebrew `openjdk@21` works as `JAVA_HOME` for `./gradlew` too.
+- Remote contract revision 16 was claimed while other wave PRs may also claim it; whichever merges second renumbers (see the revision-14 note above for the seven files).

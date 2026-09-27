@@ -13,6 +13,13 @@ import {
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
+import {
+  chatRowState,
+  isChatUnread,
+  type ChatReadMarkersSnapshot,
+  type ChatRowState,
+} from "../../renderer/shared/chat-row-state.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -156,6 +163,22 @@ export interface AidenRemoteChatSummaryProjection {
   updatedAt: string;
   revision: string;
   activity: "idle" | "active";
+  /** Additive (protocol revision 16): richer list-row state. */
+  rowState?: ChatRowState;
+  /** Additive (protocol revision 16): assistant output arrived after the last view. */
+  unread?: boolean;
+}
+
+type SafeSummaryRow = Omit<
+  AidenRemoteChatSummaryProjection,
+  "titlePending" | "activity" | "rowState" | "unread"
+> & { lastAssistantAt?: number };
+
+/** Shared, main-owned read markers used for honest unread summaries. */
+export interface AidenRemoteChatReadMarkers {
+  snapshot(): Promise<ChatReadMarkersSnapshot>;
+  /** Resolves false when the chat or message no longer exists. */
+  markRead(chatId: string, throughMessageId?: string): Promise<boolean>;
 }
 
 export interface AidenRemoteChatSummaryPage {
@@ -333,9 +356,7 @@ function chatRevision(chat: Chat): string {
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }
 
-function safeSummaryMetadata(
-  meta: Readonly<ChatMeta>,
-): Omit<AidenRemoteChatSummaryProjection, "titlePending" | "activity"> | null {
+function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
   const workspaceId = persistedChatWorkspaceId(meta.workspaceId);
   if (
     meta.botId !== undefined ||
@@ -357,6 +378,9 @@ function safeSummaryMetadata(
     createdAt: new Date(meta.createdAt).toISOString(),
     updatedAt: new Date(meta.updatedAt).toISOString(),
     revision: chatSummaryRevision(meta),
+    ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
+      ? { lastAssistantAt: meta.lastAssistantAt }
+      : {}),
   };
 }
 
@@ -509,6 +533,24 @@ function parseMove(input: unknown): { workspaceId: string; confirmedForeground: 
     throw new AidenRemoteServiceError("invalid_request", "The chat move request is invalid.", 400);
   }
   return { workspaceId: safeId(record.workspaceId, "workspace"), confirmedForeground: true };
+}
+
+function parseMarkRead(input: unknown): { throughMessageId?: string } {
+  const record = ownRecord(input);
+  if (
+    !record ||
+    !exactKeys(record, hasOwnKey(record, "throughMessageId") ? ["throughMessageId"] : []) ||
+    (hasOwnKey(record, "throughMessageId") && !boundedString(record.throughMessageId, 128))
+  ) {
+    throw new AidenRemoteServiceError("invalid_request", "The chat read request is invalid.", 400);
+  }
+  return hasOwnKey(record, "throughMessageId")
+    ? { throughMessageId: safeId(record.throughMessageId as string, "message") }
+    : {};
+}
+
+function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 function parseTurn(input: unknown): {
@@ -727,6 +769,10 @@ export class AidenRemoteChatService {
       notifyChanged?: (chatId?: string) => void;
       isTitlePending?: (chatId: string) => boolean;
       activeChatIds?: () => readonly string[];
+      /** Preferred over `activeChatIds`: also carries approval/input attention. */
+      activitySnapshot?: () => ChatActivitySnapshot;
+      /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
+      readMarkers?: AidenRemoteChatReadMarkers;
       now?: () => number;
       summaryCursorSecret?: Buffer;
     },
@@ -831,15 +877,46 @@ export class AidenRemoteChatService {
     return { snapshot, offset: cursor.offset! };
   }
 
-  private freezeSummaryPage(
-    summaries: readonly Omit<AidenRemoteChatSummaryProjection, "titlePending" | "activity">[],
-  ): AidenRemoteChatSummaryProjection[] {
-    const activeChatIds = new Set(this.options.activeChatIds?.() ?? []);
-    return summaries.map((summary) => ({
+  private async freezeSummaryPage(
+    summaries: readonly SafeSummaryRow[],
+  ): Promise<AidenRemoteChatSummaryProjection[]> {
+    const activity = this.options.activitySnapshot?.();
+    const activeChatIds = new Set(activity?.activeChatIds ?? this.options.activeChatIds?.() ?? []);
+    const approvalChatIds = new Set(activity?.approvalChatIds ?? []);
+    const inputChatIds = new Set(activity?.inputChatIds ?? []);
+    // A marker read failure hides unread dots rather than failing the list.
+    const markers = await this.options.readMarkers?.snapshot().catch(() => null);
+    return summaries.map(({ lastAssistantAt, ...summary }) => ({
       ...summary,
       titlePending: this.options.isTitlePending?.(summary.id) === true,
       activity: activeChatIds.has(summary.id) ? "active" : "idle",
+      rowState: chatRowState({
+        active: activeChatIds.has(summary.id),
+        needsApproval: approvalChatIds.has(summary.id),
+        needsInput: inputChatIds.has(summary.id),
+      }),
+      unread: isChatUnread(lastAssistantAt, markers, summary.id),
     }));
+  }
+
+  /** Whether this host can record read markers for `POST /chats/{chatId}/read`. */
+  get supportsReadMarkers(): boolean {
+    return this.options.readMarkers !== undefined;
+  }
+
+  /**
+   * Record that the paired device displayed a chat through a message. Stale
+   * or unknown message ids are a harmless no-op because markers only move
+   * forward and can never cover output the device did not receive.
+   */
+  async markRead(chatId: string, input: unknown): Promise<void> {
+    safeId(chatId, "chat");
+    const { throughMessageId } = parseMarkRead(input);
+    const readMarkers = this.options.readMarkers;
+    if (!readMarkers) {
+      throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
+    }
+    await readMarkers.markRead(chatId, throughMessageId);
   }
 
   private async executeIdempotent<T>(
@@ -954,7 +1031,7 @@ export class AidenRemoteChatService {
     if (cursor !== undefined) {
       ({ snapshot, offset } = this.decodeSummaryCursor(cursor));
     } else {
-      const summaries = this.freezeSummaryPage(
+      const summaries = await this.freezeSummaryPage(
         (await listSummaryMetadata())
           .map(safeSummaryMetadata)
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null)

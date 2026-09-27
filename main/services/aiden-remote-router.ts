@@ -12,6 +12,7 @@ import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
+  AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -128,7 +129,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -266,6 +267,7 @@ export type AidenRemoteRouteLabel =
   | "chatSummaries"
   | "chat"
   | "chatMove"
+  | "chatRead"
   | "chatTasks"
   | "chatAgents"
   | "chatSkills"
@@ -329,6 +331,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatSummaries: ["/chat-summaries"],
   chat: ["/chats/:id"],
   chatMove: ["/chats/:id/move"],
+  chatRead: ["/chats/:id/read"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
   chatSkills: ["/chats/:id/skills"],
@@ -1296,6 +1299,9 @@ export function createAidenRemoteRequestHandler(
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
+              : []),
+            ...(dependencies.chats?.markRead && dependencies.chats.supportsReadMarkers === true
+              ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE]
               : []),
             ...(progressCapabilitySupported(dependencies, "tasks:read")
               ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE]
@@ -2421,6 +2427,24 @@ export function createAidenRemoteRequestHandler(
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         await runChatMutation(dependencies.chats, device, chatMatch[1]!, "chat", () =>
           dependencies.chats!.remove(chatMatch[1]!, revision));
+        response.writeHead(204, responseHeaders());
+        response.end();
+        return;
+      }
+      const readMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read$/u.exec(path);
+      if (readMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatRead";
+        const body = await readJsonBody(request, 1_024);
+        // Viewing is a read: a read-only device may still clear its own unread dot.
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.markRead || chats.supportsReadMarkers !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(chats, device, readMatch[1]!, "read");
+        await chats.markRead(readMatch[1]!, body);
         response.writeHead(204, responseHeaders());
         response.end();
         return;

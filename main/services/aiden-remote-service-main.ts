@@ -1,4 +1,5 @@
 import { ttsService } from "./tts/service-main.js";
+import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
@@ -567,6 +568,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
+            activitySnapshot: () => chatActivityRegistry.snapshot(),
+            readMarkers: {
+              snapshot: () => chatReadMarkers.snapshot(),
+              markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
+            },
           });
           activeChats = chats;
           activeProgress?.close();

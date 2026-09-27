@@ -17,7 +17,11 @@ export class AskUserQuestionCoordinator {
   private readonly pending = new Map<string, PendingQuestionnaire>();
   private readonly detachedStreams = new Set<string>();
 
-  constructor(private readonly publish: (prompt: AskUserQuestionPromptV1) => void) {}
+  constructor(
+    private readonly publish: (prompt: AskUserQuestionPromptV1) => void,
+    /** Called once when a published prompt settles for any reason. */
+    private readonly withdraw?: (promptId: string) => void,
+  ) {}
 
   request(
     descriptor: {
@@ -44,12 +48,20 @@ export class AskUserQuestionCoordinator {
     }
     return new Promise<AskUserQuestionResponseV1>((resolve) => {
       let settled = false;
+      let published = false;
       const aborted = () => finish(cancelled());
       const finish = (response: AskUserQuestionResponseV1) => {
         if (settled) return;
         settled = true;
         this.pending.delete(prompt.promptId);
         signal?.removeEventListener("abort", aborted);
+        if (published) {
+          try {
+            this.withdraw?.(prompt.promptId);
+          } catch {
+            // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
+          }
+        }
         resolve(response);
       };
       this.pending.set(prompt.promptId, {
@@ -64,6 +76,7 @@ export class AskUserQuestionCoordinator {
       }
       try {
         this.publish(prompt);
+        published = true;
       } catch {
         finish(cancelled());
       }

@@ -298,7 +298,9 @@ class AidenWorkspaceHomeViewModel(
     }
 
     fun accept(chat: AidenChat) {
+        // An accepted chat is the one being viewed, so its row is read.
         val summary = AidenChatSummary.fromChat(chat)
+            .copy(rowStateWire = _chats.value.firstOrNull { it.id == chat.id }?.rowStateWire)
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
             val writeToken = chatCache.reserveSummaryMutation(instanceId)

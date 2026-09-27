@@ -763,6 +763,18 @@ class AidenRemoteClient(
             acceptedStatus = setOf(204)
         ) {}
 
+    /**
+     * Report that the user viewed a chat, clearing its unread marker on every
+     * surface. With a message id the marker lands exactly on what was shown.
+     */
+    suspend fun markChatRead(id: String, throughMessageId: String? = null) =
+        executeRequest<Unit>(
+            "/chats/$id/read",
+            method = "POST",
+            bodyJson = json.encodeToString(ChatReadRequest(throughMessageId)),
+            acceptedStatus = setOf(204)
+        ) {}
+
     suspend fun moveChat(
         id: String,
         revision: String,
@@ -1896,6 +1908,10 @@ class AidenRemoteClient(
 
     @Serializable
     private data class ChatUpdateRequest(val title: String)
+
+    /** Encodes to `{}` without a message id so the Mac reads through its newest message. */
+    @Serializable
+    private data class ChatReadRequest(val throughMessageId: String? = null)
 
     @Serializable
     private data class ChatMoveRequest(

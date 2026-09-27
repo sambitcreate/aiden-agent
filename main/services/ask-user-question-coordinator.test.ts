@@ -62,3 +62,51 @@ test("abort and renderer detach settle pending prompts as cancelled", async () =
   assert.equal(prompts.length, 2);
   assert.equal(coordinator.pendingCount, 0);
 });
+
+test("published prompts are withdrawn exactly once however they settle", async () => {
+  const published: string[] = [];
+  const withdrawn: string[] = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    (prompt) => published.push(prompt.promptId),
+    (promptId) => withdrawn.push(promptId),
+  );
+  const answered = coordinator.request(
+    { streamId: "s-answer", toolCallId: "call-answer", questions },
+    "document-one",
+  );
+  coordinator.respond(
+    published[0]!,
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: published[0]!,
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+    },
+    "document-one",
+  );
+  await answered;
+  const detached = coordinator.request(
+    { streamId: "s-gone", toolCallId: "call-gone", questions },
+    "document-one",
+  );
+  coordinator.detachStream("s-gone");
+  coordinator.detachStream("s-gone");
+  await detached;
+  assert.deepEqual(withdrawn, published);
+});
+
+test("a prompt whose publication failed is never withdrawn", async () => {
+  const withdrawn: string[] = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    () => {
+      throw new Error("renderer gone");
+    },
+    (promptId) => withdrawn.push(promptId),
+  );
+  const response = await coordinator.request(
+    { streamId: "s-fail", toolCallId: "call-fail", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, true);
+  assert.deepEqual(withdrawn, []);
+});

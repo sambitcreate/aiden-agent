@@ -57,6 +57,7 @@ import {
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
+import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
 import {
   cancelDesktopCompaction,
@@ -140,6 +141,14 @@ export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
+  ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
+  ipcMain.handle("chats:markRead", async (_event, id: unknown, throughMessageId?: unknown) => {
+    const chatId = asString(id, "id");
+    if (throughMessageId !== undefined && (typeof throughMessageId !== "string" || !throughMessageId)) {
+      throw new Error('Expected a message id for "throughMessageId".');
+    }
+    return markChatRead(chatId, throughMessageId as string | undefined);
+  });
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
     chatApplicationService.listRegular(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
@@ -558,6 +567,7 @@ export function registerChatHistoryHandlers(): void {
       : await chatApplicationService.remove(chatId);
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
     closeDeviceSessionsForChat(chatId);
+    void chatReadMarkers.remove(chatId).catch(() => undefined);
     return result;
   });
 

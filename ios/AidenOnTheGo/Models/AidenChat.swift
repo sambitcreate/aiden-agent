@@ -1162,6 +1162,24 @@ enum AidenChatSummaryActivity: String, Codable, Equatable, Sendable {
     case active
 }
 
+/// List-row state in display priority (contract revision 16). A chat that is
+/// blocked on the user outranks one that is merely working.
+enum AidenChatRowState: String, Codable, Equatable, Sendable {
+    case needsApproval = "needs_approval"
+    case needsInput = "needs_input"
+    case working
+    case idle
+
+    var accessibilityLabel: String {
+        switch self {
+        case .needsApproval: "Needs approval"
+        case .needsInput: "Needs input"
+        case .working: "Working"
+        case .idle: "Idle"
+        }
+    }
+}
+
 struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let workspaceId: String
@@ -1171,6 +1189,10 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     var updatedAt: Date
     var revision: String
     var activity: AidenChatSummaryActivity
+    /// Server-reported row state; nil from Macs older than contract revision 16.
+    var rowState: AidenChatRowState?
+    /// True only when assistant output arrived after the chat was last viewed.
+    var unread: Bool
 
     init(
         id: String,
@@ -1180,7 +1202,9 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         revision: String,
-        activity: AidenChatSummaryActivity
+        activity: AidenChatSummaryActivity,
+        rowState: AidenChatRowState? = nil,
+        unread: Bool = false
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1190,6 +1214,19 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.revision = revision
         self.activity = activity
+        self.rowState = rowState
+        self.unread = unread
+    }
+
+    /// The row state to render. The local activity signal is authoritative for
+    /// idleness (a prompt can only wait while a turn runs), while the server
+    /// supplies the richer attention states. Older Macs fall back to activity.
+    var displayRowState: AidenChatRowState {
+        guard activity == .active else { return .idle }
+        if let rowState, rowState == .needsApproval || rowState == .needsInput {
+            return rowState
+        }
+        return .working
     }
 
     init(chat: AidenChat, preservingActivity activity: AidenChatSummaryActivity = .idle) {
@@ -1217,6 +1254,11 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         updatedAt = updatedTimestamp.date
         revision = try values.decode(String.self, forKey: .revision)
         activity = try values.decode(AidenChatSummaryActivity.self, forKey: .activity)
+        // Additive fields: tolerate absence (older Macs) and unknown future
+        // row states rather than rejecting the whole summary page.
+        rowState = try values.decodeIfPresent(String.self, forKey: .rowState)
+            .flatMap(AidenChatRowState.init(rawValue:))
+        unread = try values.decodeIfPresent(Bool.self, forKey: .unread) ?? false
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1304,6 +1346,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
+        case rowState, unread
     }
 }
 

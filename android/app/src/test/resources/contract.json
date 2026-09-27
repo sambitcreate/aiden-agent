@@ -1,5 +1,5 @@
 {
-  "contractRevision": 15,
+  "contractRevision": 16,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -50,7 +50,7 @@
     "appVersion": "0.30.0",
     "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
     "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-read-state-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -65,7 +65,9 @@
         "createdAt": "2026-08-18T18:58:00.000Z",
         "updatedAt": "2026-08-18T19:02:00.000Z",
         "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
-        "activity": "active"
+        "activity": "active",
+        "rowState": "needs_approval",
+        "unread": false
       },
       {
         "id": "chat_fixture_summary_01",
@@ -75,7 +77,9 @@
         "createdAt": "2026-08-18T18:30:00.000Z",
         "updatedAt": "2026-08-18T19:01:00.000Z",
         "revision": "rev_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
-        "activity": "idle"
+        "activity": "idle",
+        "rowState": "idle",
+        "unread": true
       }
     ],
     "nextCursor": "cur_eyJ2IjoxLCJzbmFwc2hvdElkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwib2Zmc2V0IjoyLCJleHBpcmVzQXQiOjE3ODcwNzk5MDAwMDB9.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"

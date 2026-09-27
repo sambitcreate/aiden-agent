@@ -1037,6 +1037,8 @@ private fun AidenWorkspaceChatRow(
                 }
             }
             Spacer(Modifier.width(12.dp))
+            AidenChatRowStatus(state = chat.displayRowState, unread = chat.unread, palette = palette)
+            Spacer(Modifier.width(8.dp))
             Text(aidenRelativeTimestamp(chat.updatedAt), style = MaterialTheme.typography.labelMedium, color = palette.secondary)
         }
     }

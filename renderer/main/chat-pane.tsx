@@ -18,6 +18,7 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
@@ -202,6 +203,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
+  useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
   const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled =

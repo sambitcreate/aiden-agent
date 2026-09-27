@@ -187,7 +187,11 @@ export function createChatStore(
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
           Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
       (meta.summaryRevision === undefined ||
-        isChatSummaryRevision(meta.summaryRevision))
+        isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.lastAssistantAt === undefined ||
+        (typeof meta.lastAssistantAt === "number" &&
+          Number.isSafeInteger(meta.lastAssistantAt) &&
+          meta.lastAssistantAt >= 0))
     );
   }
 
@@ -592,6 +596,16 @@ export function createChatStore(
         (message.role === "user" || message.role === "assistant") &&
         message.content.trim().length > 0,
       )?.content;
+    const lastAssistantAt = [...chat.messages]
+      .reverse()
+      .find((message) =>
+        message.role === "assistant" &&
+        (message.content.trim().length > 0 ||
+          (message.attachments?.length ?? 0) > 0 ||
+          (message.htmlArtifacts?.length ?? 0) > 0) &&
+        Number.isSafeInteger(message.createdAt) &&
+        message.createdAt >= 0,
+      )?.createdAt;
     const boundedPreview = preview === undefined
       ? undefined
       : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
@@ -604,6 +618,7 @@ export function createChatStore(
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
+      ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };

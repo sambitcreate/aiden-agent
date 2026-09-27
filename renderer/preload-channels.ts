@@ -82,6 +82,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "devices:state",
   "devices:reveal",
   "chats:activity-changed",
+  "chats:read-markers-changed",
   "chats:changed",
   "chats:metadata-updated",
   "chats:btw-event",

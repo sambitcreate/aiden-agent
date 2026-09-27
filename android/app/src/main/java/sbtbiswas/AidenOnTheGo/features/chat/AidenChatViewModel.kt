@@ -1839,7 +1839,32 @@ class AidenChatViewModel(
         if (scheduleTitleRefresh && admitted.isTitlePending) {
             schedulePendingTitleRefresh()
         }
+        reportChatViewed(admitted)
         return true
+    }
+
+    /** Last chat revision reported read, so repeated reconciles send one report. */
+    private var reportedReadRevision: String? = null
+
+    /**
+     * Tell the Mac the user viewed this chat so its unread marker clears on
+     * every surface. Best effort: a failed report only leaves a stale dot.
+     */
+    private fun reportChatViewed(chat: AidenChat) {
+        if (chat.isBotChat || isReadOnlyPresentation ||
+            coordinator.serverInfo.value?.supportsChatReadState != true ||
+            reportedReadRevision == chat.revision
+        ) return
+        val client = activeClient() ?: return
+        reportedReadRevision = chat.revision
+        viewModelScope.launch {
+            try {
+                client.markChatRead(chat.id)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (reportedReadRevision == chat.revision) reportedReadRevision = null
+            }
+        }
     }
 
     private fun schedulePendingTitleRefresh() {

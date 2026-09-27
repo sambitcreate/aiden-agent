@@ -83,7 +83,10 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
-import { useActiveChatIds } from "../lib/use-chat-activity";
+import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
+import { chatRowStateFor } from "../lib/chat-activity";
+import { isChatUnread } from "../shared/chat-row-state";
+import { ChatRowStatus } from "./chat-row-status";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -646,20 +649,6 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-function ChatActivityIndicator() {
-  return (
-    <span
-      role="img"
-      aria-label="Working"
-      title="Working"
-      className="inline-flex size-5 items-center justify-center text-accent"
-    >
-      {/* Reduced-motion mode collapses this continuous rotation via the global motion contract. */}
-      <Loader2 className="size-4 animate-[spin_1.5s_linear_infinite]" aria-hidden="true" />
-    </span>
-  );
-}
-
 const MONTHS = [
   "January",
   "February",
@@ -720,7 +709,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const qc = useQueryClient();
   const { workspaces, activeId, select, isReady: workspaceRegistryReady } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
-  const activeChatIds = useActiveChatIds();
+  const chatActivity = useChatActivityState();
+  const readMarkers = useChatReadMarkers();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useAllRegularChats(workspaces.length > 0);
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
@@ -1148,8 +1138,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     const shortcutBinding = shortcutNumber
       ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
       : null;
-    const working =
-      activeChatIds.has(chat.id) || (chat.id === activeChatId && environmentPanel.agentBusy);
+    const rowState = chatRowStateFor(
+      chatActivity,
+      chat.id,
+      chat.id === activeChatId && environmentPanel.agentBusy,
+    );
+    const showsState = rowState !== "idle";
+    // The open chat is being viewed, so its own output never reads as unread.
+    const unread = chat.id !== activeChatId && isChatUnread(chat.lastAssistantAt, readMarkers, chat.id);
     return (
       <ContextMenu key={chat.id}>
         <ContextMenuTrigger asChild>
@@ -1160,7 +1156,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               ) : undefined
             }
-            aria-busy={renamingWithAppleId === chat.id || working}
+            aria-busy={renamingWithAppleId === chat.id || rowState === "working"}
             title={
               titleReveal?.chatId === chat.id ? (
                 <GeneratedTitleReveal
@@ -1173,7 +1169,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
               )
             }
             trailing={
-              working || (chatShortcutsVisible && shortcutBinding) ? (
+              showsState || unread || (chatShortcutsVisible && shortcutBinding) ? (
                 <span className="flex items-center gap-1">
                   {chatShortcutsVisible && shortcutBinding ? (
                     <kbd
@@ -1184,7 +1180,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                       {prettyAccelerator(shortcutBinding)}
                     </kbd>
                   ) : null}
-                  {working ? <ChatActivityIndicator /> : null}
+                  <ChatRowStatus state={rowState} unread={unread} />
                 </span>
               ) : undefined
             }

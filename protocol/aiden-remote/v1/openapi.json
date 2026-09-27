@@ -825,6 +825,51 @@
         }
       }
     },
+    "/chats/{chatId}/read": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "markChatRead",
+        "description": "Record that this device displayed the chat through a persisted message, clearing its unread marker on every surface. Markers only move forward, so stale or duplicate reports are harmless no-ops; an unknown throughMessageId never advances the marker. Without throughMessageId the marker covers the newest persisted message. Available only when the server advertises chat-read-state-v1.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "throughMessageId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Read report accepted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/move": {
       "parameters": [
         {
@@ -6760,6 +6805,19 @@
               "idle",
               "active"
             ]
+          },
+          "rowState": {
+            "description": "Additive in contract revision 16. List-row state in display priority: needs_approval (a tool approval is waiting), needs_input (an ask-user question is waiting), working (a turn is running), or idle. Older servers omit it; clients then fall back to activity.",
+            "enum": [
+              "needs_approval",
+              "needs_input",
+              "working",
+              "idle"
+            ]
+          },
+          "unread": {
+            "description": "Additive in contract revision 16. True only when assistant output was persisted after the chat was last viewed on any surface (desktop or a paired device). Output older than the host's read-tracking baseline is never unread. Always false on hosts that do not advertise chat-read-state-v1.",
+            "type": "boolean"
           }
         },
         "additionalProperties": true
