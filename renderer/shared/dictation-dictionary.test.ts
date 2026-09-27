@@ -40,7 +40,10 @@ test("rules with punctuation and non-Latin words keep their boundaries", () => {
     { from: "c++", to: "C++" },
     { from: "café", to: "Café Aiden" },
   ]);
-  assert.equal(applyDictationDictionary("write c++ at the café.", rules), "write C++ at the Café Aiden.");
+  assert.equal(
+    applyDictationDictionary("write c++ at the café.", rules),
+    "write C++ at the Café Aiden.",
+  );
   assert.equal(applyDictationDictionary("cafés", rules), "cafés");
 });
 
@@ -92,4 +95,9 @@ test("the editor adds rules, updates an existing spoken form, and explains rejec
 
 test("an empty dictionary leaves text untouched", () => {
   assert.equal(applyDictationDictionary("  as spoken  ", []), "  as spoken  ");
+});
+
+test("dictionary matching is independent of the host Turkish locale", () => {
+  const entries = parseDictationDictionary([{ from: "IĞDIR", to: "Iğdır" }]);
+  assert.equal(applyDictationDictionary("IĞDIR", entries), "Iğdır");
 });

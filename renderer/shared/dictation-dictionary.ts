@@ -20,7 +20,7 @@ function cleanTerm(value: unknown): string | null {
 }
 
 function matchKey(term: string): string {
-  return term.toLocaleLowerCase();
+  return term.toLowerCase();
 }
 
 /**

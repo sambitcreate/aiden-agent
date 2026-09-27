@@ -164,8 +164,12 @@ export class DictationCoordinator {
     if (this.deps.startReleaseWatch) {
       try {
         const stop = this.deps.startReleaseWatch(
-          () => { void this.release(operationId); },
-          () => { void this.release(operationId); },
+          () => {
+            void this.release(operationId);
+          },
+          () => {
+            void this.release(operationId);
+          },
         );
         this.stopHoldWatch = stop;
         this.holdWatchActive = typeof stop === "function";
@@ -175,7 +179,10 @@ export class DictationCoordinator {
       }
       return;
     }
-    if (this.holdKeyCode === null || !this.deps.startHoldWatch) return;
+    if (this.holdKeyCode === null || !this.deps.startHoldWatch) {
+      this.latchHybridToggle();
+      return;
+    }
     try {
       const stop = this.deps.startHoldWatch(
         this.holdKeyCode,
@@ -292,7 +299,13 @@ export class DictationCoordinator {
         }
         if (this.stage === "starting" && this.pillReady) {
           this.stage = "recording";
-          this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
+          this.deps.broadcast({
+            state: "recording",
+            operationId: this.operationId ?? undefined,
+            ...(this.mode === "hybrid" && !this.holdToTalk
+              ? { message: "Press the shortcut again to stop." }
+              : {}),
+          });
           if (!this.watchesFromPress()) this.beginHoldWatch();
           if (this.pendingRelease) this.stopIfRecording();
         }
@@ -381,7 +394,13 @@ export class DictationCoordinator {
       this.pillReady = true;
       if (this.stage === "starting") {
         this.stage = "recording";
-        this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
+        this.deps.broadcast({
+          state: "recording",
+          operationId: this.operationId ?? undefined,
+          ...(this.mode === "hybrid" && !this.holdToTalk
+            ? { message: "Press the shortcut again to stop." }
+            : {}),
+        });
         if (!this.watchesFromPress()) this.beginHoldWatch();
         if (this.pendingRelease) this.stopIfRecording();
       }
@@ -438,7 +457,10 @@ export class DictationCoordinator {
             const corrected = (await this.deps.applyDictionary(transcript)).trim();
             if (corrected) transcript = corrected.slice(0, MAX_TRANSCRIPT_LENGTH);
           } catch (error) {
-            this.deps.logError("Dictation dictionary failed; using the unmodified transcript.", error);
+            this.deps.logError(
+              "Dictation dictionary failed; using the unmodified transcript.",
+              error,
+            );
           }
         }
         const pasteResult = await this.deps.paste(transcript);

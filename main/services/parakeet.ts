@@ -177,16 +177,20 @@ export function reconfigureParakeetIdleUnload(): Promise<void> {
 }
 
 export async function releaseRecognizer(modelId: string): Promise<void> {
-  try {
-    await (await getClient()).release(modelId);
-  } catch (error) {
-    if (isolationUnavailable(error)) {
-      releaseRecognizerInProcess(modelId);
-      inProcessModels.delete(modelId);
-      return;
-    }
-    throw error;
-  }
+  await transcriptionLane.run(() =>
+    withModelLease(async () => {
+      try {
+        await (await getClient()).release(modelId);
+      } catch (error) {
+        if (isolationUnavailable(error)) {
+          releaseRecognizerInProcess(modelId);
+          inProcessModels.delete(modelId);
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
 }
 
 export async function transcribePcmBase64(
@@ -200,28 +204,29 @@ export async function transcribePcmBase64(
   }
   let activeClient: ParakeetProcessClient | null = null;
   return transcriptionLane.run(
-    () => withModelLease(async () => {
-      try {
-        activeClient = await getClient();
-        if (signal?.aborted) {
-          disposeClientIfCurrent(activeClient);
-          signal.throwIfAborted();
+    () =>
+      withModelLease(async () => {
+        try {
+          activeClient = await getClient();
+          if (signal?.aborted) {
+            disposeClientIfCurrent(activeClient);
+            signal.throwIfAborted();
+          }
+          return await activeClient.transcribe({
+            modelId,
+            modelDirectory: directory,
+            pcmBase64,
+            encoding: "float32le",
+          });
+        } catch (error) {
+          if (isolationUnavailable(error)) {
+            signal?.throwIfAborted();
+            inProcessModels.add(modelId);
+            return transcribePcmInProcess(pcmToFloat32(pcmBase64), modelId, directory);
+          }
+          throw error;
         }
-        return await activeClient.transcribe({
-          modelId,
-          modelDirectory: directory,
-          pcmBase64,
-          encoding: "float32le",
-        });
-      } catch (error) {
-        if (isolationUnavailable(error)) {
-          signal?.throwIfAborted();
-          inProcessModels.add(modelId);
-          return transcribePcmInProcess(pcmToFloat32(pcmBase64), modelId, directory);
-        }
-        throw error;
-      }
-    }),
+      }),
     {
       signal,
       onCancelActive: () => {
@@ -236,24 +241,26 @@ export async function transcribePcm16Base64(pcmBase64: string, modelId: string):
   if (!directory || !isModelInstalled(modelId)) {
     throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
   }
-  return transcriptionLane.run(() => withModelLease(async () => {
-    try {
-      return await (
-        await getClient()
-      ).transcribe({
-        modelId,
-        modelDirectory: directory,
-        pcmBase64,
-        encoding: "pcm_s16le",
-      });
-    } catch (error) {
-      if (isolationUnavailable(error)) {
-        inProcessModels.add(modelId);
-        return transcribePcmInProcess(decodeAidenRemotePcm16(pcmBase64), modelId, directory);
+  return transcriptionLane.run(() =>
+    withModelLease(async () => {
+      try {
+        return await (
+          await getClient()
+        ).transcribe({
+          modelId,
+          modelDirectory: directory,
+          pcmBase64,
+          encoding: "pcm_s16le",
+        });
+      } catch (error) {
+        if (isolationUnavailable(error)) {
+          inProcessModels.add(modelId);
+          return transcribePcmInProcess(decodeAidenRemotePcm16(pcmBase64), modelId, directory);
+        }
+        throw error;
       }
-      throw error;
-    }
-  }));
+    }),
+  );
 }
 
 export function disposeParakeet(): void {
