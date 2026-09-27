@@ -107,8 +107,23 @@ test("focus changes degrade to the clipboard result returned by the native trans
   assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
     outcome: "copied",
     reason: "paste-unavailable",
-    message: "Copied — Aiden couldn’t confirm delivery to the focused field.",
+    message: "Check the field — transcript copied.",
   });
+});
+
+test("an unconfirmed paste never tells the user to insert the transcript again", async () => {
+  let textMayAlreadyBeInserted = false;
+  const subject = harness({
+    pasteWithPreservedClipboard: async () => {
+      textMayAlreadyBeInserted = true;
+      return false;
+    },
+  });
+  const result = await pasteTranscript("Smart quotes may transform this text", subject.deps);
+  assert.equal(textMayAlreadyBeInserted, true);
+  assert.equal(result.outcome, "copied");
+  assert.equal(result.message, "Check the field — transcript copied.");
+  assert.doesNotMatch(result.message ?? "", /press|⌘V|couldn.t paste/i);
 });
 
 test("paste failures leave the transcript on the clipboard instead of throwing", async () => {
@@ -120,7 +135,7 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
   assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
     outcome: "copied",
     reason: "paste-unavailable",
-    message: "Copied — Aiden couldn’t paste into the focused app.",
+    message: "Check the field — transcript copied.",
   });
   assert.equal(subject.clipboard(), "hello world");
 });

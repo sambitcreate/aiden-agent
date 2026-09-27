@@ -31,13 +31,16 @@ export const SECURE_INPUT_COPIED_MESSAGE = "Transcript copied — press ⌘V to 
 export const ATOMIC_PASTE_SCRIPT = `on run argv
 	set transcriptText to item 1 of argv
 	set previousClipboard to the clipboard as record
+	set originalValue to missing value
 	tell application "System Events"
 		try
 			set targetProcess to first process whose frontmost is true
 			set targetPid to unix id of targetProcess
 			set targetElement to value of attribute "AXFocusedUIElement" of targetProcess
 			set targetRole to role of targetElement as text
-			set originalValue to value of attribute "AXValue" of targetElement as text
+			try
+				set originalValue to value of attribute "AXValue" of targetElement as text
+			end try
 		on error
 			set the clipboard to transcriptText
 			return "copied"
@@ -79,6 +82,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 			return "pasted"
 		end try
 		if elapsed is greater than or equal to quietWindow then
+			if originalValue is missing value then return "copied"
 			try
 				tell application "System Events"
 					set deliveredValue to value of attribute "AXValue" of targetElement as text
@@ -181,7 +185,7 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
       : {
           outcome: "copied",
           reason: "paste-unavailable",
-          message: "Copied — Aiden couldn’t confirm delivery to the focused field.",
+          message: "Check the field — transcript copied.",
         };
   } catch (error) {
     deps.writeClipboard(text);
@@ -189,7 +193,7 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
     return {
       outcome: "copied",
       reason: "paste-unavailable",
-      message: "Copied — Aiden couldn’t paste into the focused app.",
+      message: "Check the field — transcript copied.",
     };
   }
 }

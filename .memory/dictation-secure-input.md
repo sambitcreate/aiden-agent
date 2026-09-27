@@ -21,3 +21,5 @@ Branch `feature/dictation-secure-input`; plan `docs/plans/dictation-secure-input
 Review validation: 15 focused paste/pill tests pass, including a process-owned enable/disable cycle, live Carbon probe, and AppleScript compilation. CI test inventory now registers the pill test.
 
 The JXA probe explicitly binds `IsSecureEventInputEnabled` as a no-argument boolean function, avoiding reliance on OS BridgeSupport metadata. The plan index and PR description now match the Carbon detector and conservative copy fallback.
+
+Independent review: reading the original AXValue is optional, so text controls without an accessible value still receive a guarded paste attempt. An unconfirmed result or transport error says “Check the field — transcript copied.” It never instructs a second paste after a possibly successful attempt; the prior clipboard is restored only after confirmed delivery.

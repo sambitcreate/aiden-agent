@@ -48,3 +48,5 @@ the cause. The result stays visible for 4 s instead of 1.2 s.
 - Physical acceptance on supported macOS releases remains useful; the atomic
   transaction now preserves transcripts when insertion cannot be confirmed.
 - Optionally surface the condition in Settings → Dictation diagnostics.
+
+Review refinement: a missing/non-string AXValue does not prevent a paste attempt after focus validation. If delivery cannot be confirmed (including text normalization), the pill asks the user to check the field and preserves the transcript rather than instructing a second paste.
