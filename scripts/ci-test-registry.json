@@ -453,6 +453,7 @@
         "main/services/tts/speech-text.test.ts",
         "renderer/components/activity-feed.test.tsx",
         "renderer/components/ask-user-question-composer.test.ts",
+        "renderer/components/ask-user-question-expiry-notice.test.tsx",
         "renderer/components/assistant/assistant-ui.test.tsx",
         "renderer/components/assistant/use-assistant-chat.test.ts",
         "renderer/components/assistant/use-assistant-live.test.tsx",

@@ -349,9 +349,13 @@ import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import {
   createAskUserQuestionExtension,
+  resolveAskUserQuestionTimeoutMs,
   shouldEnableAskUserQuestionExtension,
 } from "./ask-user-question-extension.js";
-import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
+import {
+  AskUserQuestionCoordinator,
+  type AskUserQuestionRespondOutcome,
+} from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
@@ -720,9 +724,16 @@ async function prepareGeneration(
   ) {
     generationExtensions.push(
       createAskUserQuestionExtension({
-        request: (toolCallId, questions, requestSignal) =>
+        request: (toolCallId, questions, requestSignal, timeoutSeconds) =>
           questionnaires.request(
-            { streamId, toolCallId, questions },
+            {
+              streamId,
+              toolCallId,
+              questions,
+              timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
+                unattended: browserOwner.kind === "remote",
+              }),
+            },
             ownerDocumentId,
             requestSignal,
           ),
@@ -2201,7 +2212,16 @@ export const llmClient = {
                 requestSignal?: AbortSignal,
               ) =>
                 questionnaires.request(
-                  { streamId, toolCallId, questions },
+                  {
+                    streamId,
+                    toolCallId,
+                    questions,
+                    // The advisor picker falls back to its default model on
+                    // timeout; only unattended owners get a deadline here.
+                    timeoutMs: resolveAskUserQuestionTimeoutMs(undefined, {
+                      unattended: owner.kind === "remote",
+                    }),
+                  },
                   owner.documentId,
                   requestSignal,
                 ),
@@ -3698,6 +3718,15 @@ export const llmClient = {
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
     return questionnaires.respond(promptId, response, ownerDocumentId);
+  },
+
+  /** Desktop answer path: distinguishes an expired prompt from a foreign one. */
+  answerQuestionnaireWithOutcome(
+    promptId: string,
+    response: unknown,
+    ownerDocumentId: string,
+  ): AskUserQuestionRespondOutcome {
+    return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
   steer(streamId: string, text: string, ownerDocumentId: string): boolean {

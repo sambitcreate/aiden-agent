@@ -1733,6 +1733,9 @@ class AidenChatViewModel(
         if (question.id != promptId || !question.canRespond) return
         if (!question.expiresAt.isAfter(Instant.now())) {
             _pendingQuestion.value = null
+            // The Mac stopped waiting at expiresAt and the agent continued on
+            // its own judgement; say so instead of silently dropping the answer.
+            _presentedError.value = "This question expired, so Aiden continued with its best judgement. Send your answer as a message if it should change course."
             return
         }
         if (!canRespondToQuestions()) {

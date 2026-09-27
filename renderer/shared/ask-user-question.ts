@@ -8,6 +8,16 @@ export const ASK_USER_MAX_LABEL_LENGTH = 60;
 export const ASK_USER_MAX_QUESTION_LENGTH = 1_000;
 export const ASK_USER_MAX_DESCRIPTION_LENGTH = 2_000;
 export const ASK_USER_MAX_CUSTOM_ANSWER_LENGTH = 4_000;
+/** Shortest wait the agent may request before continuing without an answer. */
+export const ASK_USER_MIN_TIMEOUT_SECONDS = 30;
+/** Longest wait the agent may request; attended desktop chats default to no deadline. */
+export const ASK_USER_MAX_TIMEOUT_SECONDS = 60 * 60;
+/**
+ * Unattended owners (a paired phone that may have gone away) always carry a
+ * deadline, and never a longer one. It matches the Remote v1 question
+ * lifetime so the wire `expiresAt` and the agent-facing deadline coincide.
+ */
+export const ASK_USER_UNATTENDED_TIMEOUT_SECONDS = 5 * 60;
 const RESERVED_OPTION_LABELS = new Set(["Other", "Type something.", "Next"]);
 
 export interface AskUserQuestionOptionV1 {
@@ -28,6 +38,11 @@ export interface AskUserQuestionPromptV1 {
   streamId: string;
   toolCallId: string;
   questions: AskUserQuestionV1[];
+  /**
+   * RFC 3339 instant after which the agent stops waiting and continues with
+   * its best judgement. Absent when the prompt waits for its owner.
+   */
+  expiresAt?: string;
 }
 
 export type AskUserQuestionAnswerV1 =
@@ -40,6 +55,84 @@ export interface AskUserQuestionResponseV1 {
   promptId: string;
   cancelled: boolean;
   answers: AskUserQuestionAnswerV1[];
+  /**
+   * Main-owned only: the deadline passed without an answer. The response
+   * parser never copies it, so a renderer or Remote client cannot forge one.
+   * Timed-out responses are also `cancelled` so consumers that only know the
+   * cancel path (the advisor picker) fall back to their default.
+   */
+  timedOut?: true;
+}
+
+/** Outcome of an owner's answer attempt, reported back to the answering surface. */
+export type AskUserQuestionAnswerStatus = "answered" | "expired";
+
+/**
+ * Clamp an agent-requested wait into the supported window. A missing or
+ * non-numeric request returns undefined so the owner default applies.
+ */
+export function normalizeAskUserTimeoutSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(
+    ASK_USER_MAX_TIMEOUT_SECONDS,
+    Math.max(ASK_USER_MIN_TIMEOUT_SECONDS, Math.round(value)),
+  );
+}
+
+/**
+ * Milliseconds until the agent stops waiting (0 once expired), or undefined
+ * for a prompt that waits for its owner indefinitely.
+ */
+export function askUserQuestionMsUntilExpiry(
+  prompt: Pick<AskUserQuestionPromptV1, "expiresAt">,
+  now: number,
+): number | undefined {
+  if (!prompt.expiresAt) return undefined;
+  const deadline = Date.parse(prompt.expiresAt);
+  if (!Number.isFinite(deadline)) return undefined;
+  return Math.max(0, deadline - now);
+}
+
+function parseInstant(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 64) return undefined;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return undefined;
+  const normalized = new Date(time).toISOString();
+  return normalized === value ? normalized : undefined;
+}
+
+/**
+ * Plain-text rendering of an owner's answers, shared by the agent tool result
+ * and the late-reply follow-up message.
+ */
+export function formatAskUserQuestionAnswers(
+  questions: readonly AskUserQuestionV1[],
+  answers: readonly AskUserQuestionAnswerV1[],
+): string {
+  const byIndex = new Map(answers.map((answer) => [answer.questionIndex, answer]));
+  return questions
+    .map((question, index) => {
+      const answer = byIndex.get(index);
+      if (!answer) return `${index + 1}. ${question.question}\nAnswer: Skipped`;
+      if (answer.kind === "multi") {
+        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.join(", ")}`;
+      }
+      return `${index + 1}. ${question.question}\nAnswer: ${answer.answer}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * Follow-up chat message for answers that arrived after the agent stopped
+ * waiting. Returns undefined when nothing was answered, so there is nothing
+ * worth sending.
+ */
+export function formatLateAskUserQuestionFollowUp(
+  questions: readonly AskUserQuestionV1[],
+  answers: readonly AskUserQuestionAnswerV1[],
+): string | undefined {
+  if (answers.length === 0) return undefined;
+  return `Answering your earlier question, which expired before I replied:\n\n${formatAskUserQuestionAnswers(questions, answers)}`;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -124,12 +217,18 @@ export function parseAskUserQuestionPrompt(value: unknown): AskUserQuestionPromp
   }
   const questions = parseAskUserQuestions(input.questions);
   if (!questions) return undefined;
+  let expiresAt: string | undefined;
+  if (input.expiresAt !== undefined) {
+    expiresAt = parseInstant(input.expiresAt);
+    if (!expiresAt) return undefined;
+  }
   return {
     version: ASK_USER_QUESTION_VERSION,
     promptId: input.promptId,
     streamId: input.streamId,
     toolCallId: input.toolCallId,
     questions,
+    ...(expiresAt ? { expiresAt } : {}),
   };
 }
 

@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ASK_USER_QUESTION_VERSION,
+  askUserQuestionMsUntilExpiry,
+  formatLateAskUserQuestionFollowUp,
+  normalizeAskUserTimeoutSeconds,
   parseAskUserQuestionPrompt,
   parseAskUserQuestionResponse,
   parseAskUserQuestions,
@@ -79,4 +82,71 @@ test("renderer accepts only owner-routed prompt envelopes and advertised answers
     ),
     undefined,
   );
+});
+
+test("prompt deadlines are strict instants and owners cannot forge a timeout", () => {
+  const envelope = {
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: "q-timed",
+    streamId: "s-timed",
+    toolCallId: "call-timed",
+    questions,
+  };
+  const timed = parseAskUserQuestionPrompt({ ...envelope, expiresAt: "2026-09-27T10:05:00.000Z" });
+  assert.equal(timed?.expiresAt, "2026-09-27T10:05:00.000Z");
+  assert.equal(parseAskUserQuestionPrompt({ ...envelope, expiresAt: "in five minutes" }), undefined);
+  assert.equal(
+    parseAskUserQuestionPrompt({ ...envelope, expiresAt: "September 27, 2026 10:05" }),
+    undefined,
+  );
+  assert.ok(timed);
+  const now = Date.parse("2026-09-27T10:04:00.000Z");
+  assert.equal(askUserQuestionMsUntilExpiry(timed, now), 60_000);
+  assert.equal(askUserQuestionMsUntilExpiry(timed, now + 120_000), 0);
+  assert.equal(askUserQuestionMsUntilExpiry({}, now), undefined);
+
+  const response = parseAskUserQuestionResponse(
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: "q-timed",
+      cancelled: true,
+      answers: [],
+      timedOut: true,
+    },
+    timed,
+  );
+  assert.equal(response?.timedOut, undefined);
+});
+
+test("timeout requests clamp into the supported window", () => {
+  assert.equal(normalizeAskUserTimeoutSeconds(undefined), undefined);
+  assert.equal(normalizeAskUserTimeoutSeconds("300"), undefined);
+  assert.equal(normalizeAskUserTimeoutSeconds(Number.NaN), undefined);
+  assert.equal(normalizeAskUserTimeoutSeconds(1), 30);
+  assert.equal(normalizeAskUserTimeoutSeconds(299.6), 300);
+  assert.equal(normalizeAskUserTimeoutSeconds(86_400), 3_600);
+});
+
+test("a late answer becomes a readable follow-up and an empty one offers nothing", () => {
+  const parsed = parseAskUserQuestions([
+    ...questions,
+    {
+      question: "Which extras?",
+      header: "Extras",
+      multiSelect: true,
+      options: [
+        { label: "Tests", description: "Add tests." },
+        { label: "Docs", description: "Update docs." },
+      ],
+    },
+  ]);
+  assert.ok(parsed);
+  const followUp = formatLateAskUserQuestionFollowUp(parsed, [
+    { questionIndex: 1, kind: "multi", selected: ["Tests", "Docs"] },
+  ]);
+  assert.ok(followUp);
+  assert.match(followUp, /expired before I replied/u);
+  assert.match(followUp, /1\. How should I help\?\nAnswer: Skipped/u);
+  assert.match(followUp, /2\. Which extras\?\nAnswer: Tests, Docs/u);
+  assert.equal(formatLateAskUserQuestionFollowUp(parsed, []), undefined);
 });

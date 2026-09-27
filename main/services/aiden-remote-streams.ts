@@ -1053,17 +1053,26 @@ export class AidenRemoteStreamService {
       if (this.questions.has(promptId) || this.pendingQuestionForStream(stream.streamId)) {
         throw new Error("A questionnaire is already pending on this stream.");
       }
-      const expiresAt = this.options.now() + QUESTION_LIFETIME_MS;
+      // The coordinator stamps the agent-facing deadline on the prompt. Use it
+      // so the phone card expires at the instant the agent stops waiting, but
+      // never extend past the Remote question lifetime.
+      const now = this.options.now();
+      const agentDeadline =
+        typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : Number.NaN;
+      const expiresAt = Number.isFinite(agentDeadline)
+        ? Math.min(Math.max(agentDeadline, now), now + QUESTION_LIFETIME_MS)
+        : now + QUESTION_LIFETIME_MS;
       const expiry = setTimeout(() => {
         const current = this.questions.get(promptId);
         if (!current || current.expiresAt !== expiresAt) return;
+        // The host settles a past-deadline prompt as timed out, not closed.
         this.resolveQuestion(promptId, {
           version: ASK_USER_QUESTION_VERSION,
           promptId,
           cancelled: true,
           answers: [],
         });
-      }, QUESTION_LIFETIME_MS);
+      }, expiresAt - now);
       expiry.unref?.();
       this.questions.set(promptId, {
         streamId: stream.streamId,

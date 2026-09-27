@@ -62,3 +62,87 @@ test("abort and renderer detach settle pending prompts as cancelled", async () =
   assert.equal(prompts.length, 2);
   assert.equal(coordinator.pendingCount, 0);
 });
+
+test("an unanswered timed prompt tells the agent no answer arrived and reports late replies as expired", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.parse("2026-09-27T10:00:00.000Z") });
+  let published!: AskUserQuestionPromptV1;
+  const coordinator = new AskUserQuestionCoordinator((prompt) => {
+    published = prompt;
+  });
+  const pending = coordinator.request(
+    { streamId: "s-timed", toolCallId: "call-timed", questions, timeoutMs: 90_000 },
+    "document-one",
+  );
+  assert.equal(published.expiresAt, "2026-09-27T10:01:30.000Z");
+
+  t.mock.timers.tick(89_999);
+  assert.equal(coordinator.pendingCount, 1);
+  t.mock.timers.tick(1);
+  const response = await pending;
+  assert.equal(response.timedOut, true);
+  assert.deepEqual(response.answers, []);
+  assert.equal(coordinator.pendingCount, 0);
+
+  const late = {
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: published.promptId,
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer: "Guided" }],
+  };
+  assert.equal(coordinator.respondWithOutcome(published.promptId, late, "document-one"), "expired");
+  // Another document cannot learn about or claim someone else's prompt.
+  assert.equal(coordinator.respondWithOutcome(published.promptId, late, "document-two"), "rejected");
+});
+
+test("an answer that races past the deadline is settled as a timeout, never delivered", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  let published!: AskUserQuestionPromptV1;
+  const coordinator = new AskUserQuestionCoordinator((prompt) => {
+    published = prompt;
+  });
+  const pending = coordinator.request(
+    { streamId: "s-race", toolCallId: "call-race", questions, timeoutMs: 30_000 },
+    "document-one",
+  );
+  // Wall clock passes the deadline before the timer callback gets to run.
+  t.mock.timers.setTime(1_030_000);
+  assert.equal(
+    coordinator.respondWithOutcome(
+      published.promptId,
+      {
+        version: ASK_USER_QUESTION_VERSION,
+        promptId: published.promptId,
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+      },
+      "document-one",
+    ),
+    "expired",
+  );
+  const response = await pending;
+  assert.equal(response.timedOut, true);
+  assert.deepEqual(response.answers, []);
+});
+
+test("prompts without a timeout wait for their owner and carry no deadline", async () => {
+  let published!: AskUserQuestionPromptV1;
+  const coordinator = new AskUserQuestionCoordinator((prompt) => {
+    published = prompt;
+  });
+  const pending = coordinator.request(
+    { streamId: "s-open", toolCallId: "call-open", questions },
+    "document-one",
+  );
+  assert.equal(published.expiresAt, undefined);
+  const answer = {
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: published.promptId,
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+  } as const;
+  assert.equal(
+    coordinator.respondWithOutcome(published.promptId, answer, "document-one"),
+    "answered",
+  );
+  assert.equal((await pending).timedOut, undefined);
+});
