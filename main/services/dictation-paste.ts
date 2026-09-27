@@ -3,20 +3,30 @@
 // and restores only when the transcript is still on the clipboard.
 
 import { execFile } from "node:child_process";
+import type { DictationCopiedReason } from "../../renderer/shared/dictation.js";
 
 export type PasteOutcome = "pasted" | "copied";
 export interface PasteDeliveryResult {
   outcome: PasteOutcome;
-  reason?: "accessibility-required" | "paste-unavailable";
+  reason?: DictationCopiedReason;
   message?: string;
 }
 
 export interface PasteDeps {
   writeClipboard: (text: string) => void;
   isAccessibilityTrusted: () => boolean;
+  /**
+   * macOS Secure Event Input (password fields, a terminal's Secure Keyboard
+   * Entry, some password managers) silently drops synthetic keystrokes, so a
+   * paste would look successful while nothing arrives. Resolves true while
+   * any process in the console session holds it.
+   */
+  isSecureInputActive: () => Promise<boolean>;
   pasteWithPreservedClipboard: (text: string) => Promise<boolean>;
   log?: (message: string, error?: unknown) => void;
 }
+
+export const SECURE_INPUT_COPIED_MESSAGE = "Transcript copied — press ⌘V to paste.";
 
 export const ATOMIC_PASTE_SCRIPT = `on run argv
 	set transcriptText to item 1 of argv
@@ -77,6 +87,42 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 	return "pasted"
 end run`;
 
+/**
+ * Reads the current CoreGraphics session: WindowServer publishes
+ * kCGSSessionSecureInputPID only while some process holds Secure Event Input.
+ * Carbon's IsSecureEventInput is neither bridged to JXA nor exported by the
+ * current macOS SDK, so the session dictionary is the probe that works in the
+ * shipped app without a native helper.
+ */
+export const SECURE_INPUT_PROBE_SCRIPT = `ObjC.import("CoreGraphics");
+var session = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary()));
+session && session.kCGSSessionSecureInputPID ? "secure" : "clear";`;
+
+export type RunJxa = (script: string) => Promise<string>;
+
+/** Run a JavaScript for Automation snippet with a short timeout. */
+export function runJxa(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "/usr/bin/osascript",
+      ["-l", "JavaScript", "-e", script],
+      { timeout: 2_000 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+/** Detect macOS Secure Event Input. Rejects when the probe output is unrecognized. */
+export async function detectMacSecureInput(run: RunJxa = runJxa): Promise<boolean> {
+  const output = (await run(SECURE_INPUT_PROBE_SCRIPT)).trim();
+  if (output === "secure") return true;
+  if (output === "clear") return false;
+  throw new Error(`Unexpected Secure Input probe output: ${output.slice(0, 80)}`);
+}
+
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
 export function runOsascript(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -97,8 +143,9 @@ export async function runAtomicMacPaste(text: string): Promise<boolean> {
 }
 
 /**
- * Deliver a finished transcript. Without Accessibility access or after any
- * failure, the transcript remains available on the clipboard.
+ * Deliver a finished transcript. Without Accessibility access, while macOS
+ * Secure Input would swallow the keystroke, or after any failure, the
+ * transcript remains available on the clipboard.
  */
 export async function pasteTranscript(
   text: string,
@@ -110,6 +157,22 @@ export async function pasteTranscript(
       outcome: "copied",
       reason: "accessibility-required",
       message: "Copied — allow Accessibility to paste automatically.",
+    };
+  }
+  let secureInput = false;
+  try {
+    secureInput = await deps.isSecureInputActive();
+  } catch (error) {
+    // An unknown state must not block delivery; the native transaction still
+    // falls back to the clipboard on its own failures.
+    deps.log?.("Secure Input detection failed; attempting paste.", error);
+  }
+  if (secureInput) {
+    deps.writeClipboard(text);
+    return {
+      outcome: "copied",
+      reason: "secure-input",
+      message: SECURE_INPUT_COPIED_MESSAGE,
     };
   }
   try {

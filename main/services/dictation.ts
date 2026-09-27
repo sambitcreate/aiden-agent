@@ -12,7 +12,12 @@ import { shouldAcceptDictationPress } from "./dictation-hotkey.js";
 import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { dictationPlatformBehavior } from "./dictation-platform.js";
-import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
+import {
+  detectMacSecureInput,
+  pasteTranscript,
+  runAtomicMacPaste,
+  type PasteDeps,
+} from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
 
 import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
@@ -28,6 +33,9 @@ function livePasteDeps(): PasteDeps {
     isAccessibilityTrusted: () =>
       behavior.accessibilityPaste &&
       systemPreferences.isTrustedAccessibilityClient(false),
+    isSecureInputActive: behavior.accessibilityPaste
+      ? () => detectMacSecureInput()
+      : async () => false,
     pasteWithPreservedClipboard: behavior.accessibilityPaste
       ? runAtomicMacPaste
       : async () => false,

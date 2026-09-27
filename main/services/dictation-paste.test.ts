@@ -7,7 +7,10 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   ATOMIC_PASTE_SCRIPT,
+  detectMacSecureInput,
   pasteTranscript,
+  runJxa,
+  SECURE_INPUT_PROBE_SCRIPT,
   type PasteDeps,
 } from "./dictation-paste.js";
 
@@ -21,6 +24,7 @@ function harness(overrides: Partial<PasteDeps> = {}) {
       clipboard = text;
     },
     isAccessibilityTrusted: () => true,
+    isSecureInputActive: async () => false,
     pasteWithPreservedClipboard: async (text) => {
       pastedText = text;
       return true;
@@ -112,3 +116,67 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
   });
   assert.equal(subject.clipboard(), "hello world");
 });
+
+test("active Secure Input keeps the transcript on the clipboard without sending a keystroke", async () => {
+  let attempts = 0;
+  const subject = harness({
+    isSecureInputActive: async () => true,
+    pasteWithPreservedClipboard: async () => {
+      attempts += 1;
+      return true;
+    },
+  });
+  const result = await pasteTranscript("my secret note", subject.deps);
+  assert.equal(result.outcome, "copied");
+  assert.equal(result.reason, "secure-input");
+  assert.match(result.message ?? "", /⌘V/);
+  assert.equal(subject.clipboard(), "my secret note");
+  assert.equal(attempts, 0);
+});
+
+test("missing Accessibility access takes precedence over Secure Input detection", async () => {
+  let probes = 0;
+  const subject = harness({
+    isAccessibilityTrusted: () => false,
+    isSecureInputActive: async () => {
+      probes += 1;
+      return true;
+    },
+  });
+  const result = await pasteTranscript("hello world", subject.deps);
+  assert.equal(result.reason, "accessibility-required");
+  assert.equal(probes, 0);
+});
+
+test("a failed Secure Input probe does not block the paste attempt", async () => {
+  const logged: string[] = [];
+  const subject = harness({
+    isSecureInputActive: async () => {
+      throw new Error("osascript timed out");
+    },
+    log: (message) => logged.push(message),
+  });
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), { outcome: "pasted" });
+  assert.equal(subject.pastedText(), "hello world");
+  assert.equal(logged.length, 1);
+});
+
+test("Secure Input detection maps probe output and rejects unrecognized output", async () => {
+  const probe = (output: string) => async () => `${output}\n`;
+  assert.equal(await detectMacSecureInput(probe("secure")), true);
+  assert.equal(await detectMacSecureInput(probe("clear")), false);
+  await assert.rejects(detectMacSecureInput(probe("execution error: -2700")));
+  await assert.rejects(
+    detectMacSecureInput(async () => {
+      throw new Error("spawn failed");
+    }),
+  );
+});
+
+test(
+  "Secure Input probe runs against the live CoreGraphics session",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    assert.match(await runJxa(SECURE_INPUT_PROBE_SCRIPT), /^(secure|clear)$/);
+  },
+);
