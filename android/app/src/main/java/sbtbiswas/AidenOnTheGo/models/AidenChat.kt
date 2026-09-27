@@ -1399,7 +1399,9 @@ object AidenChatModelAuthority {
             chatProvider?.id == providerId && provider?.models?.any { it.id == candidate } == true
         }
         val modelId = selectedModel ?: chatModel
-            ?: catalog.defaults["modelId"] ?: provider?.visibleModels?.firstOrNull()?.id
+            ?: catalog.defaults["modelId"]?.takeIf { candidate ->
+                provider?.models?.any { it.id == candidate } == true
+            } ?: provider?.visibleModels?.firstOrNull()?.id
         val model = provider?.models?.firstOrNull { it.id == modelId }
         return AidenChatModelSelection(
             providerId = providerId,

@@ -118,6 +118,20 @@ class AidenModelPreferenceTest {
     }
 
     @Test
+    fun removedChatModelUsesAVisibleModelFromItsProviderBeforeOtherProviderDefaults() {
+        val resolved = AidenChatModelAuthority.resolvedSelection(
+            chat = workspaceChat("openai", "removed-model"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = null,
+            selectedModelId = null,
+            selectedThinkingLevel = null,
+            remembered = AidenChatModelSelection("missing-provider", "missing-model", null)
+        )
+
+        assertEquals(AidenChatModelSelection("openai", "gpt-5.6", "medium"), resolved)
+    }
+
+    @Test
     fun botChatsIgnoreTheRememberedWorkspaceChoice() {
         val bot = workspaceChat("google", "gemini-flash").copy(botId = "bot-one")
         val resolved = AidenChatModelAuthority.resolvedSelection(
