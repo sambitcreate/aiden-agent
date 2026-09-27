@@ -3,11 +3,7 @@ import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // projections, route-driven selection, and workspace/chat management actions.
 
 import * as React from "react";
-import {
-  workspaceDisplayName,
-  workspaceSecondaryLabel,
-  type WorkspacePathPreferences,
-} from "../lib/workspace-path-display";
+import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
 import { WorkspacePathLabel } from "./workspace-path-label";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -77,20 +73,10 @@ import {
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
-import {
-  queryKeys,
-  useAllRegularChats,
-  useFoundationModelsConnection,
-  useGitPullRequestStatus,
-} from "../lib/queries";
+import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
-import type {
-  ChatMeta,
-  GitHubPullRequestCheck,
-  GitHubPullRequestChecksState,
-  Workspace,
-} from "../lib/types";
+import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
 import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
@@ -120,17 +106,8 @@ interface ChatSidebarProps {
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
-function workspaceAccessibleName(
-  workspace: Workspace,
-  preferences: WorkspacePathPreferences,
-  workspaces: readonly Workspace[],
-): string {
-  return [
-    workspaceDisplayName(workspace, workspaces),
-    workspaceSecondaryLabel(workspace, preferences),
-  ]
-    .filter(Boolean)
-    .join(", ");
+function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+  return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
 }
 
 function SidebarOverflowMenu({
@@ -224,10 +201,7 @@ function SidebarOverflowMenu({
   );
 }
 
-function pullRequestChecksLabel(
-  state: GitHubPullRequestChecksState | null | undefined,
-  checkCount = 0,
-): string {
+function pullRequestChecksLabel(state: GitHubPullRequestChecksState | null | undefined, checkCount = 0): string {
   switch (state) {
     case "passing":
       return "All checks have passed";
@@ -314,25 +288,14 @@ function openExternal(url: string): void {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-function pullRequestStateLabel(
-  state: "open" | "closed" | "merged",
-  isDraft?: boolean,
-): string | null {
+function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: boolean): string | null {
   if (state === "merged") return "Merged";
   if (state === "closed") return "Closed";
   if (isDraft) return "Draft";
   return null;
 }
 
-function WorkspacePullRequestIndicator({
-  workspace,
-  visible,
-  accessibilityName,
-}: {
-  workspace: Workspace;
-  visible: boolean;
-  accessibilityName: string;
-}) {
+function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
   const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
   const status = useGitPullRequestStatus(workspace.id, enabled);
   const pullRequest = status.data?.pullRequest;
@@ -345,8 +308,7 @@ function WorkspacePullRequestIndicator({
       status.data?.availability === "no-pull-request" ||
       status.data?.availability === "not-repo" ||
       status.data?.availability === "not-github"
-    )
-      return null;
+    ) return null;
     return (
       <Popover>
         <PopoverTrigger asChild>
@@ -365,12 +327,7 @@ function WorkspacePullRequestIndicator({
           <p className="text-small-strong text-primary">GitHub status unavailable</p>
           <p className="mt-1 text-small text-secondary">{message}</p>
           <div className="mt-3 flex justify-end">
-            <Button
-              variant="muted"
-              size="small"
-              onClick={() => void status.refetch()}
-              disabled={status.isFetching}
-            >
+            <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
               {status.isFetching ? "Refreshing…" : "Refresh"}
             </Button>
           </div>
@@ -400,11 +357,7 @@ function WorkspacePullRequestIndicator({
           <GitPullRequest aria-hidden="true" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent
-        className="w-80 p-3"
-        align="start"
-        aria-label={`Pull request #${pullRequest.number} checks`}
-      >
+      <PopoverContent className="w-80 p-3" align="start" aria-label={`Pull request #${pullRequest.number} checks`}>
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-small-strong text-primary">
@@ -415,11 +368,7 @@ function WorkspacePullRequestIndicator({
             <p className="mt-1 truncate text-small text-tertiary">
               {pullRequest.headBranch} → {pullRequest.baseBranch}
             </p>
-            {stateLabel ? (
-              <span className="mt-2 inline-flex rounded-control bg-control px-2 py-0.5 text-small-strong text-secondary">
-                {stateLabel}
-              </span>
-            ) : null}
+            {stateLabel ? <span className="mt-2 inline-flex rounded-control bg-control px-2 py-0.5 text-small-strong text-secondary">{stateLabel}</span> : null}
           </div>
           <Button
             variant="transparent"
@@ -431,33 +380,17 @@ function WorkspacePullRequestIndicator({
             <ExternalLink />
           </Button>
         </div>
-        <div
-          className={`mt-3 flex items-center gap-2 rounded-control px-2.5 py-2 text-small ${pullRequestChecksTone(displayChecksState)}`}
-          role="status"
-        >
+        <div className={`mt-3 flex items-center gap-2 rounded-control px-2.5 py-2 text-small ${pullRequestChecksTone(displayChecksState)}`} role="status">
           {checksIcon(displayChecksState)}
           <span>{checkLabel}</span>
         </div>
         {visibleChecks.length > 0 ? (
           <div className="mt-3 flex flex-col gap-1.5">
             {visibleChecks.map((check) => (
-              <div
-                key={`${check.name}:${check.status}:${check.url ?? ""}`}
-                className="flex min-w-0 items-center gap-2 text-small"
-              >
-                <span
-                  className={`size-1.5 shrink-0 rounded-full bg-current ${checkStatusTone(check)}`}
-                  aria-hidden="true"
-                />
-                <span
-                  className="min-w-0 flex-1 truncate text-primary"
-                  title={check.description ?? check.name}
-                >
-                  {check.name}
-                </span>
-                <span className={`shrink-0 ${checkStatusTone(check)}`}>
-                  {checkStatusLabel(check)}
-                </span>
+              <div key={`${check.name}:${check.status}:${check.url ?? ""}`} className="flex min-w-0 items-center gap-2 text-small">
+                <span className={`size-1.5 shrink-0 rounded-full bg-current ${checkStatusTone(check)}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-primary" title={check.description ?? check.name}>{check.name}</span>
+                <span className={`shrink-0 ${checkStatusTone(check)}`}>{checkStatusLabel(check)}</span>
                 {check.url ? (
                   <Button
                     variant="transparent"
@@ -473,28 +406,14 @@ function WorkspacePullRequestIndicator({
             ))}
             {remainingChecks > 0 ? (
               <p className="text-small text-tertiary">
-                {remainingChecks === 1
-                  ? "1 more check on GitHub."
-                  : `${remainingChecks} more checks on GitHub.`}
+                {remainingChecks === 1 ? "1 more check on GitHub." : `${remainingChecks} more checks on GitHub.`}
               </p>
             ) : null}
           </div>
         ) : null}
         <div className="mt-3 flex items-center justify-between gap-2">
-          {status.isFetching ? (
-            <span className="inline-flex items-center gap-1.5 text-small text-tertiary">
-              <Loader2 className="size-3.5 animate-spin" />
-              Refreshing…
-            </span>
-          ) : (
-            <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>
-          )}
-          <Button
-            variant="muted"
-            size="small"
-            onClick={() => void status.refetch()}
-            disabled={status.isFetching}
-          >
+          {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
+          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
             Refresh
           </Button>
         </div>
@@ -1226,9 +1145,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     );
     const showsState = rowState !== "idle";
     // The open chat is being viewed, so its own output never reads as unread.
-    const unread =
-      chat.id !== activeChatId &&
-      isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
+    const unread = chat.id !== activeChatId && isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
     return (
       <ContextMenu key={chat.id}>
         <ContextMenuTrigger asChild>
@@ -1479,7 +1396,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 projection.groups.map((group) => {
                   const secondaryLabel = workspaceSecondaryLabel(group.workspace, pathPreferences);
                   const explicitlyExpanded = expandedWorkspaceIds.has(group.workspace.id);
-                  const expanded = Boolean(search.trim()) || explicitlyExpanded;
+                  const expanded =
+                    Boolean(search.trim()) || explicitlyExpanded;
                   const revealAll =
                     Boolean(search.trim()) || fullyRevealedWorkspaceIds.has(group.workspace.id);
                   const visibleChats = revealAll
@@ -1499,26 +1417,13 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">
-                                {workspaceDisplayName(group.workspace, workspaces)}
-                              </span>
+                              <span className="truncate">{workspaceDisplayName(group.workspace, workspaces)}</span>
                               {group.workspace.folderPath && pathPreferences.showWorkspacePaths ? (
                                 <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
-                                  {group.workspace.managedWorktree?.branch ? (
-                                    <span className="max-w-[45%] truncate">
-                                      {group.workspace.managedWorktree.branch} ·
-                                    </span>
-                                  ) : null}
-                                  <WorkspacePathLabel
-                                    path={group.workspace.folderPath}
-                                    format={pathPreferences.workspacePathFormat}
-                                  />
+                                  {group.workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{group.workspace.managedWorktree.branch} ·</span> : null}
+                                  <WorkspacePathLabel path={group.workspace.folderPath} format={pathPreferences.workspacePathFormat} />
                                 </span>
-                              ) : secondaryLabel ? (
-                                <span className="truncate text-small text-tertiary">
-                                  {secondaryLabel}
-                                </span>
-                              ) : null}
+                              ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                             </span>
                           }
                           aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
@@ -1740,8 +1645,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
               deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
-              Dirty worktrees are refused. Target:{" "}
-              {deletingWorktree.folderPath ?? deletingWorktree.name}.
+              Dirty worktrees are refused. Target: {deletingWorktree.folderPath ?? deletingWorktree.name}.
               {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`

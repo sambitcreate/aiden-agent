@@ -279,7 +279,10 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
-export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
+export type GitHubPullRequestReviewDecision =
+  | "approved"
+  | "changes-requested"
+  | "review-required";
 
 export interface GitHubPullRequestSummary {
   number: number;
