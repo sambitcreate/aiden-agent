@@ -11,6 +11,7 @@
   - `read()` returns the first pool key, so `has()` and readiness already understand pools.
   - `remove()` wipes every slot.
   - Pool mutations are serialized through a promise chain.
+- Provider-wide removal deletes the credential's colon-delimited secret family in one encrypted-map write; cleanup does not rely on a readable index, so orphaned slots from a corrupt index or interrupted add/remove are erased.
 - Runtime lives in `main/services/web-search-key-pool-core.ts`:
   - `runWithWebSearchKeyPool` plus `WebSearchKeyPoolTracker`. The tracker's cooldowns and round-robin cursor are in memory only.
   - The service reads `getCredentialPool` (from `web-search-main.ts`) and uses the shared `webSearchKeyPoolTracker` singleton in `web-search-credentials.ts`.

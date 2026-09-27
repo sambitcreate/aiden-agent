@@ -21,6 +21,9 @@ its adapter already maps 401/403 to `auth` and 429/432/433 to `quota`.
     and the strategy. It never holds key material.
   - A key saved before this change, when no index exists yet, is read as a
     one-entry pool. No migration step is needed.
+  - Provider-wide removal deletes the credential's colon-delimited secret
+    family in one encrypted-map write, including secondary slots omitted from
+    a corrupt or stale index.
 - **Selection.** Two strategies:
   - `ordered` always starts with the first key.
   - `round-robin` starts each search one key further along.
@@ -60,7 +63,7 @@ its adapter already maps 401/403 to `auth` and 429/432/433 to `quota`.
 | Test file | Covers |
 | --- | --- |
 | `main/services/web-search-key-pool-core.test.ts` | Rotation and failover through the real Tavily adapter with a fake `fetch`, cooldown timing, and the index parser. |
-| `main/services/web-search-credential-core.test.ts` | Pool storage, legacy primary synthesis, duplicate keys and the maximum pool size, serialization, and a corrupt index. |
+| `main/services/web-search-credential-core.test.ts` | Pool storage, legacy primary synthesis, duplicate keys and the maximum pool size, serialization, corrupt-index cleanup, and removal of orphaned secondary slots. |
 | `main/services/web-search.test.ts` | Service-level failover, charging each key attempt, and falling back to the next route. |
 | `main/handlers/web-search-key-pool.test.ts` | Register-and-invoke IPC. |
 | `renderer/components/settings/web-search-key-pool.test.tsx` | The rendered list's status, order and disabled states. |

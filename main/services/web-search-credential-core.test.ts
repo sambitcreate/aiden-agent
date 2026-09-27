@@ -9,6 +9,7 @@ import {
   webSearchCredentialReference,
   type WebSearchEncryptedSecretPort,
 } from "./web-search-credential-core.js";
+import { webSearchKeyPoolIndexSecretId } from "./web-search-key-pool-core.js";
 
 function fakeSecrets(initial: { legacy?: Record<string, string> } = {}) {
   const bound = new Map<string, { key: string; binding: string }>();
@@ -38,6 +39,13 @@ function fakeSecrets(initial: { legacy?: Record<string, string> } = {}) {
       calls.push({ operation: "delete", providerId });
       bound.delete(providerId);
       legacy.delete(providerId);
+    },
+    async deleteKeyFamily(providerId, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("stale mutation");
+      calls.push({ operation: "delete-family", providerId });
+      for (const key of bound.keys()) {
+        if (key === providerId || key.startsWith(`${providerId}:`)) bound.delete(key);
+      }
     },
   };
   return { bound, legacy, calls, access: createWebSearchCredentialAccess(port) };
@@ -191,6 +199,12 @@ function poolSecrets() {
       if (!isCurrent()) throw new Error("stale mutation");
       bound.delete(providerId);
     },
+    async deleteKeyFamily(providerId, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("stale mutation");
+      for (const key of bound.keys()) {
+        if (key === providerId || key.startsWith(`${providerId}:`)) bound.delete(key);
+      }
+    },
   };
   const access = createWebSearchCredentialAccess(port, {
     createEntryId: () => `entry${(nextId += 1)}`,
@@ -214,6 +228,39 @@ test("a key saved before pools existed becomes the first pool entry", async () =
     keys: [{ id: "primary", key: "tvly-legacy" }],
   });
   assert.equal(await h.access.read(tavily), "tvly-legacy");
+});
+
+test("provider removal deletes orphaned pool secrets without trusting the index", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  const indexId = webSearchKeyPoolIndexSecretId(tavily.secretId);
+  const orphanedId = `${tavily.secretId}:pool:orphaned-entry`;
+
+  h.bound.set(tavily.secretId, { key: "primary-key", binding: tavily.binding });
+  h.bound.set(indexId, { key: "{corrupt", binding: tavily.binding });
+  h.bound.set(orphanedId, { key: "unindexed-secondary-key", binding: tavily.binding });
+
+  await h.access.remove(tavily);
+
+  assert.equal(h.bound.has(tavily.secretId), false);
+  assert.equal(h.bound.has(indexId), false);
+  assert.equal(h.bound.has(orphanedId), false);
+});
+
+test("provider pool removal leaves secrets intact when its mutation owner is stale", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  const orphanedId = `${tavily.secretId}:pool:orphaned-entry`;
+  h.bound.set(tavily.secretId, { key: "primary-key", binding: tavily.binding });
+  h.bound.set(orphanedId, { key: "secondary-key", binding: tavily.binding });
+
+  await assert.rejects(
+    h.access.remove(tavily, () => false),
+    /stale mutation/u,
+  );
+
+  assert.equal(h.bound.has(tavily.secretId), true);
+  assert.equal(h.bound.has(orphanedId), true);
 });
 
 test("pool keys can be added, reordered, re-strategized, and removed without exposing keys", async () => {

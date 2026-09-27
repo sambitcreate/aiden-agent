@@ -34,6 +34,12 @@ function harness(options: { mutationsAllowed?: boolean } = {}) {
       if (!isCurrent()) throw new Error("stale mutation");
       bound.delete(id);
     },
+    async deleteKeyFamily(id, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("stale mutation");
+      for (const key of bound.keys()) {
+        if (key === id || key.startsWith(`${id}:`)) bound.delete(key);
+      }
+    },
   };
   let nextId = 0;
   const credentials = createWebSearchCredentialAccess(port, {

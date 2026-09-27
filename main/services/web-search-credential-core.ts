@@ -50,6 +50,7 @@ export interface WebSearchEncryptedSecretPort {
     isCurrent?: () => boolean,
   ): Promise<void>;
   deleteKey(providerId: string, isCurrent?: () => boolean): Promise<void>;
+  deleteKeyFamily(providerId: string, isCurrent?: () => boolean): Promise<void>;
 }
 
 export interface WebSearchCredentialAccess {
@@ -349,17 +350,13 @@ export function createWebSearchCredentialAccess(
     async remove(reference, isCurrent = () => true) {
       const removeAll = async () => {
         if (webSearchKeyPoolSupported(reference.providerId)) {
-          const { document } = await loadPool(reference);
-          for (const entry of document.entries) {
-            if (entry.id === WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID) continue;
-            await secrets.deleteKey(
-              webSearchKeyPoolEntrySecretId(reference.secretId, entry.id),
-              isCurrent,
-            );
-          }
-          await secrets.deleteKey(webSearchKeyPoolIndexSecretId(reference.secretId), isCurrent);
+          // Provider removal is an explicit request to erase every pooled slot.
+          // Do not trust the index: it may be corrupt or may omit a slot left
+          // by an interrupted add/remove mutation.
+          await secrets.deleteKeyFamily(reference.secretId, isCurrent);
+        } else {
+          await secrets.deleteKey(reference.secretId, isCurrent);
         }
-        await secrets.deleteKey(reference.secretId, isCurrent);
         // Removal is provider-scoped. Clear the old Exa slot too so a removed
         // credential cannot silently reappear through the compatibility path.
         if (reference.legacySecretId) await secrets.deleteKey(reference.legacySecretId, isCurrent);
