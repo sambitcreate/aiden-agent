@@ -11,3 +11,7 @@ Applied only where the schema is handed to the model:
 Identity checks keep using the raw server schema: the CLI's per-call drift fence compares against the raw inventory, and subagent schema hashes and grants are unchanged. The subagent read/mutation paths (`subagent-mcp-read.ts` `projectStructuralSchema`) already strip `format` and `$defs` through their structural allowlist, so they were left alone. `peer-response.ts` validates the Aiden Remote protocol, not tool schemas, so it was out of scope.
 
 Tests: `main/services/mcp-tool-schema.test.ts` (in `test:mcp`) uses realistic schemars 0.8 (draft-07) and 1.x (2020-12) fixtures. A strict Ajv rejects the raw schemas ("unknown format") and compiles the normalized ones, and the range oracle accepts or rejects boundary values. The CLI parity MCP test extends its stdio fixture with a `uint32` field and checks both the model-facing schema and the raw inventory.
+
+## Review follow-up
+
+Draft-07 schema-valued dependencies now normalize too; property-name dependency lists remain unchanged. Added strict-Ajv regression and registered the suite in the core-git CI lane. Focused schema tests (7) and CI policy tests (46) pass.

@@ -63,6 +63,7 @@ const SUBSCHEMA_MAP_KEYWORDS = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
+  "dependencies",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

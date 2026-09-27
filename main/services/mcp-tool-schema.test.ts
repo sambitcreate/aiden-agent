@@ -61,7 +61,10 @@ function schemars1Fixture() {
       channels: { type: "integer", format: "uint8", minimum: 0, maximum: 255 },
       level: { type: "integer", format: "int8", minimum: -10 },
       size: { $ref: "#/$defs/Size" },
-      extra: { type: "object", additionalProperties: { type: "integer", format: "uint16", minimum: 0 } },
+      extra: {
+        type: "object",
+        additionalProperties: { type: "integer", format: "uint16", minimum: 0 },
+      },
     },
     $defs: {
       Size: {
@@ -185,4 +188,25 @@ test("schemas without schemars formats pass through unchanged", () => {
   };
   assert.deepEqual(normalizeMcpToolInputSchema(schema), schema);
   assert.equal(normalizeMcpToolInputSchema(undefined), undefined);
+});
+
+test("draft-07 dependencies normalize schemas while preserving property lists", () => {
+  const schema = {
+    type: "object",
+    dependencies: {
+      mode: { properties: { retries: { type: "integer", format: "uint8" } } },
+      name: ["mode"],
+    },
+  };
+  const normalized = normalizeMcpToolInputSchema(schema);
+  assert.deepEqual(normalized.dependencies.mode.properties.retries, {
+    type: "integer",
+    minimum: 0,
+    maximum: 255,
+  });
+  assert.deepEqual(normalized.dependencies.name, ["mode"]);
+  assert.equal(schema.dependencies.mode.properties.retries.format, "uint8");
+  const validate = strictDraft07().compile(normalized);
+  assert.equal(validate({ mode: true, retries: 256 }), false);
+  assert.equal(validate({ mode: true, retries: 255 }), true);
 });
