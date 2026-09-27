@@ -625,6 +625,21 @@ test("messages sent during compaction queue behind it and survive a failed compa
   // A failed compaction keeps the queued message and pauses delivery.
   await startCompaction();
   await expect.poll(compactionStarts).toBe(1);
+  // Draft editing includes removing attachments while the local compaction
+  // command is still pending, before a remount clears its local busy state.
+  const image = (
+    await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
+  ).toString("base64");
+  await composer.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  }, image);
+  const removeAttachment = page.getByRole("button", { name: "Remove Pasted image.png", exact: true });
+  await expect(removeAttachment).toBeEnabled();
+  await removeAttachment.click();
+  await expect(removeAttachment).toBeHidden();
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
   await page
     .locator("[data-sidebar]")

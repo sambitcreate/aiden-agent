@@ -1880,7 +1880,7 @@ export function Composer({
                   </span>
                   <button
                     type="button"
-                    disabled={sessionCommandBusy}
+                    disabled={composerInputLocked}
                     onClick={() => {
                       dispatchSkillSelection({ type: "remove" });
                       requestAnimationFrame(() =>
@@ -1919,7 +1919,7 @@ export function Composer({
                     <span className="max-w-[10rem] truncate text-small">{a.name}</span>
                     <button
                       type="button"
-                      disabled={sessionCommandBusy}
+                      disabled={composerInputLocked}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
                       className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"

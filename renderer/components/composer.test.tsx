@@ -465,3 +465,10 @@ test("all asynchronous attachment entry points fence completion and current draf
   }
   assert.match(composer, /if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;\s*const added = await attachmentsApi\.readClipboardImages/u);
 });
+
+
+test("compaction keeps draft attachment and skill removal aligned with input locking", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => removeAttachment/u);
+  assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => \{\s*dispatchSkillSelection\(\{ type: "remove"/u);
+});
