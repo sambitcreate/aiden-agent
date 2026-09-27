@@ -149,6 +149,8 @@ test("the system prompt prefers device tools but leaves shell simulator tooling 
   for (const purpose of ["builds", "installs", "logs", "port forwarding", "diagnostics"]) {
     assert.ok(withDevices.includes(purpose), purpose);
   }
+  // The shell escape hatch never extends to tearing down the watched device, even before device_open.
+  assert.match(withDevices, /Never shut down or erase a simulator the user is watching or stop serve-sim unless the user asks/u);
 });
 
 test("device_open's quick start allows simctl for gaps without letting the agent tear down the watched device", () => {

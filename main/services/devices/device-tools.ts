@@ -30,6 +30,7 @@ export const DEVICE_AGENT_GUIDANCE = [
   "For iOS Simulator work use the device tools: device_list, then device_open, which shows the device in the Simulator tab and returns the agent-device command to drive it.",
   "Verify results with device_screenshot. Close devices you opened with device_close when the task is done.",
   "Prefer the device tools and agent-device for anything on the device the user is watching. Shell tools such as xcrun simctl, xcodebuild, or adb are fine for builds, installs, logs, port forwarding, and diagnostics the device tools don't cover.",
+  "Never shut down or erase a simulator the user is watching or stop serve-sim unless the user asks; the Simulator tab needs them.",
 ].join("\n");
 
 export const DEVICE_ACCESS_OFF =
