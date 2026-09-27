@@ -1054,6 +1054,16 @@ final class AidenChatViewModel {
               last.isReadAloudEligible else { return nil }
         return last.id
     }
+    /// Quotes `selection` into the composer draft for a follow-up question.
+    /// Returns false when the chat is read-only or the selection is blank.
+    @discardableResult
+    func askAbout(_ selection: String) -> Bool {
+        guard !isReadOnlyPresentation,
+              let next = AidenSelectionQuote.draft(quoting: selection, into: draft) else { return false }
+        draft = next
+        return true
+    }
+
     func toggleReadAloud(_ messageID: String) {
         if readAloud.activeMessageID != nil { readAloud.stop(); return }
         guard let context = try? coordinator.requestContext(for: instanceId),
@@ -4096,7 +4106,10 @@ struct AidenChatDetailView: View {
                 chat: model.chat,
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
-                readAloudActiveID: model.readAloud.activeMessageID
+                readAloudActiveID: model.readAloud.activeMessageID,
+                onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
+                    if model.askAbout(selection) { composerIsFocused = true }
+                }
             )
             .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
@@ -4479,8 +4492,12 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// Quotes a selection into the composer; nil while the chat is read-only.
+    /// Closure identity is excluded from equality like the stable `model`.
+    var onAskAbout: ((String) -> Void)? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
+        (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
         // `model` is a shared reference (same pointer on both sides of every
         // comparison), so equality must cover the value-typed snapshots the
         // body renders — `chat`, the Read Aloud state — and the presentation style.
@@ -4499,6 +4516,10 @@ private struct AidenSettledMessageRows: View, Equatable {
         let previous = index > 0 ? chat.messages[index - 1] : nil
         let isBotMessage = presentationStyle == .botMessages
         let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
+        let next = index + 1 < chat.messages.count ? chat.messages[index + 1] : nil
+        // Bot bubbles join into clusters; only the cluster's last bubble
+        // carries the footer so the Messages rhythm stays compact.
+        let showsFooter = !isBotMessage || next.map { !aidenMessagesJoin(message, $0) } ?? true
 
         return AidenMessageView(
             message: message,
@@ -4507,7 +4528,9 @@ private struct AidenSettledMessageRows: View, Equatable {
                 await model.attachmentImageData(for: attachment)
             },
             readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
-            readAloudActive: readAloudActiveID == message.id
+            readAloudActive: readAloudActiveID == message.id,
+            showsFooter: showsFooter,
+            onAskAbout: onAskAbout
         )
         .equatable()
         .padding(.top, topPadding)
@@ -4521,14 +4544,23 @@ private struct AidenMessageView: View, Equatable {
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
     var readAloudAction: (() -> Void)? = nil
     var readAloudActive = false
+    var showsFooter = true
+    var onAskAbout: ((String) -> Void)? = nil
+    @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         // The loader closure captures the stable view-model; identity churn on
         // it must not force settled rows to re-render on every streamed token.
-        // The Read Aloud action is compared by presence for the same reason.
+        // The Read Aloud and Ask actions are compared by presence for the same reason.
         lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle &&
             (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
-            lhs.readAloudActive == rhs.readAloudActive
+            lhs.readAloudActive == rhs.readAloudActive &&
+            lhs.showsFooter == rhs.showsFooter &&
+            (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil)
+    }
+
+    private var selectableText: String {
+        AidenSelectionQuote.selectableText(for: message, visibleText: visibleText)
     }
 
     private var botReply: AidenBotReplyProjection? {
@@ -4545,6 +4577,23 @@ private struct AidenMessageView: View, Equatable {
     }
 
     var body: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
+            messageBody
+            if showsFooter {
+                AidenMessageFooter(
+                    message: message,
+                    copyText: AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle),
+                    readAloudAction: readAloudAction,
+                    readAloudActive: readAloudActive
+                )
+            }
+        }
+        .sheet(item: $selectTextRequest) { request in
+            AidenSelectTextSheet(text: request.text, onAskAbout: onAskAbout)
+        }
+    }
+
+    private var messageBody: some View {
         HStack(alignment: .bottom, spacing: 0) {
             if message.role == .user {
                 Spacer(minLength: presentationStyle == .botMessages ? 72 : 48)
@@ -4562,21 +4611,6 @@ private struct AidenMessageView: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity)
-        .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 4) {
-            if let readAloudAction {
-                HStack(spacing: 16) {
-                    Button { UIPasteboard.general.string = AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) } label: {
-                        Image(systemName: "doc.on.doc")
-                    }.accessibilityLabel("Copy response")
-                    Button(action: readAloudAction) {
-                        Image(systemName: readAloudActive ? "stop.fill" : "speaker.wave.2")
-                    }.accessibilityLabel(readAloudActive ? "Stop reading aloud" : "Read response aloud")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .frame(minHeight: 44)
-            }
-        }
         .contextMenu {
             if let copyText = AidenMessageActionContent.copyText(
                 for: message,
@@ -4587,6 +4621,18 @@ private struct AidenMessageView: View, Equatable {
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
+                Button {
+                    selectTextRequest = AidenSelectTextRequest(text: selectableText)
+                } label: {
+                    Label("Select Text", systemImage: "selection.pin.in.out")
+                }
+                if let onAskAbout {
+                    Button {
+                        onAskAbout(selectableText)
+                    } label: {
+                        Label("Ask About This", systemImage: "text.bubble")
+                    }
+                }
             }
         }
         .accessibilityActions {
@@ -4594,8 +4640,16 @@ private struct AidenMessageView: View, Equatable {
                 for: message,
                 presentationStyle: presentationStyle
             ) {
-                Button("Copy response") {
+                Button(message.role == .user ? "Copy message" : "Copy response") {
                     UIPasteboard.general.string = copyText
+                }
+                Button("Select text") {
+                    selectTextRequest = AidenSelectTextRequest(text: selectableText)
+                }
+                if let onAskAbout {
+                    Button("Ask about this") {
+                        onAskAbout(selectableText)
+                    }
                 }
             }
         }
@@ -5641,7 +5695,8 @@ enum AidenMessageActionContent {
         for message: AidenChatMessage,
         presentationStyle: AidenChatPresentationStyle = .workspace
     ) -> String? {
-        guard message.role == .assistant, !message.text.isEmpty else { return nil }
+        guard !message.text.isEmpty else { return nil }
+        guard message.role == .assistant else { return message.text }
         let text = presentationStyle == .botMessages
             ? AidenBotReplyProjection.resolve(
                 text: message.text,
@@ -5844,6 +5899,13 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if model.isStreaming,
+               let start = AidenTurnElapsed.liveStart(
+                   timeline: model.activityTimeline,
+                   messages: model.chat.messages
+               ) {
+                AidenLiveElapsedLabel(start: start)
+            }
             if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)

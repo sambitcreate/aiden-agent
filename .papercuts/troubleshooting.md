@@ -1404,3 +1404,7 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Mobile transcript polish (Hermex Tier 1)
+- The worktree command guard rejects compound shell commands (`;`, `&&`, variable assignments, `cd` in heredoc pipelines). Multi-file source edits went more smoothly as Python scripts in the scratchpad that assert on exact anchors before replacing.
+- Android Gradle in a fresh worktree fails with "SDK location not found" because there is no `local.properties`. Pass `ANDROID_HOME=$HOME/Library/Android/sdk` (absolute) along with `JAVA_HOME=/opt/homebrew/opt/openjdk@21`.

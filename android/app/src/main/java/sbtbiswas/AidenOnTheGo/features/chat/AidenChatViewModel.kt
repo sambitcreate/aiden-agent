@@ -661,6 +661,17 @@ class AidenChatViewModel(
         )
     }
 
+    /**
+     * Quotes [selection] into the composer draft for a follow-up question.
+     * Returns false when the chat is read-only or the selection is blank.
+     */
+    fun askAbout(selection: String): Boolean {
+        if (isReadOnlyPresentation) return false
+        val next = AidenSelectionQuote.draft(selection, _draft.value) ?: return false
+        updateDraft(next)
+        return true
+    }
+
     fun updateDraft(text: String) {
         _draft.value = text
         draftSession?.let { session ->

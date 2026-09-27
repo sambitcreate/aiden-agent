@@ -3635,7 +3635,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
     }
 
-    func testAgentReplyCopyKeepsOriginalMarkdownAndRejectsNonReplies() {
+    func testMessageCopyKeepsOriginalMarkdownAndSkipsEmptyMessages() {
         let assistant = AidenChatMessage(
             id: "assistant-1",
             role: .assistant,
@@ -3659,8 +3659,133 @@ final class AidenChatTests: XCTestCase {
             AidenMessageActionContent.copyText(for: assistant),
             "## Result\n\nUse `xcodebuild test`."
         )
-        XCTAssertNil(AidenMessageActionContent.copyText(for: user))
+        XCTAssertEqual(AidenMessageActionContent.copyText(for: user), "Please test it")
         XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
+    }
+
+    private func polishTimeline(
+        status: AidenGenerationTimelineStatus,
+        startedAt: Double,
+        finishedAt: Double?
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-polish",
+            status: status,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            steps: []
+        )
+    }
+
+    func testWorkedForUsesTheMacTimelineOnlyForCompletedAssistantTurns() {
+        let start = 1_787_079_660_000.0
+        func assistant(_ timeline: AidenGenerationTimeline?) -> AidenChatMessage {
+            AidenChatMessage(id: "a", role: .assistant, text: "Done", timeline: timeline, createdAt: Date(timeIntervalSince1970: 1))
+        }
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 65_400))),
+            "Worked for 1m 5s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 42_900))),
+            "Worked for 42s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 3_780_000))),
+            "Worked for 1h 3m"
+        )
+        // Running, failed, cancelled, legacy (no timeline), inverted clocks and
+        // user turns never claim a completed duration.
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .running, startedAt: start, finishedAt: nil))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .failed, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .cancelled, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(nil)))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start - 1))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: AidenChatMessage(
+            id: "u", role: .user, text: "Hi",
+            timeline: polishTimeline(status: .completed, startedAt: start, finishedAt: start + 5_000),
+            createdAt: Date(timeIntervalSince1970: 1)
+        )))
+    }
+
+    func testLiveWorkingTimerStartsAtTheTimelineOrTheTurnsUserMessage() {
+        let userSent = Date(timeIntervalSince1970: 1_000)
+        let messages = [
+            AidenChatMessage(id: "u0", role: .user, text: "Earlier", createdAt: Date(timeIntervalSince1970: 10)),
+            AidenChatMessage(id: "a0", role: .assistant, text: "Reply", createdAt: Date(timeIntervalSince1970: 20)),
+            AidenChatMessage(id: "u1", role: .user, text: "Now", createdAt: userSent),
+        ]
+        XCTAssertEqual(AidenTurnElapsed.liveStart(timeline: nil, messages: messages), userSent)
+        let timeline = polishTimeline(status: .running, startedAt: 1_002_000, finishedAt: nil)
+        let timelineStart = AidenTurnElapsed.liveStart(timeline: timeline, messages: messages)
+        XCTAssertEqual(timelineStart, Date(timeIntervalSince1970: 1_002))
+        XCTAssertNil(AidenTurnElapsed.liveStart(timeline: nil, messages: []))
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(125.7)),
+            "Working for 2m 5s"
+        )
+        // A Mac clock ahead of the phone clamps instead of counting negative time.
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(-4)),
+            "Working for 0s"
+        )
+    }
+
+    func testMessageTimestampShowsTimeTodayThenYesterdayThenDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 18, minute: 30)))
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 15, minute: 4)))
+        let yesterday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 9, minute: 5)))
+        let earlier = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9, minute: 5)))
+        let lastYear = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 9, minute: 5)))
+
+        let todayLabel = AidenMessageTimestamp.label(for: today, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(todayLabel.contains("3:04"), todayLabel)
+        XCTAssertFalse(todayLabel.contains("Sep"), todayLabel)
+
+        let yesterdayLabel = AidenMessageTimestamp.label(for: yesterday, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(yesterdayLabel.hasPrefix("Yesterday "), yesterdayLabel)
+        XCTAssertTrue(yesterdayLabel.contains("9:05"), yesterdayLabel)
+
+        let earlierLabel = AidenMessageTimestamp.label(for: earlier, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(earlierLabel.contains("Sep 3"), earlierLabel)
+        XCTAssertFalse(earlierLabel.contains("2026"), earlierLabel)
+
+        let lastYearLabel = AidenMessageTimestamp.label(for: lastYear, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(lastYearLabel.contains("2025"), lastYearLabel)
+    }
+
+    func testAskAboutQuotesSelectionAfterTheExistingDraft() {
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "  Use the cache.\n\nThen retry.  \n", into: ""),
+            "> Use the cache.\n>\n> Then retry.\n\n"
+        )
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "retry budget", into: "Question one\n\n"),
+            "Question one\n\n> retry budget\n\n"
+        )
+        XCTAssertNil(AidenSelectionQuote.draft(quoting: " \n\t", into: "Keep me"))
+
+        let long = String(repeating: "a", count: AidenSelectionQuote.maximumQuotedCharacters + 50)
+        let bounded = AidenSelectionQuote.draft(quoting: long, into: "")
+        XCTAssertEqual(bounded?.count, 2 + AidenSelectionQuote.maximumQuotedCharacters + 1 + 2)
+        XCTAssertEqual(bounded?.hasSuffix("…\n\n"), true)
+    }
+
+    func testSelectableTextFlattensAssistantMarkdownButKeepsUserText() {
+        let assistant = AidenChatMessage(id: "a", role: .assistant, text: "## Plan\n\nUse **bold** words.", createdAt: Date(timeIntervalSince1970: 1))
+        let flattened = AidenSelectionQuote.selectableText(for: assistant, visibleText: assistant.text)
+        XCTAssertFalse(flattened.contains("**"), flattened)
+        XCTAssertFalse(flattened.contains("##"), flattened)
+        XCTAssertTrue(flattened.contains("Use bold words."), flattened)
+
+        let user = AidenChatMessage(id: "u", role: .user, text: "**literal**", createdAt: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(AidenSelectionQuote.selectableText(for: user, visibleText: user.text), "**literal**")
     }
 
     func testBotReplyKeepsOnlyPostToolFinalTextVisible() {
