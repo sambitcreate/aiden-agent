@@ -1408,3 +1408,5 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-27 Dictation Secure Input detection
 - Carbon `IsSecureEventInput` is not usable from Aiden. JXA `ObjC.bindFunction` reports "function not found", and on the macOS 27 SDK both linking and `dlsym` fail, although `EnableSecureEventInput` still resolves. Read `kCGSSessionSecureInputPID` from `CGSessionCopyCurrentDictionary()` through JXA instead.
 - The worktree-isolation guard rejects compound shell commands and heredocs that touch scratch paths. Put multi-step probes into a script file under the scratchpad and run that file.
+
+- 2026-09-27: Secure Input probe used an incorrect Carbon symbol name; `IsSecureEventInputEnabled` is exported and JXA-callable. Prefer the documented API. CI test additions also require `scripts/ci-test-registry.json` lane assignment.

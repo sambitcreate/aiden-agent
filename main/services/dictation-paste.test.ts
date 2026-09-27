@@ -42,6 +42,14 @@ test("native paste transaction preserves all pasteboard representations and rech
   assert.match(ATOMIC_PASTE_SCRIPT, /quietWindow/);
   assert.match(ATOMIC_PASTE_SCRIPT, /is not transcriptText then return "pasted"/);
   assert.match(ATOMIC_PASTE_SCRIPT, /set the clipboard to previousClipboard/);
+  assert.match(
+    ATOMIC_PASTE_SCRIPT,
+    /deliveredValue is originalValue or deliveredValue does not contain transcriptText then return "copied"/,
+  );
+  assert.ok(
+    ATOMIC_PASTE_SCRIPT.indexOf("deliveredValue is originalValue") <
+      ATOMIC_PASTE_SCRIPT.indexOf("set the clipboard to previousClipboard"),
+  );
 });
 
 test(
@@ -99,7 +107,7 @@ test("focus changes degrade to the clipboard result returned by the native trans
   assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
     outcome: "copied",
     reason: "paste-unavailable",
-    message: "Copied — the original text field was no longer focused.",
+    message: "Copied — Aiden couldn’t confirm delivery to the focused field.",
   });
 });
 
@@ -148,7 +156,7 @@ test("missing Accessibility access takes precedence over Secure Input detection"
   assert.equal(probes, 0);
 });
 
-test("a failed Secure Input probe does not block the paste attempt", async () => {
+test("a failed Secure Input probe preserves the transcript without attempting paste", async () => {
   const logged: string[] = [];
   const subject = harness({
     isSecureInputActive: async () => {
@@ -156,8 +164,9 @@ test("a failed Secure Input probe does not block the paste attempt", async () =>
     },
     log: (message) => logged.push(message),
   });
-  assert.deepEqual(await pasteTranscript("hello world", subject.deps), { outcome: "pasted" });
-  assert.equal(subject.pastedText(), "hello world");
+  assert.equal((await pasteTranscript("hello world", subject.deps)).outcome, "copied");
+  assert.equal(subject.pastedText(), "");
+  assert.equal(subject.clipboard(), "hello world");
   assert.equal(logged.length, 1);
 });
 
@@ -174,7 +183,7 @@ test("Secure Input detection maps probe output and rejects unrecognized output",
 });
 
 test(
-  "Secure Input probe runs against the live CoreGraphics session",
+  "Secure Input probe runs against the documented Carbon API",
   { skip: process.platform !== "darwin" },
   async () => {
     assert.match(await runJxa(SECURE_INPUT_PROBE_SCRIPT), /^(secure|clear)$/);

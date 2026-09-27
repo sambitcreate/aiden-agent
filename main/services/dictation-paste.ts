@@ -37,6 +37,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 			set targetPid to unix id of targetProcess
 			set targetElement to value of attribute "AXFocusedUIElement" of targetProcess
 			set targetRole to role of targetElement as text
+			set originalValue to value of attribute "AXValue" of targetElement as text
 		on error
 			set the clipboard to transcriptText
 			return "copied"
@@ -79,6 +80,14 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 		end try
 		if elapsed is greater than or equal to quietWindow then
 			try
+				tell application "System Events"
+					set deliveredValue to value of attribute "AXValue" of targetElement as text
+				end tell
+				if deliveredValue is originalValue or deliveredValue does not contain transcriptText then return "copied"
+				on error
+				return "copied"
+			end try
+			try
 				if (the clipboard as text) is transcriptText then set the clipboard to previousClipboard
 			end try
 			return "pasted"
@@ -87,16 +96,9 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 	return "pasted"
 end run`;
 
-/**
- * Reads the current CoreGraphics session: WindowServer publishes
- * kCGSSessionSecureInputPID only while some process holds Secure Event Input.
- * Carbon's IsSecureEventInput is neither bridged to JXA nor exported by the
- * current macOS SDK, so the session dictionary is the probe that works in the
- * shipped app without a native helper.
- */
-export const SECURE_INPUT_PROBE_SCRIPT = `ObjC.import("CoreGraphics");
-var session = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary()));
-session && session.kCGSSessionSecureInputPID ? "secure" : "clear";`;
+/** Query the documented Carbon API rather than an undocumented session key. */
+export const SECURE_INPUT_PROBE_SCRIPT = `ObjC.import("Carbon");
+$.IsSecureEventInputEnabled() ? "secure" : "clear";`;
 
 export type RunJxa = (script: string) => Promise<string>;
 
@@ -147,10 +149,7 @@ export async function runAtomicMacPaste(text: string): Promise<boolean> {
  * Secure Input would swallow the keystroke, or after any failure, the
  * transcript remains available on the clipboard.
  */
-export async function pasteTranscript(
-  text: string,
-  deps: PasteDeps,
-): Promise<PasteDeliveryResult> {
+export async function pasteTranscript(text: string, deps: PasteDeps): Promise<PasteDeliveryResult> {
   if (!deps.isAccessibilityTrusted()) {
     deps.writeClipboard(text);
     return {
@@ -163,9 +162,9 @@ export async function pasteTranscript(
   try {
     secureInput = await deps.isSecureInputActive();
   } catch (error) {
-    // An unknown state must not block delivery; the native transaction still
-    // falls back to the clipboard on its own failures.
-    deps.log?.("Secure Input detection failed; attempting paste.", error);
+    deps.log?.("Secure Input detection failed; transcript left on the clipboard.", error);
+    deps.writeClipboard(text);
+    return { outcome: "copied", reason: "paste-unavailable", message: SECURE_INPUT_COPIED_MESSAGE };
   }
   if (secureInput) {
     deps.writeClipboard(text);
@@ -181,7 +180,7 @@ export async function pasteTranscript(
       : {
           outcome: "copied",
           reason: "paste-unavailable",
-          message: "Copied — the original text field was no longer focused.",
+          message: "Copied — Aiden couldn’t confirm delivery to the focused field.",
         };
   } catch (error) {
     deps.writeClipboard(text);

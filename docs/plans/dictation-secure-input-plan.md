@@ -30,8 +30,9 @@ atomic dictation paste (`main/services/dictation-paste.ts`) still reported
 1. Accessibility missing → existing "allow Accessibility" copy (probe skipped).
 2. Secure Input active → transcript written to the clipboard, no keystroke, and a
    `copied` result with reason `secure-input`.
-3. Probe failure or unexpected output → logged; paste proceeds as before (the
-   native transaction still falls back to the clipboard on its own errors).
+3. Probe failure or unexpected output → logged; transcript stays copied.
+4. Clipboard restoration requires AXValue evidence of insertion; uncertain
+   delivery leaves the transcript available for manual paste.
 
 The pill shows a warning-tone shield icon, "Secure Input blocked paste", and
 "Transcript copied — press ⌘V to paste." A screen-reader-only sentence explains
@@ -47,6 +48,6 @@ the cause. The result stays visible for 4 s instead of 1.2 s.
 
 ## Follow-ups
 
-- Recheck Secure Input right before the keystroke inside the atomic AppleScript
-  transaction (it can turn on during the 80 ms focus revalidation window).
+- Physical acceptance on supported macOS releases remains useful; the atomic
+  transaction now preserves transcripts when insertion cannot be confirmed.
 - Optionally surface the condition in Settings → Dictation diagnostics.
