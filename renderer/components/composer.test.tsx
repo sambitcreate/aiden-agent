@@ -92,7 +92,7 @@ test("undelivered Steer guidance is appended to the draft, never resent", () => 
 test("busy composer actions are closed while Stop is settling", () => {
   const composer = source("./composer.tsx");
   assert.match(composer, /stoppingGeneration = false,/u);
-  assert.match(composer, /!sessionCommandBusy &&\s*!\(isGenerating && stoppingGeneration\)/u);
+  assert.match(composer, /!composerInputLocked &&\s*!\(isGenerating && stoppingGeneration\)/u);
   assert.match(composer, /subscribeGuidanceRestore\(chatId, \(guidance\) => \{/u);
   assert.match(composer, /mergeRestoredGuidance\(current, guidance\)/u);
 });
@@ -327,7 +327,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
+  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /chatsApi\.copyVisibleHistory\([\s\S]{0,100}throughAssistantMessageId/u);
@@ -422,7 +422,7 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
   assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
-  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
+  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
   assert.match(composer, /role="status"[^\n]*Sending…/u);
 });
 

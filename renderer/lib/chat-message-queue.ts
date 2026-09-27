@@ -15,7 +15,12 @@ interface QueueSnapshot {
   paused: boolean;
   sendingId?: string;
   editingId?: string;
+  /** Set while a chat-wide operation (manual compaction) must finish before delivery. */
+  holdReason?: "compaction";
 }
+
+/** The subset of a compaction result that decides whether held follow-ups may proceed. */
+export type CompactionHoldOutcome = { compacted: true } | { compacted: false; reason: string };
 
 /** Unsent, document-local drafts. Never write attachment contents to browser storage. */
 export class ChatMessageQueue {
@@ -64,7 +69,11 @@ export class ChatMessageQueue {
     if (requestStop && !requestStop()) {
       throw new Error("The current response has ended. Send your message normally.");
     }
-    this.publish({ messages: [structuredClone(message)], paused: false });
+    this.publish({
+      messages: [structuredClone(message)],
+      paused: false,
+      holdReason: this.snapshot.holdReason,
+    });
   }
   edit(id: string): boolean {
     if (this.snapshot.sendingId || !this.snapshot.messages.some((item) => item.id === id))
@@ -110,10 +119,43 @@ export class ChatMessageQueue {
     this.publish({ ...this.snapshot, paused: false });
   }
   discard() {
-    this.publish({ messages: [], paused: true });
+    this.publish({ messages: [], paused: true, holdReason: this.snapshot.holdReason });
+  }
+  /** Accept follow-ups while compaction runs, but deliver none until it settles. */
+  holdForCompaction() {
+    this.publish({ ...this.snapshot, holdReason: "compaction" });
+  }
+  /**
+   * Release the compaction hold. A finished (or unnecessary) compaction lets
+   * the queue continue in order; anything else keeps every queued message and
+   * pauses delivery so the user decides whether to send into the old context.
+   * Returns true when queued messages were paused by this release.
+   */
+  releaseCompactionHold(outcome: CompactionHoldOutcome | undefined): boolean {
+    if (this.snapshot.holdReason !== "compaction") return false;
+    const proceed =
+      outcome !== undefined &&
+      (outcome.compacted ||
+        outcome.reason === "already_compact" ||
+        // Compaction never started because another turn owns the chat; the
+        // queue already waits for that turn through its normal gates.
+        outcome.reason === "busy");
+    const pause = !proceed && this.snapshot.messages.length > 0;
+    this.publish({
+      ...this.snapshot,
+      holdReason: undefined,
+      paused: pause || this.snapshot.paused,
+    });
+    return pause;
   }
   claim(): QueuedChatMessage | undefined {
-    if (this.snapshot.paused || this.snapshot.sendingId || this.snapshot.editingId) return;
+    if (
+      this.snapshot.paused ||
+      this.snapshot.holdReason ||
+      this.snapshot.sendingId ||
+      this.snapshot.editingId
+    )
+      return;
     const message = this.snapshot.messages[0];
     if (!message) return;
     this.publish({ ...this.snapshot, sendingId: message.id });
@@ -164,6 +206,7 @@ export async function deliverQueuedMessage(input: {
     if (
       !input.isCurrent() ||
       input.queue.getSnapshot().paused ||
+      input.queue.getSnapshot().holdReason ||
       input.queue.getSnapshot().sendingId !== message.id
     ) {
       input.queue.settle(message.id, "deferred");

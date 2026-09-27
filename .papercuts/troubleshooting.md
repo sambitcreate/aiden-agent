@@ -1404,3 +1404,6 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 queue while compacting
+- `renderer/components/composer.test.tsx` pins the exact `readOnly={sessionCommandBusy || firstSendPending}` and submission expressions with `assert.match`. Renaming the lock predicate breaks three unrelated tests. I updated the names in place without adding asserts, and put the behavioral coverage in the e2e specs. These greps should be replaced with a rendered-composer test.
