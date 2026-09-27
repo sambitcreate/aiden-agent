@@ -149,6 +149,25 @@ func aidenCanonicalBotConversations(
     }
 }
 
+enum AidenBotDeepLinkResolution: Equatable, Sendable {
+    /// Open this Bot's canonical conversation.
+    case openChat(String)
+    /// The Bot has no conversation yet; land on the Bot without creating one.
+    case showBot
+}
+
+/// Chooses the chat a `aiden-otg://bot/{id}/chat` link opens. Items owned by
+/// another Bot are ignored even if a server returned them, and duplicates use
+/// the same canonical rule as Bots Home so a link and a tap agree.
+func aidenResolvedBotDeepLink(
+    botID: String,
+    conversations: [AidenBotConversationItem]
+) -> AidenBotDeepLinkResolution {
+    let owned = conversations.filter { $0.botId == botID }
+    guard let chat = aidenCanonicalBotConversations(owned).first else { return .showBot }
+    return .openChat(chat.chatId)
+}
+
 /// A single layout-shaped placeholder shared by the Bot favorites, Bot list,
 /// and chat list during a true cold load. Warm refreshes keep the last-good UI
 /// in place and never show this view.

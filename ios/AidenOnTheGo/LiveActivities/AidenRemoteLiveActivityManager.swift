@@ -73,7 +73,8 @@ final class AidenRemoteLiveActivityManager {
                 AgentRunActivityStateReducer.initialState(
                     sessionID: $0.sessionID,
                     sessionTitle: $0.sessionTitle,
-                    startedAt: $0.startedAt
+                    startedAt: $0.startedAt,
+                    toolCallCount: $0.toolCallCount
                 )
             }
         case .running:

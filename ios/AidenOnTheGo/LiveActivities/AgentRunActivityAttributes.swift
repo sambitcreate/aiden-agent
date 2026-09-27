@@ -13,6 +13,10 @@ struct AgentRunActivityAttributes: ActivityAttributes {
         var isStale: Bool
         var isFinal: Bool
         var errorSummary: String?
+        /// Tool calls started during this run, shown as a freshness chip. It is
+        /// a bounded counter only: tool names and arguments never reach the
+        /// widget beyond the sanitized activity line.
+        var toolCallCount: Int
 
         init(
             sessionID: String,
@@ -24,7 +28,8 @@ struct AgentRunActivityAttributes: ActivityAttributes {
             updatedAt: Date,
             isStale: Bool = false,
             isFinal: Bool = false,
-            errorSummary: String? = nil
+            errorSummary: String? = nil,
+            toolCallCount: Int = 0
         ) {
             self.sessionID = sessionID
             self.sessionTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
@@ -36,6 +41,26 @@ struct AgentRunActivityAttributes: ActivityAttributes {
             self.isStale = isStale
             self.isFinal = isFinal
             self.errorSummary = errorSummary.map(AgentRunActivitySanitizer.activityLine)
+            self.toolCallCount = AgentRunFreshness.clampedToolCallCount(toolCallCount)
+        }
+
+        // iOS persists running activities across app updates, so state encoded
+        // by an older build (without `toolCallCount`) must still decode.
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                sessionID: try values.decode(String.self, forKey: .sessionID),
+                sessionTitle: try values.decode(String.self, forKey: .sessionTitle),
+                status: try values.decode(AgentRunActivityStatus.self, forKey: .status),
+                currentActivity: try values.decode(String.self, forKey: .currentActivity),
+                responseExcerpt: try values.decode(String.self, forKey: .responseExcerpt),
+                startedAt: try values.decode(Date.self, forKey: .startedAt),
+                updatedAt: try values.decode(Date.self, forKey: .updatedAt),
+                isStale: try values.decode(Bool.self, forKey: .isStale),
+                isFinal: try values.decode(Bool.self, forKey: .isFinal),
+                errorSummary: try values.decodeIfPresent(String.self, forKey: .errorSummary),
+                toolCallCount: try values.decodeIfPresent(Int.self, forKey: .toolCallCount) ?? 0
+            )
         }
     }
 
@@ -225,6 +250,35 @@ enum AgentRunActivitySanitizer {
     }
 }
 
+/// Freshness chips make a stale Live Activity obvious: how many tools the run
+/// has started, and when the last real agent update arrived.
+enum AgentRunFreshness {
+    static let maximumDisplayedToolCalls = 99
+
+    static func clampedToolCallCount(_ count: Int) -> Int {
+        min(max(0, count), 9_999)
+    }
+
+    /// `nil` hides the chip until the run starts its first tool.
+    static func toolCallLabel(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        if count > maximumDisplayedToolCalls {
+            return String(localized: "\(maximumDisplayedToolCalls)+ tools")
+        }
+        return count == 1 ? String(localized: "1 tool") : String(localized: "\(count) tools")
+    }
+
+    /// A finished run is never "stale"; otherwise either the app marked it
+    /// stale (backgrounded, unreachable Mac) or ActivityKit passed its
+    /// `staleDate` without a newer update.
+    static func isStale(
+        _ state: AgentRunActivityAttributes.ContentState,
+        systemMarkedStale: Bool
+    ) -> Bool {
+        !state.isFinal && (state.isStale || systemMarkedStale)
+    }
+}
+
 enum AgentRunElapsedTimeFormatter {
     static func label(startedAt: Date, updatedAt: Date) -> String {
         let elapsedSeconds = max(0, Int(updatedAt.timeIntervalSince(startedAt).rounded(.down)))
@@ -275,14 +329,18 @@ enum AgentRunActivityStateReducer {
             updatedAt: now,
             isStale: state.isStale,
             isFinal: state.isFinal,
-            errorSummary: state.errorSummary
+            errorSummary: state.errorSummary,
+            toolCallCount: state.toolCallCount
         )
     }
 
+    /// `toolCallCount` lets a queued/reconciling restart keep the count the
+    /// run already earned instead of resetting the freshness chip.
     static func initialState(
         sessionID: String,
         sessionTitle: String,
-        startedAt: Date = Date()
+        startedAt: Date = Date(),
+        toolCallCount: Int = 0
     ) -> AgentRunActivityAttributes.ContentState {
         AgentRunActivityAttributes.ContentState(
             sessionID: sessionID,
@@ -290,7 +348,8 @@ enum AgentRunActivityStateReducer {
             status: .starting,
             currentActivity: String(localized: "Starting response"),
             startedAt: startedAt,
-            updatedAt: startedAt
+            updatedAt: startedAt,
+            toolCallCount: toolCallCount
         )
     }
 
@@ -307,7 +366,8 @@ enum AgentRunActivityStateReducer {
             currentActivity: String(localized: "Writing response"),
             responseExcerpt: state.responseExcerpt + text,
             startedAt: state.startedAt,
-            updatedAt: now
+            updatedAt: now,
+            toolCallCount: state.toolCallCount
         )
     }
 
@@ -337,7 +397,8 @@ enum AgentRunActivityStateReducer {
             currentActivity: String(localized: "Writing response"),
             responseExcerpt: excerpt,
             startedAt: state.startedAt,
-            updatedAt: now
+            updatedAt: now,
+            toolCallCount: state.toolCallCount
         )
     }
 
@@ -355,7 +416,8 @@ enum AgentRunActivityStateReducer {
             updatedAt: now,
             isStale: state.isStale,
             isFinal: state.isFinal,
-            errorSummary: state.errorSummary
+            errorSummary: state.errorSummary,
+            toolCallCount: state.toolCallCount
         )
     }
 
@@ -373,6 +435,8 @@ enum AgentRunActivityStateReducer {
         state: AgentRunActivityAttributes.ContentState,
         now: Date = Date()
     ) -> AgentRunActivityAttributes.ContentState {
+        var state = state
+        state.toolCallCount = AgentRunFreshness.clampedToolCallCount(state.toolCallCount + 1)
         switch AgentRunActivitySanitizer.toolKind(name: name) {
         case .command:
             return statusState(.runningCommand, activity: String(localized: "Running command"), state: state, now: now)
@@ -410,10 +474,13 @@ enum AgentRunActivityStateReducer {
             currentActivity: state.currentActivity.isEmpty ? String(localized: "Latest status shown") : state.currentActivity,
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
-            updatedAt: now,
+            // Keep the last real agent update: marking stale is not progress,
+            // and the "updated … ago" chip must keep aging.
+            updatedAt: state.updatedAt,
             isStale: true,
             isFinal: state.isFinal,
-            errorSummary: state.errorSummary
+            errorSummary: state.errorSummary,
+            toolCallCount: state.toolCallCount
         )
     }
 
@@ -434,7 +501,8 @@ enum AgentRunActivityStateReducer {
             updatedAt: now,
             isStale: false,
             isFinal: true,
-            errorSummary: errorSummary
+            errorSummary: errorSummary,
+            toolCallCount: state.toolCallCount
         )
     }
 
@@ -451,7 +519,8 @@ enum AgentRunActivityStateReducer {
             currentActivity: activity,
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
-            updatedAt: now
+            updatedAt: now,
+            toolCallCount: state.toolCallCount
         )
     }
 }

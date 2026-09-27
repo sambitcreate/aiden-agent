@@ -184,6 +184,138 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertNil(AidenDeepLink.request(from: URL(string: "aiden-otg://chat?instance=a&chat=c&prompt=hello")!))
     }
 
+    func testBotChatDeepLinkRoundTripsAndRejectsAmbiguousOrUnsafeShapes() throws {
+        let link = try XCTUnwrap(AidenDeepLink.botChatURL(instanceId: "instance-1", botId: "bot_fixture_01"))
+        XCTAssertEqual(link.absoluteString, "aiden-otg://bot/bot_fixture_01/chat?instance=instance-1")
+        XCTAssertEqual(
+            AidenDeepLink.request(from: link),
+            AidenNavigationRequest(
+                destination: .botChat("bot_fixture_01"),
+                instanceId: "instance-1",
+                workspaceId: nil,
+                startsVoice: false
+            )
+        )
+
+        let bare = try XCTUnwrap(URL(string: "aiden-otg://bot/bot:ops.1/chat"))
+        XCTAssertEqual(AidenDeepLink.request(from: bare)?.destination, .botChat("bot:ops.1"))
+        XCTAssertNil(AidenDeepLink.request(from: bare)?.instanceId)
+        XCTAssertEqual(AidenDeepLink.request(from: URL(string: "AIDEN-OTG://BOT/b1/chat")!)?.destination, .botChat("b1"))
+
+        for rejected in [
+            "aiden-otg://bot/b1",
+            "aiden-otg://bot/b1/chat/extra",
+            "aiden-otg://bot//chat",
+            "aiden-otg://bot/b1/settings",
+            "aiden-otg://bot/..%2Fsecret/chat",
+            "aiden-otg://bot/b%31/chat",
+            "aiden-otg://bot/b1/chat?chat=c1",
+            "aiden-otg://bot/b1/chat?workspace=w1",
+            "aiden-otg://bot/b1/chat?instance=a&instance=b",
+            "aiden-otg://bot/b1/chat?instance=../x",
+            "aiden-otg://bot/b1/chat?prompt=hello",
+            "aiden-otg://bot/b1/chat#frag",
+            "aiden-otg://user@bot/b1/chat",
+            "https://bot/b1/chat",
+        ] {
+            XCTAssertNil(AidenDeepLink.request(from: try XCTUnwrap(URL(string: rejected))), rejected)
+        }
+        XCTAssertNil(AidenDeepLink.botChatURL(instanceId: nil, botId: "../secret"))
+        XCTAssertNil(AidenDeepLink.botChatURL(instanceId: "bad id", botId: "b1"))
+        XCTAssertNil(AidenDeepLink.botChatURL(instanceId: nil, botId: String(repeating: "b", count: 161)))
+    }
+
+    func testLiveActivityFreshnessCountsToolCallsAcrossTransitionsAndKeepsLastUpdateWhenStale() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var state = AgentRunActivityStateReducer.initialState(
+            sessionID: "chat-1",
+            sessionTitle: "Chat",
+            startedAt: start
+        )
+        XCTAssertEqual(state.toolCallCount, 0)
+        XCTAssertNil(AgentRunFreshness.toolCallLabel(count: state.toolCallCount))
+
+        state = AgentRunActivityStateReducer.toolStarted(name: "read_file", state: state, now: start + 1)
+        state = AgentRunActivityStateReducer.toolCompleted(state: state, now: start + 2)
+        state = AgentRunActivityStateReducer.appendingToken("partial", to: state, now: start + 3)
+        state = AgentRunActivityStateReducer.reasoning("", state: state, now: start + 4)
+        state = AgentRunActivityStateReducer.toolStarted(name: "bash", state: state, now: start + 5)
+        state = AgentRunActivityStateReducer.waitingForApproval(state: state, now: start + 6)
+        state = AgentRunActivityStateReducer.settingInterimAssistant("interim", on: state, now: start + 7)
+        state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state, now: start + 8)
+        state = AgentRunActivityStateReducer.updatingSessionTitle("Renamed", state: state, now: start + 9)
+        XCTAssertEqual(state.toolCallCount, 2)
+        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: state.toolCallCount), "2 tools")
+        XCTAssertEqual(state.updatedAt, start + 9)
+
+        // Going stale is not agent progress: the "updated … ago" chip keeps aging.
+        let stale = AgentRunActivityStateReducer.stale(state: state, now: start + 600)
+        XCTAssertTrue(stale.isStale)
+        XCTAssertEqual(stale.updatedAt, start + 9)
+        XCTAssertEqual(stale.toolCallCount, 2)
+        XCTAssertTrue(AgentRunFreshness.isStale(stale, systemMarkedStale: false))
+
+        // The system's staleDate alone also marks a running activity stale,
+        // but a finished run is never presented as stale.
+        XCTAssertFalse(AgentRunFreshness.isStale(state, systemMarkedStale: false))
+        XCTAssertTrue(AgentRunFreshness.isStale(state, systemMarkedStale: true))
+        let done = AgentRunActivityStateReducer.final(
+            status: .complete,
+            activity: "Response complete",
+            state: stale,
+            now: start + 700
+        )
+        XCTAssertEqual(done.toolCallCount, 2)
+        XCTAssertFalse(AgentRunFreshness.isStale(done, systemMarkedStale: true))
+
+        // A queued/reconciling restart keeps the count the run already earned.
+        let restarted = AgentRunActivityStateReducer.initialState(
+            sessionID: state.sessionID,
+            sessionTitle: state.sessionTitle,
+            startedAt: state.startedAt,
+            toolCallCount: state.toolCallCount
+        )
+        XCTAssertEqual(restarted.toolCallCount, 2)
+    }
+
+    func testLiveActivityToolCallChipIsBoundedAndSingular() {
+        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 1), "1 tool")
+        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 99), "99 tools")
+        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 100), "99+ tools")
+        XCTAssertNil(AgentRunFreshness.toolCallLabel(count: -3))
+        let negative = AgentRunActivityAttributes.ContentState(
+            sessionID: "chat-1",
+            sessionTitle: "Chat",
+            status: .usingTool,
+            currentActivity: "Using tool",
+            startedAt: Date(),
+            updatedAt: Date(),
+            toolCallCount: -5
+        )
+        XCTAssertEqual(negative.toolCallCount, 0)
+    }
+
+    func testLiveActivityStateEncodedBeforeFreshnessChipsStillDecodes() throws {
+        // Activities persisted by an older build have no `toolCallCount`.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"usingTool",
+         "currentActivity":"Using tool","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":false,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(decoded.toolCallCount, 0)
+        XCTAssertEqual(decoded.status, .usingTool)
+        XCTAssertEqual(decoded.updatedAt, Date(timeIntervalSinceReferenceDate: 12))
+
+        let counted = AgentRunActivityStateReducer.toolStarted(name: "bash", state: decoded)
+        let roundTripped = try JSONDecoder().decode(
+            AgentRunActivityAttributes.ContentState.self,
+            from: JSONEncoder().encode(counted)
+        )
+        XCTAssertEqual(roundTripped, counted)
+        XCTAssertEqual(roundTripped.toolCallCount, 1)
+    }
+
     @MainActor
     func testLiveActivityStateIsBoundedAndResponseExcerptDefaultsOff() throws {
         let longTitle = String(repeating: "Title ", count: 30)

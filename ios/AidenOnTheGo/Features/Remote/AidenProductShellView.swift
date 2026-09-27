@@ -1859,12 +1859,7 @@ struct AidenProductShellView: View {
                     botsAvailability: botsAvailability
                 ) {
                 case .bots:
-                    area = .bots
-                    deepLinkedBotChat = chat
-                    deepLinkedBotInstanceID = context.instanceId
-                    deepLinkedBotDeviceID = context.deviceId
-                    deepLinkedBotAllowsMutations = false
-                    await prepareBotAccess()
+                    await presentDeepLinkedBotChat(chat, context: context)
                 case .workspaces:
                     area = .workspaces
                     workspaceNavigationRequest = request
@@ -1882,6 +1877,69 @@ struct AidenProductShellView: View {
                 navigationRequest = nil
                 coordinator.presentedError = error.localizedDescription
             }
+        case .botChat(let botID):
+            guard botsAvailability.canOpen else {
+                navigationRequest = nil
+                area = .workspaces
+                coordinator.presentedError = botsAvailability.unavailableMessage ?? "Bot access is unavailable."
+                return
+            }
+            var capturedContext: AidenRemoteRequestContext?
+            do {
+                let context = try coordinator.requestContext(for: request.instanceId)
+                capturedContext = context
+                let client = try coordinator.remoteClient(for: context)
+                let page = try await client.botConversations(
+                    query: AidenBotConversationQuery(botId: botID)
+                )
+                guard coordinator.isCurrent(context), navigationRequest == request else { return }
+                switch aidenResolvedBotDeepLink(botID: botID, conversations: page.conversations) {
+                case .openChat(let chatID):
+                    let chat = try await client.chat(id: chatID)
+                    guard coordinator.isCurrent(context), navigationRequest == request else { return }
+                    navigationRequest = nil
+                    guard chat.botId == botID, chat.isBotChat else {
+                        coordinator.presentedError = "That Bot chat is no longer available."
+                        return
+                    }
+                    await presentDeepLinkedBotChat(chat, context: context)
+                case .showBot:
+                    // Confirm the Bot exists before landing on it; a link never
+                    // creates a conversation on the user's behalf.
+                    let bot = try await client.bot(id: botID)
+                    guard coordinator.isCurrent(context), navigationRequest == request else { return }
+                    navigationRequest = nil
+                    area = .bots
+                    navigationStore.setSelectedBot(
+                        bot.id,
+                        for: context.instanceId,
+                        deviceID: context.deviceId
+                    )
+                    coordinator.presentedError = "\(bot.name) has no chat yet. Open it from Bots to start one."
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                if let context = capturedContext,
+                   await coordinator.handleCredentialRevocation(error, context: context) { return }
+                guard navigationRequest == request,
+                      capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return }
+                navigationRequest = nil
+                coordinator.presentedError = error.localizedDescription
+            }
         }
+    }
+
+    @MainActor
+    private func presentDeepLinkedBotChat(
+        _ chat: AidenChat,
+        context: AidenRemoteRequestContext
+    ) async {
+        area = .bots
+        deepLinkedBotChat = chat
+        deepLinkedBotInstanceID = context.instanceId
+        deepLinkedBotDeviceID = context.deviceId
+        deepLinkedBotAllowsMutations = false
+        await prepareBotAccess()
     }
 }

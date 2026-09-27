@@ -32,14 +32,17 @@ struct AgentRunLiveActivityWidget: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    AgentRunExpandedIslandBottomView(state: context.state)
+                    AgentRunExpandedIslandBottomView(
+                        state: context.state,
+                        systemMarkedStale: context.isStale
+                    )
                 }
             } compactLeading: {
                 AgentRunIslandCompactMark(status: context.state.status)
             } compactTrailing: {
                 Text(context.state.status.compactTitle)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AgentRunStatusStyle.color(for: context.state.status, isStale: context.state.isStale))
+                    .foregroundStyle(AgentRunStatusStyle.color(for: context.state.status, isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)))
                     .minimumScaleFactor(0.72)
                     .lineLimit(1)
             } minimal: {
@@ -49,23 +52,26 @@ struct AgentRunLiveActivityWidget: Widget {
                 instanceId: context.attributes.instanceID,
                 chatId: context.state.sessionID
             ))
-            .keylineTint(AgentRunStatusStyle.color(for: context.state.status, isStale: context.state.isStale))
+            .keylineTint(AgentRunStatusStyle.color(for: context.state.status, isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)))
         }
     }
 }
 
 private struct AgentRunExpandedIslandBottomView: View {
     let state: AgentRunActivityAttributes.ContentState
+    let systemMarkedStale: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             AgentRunProgressRail(status: state.status)
 
+            AgentRunFreshnessChips(state: state, systemMarkedStale: systemMarkedStale)
+
             if !state.responseExcerpt.isEmpty {
                 Text(state.responseExcerpt)
                     .font(.caption2)
                     .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
             } else {
                 Text(state.currentActivity)
@@ -96,8 +102,12 @@ private struct AgentRunLockScreenView: View {
         .padding(.vertical, 14)
     }
 
+    private var isStale: Bool {
+        AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
+    }
+
     private var activityText: String {
-        if context.state.isStale {
+        if isStale {
             return "Latest status shown"
         }
 
@@ -110,13 +120,17 @@ private struct AgentRunLockScreenView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            AgentRunStatusDot(status: context.state.status, isStale: context.state.isStale, size: 34)
+            AgentRunStatusDot(status: context.state.status, isStale: isStale, size: 34)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Aiden")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                    .textCase(.uppercase)
+                HStack(spacing: 6) {
+                    Text("Aiden")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
+                        .textCase(.uppercase)
+
+                    AgentRunFreshnessChips(state: context.state, systemMarkedStale: context.isStale)
+                }
 
                 Text(context.state.sessionTitle)
                     .font(.headline.weight(.semibold))
@@ -160,7 +174,7 @@ private struct AgentRunLockScreenView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(AgentRunStatusStyle.color(for: context.state.status, isStale: context.state.isStale).opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(AgentRunStatusStyle.color(for: context.state.status, isStale: isStale).opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(AgentRunLiveActivityTheme.stroke, lineWidth: 1)
@@ -177,6 +191,58 @@ private struct AgentRunLockScreenView: View {
         }
 
         return "Waiting for the next agent update."
+    }
+}
+
+/// Tool-call count plus "updated … ago" so a Live Activity that stopped
+/// receiving updates reads as old at a glance. The relative date is rendered
+/// by the system, so it keeps aging while the app is suspended.
+private struct AgentRunFreshnessChips: View {
+    let state: AgentRunActivityAttributes.ContentState
+    let systemMarkedStale: Bool
+
+    private var isStale: Bool {
+        AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale)
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let toolLabel = AgentRunFreshness.toolCallLabel(count: state.toolCallCount) {
+                chip(systemImage: "wrench.and.screwdriver", color: AgentRunLiveActivityTheme.secondaryText) {
+                    Text(toolLabel)
+                }
+                .accessibilityLabel(Text(toolLabel))
+            }
+
+            if !state.isFinal {
+                chip(
+                    systemImage: isStale ? "clock.badge.exclamationmark" : "clock",
+                    color: isStale ? AgentRunLiveActivityTheme.staleText : AgentRunLiveActivityTheme.secondaryText
+                ) {
+                    Text("\(isStale ? String(localized: "Stale") : String(localized: "Updated")) \(Text(state.updatedAt, style: .relative)) ago")
+                }
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    private func chip<Label: View>(
+        systemImage: String,
+        color: Color,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .imageScale(.small)
+            label()
+                .monospacedDigit()
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .background(AgentRunLiveActivityTheme.pillBackground, in: Capsule(style: .continuous))
     }
 }
 
@@ -373,6 +439,7 @@ private enum AgentRunLiveActivityTheme {
     static let pillBackground = Color.white.opacity(0.08)
     static let railBackground = Color.white.opacity(0.14)
     static let liveDot = Color(red: 0.35, green: 0.95, blue: 0.7)
+    static let staleText = Color(red: 1.0, green: 0.78, blue: 0.45)
 }
 
 private enum AgentRunStatusStyle {
