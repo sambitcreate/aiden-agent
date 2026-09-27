@@ -273,15 +273,53 @@ test("chat width setting resizes the transcript and composer together and persis
           !element.matches('[data-browser-composer-inset="true"]') && element.textContent?.includes(text),
       );
       const composer = document.querySelector('[data-browser-composer-inset="true"]');
-      if (!transcript || !composer) return null;
+      const viewport = transcript?.closest<HTMLElement>(".scroll-edge-mask");
+      if (!transcript || !composer || !viewport) return null;
+      const scrollContent = viewport.querySelector<HTMLElement>("[data-scroll-content]");
+      if (!scrollContent) return null;
       const a = transcript.getBoundingClientRect();
       const b = composer.getBoundingClientRect();
+      const scrollport = viewport.getBoundingClientRect();
+      const content = scrollContent.getBoundingClientRect();
+      const scrollportLeft = Math.round(scrollport.left + viewport.clientLeft);
+      const scrollportRight = Math.round(scrollportLeft + viewport.clientWidth);
       return {
         transcript: Math.round(a.width),
         composer: Math.round(b.width),
         centerOffset: Math.abs(Math.round(a.left + a.width / 2 - (b.left + b.width / 2))),
+        scrollbarGutter: viewport.offsetWidth - viewport.clientWidth,
+        horizontalOverflow: Math.max(0, Math.round(content.right) - scrollportRight),
+        transcriptRight: Math.round(a.right),
+        scrollportLeft,
+        scrollportRight,
+        contentLeft: Math.round(content.left),
       };
     }, prompt);
+
+  const scrollbarGutter = () => page.evaluate((text) => {
+    const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
+      (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
+    );
+    return viewport ? viewport.offsetWidth - viewport.clientWidth : null;
+  }, prompt);
+  const forceClassicGutter = async () => {
+    await page.evaluate((text) => {
+      const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
+        (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
+      );
+      if (!viewport) throw new Error("Chat transcript scroll viewport was not found");
+      const nativeGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      const gutter = Math.max(16, nativeGutter);
+      viewport.style.setProperty("overflow-y", "scroll", "important");
+      viewport.style.setProperty("scrollbar-width", "auto", "important");
+      viewport.style.paddingInlineEnd = `${gutter - nativeGutter}px`;
+      Object.defineProperty(viewport, "clientWidth", {
+        configurable: true,
+        get: () => viewport.offsetWidth - gutter,
+      });
+    }, prompt);
+    await expect.poll(scrollbarGutter).toBeGreaterThan(0);
+  };
 
   const chooseWidth = async (label: string) => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -301,11 +339,23 @@ test("chat width setting resizes the transcript and composer together and persis
   const measured: Record<string, number> = {};
   for (const label of ["Narrow", "Default", "Wide", "Full"]) {
     await chooseWidth(label);
+    // Chat-width changes may recreate the viewport; reapply the classic-gutter
+    // fixture so every size, including Full, exercises scrollport compensation.
+    await forceClassicGutter();
     await expect.poll(async () => {
       const current = await widths();
-      return current !== null && current.transcript === current.composer && current.centerOffset <= 1;
-    }).toBe(true);
-    measured[label] = (await widths())!.transcript;
+      return current && current.transcript === current.composer && current.centerOffset <= 1
+        ? true
+        : current;
+    }, `${label} transcript and composer geometry`).toBe(true);
+    const geometry = (await widths())!;
+    measured[label] = geometry.transcript;
+    if (label === "Full") {
+      expect(geometry.scrollbarGutter).toBeGreaterThan(0);
+      expect(geometry.horizontalOverflow).toBeLessThanOrEqual(1);
+      expect(geometry.contentLeft).toBeGreaterThanOrEqual(geometry.scrollportLeft - 1);
+      expect(geometry.transcriptRight).toBeLessThanOrEqual(geometry.scrollportRight + 1);
+    }
   }
   expect(measured.Narrow).toBeLessThan(measured.Default);
   expect(measured.Default).toBeLessThan(measured.Wide);
