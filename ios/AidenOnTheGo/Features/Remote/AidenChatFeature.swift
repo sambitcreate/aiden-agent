@@ -418,7 +418,9 @@ enum AidenChatModelAuthority {
         let provider = catalog.providers.first { $0.id == providerId }
         var modelId = selectedModelId
         if modelId == nil || provider?.models.contains(where: { $0.id == modelId }) != true {
-            modelId = catalog.defaults["modelId"] ?? provider?.visibleModels.first?.id
+            modelId = catalog.defaults["modelId"].flatMap { candidate in
+                provider?.models.contains(where: { $0.id == candidate }) == true ? candidate : nil
+            } ?? provider?.visibleModels.first?.id
         }
         let model = provider?.models.first { $0.id == modelId }
         return AidenChatModelSelection(

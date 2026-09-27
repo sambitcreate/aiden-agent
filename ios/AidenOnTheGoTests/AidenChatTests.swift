@@ -3695,6 +3695,22 @@ final class AidenChatTests: XCTestCase {
             remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: "high")
         )
         XCTAssertEqual(removed, AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil))
+
+        var chatWithRemovedModel = chat
+        chatWithRemovedModel.providerId = "openai"
+        chatWithRemovedModel.modelId = "removed-model"
+        let providerFallback = AidenChatModelAuthority.resolvedSelection(
+            chat: chatWithRemovedModel,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: nil)
+        )
+        XCTAssertEqual(
+            providerFallback,
+            AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: nil)
+        )
     }
 
     func testModelPreferenceStoreKeepsOneChoicePerPairedHostAcrossRelaunch() throws {
