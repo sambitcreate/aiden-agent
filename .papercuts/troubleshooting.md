@@ -1404,3 +1404,6 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 subagent pending question
+- Subagent snapshot text must equal `sanitizeSubagentSnapshotText(text)`, and that pass NFKC-normalizes, so a Unicode ellipsis (`…`) becomes `...` and fails the parser. Truncation helpers for snapshot fields have to use ASCII `...`.
