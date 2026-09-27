@@ -93,6 +93,14 @@ export function askUserQuestionMsUntilExpiry(
   return Math.max(0, deadline - now);
 }
 
+/** Keep an already-expired prompt available so its owner can turn a late answer into a follow-up. */
+export function retainExpiredAskUserQuestionForLateAnswer(
+  prompt: AskUserQuestionPromptV1 | null | undefined,
+  now = Date.now(),
+): AskUserQuestionPromptV1 | null {
+  return prompt && askUserQuestionMsUntilExpiry(prompt, now) === 0 ? prompt : null;
+}
+
 function parseInstant(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 64) return undefined;
   const time = Date.parse(value);

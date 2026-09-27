@@ -19,13 +19,14 @@ Source: the DeepSeek harness comparison page and the 2026-09-24..27 digests. The
 
 - Desktop:
   - Once `expiresAt` passes, the composer shows an "expired" notice.
+  - If the agent finishes after that deadline, the expired question remains visible in the composer so the user can still answer it.
   - An answer submitted after expiry is not lost. It becomes a "late answer" notice that offers **Send as follow-up**, or **Queue follow-up** while a response is streaming, plus **Discard**.
   - The follow-up text restates each question with its answer.
 - Remote: the stream uses the prompt's `expiresAt`, capped at the Remote lifetime, for `question_required` and the pending-question snapshot, so clients see the real agent deadline.
 - iOS and Android: when the local expiry trips, the question is no longer dropped silently. Both clients show that Aiden continued with its best judgement and suggest sending the answer as a message.
+- CLI TUI: one timeout covers the entire questionnaire, including all steps of a multi-select question. Each terminal selection receives the remaining time and the tool-call cancellation signal.
 
 ## Follow-ups
 
-- Add a timeout to the CLI's ask-user wait. Its headless runs use the shared extension core, but it has no owner-kind policy yet.
 - Native late-answer follow-up UX (composer prefill) and a live-expiry card state on iOS and Android.
 - An optional deadline for detached or background desktop renderer runs, for example scheduled tasks rendered in a window.

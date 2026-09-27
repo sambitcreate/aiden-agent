@@ -1408,3 +1408,4 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-27 timed ask-user (feature/timed-ask-user)
 - The worktree-isolation guard refuses compound shell commands (python heredoc plus a runner, `cat >> <<EOF` then npx, and `$HOME` inside gradlew env). Write scripts to the scratchpad and run them as a separate plain command, and spell out absolute SDK paths.
 - The Android gradle run printed only "Unable to locate a Java Runtime" to the log, and its background task still reported exit 0. Check the log, not the task status.
+- Pi terminal `select` supports `signal` and `timeout` options. Pass the shrinking remaining timeout on every selection under one questionnaire deadline; otherwise a sequence of questions or multi-select choices can outlive the advertised limit.

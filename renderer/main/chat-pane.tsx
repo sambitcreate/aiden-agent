@@ -164,6 +164,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   askUserQuestionMsUntilExpiry,
   formatLateAskUserQuestionFollowUp,
+  retainExpiredAskUserQuestionForLateAnswer,
   type AskUserQuestionPromptV1,
   type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
@@ -1219,7 +1220,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
-              setQuestionnaire(null);
+              // Timed-out prompts remain answerable after the agent continues with its default.
+              setQuestionnaire((current) =>
+                retainExpiredAskUserQuestionForLateAnswer(current),
+              );
               setQuestionnaireSubmitting(false);
             }
           },
@@ -1296,7 +1300,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
-                setQuestionnaire(null);
+                setQuestionnaire((current) =>
+                  retainExpiredAskUserQuestionForLateAnswer(current),
+                );
                 setQuestionnaireSubmitting(false);
                 const persistedFailure =
                   updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&

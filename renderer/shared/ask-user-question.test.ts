@@ -8,6 +8,7 @@ import {
   parseAskUserQuestionPrompt,
   parseAskUserQuestionResponse,
   parseAskUserQuestions,
+  retainExpiredAskUserQuestionForLateAnswer,
 } from "./ask-user-question.js";
 
 const questions = [
@@ -104,6 +105,9 @@ test("prompt deadlines are strict instants and owners cannot forge a timeout", (
   assert.equal(askUserQuestionMsUntilExpiry(timed, now), 60_000);
   assert.equal(askUserQuestionMsUntilExpiry(timed, now + 120_000), 0);
   assert.equal(askUserQuestionMsUntilExpiry({}, now), undefined);
+  assert.equal(retainExpiredAskUserQuestionForLateAnswer(timed, now), null);
+  assert.equal(retainExpiredAskUserQuestionForLateAnswer(timed, now + 120_000), timed);
+  assert.equal(retainExpiredAskUserQuestionForLateAnswer({ ...timed, expiresAt: undefined }, now), null);
 
   const response = parseAskUserQuestionResponse(
     {
