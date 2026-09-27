@@ -10,7 +10,7 @@ Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). R
 ## Surfaces
 - Desktop: `ChatRowStatus` in the sidebar. The open chat never shows the unread dot, and `useMarkChatRead` in `chat-pane.tsx` reports reads while the document is visible (IPC `chats:markRead`). `aria-busy` is set only for Working.
 - Remote: `/chat-summaries` rows carry `rowState` and `unread`. `POST /chats/{chatId}/read` takes `{}` or `{throughMessageId}` and returns 204; it needs `chat:read` plus readable chat access. Both are advertised as `chat-read-state-v1`, and the parser treats the fields as optional.
-- iOS and Android: `displayRowState` gates on local `activity` (idle wins, so a stale server attention state cannot linger) and falls back to Working for older Macs. Unknown future states decode as nil or null. Rows use soft 12% semantic fills (warning for Approve, accent for Reply), a spinner for Working and an accent unread dot. Opening a chat clears unread locally and reports read once per chat revision when the feature is advertised.
+- iOS and Android: `displayRowState` gates on local `activity` (idle wins, so a stale server attention state cannot linger) and falls back to Working for older Macs. Unknown future states decode as nil or null. Rows use soft 12% semantic fills (warning for Approve, accent for Reply), a spinner for Working and an accent unread dot. Read reports require the detail chat to be visible while its app scene is active; returning to a chat reports its current snapshot. Stale sidebar callbacks cannot restore a popped chat or replace a newly selected chat.
 
 ## Follow-ups
 - Bot chats are excluded; native Bot contact rows could adopt the same states later.
@@ -22,4 +22,4 @@ Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). R
 - CI registry assigns all four newly added test files.
 - Desktop focused tests (67), CI policy and typecheck pass; Android chat-summary tests and the iOS AidenRemoteClientTests simulator suite pass.
 
-Independent review found that Android background reconciliation could mark an unseen reply read. Read reporting now requires the chat foreground lifecycle flag and reports the current snapshot when the screen resumes; an HTTP-backed ViewModel regression covers background refresh, resume boundaries, and duplicate suppression.
+Independent review found that Android and iOS background reconciliation could mark an unseen reply read. Both clients now require the detail to be foregrounded and report the current snapshot on resume; Android's HTTP-backed ViewModel regression covers background refresh, resume boundaries, and duplicate suppression, while iOS tests cover visible-scene admission and stale-sidebar callbacks.

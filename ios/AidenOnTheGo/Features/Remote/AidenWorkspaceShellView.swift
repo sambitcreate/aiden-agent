@@ -752,8 +752,6 @@ struct AidenWorkspaceShellView: View {
     @State private var isShowingScheduledTasks = false
     @State private var isShowingUsage = false
     @State private var selectedSidebarChat: AidenChat?
-    /// Last chat revision reported read, so repeated updates send one report.
-    @State private var reportedReadRevisions: [String: String] = [:]
     @State private var selectedSidebarChatStartsVoice = false
     @State private var sidebarChatNavigationTask: Task<Void, Never>?
     @State private var sidebarChatNavigationRequestID: UUID?
@@ -864,11 +862,7 @@ struct AidenWorkspaceShellView: View {
                                 coordinator: coordinator,
                                 chat: selectedSidebarChat,
                                 autoStartVoice: selectedSidebarChatStartsVoice,
-                                onChatUpdated: { updated in
-                                    homeModel.accept(updated)
-                                    self.selectedSidebarChat = updated
-                                    reportChatViewed(updated)
-                                },
+                                onChatUpdated: acceptSelectedChatUpdate,
                                 onChatActivityChanged: { chatID, activity in
                                     homeModel.setActivity(activity, forChatID: chatID)
                                 }
@@ -897,11 +891,7 @@ struct AidenWorkspaceShellView: View {
                                     coordinator: coordinator,
                                     chat: selectedSidebarChat,
                                     autoStartVoice: selectedSidebarChatStartsVoice,
-                                    onChatUpdated: { updated in
-                                        homeModel.accept(updated)
-                                        self.selectedSidebarChat = updated
-                                        reportChatViewed(updated)
-                                    },
+                                    onChatUpdated: acceptSelectedChatUpdate,
                                     onChatActivityChanged: { chatID, activity in
                                         homeModel.setActivity(activity, forChatID: chatID)
                                     }
@@ -1800,6 +1790,15 @@ struct AidenWorkspaceShellView: View {
         commitOpenChat(chat, startsVoice: startsVoice)
     }
 
+    private func acceptSelectedChatUpdate(_ updated: AidenChat) {
+        homeModel.accept(updated)
+        guard AidenChatReadAdmission.acceptsSelectedChatUpdate(
+            chatID: updated.id,
+            selectedChatID: selectedSidebarChat?.id
+        ) else { return }
+        selectedSidebarChat = updated
+    }
+
     private func commitOpenChat(_ chat: AidenChat, startsVoice: Bool = false) {
         guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
         selectedWorkspaceId = chat.workspaceId
@@ -1811,27 +1810,6 @@ struct AidenWorkspaceShellView: View {
         selectedSidebarChatStartsVoice = startsVoice
         selectedSidebarChat = chat
         homeModel.markViewed(chatID: chat.id)
-        reportChatViewed(chat)
-    }
-
-    /// Tell the Mac the user viewed this chat so its unread marker clears on
-    /// every surface. Best effort: a failed report only leaves a stale dot.
-    private func reportChatViewed(_ chat: AidenChat) {
-        guard !chat.isBotChat,
-              coordinator.server?.supportsChatReadState == true,
-              reportedReadRevisions[chat.id] != chat.revision else { return }
-        guard let throughMessageId = chat.lastViewedMessageId else { return }
-        reportedReadRevisions[chat.id] = chat.revision
-        Task { @MainActor in
-            do {
-                let context = try coordinator.requestContext()
-                try await coordinator.remoteClient(for: context).markChatRead(id: chat.id, throughMessageId: throughMessageId)
-            } catch {
-                if reportedReadRevisions[chat.id] == chat.revision {
-                    reportedReadRevisions[chat.id] = nil
-                }
-            }
-        }
     }
 
     private func openChat(_ summary: AidenChatSummary, startsVoice: Bool = false) {

@@ -22,6 +22,16 @@ enum AidenImageSendRecovery: Equatable {
     case chooseImageCapableModel
 }
 
+enum AidenChatReadAdmission {
+    static func acceptsSelectedChatUpdate(chatID: String, selectedChatID: String?) -> Bool {
+        selectedChatID == chatID
+    }
+
+    static func shouldReportRead(isChatVisible: Bool, sceneIsActive: Bool) -> Bool {
+        isChatVisible && sceneIsActive
+    }
+}
+
 func aidenImageSendRecovery(
     isBotChat: Bool,
     acceptsImages: Bool,
@@ -1379,6 +1389,8 @@ final class AidenChatViewModel {
     /// Quiet Open Chat: while this conversation is on screen its ambient
     /// surfaces stay quiet; blocking kinds (approvals, errors) still publish.
     @ObservationIgnored private var isChatForegrounded = false
+    @ObservationIgnored private var isSceneActive = false
+    @ObservationIgnored private var reportedReadRevision: String?
 
     private var isAmbientSurfaceQuiet: Bool {
         isChatForegrounded && UIApplication.shared.applicationState == .active
@@ -1391,6 +1403,51 @@ final class AidenChatViewModel {
         // recovers on the next published update.
         if foregrounded, let streamID = activeStreamID {
             Task { await liveActivities.markStale(instanceID: instanceId, streamID: streamID) }
+        }
+        reportChatViewed(chat)
+    }
+
+    func setSceneActive(_ active: Bool) {
+        isSceneActive = active
+        if active { reportChatViewed(chat) }
+    }
+
+    /** Tell the paired Mac which displayed message was last seen. */
+    private func reportChatViewed(_ snapshot: AidenChat) {
+        guard AidenChatReadAdmission.shouldReportRead(
+            isChatVisible: isChatForegrounded,
+            sceneIsActive: isSceneActive
+        ),
+        !snapshot.isBotChat,
+        !isReadOnlyPresentation,
+        coordinator.server?.supportsChatReadState == true,
+        reportedReadRevision != snapshot.revision,
+        let throughMessageId = snapshot.lastViewedMessageId,
+        let context = try? coordinator.requestContext(for: instanceId) else { return }
+
+        reportedReadRevision = snapshot.revision
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard self.chat.id == snapshot.id,
+                  self.chat.revision == snapshot.revision,
+                  AidenChatReadAdmission.shouldReportRead(
+                    isChatVisible: self.isChatForegrounded,
+                    sceneIsActive: self.isSceneActive
+                  ),
+                  self.coordinator.isCurrent(context) else {
+                if self.reportedReadRevision == snapshot.revision {
+                    self.reportedReadRevision = nil
+                }
+                return
+            }
+            do {
+                try await self.coordinator.remoteClient(for: context)
+                    .markChatRead(id: snapshot.id, throughMessageId: throughMessageId)
+            } catch {
+                if self.reportedReadRevision == snapshot.revision {
+                    self.reportedReadRevision = nil
+                }
+            }
         }
     }
 
@@ -3459,6 +3516,7 @@ final class AidenChatViewModel {
         chat = presented
         resolveModelSelection()
         onChatUpdated(presented)
+        reportChatViewed(presented)
         if scheduleTitleRefresh, presented.isTitlePending {
             schedulePendingTitleRefresh(context: context)
         }
@@ -3959,11 +4017,13 @@ struct AidenChatDetailView: View {
         .onAppear {
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
+            model.setSceneActive(scenePhase == .active)
         }
         .onChange(of: model.readAloudCandidateID) { _, candidate in
             if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
         }
         .onChange(of: scenePhase) { _, phase in
+            model.setSceneActive(phase == .active)
             if phase == .active {
                 model.startProgressObservation()
             } else {

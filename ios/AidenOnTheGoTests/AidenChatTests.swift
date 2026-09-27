@@ -723,9 +723,14 @@ final class AidenChatTests: XCTestCase {
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
+        initialChat: AidenChat? = nil,
+        responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
+        if let responseOverride {
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride(responseOverride)
+        }
         let keychain = AidenChatProgressMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
         let endpoint = URL(string: "https://aiden.test/api/aiden/v1")!
@@ -762,14 +767,19 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(coordinator.connectionState, .connected)
         onCoordinator?(coordinator)
 
-        let chat = try AidenRemoteJSONDecoder.decode(
-            AidenChat.self,
-            from: Data(
-                """
-                {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}
-                """.utf8
+        let chat: AidenChat
+        if let initialChat {
+            chat = initialChat
+        } else {
+            chat = try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: Data(
+                    """
+                    {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}
+                    """.utf8
+                )
             )
-        )
+        }
         return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore, onChatUpdated: onChatUpdated)
     }
 
@@ -780,7 +790,11 @@ final class AidenChatTests: XCTestCase {
         let gate = AidenChatWriteTestGate()
         let cache = AidenChatCache(root: root, beforeChatWrite: { await gate.waitIfArmed() })
         var publications: [AidenChat] = []
-        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache) { publications.append($0) }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            onChatUpdated: { publications.append($0) }
+        )
         let originalTitle = model.chat.title
         var remote = model.chat
         remote.title = "Rejected remote title"
@@ -2142,7 +2156,11 @@ final class AidenChatTests: XCTestCase {
         let files = AidenHeldChatCacheFileManager()
         let cache = AidenChatCache(root: root, fileManager: files)
         var publications: [AidenChat] = []
-        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache) { publications.append($0) }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            onChatUpdated: { publications.append($0) }
+        )
         let fixture = AidenStreamRecoveryFixture(chat: model.chat)
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
         let writing = expectation(description: "chat cache write held")
@@ -6480,6 +6498,74 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 }
 
+private final class AidenChatReadStateHTTPFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var chat: AidenChat
+    private var readMessageIDs: [String] = []
+
+    init(chat: AidenChat) { self.chat = chat }
+
+    var reportedMessageIDs: [String] {
+        lock.withLock { readMessageIDs }
+    }
+
+    func setChat(_ chat: AidenChat) {
+        lock.withLock { self.chat = chat }
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        let path = request.url?.path ?? ""
+        switch path {
+        case "/api/aiden/v1/server":
+            let body: [String: Any] = [
+                "protocolVersion": 1,
+                "instanceId": "instance-progress-lifecycle",
+                "name": "Read State Mac",
+                "appVersion": "1.0",
+                "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "features": ["chat-read-state-v1"],
+                "connectionMode": "lan",
+                "serverTime": "2026-09-27T12:00:00Z",
+            ]
+            return (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[],"defaults":{}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            let snapshot = lock.withLock { chat }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            return (200, "application/json", try! encoder.encode(snapshot))
+        default:
+            guard path.hasSuffix("/read"), request.httpMethod == "POST" else { return nil }
+            let data: Data
+            if let body = request.httpBody {
+                data = body
+            } else if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var received = Data()
+                var buffer = [UInt8](repeating: 0, count: 4_096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count >= 0 else { return (400, "application/json", Data(#"{"error":"invalid body stream"}"#.utf8)) }
+                    if count == 0 { break }
+                    received.append(buffer, count: count)
+                }
+                data = received
+            } else {
+                data = Data()
+            }
+            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            guard let messageID = body?["throughMessageId"] as? String else {
+                return (400, "application/json", Data(#"{"error":"missing message boundary"}"#.utf8))
+            }
+            lock.withLock { readMessageIDs.append(messageID) }
+            return (204, "application/json", Data())
+        }
+    }
+}
+
 final class AidenChatSummaryPerformanceTests: XCTestCase {
     private enum Profile: CaseIterable {
         case small, medium, large, pathological
@@ -7659,6 +7745,59 @@ final class AidenAppearanceTests: XCTestCase {
 }
 
 extension AidenChatTests {
+    @MainActor
+    func testBackgroundReconciliationReportsTheCurrentMessageWhenChatResumes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-read-admission-\(UUID())")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let date = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
+        let first = AidenChat(
+            id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: "Read boundary",
+            providerId: nil, modelId: nil,
+            messages: [AidenChatMessage(id: "reply-one", role: .assistant, text: "First", createdAt: date)],
+            createdAt: date, updatedAt: date, revision: "read-r1"
+        )
+        let fixture = AidenChatReadStateHTTPFixture(chat: first)
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            initialChat: first,
+            responseOverride: { fixture.response($0) }
+        )
+
+        model.setSceneActive(true)
+        await model.load(observeProgress: false)
+        XCTAssertTrue(fixture.reportedMessageIDs.isEmpty, "a hidden chat must not be marked read")
+
+        model.setChatForegrounded(true)
+        for _ in 0..<100 where fixture.reportedMessageIDs.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(fixture.reportedMessageIDs, ["reply-one"])
+
+        model.setSceneActive(false)
+        var second = first
+        second.revision = "read-r2"
+        second.messages.append(AidenChatMessage(id: "reply-two", role: .assistant, text: "Unseen", createdAt: date))
+        fixture.setChat(second)
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.revision, "read-r2")
+        XCTAssertEqual(fixture.reportedMessageIDs, ["reply-one"], "background reconciliation must leave the new reply unread")
+
+        model.setSceneActive(true)
+        for _ in 0..<100 where fixture.reportedMessageIDs.count < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        model.setSceneActive(true)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(fixture.reportedMessageIDs, ["reply-one", "reply-two"], "resuming reports the current snapshot once")
+        model.setChatForegrounded(false)
+        model.setSceneActive(false)
+    }
+
     private func questionFixture(
         multiSelect: Bool = false,
         options: [AidenRemoteQuestionOption]? = nil
@@ -7826,6 +7965,39 @@ final class AidenQuietOpenChatTests: XCTestCase {
             )
         }
     }
+}
+
+final class AidenChatReadAdmissionTests: XCTestCase {
+    func testLateDetailUpdatesCannotRestoreAnOldSidebarSelection() {
+        XCTAssertTrue(AidenChatReadAdmission.acceptsSelectedChatUpdate(
+            chatID: "chat-a",
+            selectedChatID: "chat-a"
+        ))
+        XCTAssertFalse(AidenChatReadAdmission.acceptsSelectedChatUpdate(
+            chatID: "chat-a",
+            selectedChatID: nil
+        ), "a late callback after navigation must not restore the popped chat")
+        XCTAssertFalse(AidenChatReadAdmission.acceptsSelectedChatUpdate(
+            chatID: "chat-a",
+            selectedChatID: "chat-b"
+        ), "an old detail callback must not replace the newly selected chat")
+    }
+
+    func testReadAdmissionRequiresBothVisibleChatAndActiveScene() {
+        XCTAssertTrue(AidenChatReadAdmission.shouldReportRead(
+            isChatVisible: true,
+            sceneIsActive: true
+        ))
+        XCTAssertFalse(AidenChatReadAdmission.shouldReportRead(
+            isChatVisible: true,
+            sceneIsActive: false
+        ), "background reconciliation must wait until the selected chat resumes")
+        XCTAssertFalse(AidenChatReadAdmission.shouldReportRead(
+            isChatVisible: false,
+            sceneIsActive: true
+        ))
+    }
+
 }
 
 private final class AidenStreamRecoveryFixture: @unchecked Sendable {
