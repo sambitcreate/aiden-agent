@@ -19,3 +19,5 @@ Branch `feature/dictation-secure-input`; plan `docs/plans/dictation-secure-input
 - No Remote protocol, iOS, or Android impact: the pill state is desktop-only IPC.
 
 Review validation: 15 focused paste/pill tests pass, including a process-owned enable/disable cycle, live Carbon probe, and AppleScript compilation. CI test inventory now registers the pill test.
+
+The JXA probe explicitly binds `IsSecureEventInputEnabled` as a no-argument boolean function, avoiding reliance on OS BridgeSupport metadata. The plan index and PR description now match the Carbon detector and conservative copy fallback.

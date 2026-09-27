@@ -98,6 +98,7 @@ end run`;
 
 /** Query the documented Carbon API rather than an undocumented session key. */
 export const SECURE_INPUT_PROBE_SCRIPT = `ObjC.import("Carbon");
+ObjC.bindFunction("IsSecureEventInputEnabled", ["bool", []]);
 $.IsSecureEventInputEnabled() ? "secure" : "clear";`;
 
 export type RunJxa = (script: string) => Promise<string>;
