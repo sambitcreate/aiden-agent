@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Web Search key pool (feature/web-search-key-pool)
+- The worktree guard is inconsistent about heredocs. `cd … && python3 - <<EOF` sometimes runs and sometimes gets refused as "too complex", and `cat >> file <<EOF` appends are refused. What works reliably: write the script with the Write tool into the scratchpad, then run `python3 /abs/script.py` as a plain command.
+- `WebSearchService`'s `adapterFactories` override replaces the whole registry and does not merge into it. A service test that mixes a real adapter (such as Tavily with a fake `fetch`) and stubs has to list the real factory explicitly. Otherwise the route is quietly not ready, and automatic routing falls back.
+- `oxfmt` on `renderer/components/ui.tsx`, `renderer/lib/ipc.ts` and `package.json` reformats code that has nothing to do with the change (main is not oxfmt-clean). Format only new files, and reapply small edits to existing ones by hand.

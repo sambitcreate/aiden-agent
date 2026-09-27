@@ -170,3 +170,137 @@ test("credential mutation guards are forwarded before publication", async () => 
   assert.equal(h.bound.size, 0);
   assert.equal(h.calls.length, 0);
 });
+
+function poolSecrets() {
+  const bound = new Map<string, { key: string; binding: string }>();
+  let nextId = 0;
+  let clock = 100;
+  const port: WebSearchEncryptedSecretPort = {
+    async getProviderKey(providerId, binding) {
+      const entry = bound.get(providerId);
+      return entry?.binding === binding ? entry.key : null;
+    },
+    async getOrBindLegacyProviderKey() {
+      return null;
+    },
+    async setProviderKey(providerId, key, binding, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("stale mutation");
+      bound.set(providerId, { key, binding });
+    },
+    async deleteKey(providerId, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("stale mutation");
+      bound.delete(providerId);
+    },
+  };
+  const access = createWebSearchCredentialAccess(port, {
+    createEntryId: () => `entry${(nextId += 1)}`,
+    now: () => (clock += 1),
+  });
+  return { bound, access };
+}
+
+test("a key saved before pools existed becomes the first pool entry", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  await h.access.set(tavily, "tvly-legacy");
+
+  const listed = await h.access.listPool(tavily);
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.id),
+    ["primary"],
+  );
+  assert.deepEqual(await h.access.readPool(tavily), {
+    strategy: "ordered",
+    keys: [{ id: "primary", key: "tvly-legacy" }],
+  });
+  assert.equal(await h.access.read(tavily), "tvly-legacy");
+});
+
+test("pool keys can be added, reordered, re-strategized, and removed without exposing keys", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+
+  await h.access.addPoolKey(tavily, "tvly-one");
+  await h.access.addPoolKey(tavily, "tvly-two", "Team");
+  const added = await h.access.addPoolKey(tavily, "tvly-three");
+  assert.deepEqual(
+    added.entries.map((entry) => [entry.id, entry.label]),
+    [
+      ["primary", "Key 1"],
+      ["entry1", "Team"],
+      ["entry2", "Key 3"],
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(added), /tvly-/u);
+  // The first pooled key lives in the pre-pool slot for single-key readers.
+  assert.equal(await h.access.read(tavily), "tvly-one");
+
+  await assert.rejects(h.access.addPoolKey(tavily, " tvly-two "), /already in the pool/u);
+
+  await h.access.reorderPool(tavily, ["entry2", "primary", "entry1"]);
+  assert.deepEqual(
+    (await h.access.readPool(tavily)).keys.map((entry) => entry.key),
+    ["tvly-three", "tvly-one", "tvly-two"],
+  );
+  assert.equal(await h.access.read(tavily), "tvly-three");
+  await assert.rejects(h.access.reorderPool(tavily, ["entry2", "primary"]), /no longer matches/u);
+
+  const strategy = await h.access.setPoolStrategy(tavily, "round-robin");
+  assert.equal(strategy.strategy, "round-robin");
+  await assert.rejects(h.access.setPoolStrategy(tavily, "random"));
+
+  const removed = await h.access.removePoolKey(tavily, "entry2");
+  assert.deepEqual(
+    removed.entries.map((entry) => entry.id),
+    ["primary", "entry1"],
+  );
+  assert.equal(await h.access.read(tavily), "tvly-one");
+  assert.ok(![...h.bound.values()].some((entry) => entry.key === "tvly-three"));
+  await assert.rejects(h.access.removePoolKey(tavily, "entry2"), /no longer in the pool/u);
+
+  // Removing the provider credential clears every pooled slot and the index.
+  await h.access.remove(tavily);
+  assert.equal(await h.access.has(tavily), false);
+  assert.deepEqual(await h.access.readPool(tavily), { strategy: "ordered", keys: [] });
+  assert.equal(h.bound.size, 0);
+});
+
+test("the pool refuses a ninth key and non-pool providers keep single-key behavior", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  for (let index = 0; index < 8; index += 1) await h.access.addPoolKey(tavily, `tvly-${index}`);
+  await assert.rejects(h.access.addPoolKey(tavily, "tvly-9"), /at most 8 keys/u);
+
+  const brave = h.access.reference("brave");
+  await assert.rejects(h.access.listPool(brave), /does not support multiple API keys/u);
+  await h.access.set(brave, "brave-key");
+  assert.deepEqual(await h.access.readPool(brave), {
+    strategy: "ordered",
+    keys: [{ id: "primary", key: "brave-key" }],
+  });
+});
+
+test("concurrent pool edits are serialized so neither is lost", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  await Promise.all([
+    h.access.addPoolKey(tavily, "tvly-a"),
+    h.access.addPoolKey(tavily, "tvly-b"),
+    h.access.addPoolKey(tavily, "tvly-c"),
+  ]);
+  assert.deepEqual((await h.access.readPool(tavily)).keys.map((entry) => entry.key).sort(), [
+    "tvly-a",
+    "tvly-b",
+    "tvly-c",
+  ]);
+});
+
+test("a corrupt pool index falls back to the saved primary key", async () => {
+  const h = poolSecrets();
+  const tavily = h.access.reference("tavily");
+  await h.access.addPoolKey(tavily, "tvly-a");
+  await h.access.addPoolKey(tavily, "tvly-b");
+  const indexSlot = [...h.bound.keys()].find((id) => id.endsWith(":pool-index"))!;
+  h.bound.set(indexSlot, { key: "{not json", binding: tavily.binding });
+  assert.deepEqual((await h.access.readPool(tavily)).keys, [{ id: "primary", key: "tvly-a" }]);
+});

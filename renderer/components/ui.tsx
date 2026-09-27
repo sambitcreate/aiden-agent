@@ -200,6 +200,7 @@ export function Badge({
         color === "green" && "bg-status-green-surface text-status-green",
         color === "red" && "bg-status-red-surface text-status-red",
         color === "blue" && "bg-status-accent-surface text-status-accent",
+        color === "warning" && "bg-status-warning-surface text-status-warning",
         className,
       )}
       {...props}
