@@ -308,10 +308,14 @@ test("chat width setting resizes the transcript and composer together and persis
         (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
       );
       if (!viewport) throw new Error("Chat transcript scroll viewport was not found");
-      const nativeGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-      const gutter = Math.max(16, nativeGutter);
+      // Measure the final native style, not the app's initial thin scrollbar.
+      // Linux changes the reserved width when switching from thin to auto.
+      Reflect.deleteProperty(viewport, "clientWidth");
+      viewport.style.removeProperty("padding-inline-end");
       viewport.style.setProperty("overflow-y", "scroll", "important");
       viewport.style.setProperty("scrollbar-width", "auto", "important");
+      const nativeGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      const gutter = Math.max(16, nativeGutter);
       viewport.style.paddingInlineEnd = `${gutter - nativeGutter}px`;
       Object.defineProperty(viewport, "clientWidth", {
         configurable: true,
