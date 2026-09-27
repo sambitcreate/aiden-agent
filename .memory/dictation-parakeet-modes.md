@@ -32,3 +32,5 @@
 - Recognizer release runs in the transcription lane under an idle lease, so idle disposal cannot reject model deletion.
 - CLI speech worker handles the shared warm request explicitly.
 - Added shortcut/dictionary regressions; 44 focused tests, CI policy suite, desktop typecheck, and CLI build/typecheck pass. New suites are assigned to CI lanes.
+
+Independent review corrected the dictionary settings row keys to use the same locale-independent lowercase identity as parser deduplication; a Turkish-casing regression verifies distinct I/dotless-ı entries keep distinct React keys.

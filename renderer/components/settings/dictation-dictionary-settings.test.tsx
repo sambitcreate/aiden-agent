@@ -87,3 +87,17 @@ test("submitting the form adds the rule without reloading the page", () => {
   assert.equal(prevented, true);
   assert.equal(added, 1);
 });
+
+
+test("dictionary row keys remain distinct under Turkish locale casing", () => {
+  const original = String.prototype.toLocaleLowerCase;
+  let keys: Array<string | null>;
+  try {
+    String.prototype.toLocaleLowerCase = function () { return original.call(this, "tr"); };
+    const tree = DictationDictionaryView(props({ entries: [{ from: "I", to: "" }, { from: "ı", to: "" }] }));
+    keys = findAll(tree, (element) => element.type === "li").map((element) => element.key);
+  } finally {
+    String.prototype.toLocaleLowerCase = original;
+  }
+  assert.deepEqual(keys, ["i", "ı"]);
+});

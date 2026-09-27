@@ -90,7 +90,7 @@ export function DictationDictionaryView({
           <ul className="mt-3 flex flex-col gap-1" aria-label="Custom dictionary">
             {entries.map((entry, index) => (
               <li
-                key={entry.from.toLocaleLowerCase()}
+                key={entry.from.toLowerCase()}
                 className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1 hover:bg-list-hover"
               >
                 <Text variant="small" className="min-w-0 truncate">
