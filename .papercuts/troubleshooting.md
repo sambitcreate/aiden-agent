@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Remote subagent interrupt (revision 16)
+- Bash refuses inline python heredocs that contain Swift string interpolation (`\(`) as "too complex". Write the script to the scratchpad and run `python3 <file>`.
+- `npm run test:subagents` failed once (1 failure in a 19-test block, likely `scripts/subagent-run-store.test.mjs`) while `tsc` ran at the same time, then passed on two reruns. It is a possible load-sensitive flake. The exact spec was not captured.
+- The iOS feature-advertisement test (`testCanonicalChatSummaryFixtureAndServerFeatureAdvertisementDecode`) asserts the fixture's exact `features` list. Adding a feature token to `contract.json` needs that list updated too.
