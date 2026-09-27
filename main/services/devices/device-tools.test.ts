@@ -27,6 +27,7 @@ import {
   shellQuote,
   type DeviceToolPort,
 } from "./device-tools.js";
+import { buildSystemPrompt } from "../chat-system-prompt.js";
 
 const IPHONE: DeviceSummary = {
   hostId: "local",
@@ -130,10 +131,32 @@ test("names, approvals, and the always-on guidance stay small", () => {
   assert.equal(isDeviceToolName("device_open"), true);
   assert.equal(isDeviceToolName("browser_open"), false);
   assert.ok(DEVICE_AGENT_GUIDANCE.split("\n").length <= 5);
-  assert.match(DEVICE_AGENT_GUIDANCE, /Do not call simctl, xcrun, or serve-sim/u);
   assert.match(deviceToolApprovalSummary("device_open", { deviceId: "UDID-1" }), /Open simulator UDID-1/u);
   assert.match(deviceToolApprovalSummary("device_close", { deviceId: "UDID-1", shutdown: true }), /shut it down/u);
   assert.match(deviceToolApprovalSummary("device_close", {}), /keeps running/u);
+});
+
+test("the system prompt prefers device tools but leaves shell simulator tooling open for builds and diagnostics", async () => {
+  const withDevices = await buildSystemPrompt("/repo", "main", "full", false, false, undefined, new Set(["device_open", "shell"]));
+  const withoutDevices = await buildSystemPrompt("/repo", "main", "full", false, false, undefined, new Set(["shell"]));
+  assert.doesNotMatch(withoutDevices, /simctl|device_open/u);
+  // Interaction with the device the user sees goes through the device tools first.
+  assert.match(withDevices, /Prefer the device tools and agent-device for anything on the device the user is watching/u);
+  // Nothing forbids the shell simulator tooling any more.
+  assert.doesNotMatch(withDevices, /(do not|don't|never) (call|use|run) (simctl|xcrun|adb)/iu);
+  // Each shell escape hatch and each non-interaction purpose is named.
+  for (const tool of ["xcrun simctl", "xcodebuild", "adb"]) assert.ok(withDevices.includes(tool), tool);
+  for (const purpose of ["builds", "installs", "logs", "port forwarding", "diagnostics"]) {
+    assert.ok(withDevices.includes(purpose), purpose);
+  }
+});
+
+test("device_open's quick start allows simctl for gaps without letting the agent tear down the watched device", () => {
+  const text = agentDeviceQuickStart(IPHONE, agentDeviceTargetArgs(IPHONE));
+  assert.match(text, /Prefer agent-device for taps, typing, and screenshots on this device/u);
+  assert.match(text, /xcrun simctl is fine for builds, installs, logs, and diagnostics/u);
+  assert.doesNotMatch(text, /(do not|don't|never) (call|use|run) (simctl|xcrun)/iu);
+  assert.match(text, /do not shut down or erase this device or stop serve-sim/u);
 });
 
 test("quick start pins every command and quotes unsafe values", () => {

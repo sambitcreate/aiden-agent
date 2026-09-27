@@ -93,7 +93,7 @@ serve-sim's own Tools panel sends shell commands over that exec channel. Aiden n
 
 ### Agents drive through the CLI
 
-There are deliberately only four `device_*` tools (`device-tools.ts`). Driving happens through the `agent-device` CLI. `run_command` gets a pinned shim directory on its PATH, read fresh for every command, so a revoke mid-generation drops it. How to drive a device comes back in the `device_open` result instead of an always-loaded prompt. The always-on prompt block is three lines that point at the tools and forbid raw `simctl`, `xcrun` and `serve-sim`.
+There are deliberately only four `device_*` tools (`device-tools.ts`). Driving happens through the `agent-device` CLI. `run_command` gets a pinned shim directory on its PATH, read fresh for every command, so a revoke mid-generation drops it. How to drive a device comes back in the `device_open` result instead of an always-loaded prompt. The always-on prompt block is three lines that point at the tools and ask the agent to prefer them (and `agent-device`) for anything on the device the user is watching. Shell tools such as `xcrun simctl`, `xcodebuild` and `adb` stay allowed for builds, installs, logs, port forwarding and diagnostics the device tools do not cover. The `device_open` quick start repeats that preference, allows `xcrun simctl` for gaps on the same UDID, and asks the agent not to shut down or erase the watched device or stop `serve-sim`, which the Simulator tab needs.
 
 ### Paired Macs
 
