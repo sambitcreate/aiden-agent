@@ -84,17 +84,15 @@ export function isChatCreateReconciliationRequiredError(
 
 export function createChatStore(
   resolveChatsDir: () => Promise<string>,
-  resolveProviderId: (
-    providerId: string | undefined,
-  ) => Promise<string | undefined> = async (providerId) =>
-    migrateLegacyPiProviderId(providerId),
+  resolveProviderId: (providerId: string | undefined) => Promise<string | undefined> = async (
+    providerId,
+  ) => migrateLegacyPiProviderId(providerId),
   durability: ChatStoreDurability = {},
 ) {
   let operationTail: Promise<void> = Promise.resolve();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
-  const readFile =
-    durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
+  const readFile = durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -158,8 +156,7 @@ export function createChatStore(
   }
 
   function isValidMeta(value: unknown): value is ChatMeta {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const meta = value as Record<string, unknown>;
     return (
       typeof meta.id === "string" &&
@@ -172,8 +169,7 @@ export function createChatStore(
       Number.isFinite(meta.createdAt) &&
       typeof meta.updatedAt === "number" &&
       Number.isFinite(meta.updatedAt) &&
-      (meta.workspaceId === undefined ||
-        typeof meta.workspaceId === "string") &&
+      (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
       (meta.botId === undefined ||
         (typeof meta.botId === "string" &&
           meta.botId.length > 0 &&
@@ -186,8 +182,11 @@ export function createChatStore(
         (typeof meta.preview === "string" &&
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
           Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
-      (meta.summaryRevision === undefined ||
-        isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.summaryRevision === undefined || isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.lastAssistantSequence === undefined ||
+        (typeof meta.lastAssistantSequence === "number" &&
+          Number.isSafeInteger(meta.lastAssistantSequence) &&
+          meta.lastAssistantSequence >= 0)) &&
       (meta.lastAssistantAt === undefined ||
         (typeof meta.lastAssistantAt === "number" &&
           Number.isSafeInteger(meta.lastAssistantAt) &&
@@ -220,10 +219,7 @@ export function createChatStore(
     if (removed) await syncDirectoryDurably(directory);
   }
 
-  async function removeStagedFileDurably(
-    staged: string,
-    directory: string,
-  ): Promise<void> {
+  async function removeStagedFileDurably(staged: string, directory: string): Promise<void> {
     try {
       await fs.rm(staged);
     } catch (error) {
@@ -241,10 +237,7 @@ export function createChatStore(
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
     const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
-    const staged = path.join(
-      directory,
-      `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`,
-    );
+    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`);
     try {
       await fs.writeFile(staged, JSON.stringify(sorted, null, 2), {
         encoding: "utf-8",
@@ -303,8 +296,7 @@ export function createChatStore(
       const chat = await readChat(meta.id);
       if (!chat || chat.id !== meta.id) continue;
       const recoveredMeta = metaOf(chat);
-      if (isValidMeta(recoveredMeta))
-        recovered.set(recoveredMeta.id, recoveredMeta);
+      if (isValidMeta(recoveredMeta)) recovered.set(recoveredMeta.id, recoveredMeta);
     }
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (
@@ -337,10 +329,7 @@ export function createChatStore(
       }),
     );
     if (quarantineExisting) {
-      const quarantine = path.join(
-        directory,
-        `.${path.basename(target)}.${randomUUID()}.corrupt`,
-      );
+      const quarantine = path.join(directory, `.${path.basename(target)}.${randomUUID()}.corrupt`);
       try {
         await fs.rename(target, quarantine);
         await syncDirectoryDurably(directory);
@@ -358,8 +347,7 @@ export function createChatStore(
     try {
       parsed = JSON.parse(await readFile(target)) as unknown;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        return recoverIndex(false);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return recoverIndex(false);
       if (error instanceof SyntaxError) return recoverIndex(true);
       throw error;
     }
@@ -413,11 +401,14 @@ export function createChatStore(
           if ((directoryError as NodeJS.ErrnoException).code === "ENOENT") return [];
           throw directoryError;
         }
-        const hasUnindexedChatState = entries.some((entry) =>
-          entry.isFile() &&
-          !entry.isSymbolicLink() &&
-          (CHAT_TRANSACTION.test(entry.name) ||
-            (entry.name !== INDEX && !entry.name.startsWith(".") && entry.name.endsWith(".json"))),
+        const hasUnindexedChatState = entries.some(
+          (entry) =>
+            entry.isFile() &&
+            !entry.isSymbolicLink() &&
+            (CHAT_TRANSACTION.test(entry.name) ||
+              (entry.name !== INDEX &&
+                !entry.name.startsWith(".") &&
+                entry.name.endsWith(".json"))),
         );
         if (!hasUnindexedChatState) return [];
         throw new Error("The chat summary index is unavailable.");
@@ -484,10 +475,7 @@ export function createChatStore(
       parsed.id !== id ||
       !Array.isArray(messages) ||
       !messages.every(
-        (message) =>
-          message !== null &&
-          typeof message === "object" &&
-          !Array.isArray(message),
+        (message) => message !== null && typeof message === "object" && !Array.isArray(message),
       )
     ) {
       return null;
@@ -500,8 +488,8 @@ export function createChatStore(
     chat.messages = chat.messages.map((message) => {
       const assistant = message.role === "assistant";
       const providerFailure = assistant
-        ? parseProviderFailureV1(message.providerFailure) ??
-          providerFailureFromLegacyPiMessage(message.pi)
+        ? (parseProviderFailureV1(message.providerFailure) ??
+          providerFailureFromLegacyPiMessage(message.pi))
         : undefined;
       if (assistant) {
         const pi =
@@ -515,10 +503,7 @@ export function createChatStore(
         ) {
           privacyMigrationRequired = true;
         }
-        if (
-          JSON.stringify(message.providerFailure) !==
-          JSON.stringify(providerFailure)
-        ) {
+        if (JSON.stringify(message.providerFailure) !== JSON.stringify(providerFailure)) {
           privacyMigrationRequired = true;
         }
       }
@@ -529,29 +514,18 @@ export function createChatStore(
         createdAt: message.createdAt,
         model: message.model,
         attachments: safeStoredAttachments(message.attachments),
-        htmlArtifacts: assistant
-          ? parseChatHtmlArtifacts(message.htmlArtifacts)
-          : undefined,
+        htmlArtifacts: assistant ? parseChatHtmlArtifacts(message.htmlArtifacts) : undefined,
         reasoning:
-          assistant &&
-          typeof message.reasoning === "string" &&
-          message.reasoning.trim()
+          assistant && typeof message.reasoning === "string" && message.reasoning.trim()
             ? message.reasoning
             : undefined,
-        pi: assistant
-          ? parseStoredPiAssistantMessage(message.pi)
-          : undefined,
+        pi: assistant ? parseStoredPiAssistantMessage(message.pi) : undefined,
         providerFailure,
         timeline: assistant
           ? parseGenerationTimeline(message.timeline, message.content.length)
           : undefined,
-        subagents: assistant
-          ? parseSubagentMessageReferenceV1(message.subagents)
-          : undefined,
-        skill:
-          message.role === "user"
-            ? parseSkillProvenanceV1(message.skill)
-            : undefined,
+        subagents: assistant ? parseSubagentMessageReferenceV1(message.subagents) : undefined,
+        skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
       };
     });
     if (privacyMigrationRequired) await writeChat(chat);
@@ -559,17 +533,11 @@ export function createChatStore(
     return chat;
   }
 
-  async function writeChat(
-    chat: Chat,
-    beforeRename: () => void = () => undefined,
-  ): Promise<void> {
+  async function writeChat(chat: Chat, beforeRename: () => void = () => undefined): Promise<void> {
     const target = await chatPath(chat.id);
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
-    const staged = path.join(
-      directory,
-      `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`,
-    );
+    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`);
     try {
       await fs.writeFile(staged, JSON.stringify(chat, null, 2), {
         encoding: "utf-8",
@@ -592,23 +560,29 @@ export function createChatStore(
   function metaOf(chat: Chat): ChatMeta {
     const preview = [...chat.messages]
       .reverse()
-      .find((message) =>
-        (message.role === "user" || message.role === "assistant") &&
-        message.content.trim().length > 0,
+      .find(
+        (message) =>
+          (message.role === "user" || message.role === "assistant") &&
+          message.content.trim().length > 0,
       )?.content;
-    const lastAssistantAt = [...chat.messages]
+    const lastAssistantReverseIndex = [...chat.messages]
       .reverse()
-      .find((message) =>
-        message.role === "assistant" &&
-        (message.content.trim().length > 0 ||
-          (message.attachments?.length ?? 0) > 0 ||
-          (message.htmlArtifacts?.length ?? 0) > 0) &&
-        Number.isSafeInteger(message.createdAt) &&
-        message.createdAt >= 0,
-      )?.createdAt;
-    const boundedPreview = preview === undefined
-      ? undefined
-      : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
+      .findIndex(
+        (message) =>
+          message.role === "assistant" &&
+          (message.content.trim().length > 0 ||
+            (message.attachments?.length ?? 0) > 0 ||
+            (message.htmlArtifacts?.length ?? 0) > 0) &&
+          Number.isSafeInteger(message.createdAt) &&
+          message.createdAt >= 0,
+      );
+    const lastAssistantSequence =
+      lastAssistantReverseIndex < 0 ? -1 : chat.messages.length - 1 - lastAssistantReverseIndex;
+    const lastAssistantAt = chat.messages[lastAssistantSequence]?.createdAt;
+    const boundedPreview =
+      preview === undefined
+        ? undefined
+        : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
     return {
       id: chat.id,
       title: chat.title,
@@ -618,7 +592,7 @@ export function createChatStore(
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
-      ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
+      ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -670,10 +644,7 @@ export function createChatStore(
         continue;
       }
       const nextMeta = metaOf(chat);
-      if (
-        indexPosition < 0 ||
-        JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)
-      ) {
+      if (indexPosition < 0 || JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)) {
         if (indexPosition < 0) index.push(nextMeta);
         else index[indexPosition] = nextMeta;
         changed = true;
@@ -683,10 +654,7 @@ export function createChatStore(
     for (const id of transactionIds) await clearChatTransaction(id);
   }
 
-  async function installNewChat(
-    chat: Chat,
-    assertCurrent?: () => void,
-  ): Promise<Chat> {
+  async function installNewChat(chat: Chat, assertCurrent?: () => void): Promise<Chat> {
     try {
       await writeChatAndMeta(chat, () => assertCurrent?.());
       return chat;
@@ -764,8 +732,10 @@ export function createChatStore(
         input.assertCurrent();
         const existing = await readChat(input.id);
         if (existing) {
-          if (existing.firstMessageCommit?.turnId !== input.turnId ||
-              existing.firstMessageCommit.fingerprint !== input.fingerprint) {
+          if (
+            existing.firstMessageCommit?.turnId !== input.turnId ||
+            existing.firstMessageCommit.fingerprint !== input.fingerprint
+          ) {
             throw new Error("This draft identifier has already been used for a different message.");
           }
           return existing;
@@ -839,12 +809,14 @@ export function createChatStore(
           createdAt: now,
           updatedAt: now,
           messages: openingGreeting
-            ? [{
-                id: randomUUID(),
-                role: "assistant",
-                content: openingGreeting,
-                createdAt: now,
-              }]
+            ? [
+                {
+                  id: randomUUID(),
+                  role: "assistant",
+                  content: openingGreeting,
+                  createdAt: now,
+                },
+              ]
             : [],
         };
         return installNewChat(chat, input.assertCurrent);
@@ -870,20 +842,16 @@ export function createChatStore(
         if (!source) throw new Error(`Chat ${input.sourceChatId} not found`);
         if (
           input.expectedWorkspaceId !== undefined &&
-          (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
-            input.expectedWorkspaceId
+          (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !== input.expectedWorkspaceId
         ) {
-          throw new Error(
-            "The chat workspace changed before it could be copied.",
-          );
+          throw new Error("The chat workspace changed before it could be copied.");
         }
 
         let throughIndex = source.messages.length - 1;
         if (input.throughAssistantMessageId !== undefined) {
           throughIndex = source.messages.findIndex(
             (message) =>
-              message.id === input.throughAssistantMessageId &&
-              message.role === "assistant",
+              message.id === input.throughAssistantMessageId && message.role === "assistant",
           );
           if (throughIndex < 0) {
             throw new Error("Choose a completed assistant turn to fork from.");
@@ -917,9 +885,7 @@ export function createChatStore(
         const metadata = projectVisibleChatMetadata(source);
         const suffix = input.throughAssistantMessageId ? " (fork)" : " (copy)";
         const maximumBaseLength = Math.max(1, 120 - suffix.length);
-        const title = `${Array.from(
-          metadata.title.slice(0, maximumBaseLength * 2),
-        )
+        const title = `${Array.from(metadata.title.slice(0, maximumBaseLength * 2))
           .slice(0, maximumBaseLength)
           .join("")}${suffix}`;
         chargedBytes += 1_024;
@@ -943,9 +909,7 @@ export function createChatStore(
             charge(attachment.id);
             charge(attachment.name);
             charge(attachment.mimeType);
-            charge(
-              attachment.kind === "image" ? attachment.data : attachment.text,
-            );
+            charge(attachment.kind === "image" ? attachment.data : attachment.text);
           }
           for (const artifact of message.htmlArtifacts ?? []) {
             chargedBytes += 128;
@@ -969,10 +933,7 @@ export function createChatStore(
                     return { ...artifact, mediaId };
                   })
                 : undefined,
-            skill:
-              message.role === "user"
-                ? parseSkillProvenanceV1(message.skill)
-                : undefined,
+            skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)
@@ -983,8 +944,7 @@ export function createChatStore(
         const copied: Chat = {
           id: newChatId,
           title,
-          workspaceId:
-            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          workspaceId: input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
           botId: source.botId,
           providerId: metadata.providerId,
           model: metadata.model,
@@ -1087,14 +1047,12 @@ export function createChatStore(
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
-        if (!isCurrent())
-          throw new Error("The renderer document is no longer active.");
+        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
         chat.computerUseEnabled = enabled;
         await writeChat(chat, () => {
           // No await occurs between this ownership check and invoking the
           // atomic rename, so a replaced document cannot commit the staged opt-in.
-          if (!isCurrent())
-            throw new Error("The renderer document is no longer active.");
+          if (!isCurrent()) throw new Error("The renderer document is no longer active.");
         });
         return chat;
       });
@@ -1143,12 +1101,9 @@ export function createChatStore(
         }
         if (
           meta?.expectedWorkspaceId !== undefined &&
-          (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
-            meta.expectedWorkspaceId
+          (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !== meta.expectedWorkspaceId
         ) {
-          throw new Error(
-            "The chat workspace changed before the message could be saved.",
-          );
+          throw new Error("The chat workspace changed before the message could be saved.");
         }
         const full: ChatMessage = {
           id: message.id ?? newId(),
@@ -1161,10 +1116,7 @@ export function createChatStore(
             message.reasoning.trim()
               ? message.reasoning
               : undefined,
-          pi:
-            message.role === "assistant"
-              ? parseStoredPiAssistantMessage(message.pi)
-              : undefined,
+          pi: message.role === "assistant" ? parseStoredPiAssistantMessage(message.pi) : undefined,
           providerFailure:
             message.role === "assistant"
               ? parseProviderFailureV1(message.providerFailure)
@@ -1174,10 +1126,7 @@ export function createChatStore(
             message.role === "assistant"
               ? parseChatHtmlArtifacts(message.htmlArtifacts)
               : undefined,
-          skill:
-            message.role === "user"
-              ? parseSkillProvenanceV1(message.skill)
-              : undefined,
+          skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
           timeline:
             message.role === "assistant"
               ? parseGenerationTimeline(message.timeline, message.content.length)
@@ -1189,17 +1138,12 @@ export function createChatStore(
           createdAt: message.createdAt ?? Date.now(),
         };
         const isFirstUserMessage =
-          full.role === "user" &&
-          !chat.messages.some((entry) => entry.role === "user");
+          full.role === "user" && !chat.messages.some((entry) => entry.role === "user");
         chat.messages.push(full);
         chat.updatedAt = Date.now();
         if (meta?.providerId) chat.providerId = meta.providerId;
         if (meta?.model) chat.model = meta.model;
-        if (
-          meta?.autoTitle &&
-          isFirstUserMessage &&
-          isDefaultChatTitle(chat.title)
-        ) {
+        if (meta?.autoTitle && isFirstUserMessage && isDefaultChatTitle(chat.title)) {
           chat.title = deriveChatTitleSeed(full);
         }
         await writeChatAndMeta(chat, () => {
@@ -1212,15 +1156,10 @@ export function createChatStore(
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
-    async replaceAutoTitle(
-      id: string,
-      expectedSeed: string,
-      title: string,
-    ): Promise<Chat | null> {
+    async replaceAutoTitle(id: string, expectedSeed: string, title: string): Promise<Chat | null> {
       return serialized(async () => {
         const chat = await readChat(id);
-        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
-          return null;
+        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed)) return null;
         const nextTitle = title.trim();
         if (!nextTitle || nextTitle === chat.title) return null;
         chat.title = nextTitle;

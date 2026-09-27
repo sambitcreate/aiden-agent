@@ -15,6 +15,14 @@ export async function markChatRead(chatId: string, throughMessageId?: string): P
   if (!chat) return false;
   const throughAt = chatReadThroughAt(chat, throughMessageId);
   if (throughAt === null) return false;
-  await chatReadMarkers.markRead(chatId, throughAt);
+  const sequence =
+    throughMessageId === undefined
+      ? chat.messages.length -
+        1 -
+        [...chat.messages]
+          .reverse()
+          .findIndex((message) => message.role === "user" || message.role === "assistant")
+      : chat.messages.findIndex((message) => message.id === throughMessageId);
+  await chatReadMarkers.markRead(chatId, throughAt, sequence);
   return true;
 }

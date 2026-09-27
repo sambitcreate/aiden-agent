@@ -1820,11 +1820,12 @@ struct AidenWorkspaceShellView: View {
         guard !chat.isBotChat,
               coordinator.server?.supportsChatReadState == true,
               reportedReadRevisions[chat.id] != chat.revision else { return }
+        guard let throughMessageId = chat.lastViewedMessageId else { return }
         reportedReadRevisions[chat.id] = chat.revision
         Task { @MainActor in
             do {
                 let context = try coordinator.requestContext()
-                try await coordinator.remoteClient(for: context).markChatRead(id: chat.id)
+                try await coordinator.remoteClient(for: context).markChatRead(id: chat.id, throughMessageId: throughMessageId)
             } catch {
                 if reportedReadRevisions[chat.id] == chat.revision {
                     reportedReadRevisions[chat.id] = nil

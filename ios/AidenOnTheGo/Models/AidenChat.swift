@@ -979,6 +979,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var displayTitle: String { localTitleOverride ?? title }
     var isTitlePending: Bool { titlePending == true }
     var isBotChat: Bool { botId != nil }
+    var lastViewedMessageId: String? { messages.last?.id }
 
     init(
         id: String,

@@ -279,10 +279,7 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
-export type GitHubPullRequestReviewDecision =
-  | "approved"
-  | "changes-requested"
-  | "review-required";
+export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
 
 export interface GitHubPullRequestSummary {
   number: number;
@@ -629,6 +626,7 @@ export interface ChatMeta {
   model?: string;
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
+  lastAssistantSequence?: number;
   createdAt: number;
   updatedAt: number;
 }

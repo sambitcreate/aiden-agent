@@ -85,3 +85,24 @@ test("read-through resolves to the viewed message and never past it", () => {
   assert.equal(chatReadThroughAt(chat, "s1"), null);
   assert.equal(chatReadThroughAt({ messages: [] }), null);
 });
+
+test("equal-timestamp output uses message order and stale views cannot regress it", async (t) => {
+  const root = await tmpDir(t);
+  const store = new ChatReadMarkerStore(() => root, { now: () => 100 });
+  await store.markRead("chat-a", 500, 1);
+  assert.equal(
+    await store.isUnread({ id: "chat-a", lastAssistantAt: 500, lastAssistantSequence: 2 }),
+    true,
+  );
+  await store.markRead("chat-a", 500, 2);
+  assert.equal(await store.markRead("chat-a", 500, 1), false);
+  const reopened = new ChatReadMarkerStore(() => root);
+  assert.equal(
+    await reopened.isUnread({ id: "chat-a", lastAssistantAt: 500, lastAssistantSequence: 2 }),
+    false,
+  );
+  assert.equal(
+    await reopened.isUnread({ id: "chat-a", lastAssistantAt: 500, lastAssistantSequence: 3 }),
+    true,
+  );
+});

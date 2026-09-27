@@ -1856,10 +1856,11 @@ class AidenChatViewModel(
             reportedReadRevision == chat.revision
         ) return
         val client = activeClient() ?: return
+        val throughMessageId = chat.lastViewedMessageId ?: return
         reportedReadRevision = chat.revision
         viewModelScope.launch {
             try {
-                client.markChatRead(chat.id)
+                client.markChatRead(chat.id, throughMessageId)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 if (reportedReadRevision == chat.revision) reportedReadRevision = null

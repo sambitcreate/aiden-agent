@@ -19,6 +19,7 @@ interface ChatReadMarkersFile {
   /** 0 until the first load stamps the installation baseline. */
   baselineAt: number;
   readThrough: Record<string, number>;
+  readThroughSequence?: Record<string, number>;
 }
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
@@ -39,7 +40,14 @@ function normalizeFile(value: unknown): ChatReadMarkersFile {
       if (SAFE_CHAT_ID.test(chatId) && isTimestamp(at)) readThrough[chatId] = at;
     }
   }
-  return { version: 1, baselineAt: record.baselineAt, readThrough };
+  const readThroughSequence: Record<string, number> = {};
+  if (typeof record.readThroughSequence === "object" && record.readThroughSequence !== null) {
+    for (const [id, sequence] of Object.entries(record.readThroughSequence)) {
+      if (Object.prototype.hasOwnProperty.call(readThrough, id) && isTimestamp(sequence))
+        readThroughSequence[id] = sequence;
+    }
+  }
+  return { version: 1, baselineAt: record.baselineAt, readThrough, readThroughSequence };
 }
 
 /** Keep the newest markers when the bounded map would overflow. */
@@ -97,26 +105,54 @@ export class ChatReadMarkerStore {
       revision: this.revision,
       baselineAt: file.baselineAt,
       readThrough: { ...file.readThrough },
+      readThroughSequence: { ...file.readThroughSequence },
     };
   }
 
-  async isUnread(meta: Pick<ChatMeta, "id" | "lastAssistantAt">): Promise<boolean> {
-    return isChatUnread(meta.lastAssistantAt, await this.snapshot(), meta.id);
+  async isUnread(
+    meta: Pick<ChatMeta, "id" | "lastAssistantAt" | "lastAssistantSequence">,
+  ): Promise<boolean> {
+    return isChatUnread(
+      meta.lastAssistantAt,
+      await this.snapshot(),
+      meta.id,
+      meta.lastAssistantSequence,
+    );
   }
 
   /**
    * Record that the user viewed a chat through `throughAt`. Markers only move
    * forward, so a late or duplicate report from a slower surface is harmless.
    */
-  async markRead(chatId: string, throughAt: number): Promise<boolean> {
-    if (!SAFE_CHAT_ID.test(chatId) || !isTimestamp(throughAt)) return false;
+  async markRead(chatId: string, throughAt: number, sequence?: number): Promise<boolean> {
+    if (
+      !SAFE_CHAT_ID.test(chatId) ||
+      !isTimestamp(throughAt) ||
+      (sequence !== undefined && !isTimestamp(sequence))
+    )
+      return false;
     await this.initialized();
-    const current = (await this.store.load()).readThrough[chatId];
-    if (current !== undefined && current >= throughAt) return false;
+    const ahead = (file: ChatReadMarkersFile) => {
+      const at = file.readThrough[chatId];
+      return (
+        at === undefined ||
+        throughAt > at ||
+        (throughAt === at &&
+          sequence !== undefined &&
+          sequence > (file.readThroughSequence?.[chatId] ?? -1))
+      );
+    };
+    if (!ahead(await this.store.load())) return false;
     const changed = await this.store.update((draft) => {
-      const existing = draft.readThrough[chatId];
-      if (existing !== undefined && existing >= throughAt) return false;
+      if (!ahead(draft)) return false;
       draft.readThrough = pruned({ ...draft.readThrough, [chatId]: throughAt });
+      draft.readThroughSequence ??= {};
+      if (sequence !== undefined) draft.readThroughSequence[chatId] = sequence;
+      else delete draft.readThroughSequence[chatId];
+      for (const id of Object.keys(draft.readThroughSequence)) {
+        if (!Object.prototype.hasOwnProperty.call(draft.readThrough, id))
+          delete draft.readThroughSequence[id];
+      }
       return true;
     });
     if (changed) await this.publish();
@@ -127,6 +163,7 @@ export class ChatReadMarkerStore {
     if ((await this.store.load()).readThrough[chatId] === undefined) return;
     await this.store.update((draft) => {
       delete draft.readThrough[chatId];
+      delete draft.readThroughSequence?.[chatId];
     });
     await this.publish();
   }
@@ -144,7 +181,10 @@ export class ChatReadMarkerStore {
  * the newest visible message persisted right now. Unknown ids resolve to null
  * so a client can never advance the marker past output it never received.
  */
-export function chatReadThroughAt(chat: Pick<Chat, "messages">, throughMessageId?: string): number | null {
+export function chatReadThroughAt(
+  chat: Pick<Chat, "messages">,
+  throughMessageId?: string,
+): number | null {
   const visible = chat.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
   );

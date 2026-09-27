@@ -1,10 +1,4 @@
-import {
-  createHash,
-  createHmac,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
@@ -41,14 +35,8 @@ import {
   MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN,
   type AidenRemoteAttachmentProjection,
 } from "./aiden-remote-attachments.js";
-import {
-  attachmentRepresentationBytes,
-  safeStoredAttachments,
-} from "./attachment-contract.js";
-import {
-  imageBytesMatchMime,
-  MAX_IMAGE_BYTES,
-} from "./attachments.js";
+import { attachmentRepresentationBytes, safeStoredAttachments } from "./attachment-contract.js";
+import { imageBytesMatchMime, MAX_IMAGE_BYTES } from "./attachments.js";
 import type { Chat, ChatMessage, ChatStartParams } from "./types.js";
 import type { ChatMeta } from "./types.js";
 import type { BotStore } from "./bot-store-core.js";
@@ -85,21 +73,27 @@ import type { RegisteredSkill } from "./skill-registry.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
-const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
-  ASK_USER_QUESTION_TOOL_NAME,
-]);
+const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([ASK_USER_QUESTION_TOOL_NAME]);
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 const SUMMARY_CURSOR = /^cur_([A-Za-z0-9_-]{1,384})\.([A-Za-z0-9_-]{43})$/u;
 const SUMMARY_CURSOR_TTL_MS = 5 * 60_000;
 const MAX_SUMMARY_SNAPSHOTS = 16;
 type ChatApplicationService = ReturnType<typeof createChatApplicationService>;
 
-function remoteImageHasCompleteTrailer(bytes: Uint8Array, mimeType: "image/png" | "image/jpeg"): boolean {
+function remoteImageHasCompleteTrailer(
+  bytes: Uint8Array,
+  mimeType: "image/png" | "image/jpeg",
+): boolean {
   if (mimeType === "image/jpeg") {
-    return bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9;
+    return (
+      bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9
+    );
   }
   const iend = [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130];
-  return bytes.length >= iend.length && iend.every((value, index) => bytes[bytes.length - iend.length + index] === value);
+  return (
+    bytes.length >= iend.length &&
+    iend.every((value, index) => bytes[bytes.length - iend.length + index] === value)
+  );
 }
 
 export interface AidenRemoteMessageProjection {
@@ -172,7 +166,7 @@ export interface AidenRemoteChatSummaryProjection {
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
   "titlePending" | "activity" | "rowState" | "unread"
-> & { lastAssistantAt?: number };
+> & { lastAssistantAt?: number; lastAssistantSequence?: number };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
 export interface AidenRemoteChatReadMarkers {
@@ -234,10 +228,16 @@ function ownRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function exactKeys(record: Record<string, unknown>, required: string[], optional: string[] = []): boolean {
+function exactKeys(
+  record: Record<string, unknown>,
+  required: string[],
+  optional: string[] = [],
+): boolean {
   const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
+  return (
+    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
+    Object.keys(record).every((key) => allowed.has(key))
+  );
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
@@ -252,12 +252,7 @@ function boundedUnicodeScalarPrefix(value: string, maximum: number): string {
     const leading = value.charCodeAt(end);
     const trailing = value.charCodeAt(end + 1);
     end +=
-      leading >= 0xd800 &&
-      leading <= 0xdbff &&
-      trailing >= 0xdc00 &&
-      trailing <= 0xdfff
-        ? 2
-        : 1;
+      leading >= 0xd800 && leading <= 0xdbff && trailing >= 0xdc00 && trailing <= 0xdfff ? 2 : 1;
     scalars += 1;
   }
   return value.slice(0, end);
@@ -265,7 +260,11 @@ function boundedUnicodeScalarPrefix(value: string, maximum: number): string {
 
 function safeId(value: string, label: string): string {
   if (!SAFE_ID.test(value)) {
-    throw new AidenRemoteServiceError("invalid_request", `The ${label} identifier is invalid.`, 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      `The ${label} identifier is invalid.`,
+      400,
+    );
   }
   return value;
 }
@@ -296,13 +295,17 @@ function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachment
     name: safeAttachmentDisplayName(attachment.name),
     mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
       ? attachment.mimeType
-      : attachment.kind === "image" ? "image/unknown" : "text/plain",
+      : attachment.kind === "image"
+        ? "image/unknown"
+        : "text/plain",
     kind: attachment.kind,
     size: attachment.size,
   }));
 }
 
-function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeProjection | undefined {
+function projectMessageOutcome(
+  message: ChatMessage,
+): AidenRemoteMessageOutcomeProjection | undefined {
   const failure = parseProviderFailureV1(message.providerFailure);
   if (failure) {
     return {
@@ -341,8 +344,13 @@ function chatRevision(chat: Chat): string {
         id: message.id,
         role: message.role,
         content: message.content,
-        reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
-          ? message.reasoning : null,
+        reasoning:
+          !chat.botId &&
+          message.role === "assistant" &&
+          message.reasoning &&
+          message.reasoning.length <= 100_000
+            ? message.reasoning
+            : null,
         createdAt: message.createdAt,
         attachments: projectMessageAttachments(message.attachments),
         htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
@@ -379,7 +387,7 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
     updatedAt: new Date(meta.updatedAt).toISOString(),
     revision: chatSummaryRevision(meta),
     ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
-      ? { lastAssistantAt: meta.lastAssistantAt }
+      ? { lastAssistantAt: meta.lastAssistantAt, lastAssistantSequence: meta.lastAssistantSequence }
       : {}),
   };
 }
@@ -412,21 +420,35 @@ export function projectAidenRemoteChat(
         const attachments = projectMessageAttachments(message.attachments);
         const outcome = projectMessageOutcome(message);
         const text = boundedUnicodeScalarPrefix(message.content, 200_000);
-        const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
-          message.reasoning.length <= 100_000 ? message.reasoning : undefined;
+        const reasoning =
+          !chat.botId &&
+          message.role === "assistant" &&
+          message.reasoning &&
+          message.reasoning.length <= 100_000
+            ? message.reasoning
+            : undefined;
         const storedTimeline = projectMessageTimeline(message);
         // A stored timeline can be valid for the full assistant message while
         // pointing beyond the prefix exposed to Remote. Omit it as a unit in
         // that case instead of clamping or fabricating offsets.
-        const publicTimeline = storedTimeline && !reasoning
-          ? { ...storedTimeline, steps: storedTimeline.steps.map((step) => {
-              if (step.kind !== "thinking") return step;
-              const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
-              return safeStep;
-            }) }
-          : storedTimeline;
+        const publicTimeline =
+          storedTimeline && !reasoning
+            ? {
+                ...storedTimeline,
+                steps: storedTimeline.steps.map((step) => {
+                  if (step.kind !== "thinking") return step;
+                  const {
+                    reasoningStartOffset: _start,
+                    reasoningEndOffset: _end,
+                    ...safeStep
+                  } = step;
+                  return safeStep;
+                }),
+              }
+            : storedTimeline;
         const timeline = publicTimeline
-          ? parseGenerationTimeline(publicTimeline, text.length, reasoning?.length ?? 0) ?? undefined
+          ? (parseGenerationTimeline(publicTimeline, text.length, reasoning?.length ?? 0) ??
+            undefined)
           : undefined;
         return {
           id: message.id,
@@ -455,9 +477,11 @@ export function projectAidenRemoteChat(
     // Reasoning is optional presentation data. Keep the existing chat available
     // when several otherwise valid assistant messages exceed the response cap.
     let responseBytes = Buffer.byteLength(JSON.stringify(projection), "utf8");
-    for (let index = projection.messages.length - 1;
+    for (
+      let index = projection.messages.length - 1;
       index >= 0 && responseBytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES;
-      index -= 1) {
+      index -= 1
+    ) {
       const message = projection.messages[index]!;
       if (!message.reasoning) continue;
       const previousBytes = Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -501,7 +525,11 @@ function parseCreate(input: unknown): { workspaceId: string; providerId?: string
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256))
   ) {
-    throw new AidenRemoteServiceError("invalid_request", "The chat creation request is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The chat creation request is invalid.",
+      400,
+    );
   }
   return {
     workspaceId: safeId(record.workspaceId, "workspace"),
@@ -571,7 +599,11 @@ function parseTurn(input: unknown): {
       attachmentIds.every((value) => typeof value === "string"));
   if (
     !record ||
-    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill"]) ||
+    !exactKeys(
+      record,
+      ["text"],
+      ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill"],
+    ) ||
     typeof record.text !== "string" ||
     Array.from(record.text).length > 200_000 ||
     (!record.text.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) ||
@@ -591,11 +623,7 @@ function parseTurn(input: unknown): {
     try {
       skill = parseSkillInvocationV1(record.skill);
     } catch {
-      throw new AidenRemoteServiceError(
-        "invalid_request",
-        "The skill invocation is invalid.",
-        400,
-      );
+      throw new AidenRemoteServiceError("invalid_request", "The skill invocation is invalid.", 400);
     }
   }
   return {
@@ -683,8 +711,11 @@ export class AidenRemoteChatService {
 
   constructor(
     private readonly options: {
-      application: Pick<ChatApplicationService, "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">
-        & Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
+      application: Pick<
+        ChatApplicationService,
+        "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove"
+      > &
+        Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
       chatStore: {
         get(id: string): Promise<Chat | null>;
         appendMessage(
@@ -699,7 +730,11 @@ export class AidenRemoteChatService {
         ): Promise<Chat>;
       };
       generation: {
-        beginChatTurn(chatId: string, turnId: string, ownerId: string): {
+        beginChatTurn(
+          chatId: string,
+          turnId: string,
+          ownerId: string,
+        ): {
           isActive(): boolean;
           reserveAppendPayload(bytes: number): void;
           reserveSkillPreparation(): void;
@@ -821,28 +856,42 @@ export class AidenRemoteChatService {
     offset: number;
   } {
     if (value.length > AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid.",
+        400,
+      );
     }
     const match = SUMMARY_CURSOR.exec(value);
     if (!match) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid.",
+        400,
+      );
     }
-    const expected = createHmac("sha256", this.summaryCursorSecret)
-      .update(match[1]!)
-      .digest();
+    const expected = createHmac("sha256", this.summaryCursorSecret).update(match[1]!).digest();
     const supplied = Buffer.from(match[2]!, "base64url");
     if (
       supplied.length !== expected.length ||
       supplied.toString("base64url") !== match[2] ||
       !timingSafeEqual(supplied, expected)
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid.",
+        400,
+      );
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(Buffer.from(match[1]!, "base64url").toString("utf8")) as unknown;
     } catch {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid.",
+        400,
+      );
     }
     if (
       !parsed ||
@@ -850,7 +899,11 @@ export class AidenRemoteChatService {
       Array.isArray(parsed) ||
       Object.keys(parsed).sort().join(",") !== "expiresAt,offset,snapshotId,v"
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid.",
+        400,
+      );
     }
     const cursor = parsed as Partial<AidenRemoteChatSummaryCursor>;
     const now = this.summaryNow();
@@ -864,7 +917,11 @@ export class AidenRemoteChatService {
       !Number.isSafeInteger(cursor.expiresAt) ||
       (cursor.expiresAt ?? 0) <= now
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid or expired.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid or expired.",
+        400,
+      );
     }
     const snapshot = this.summarySnapshots.get(cursor.snapshotId);
     if (
@@ -872,7 +929,11 @@ export class AidenRemoteChatService {
       snapshot.expiresAt !== cursor.expiresAt ||
       cursor.offset! > snapshot.summaries.length
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid or expired.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The chat summary cursor is invalid or expired.",
+        400,
+      );
     }
     return { snapshot, offset: cursor.offset! };
   }
@@ -886,7 +947,7 @@ export class AidenRemoteChatService {
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
     // A marker read failure hides unread dots rather than failing the list.
     const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, ...summary }) => ({
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, ...summary }) => ({
       ...summary,
       titlePending: this.options.isTitlePending?.(summary.id) === true,
       activity: activeChatIds.has(summary.id) ? "active" : "idle",
@@ -895,7 +956,7 @@ export class AidenRemoteChatService {
         needsApproval: approvalChatIds.has(summary.id),
         needsInput: inputChatIds.has(summary.id),
       }),
-      unread: isChatUnread(lastAssistantAt, markers, summary.id),
+      unread: isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence),
     }));
   }
 
@@ -914,7 +975,11 @@ export class AidenRemoteChatService {
     const { throughMessageId } = parseMarkRead(input);
     const readMarkers = this.options.readMarkers;
     if (!readMarkers) {
-      throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError(
+        "not_found",
+        "Chat read state is unavailable on this host.",
+        404,
+      );
     }
     await readMarkers.markRead(chatId, throughMessageId);
   }
@@ -944,7 +1009,11 @@ export class AidenRemoteChatService {
     } catch (error) {
       reject(error);
       await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this chat request.", 500);
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "Aiden could not prepare this chat request.",
+        500,
+      );
     }
     let result: T | undefined;
     let failure: unknown;
@@ -972,7 +1041,12 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (result.reconciliation) {
-      throw new AidenRemoteServiceError("operation_in_progress", "This chat is still reconciling.", 409, true);
+      throw new AidenRemoteServiceError(
+        "operation_in_progress",
+        "This chat is still reconciling.",
+        409,
+        true,
+      );
     }
     if (result.imageArtifactRecoveryUnavailable) {
       throw new AidenRemoteServiceError(
@@ -1183,9 +1257,7 @@ export class AidenRemoteChatService {
       }
       return action();
     };
-    return expected.botId
-      ? this.options.botMutations.run(expected.botId, run)
-      : run();
+    return expected.botId ? this.options.botMutations.run(expected.botId, run) : run();
   }
 
   async get(chatId: string): Promise<AidenRemoteChatProjection> {
@@ -1219,7 +1291,11 @@ export class AidenRemoteChatService {
   ): Promise<AidenRemoteAttachmentContent> {
     safeId(chatId, "chat");
     if (!/^[A-Za-z0-9._:-]{1,256}$/u.test(attachmentId)) {
-      throw new AidenRemoteServiceError("invalid_request", "The attachment identifier is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The attachment identifier is invalid.",
+        400,
+      );
     }
     const authoritative = await this.chat(chatId);
     const matches = authoritative.messages.flatMap((message) =>
@@ -1267,19 +1343,23 @@ export class AidenRemoteChatService {
         parsed,
         async () => {
           const owner = ephemeralOwner(deviceId, key);
-          const selection = parsed.providerId || parsed.model
-            ? await this.options.models.resolve(parsed.providerId, parsed.model)
-            : undefined;
+          const selection =
+            parsed.providerId || parsed.model
+              ? await this.options.models.resolve(parsed.providerId, parsed.model)
+              : undefined;
           const created = await this.options.application.create(
             {
               workspaceId: parsed.workspaceId,
-              ...(selection
-                ? { providerId: selection.providerId, model: selection.modelId }
-                : {}),
+              ...(selection ? { providerId: selection.providerId, model: selection.modelId } : {}),
             },
             owner,
           );
-          if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
+          if (!created)
+            throw new AidenRemoteServiceError(
+              "internal_error",
+              "Aiden could not create the chat.",
+              500,
+            );
           this.options.notifyChanged?.(created.id);
           return projectAidenRemoteChat(created);
         },
@@ -1289,7 +1369,11 @@ export class AidenRemoteChatService {
     }
   }
 
-  async rename(chatId: string, revision: string, input: unknown): Promise<AidenRemoteChatProjection> {
+  async rename(
+    chatId: string,
+    revision: string,
+    input: unknown,
+  ): Promise<AidenRemoteChatProjection> {
     const title = parseTitle(input);
     const updated = await this.options.application.rename(safeId(chatId, "chat"), title, {
       assertCurrent: (chat) => requireRevision(revision, chat),
@@ -1317,9 +1401,13 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const moved = await this.options.application.moveEmptyToWorkspace(chatId, parsed.workspaceId, {
-            assertCurrent: (chat) => requireRevision(revision, chat),
-          });
+          const moved = await this.options.application.moveEmptyToWorkspace(
+            chatId,
+            parsed.workspaceId,
+            {
+              assertCurrent: (chat) => requireRevision(revision, chat),
+            },
+          );
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
         },
@@ -1363,7 +1451,12 @@ export class AidenRemoteChatService {
     let skills: readonly SkillCatalogEntry[];
     try {
       skills = authoritative.botId
-        ? await (this.options.botSkillCatalog?.(deviceId, authoritative.botId, authoritative.id, workspaceId) ?? [])
+        ? await (this.options.botSkillCatalog?.(
+            deviceId,
+            authoritative.botId,
+            authoritative.id,
+            workspaceId,
+          ) ?? [])
         : await this.options.skillCatalog(workspaceId);
     } catch (error) {
       throw skillInvocationRemoteError(error);
@@ -1385,10 +1478,7 @@ export class AidenRemoteChatService {
     message: AidenRemoteMessageProjection;
   }> {
     const parsed = parseTurn(input);
-    if (
-      parsed.skill &&
-      (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true
-    ) {
+    if (parsed.skill && (await this.options.deviceSupportsSkillInvocation?.(deviceId)) !== true) {
       throw new AidenRemoteServiceError(
         "capability_denied",
         "This device does not have access to that Aiden capability.",
@@ -1412,12 +1502,13 @@ export class AidenRemoteChatService {
             requestedModelId,
             { allowExistingPinnedGemini: preservesPinnedGemini },
           );
-          if (authoritative.botId && (
-            !authoritative.providerId ||
-            !authoritative.model ||
-            selection.providerId !== authoritative.providerId ||
-            selection.modelId !== authoritative.model
-          )) {
+          if (
+            authoritative.botId &&
+            (!authoritative.providerId ||
+              !authoritative.model ||
+              selection.providerId !== authoritative.providerId ||
+              selection.modelId !== authoritative.model)
+          ) {
             throw new AidenRemoteServiceError(
               "invalid_request",
               "This Bot uses its saved AI connection and model. Reload it before sending.",
@@ -1444,11 +1535,16 @@ export class AidenRemoteChatService {
             selection.thinkingLevels.length > 0 &&
             !selection.thinkingLevels.includes(parsed.thinkingLevel)
           ) {
-            throw new AidenRemoteServiceError("invalid_request", "That thinking level is unavailable.", 400);
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "That thinking level is unavailable.",
+              400,
+            );
           }
           if (
             this.attachments.requiresImageInput(deviceId, chatId, parsed.attachmentIds) &&
-            !selection.supportsImages && !supportsCompanionImages
+            !selection.supportsImages &&
+            !supportsCompanionImages
           ) {
             throw new AidenRemoteServiceError(
               "invalid_request",
@@ -1481,14 +1577,19 @@ export class AidenRemoteChatService {
               this.options.streams.markRunning(deviceId, streamId);
             },
           });
-          const turn = beginSurfaceGeneration(
-            this.options.generation.beginChatTurn,
-            surface,
-          );
+          const turn = beginSurfaceGeneration(this.options.generation.beginChatTurn, surface);
           if (!turn) {
             owner.invalidate();
-            this.options.streams.markStartError(deviceId, streamId, new Error("This chat already has a response in progress."));
-            throw new AidenRemoteServiceError("turn_already_active", "This chat already has a response in progress.", 409);
+            this.options.streams.markStartError(
+              deviceId,
+              streamId,
+              new Error("This chat already has a response in progress."),
+            );
+            throw new AidenRemoteServiceError(
+              "turn_already_active",
+              "This chat already has a response in progress.",
+              409,
+            );
           }
           const messageId = `message_${randomUUID()}`;
           let appended = false;
@@ -1565,23 +1666,23 @@ export class AidenRemoteChatService {
             }
             const chat = await appendChatMessageWithReconciliation({
               messageId,
-              append: () => this.options.chatStore.appendMessage(
-                chatId,
-                {
-                  id: messageId,
-                  role: "user",
-                  content: parsed.text,
-                  ...(attachments?.length ? { attachments } : {}),
-                  ...(preparedSkill ? { skill: preparedSkill.provenance } : {}),
-                },
-                {
-                  providerId: selection.providerId,
-                  model: selection.modelId,
-                  expectedWorkspaceId: workspaceId,
-                  isCurrent: () =>
-                    turn.isActive() && workspaceAdmission?.signal.aborted !== true,
-                },
-              ),
+              append: () =>
+                this.options.chatStore.appendMessage(
+                  chatId,
+                  {
+                    id: messageId,
+                    role: "user",
+                    content: parsed.text,
+                    ...(attachments?.length ? { attachments } : {}),
+                    ...(preparedSkill ? { skill: preparedSkill.provenance } : {}),
+                  },
+                  {
+                    providerId: selection.providerId,
+                    model: selection.modelId,
+                    expectedWorkspaceId: workspaceId,
+                    isCurrent: () => turn.isActive() && workspaceAdmission?.signal.aborted !== true,
+                  },
+                ),
               recover: () => this.options.chatStore.get(chatId),
             });
             appended = true;
@@ -1617,12 +1718,15 @@ export class AidenRemoteChatService {
             }
             if (appended && appendedChat) {
               this.options.notifyChanged?.(chatId);
-              const message = appendedChat.messages.find((candidate) => candidate.id === messageId)!;
+              const message = appendedChat.messages.find(
+                (candidate) => candidate.id === messageId,
+              )!;
               return {
                 turnId,
                 streamId,
                 status: "accepted" as const,
-                message: projectAidenRemoteChat({ ...appendedChat, messages: [message] }).messages[0]!,
+                message: projectAidenRemoteChat({ ...appendedChat, messages: [message] })
+                  .messages[0]!,
               };
             }
             throw error;
@@ -1638,7 +1742,11 @@ export class AidenRemoteChatService {
     if (error instanceof AidenRemoteServiceError) throw error;
     if (error instanceof AidenOperationContractError) {
       const status = error.code === "idempotency_capacity" ? 429 : 409;
-      throw new AidenRemoteServiceError(error.code, "This chat request cannot be safely repeated.", status);
+      throw new AidenRemoteServiceError(
+        error.code,
+        "This chat request cannot be safely repeated.",
+        status,
+      );
     }
     throw error;
   }

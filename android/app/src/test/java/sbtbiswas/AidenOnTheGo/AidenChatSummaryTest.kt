@@ -206,6 +206,18 @@ class AidenChatSummaryTest {
     }
 
     @Test
+    fun readBoundaryBelongsToOpenedSnapshotWithEqualMessageTimestamps() {
+        val time = Instant.ofEpochSecond(500)
+        val chat = AidenChat(id = "chat-read", workspaceId = "workspace", title = "Read", messages = emptyList(), createdAt = time, updatedAt = time, revision = "r1")
+        assertNull(chat.lastViewedMessageId)
+        chat.messages = listOf(AidenChatMessage(id = "message-1", role = AidenChatRole.USER, text = "Hello", createdAt = time))
+        val opened = chat.copy()
+        chat.messages = chat.messages + AidenChatMessage(id = "message-2", role = AidenChatRole.ASSISTANT, text = "Reply", createdAt = time)
+        assertEquals("message-1", opened.lastViewedMessageId)
+        assertEquals("message-2", chat.lastViewedMessageId)
+    }
+
+    @Test
     fun markChatReadPostsAnEmptyOrTargetedJsonBody() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(204))
         server.enqueue(MockResponse().setResponseCode(204))

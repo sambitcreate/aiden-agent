@@ -428,6 +428,7 @@ export interface ChatMeta {
    * Drives honest unread markers; absent on legacy rows until their next write.
    */
   lastAssistantAt?: number;
+  lastAssistantSequence?: number;
   createdAt: number;
   updatedAt: number;
 }

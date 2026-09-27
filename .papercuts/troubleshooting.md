@@ -1410,3 +1410,5 @@ because their native file-mutator test binary had not been built. Run
 - A fresh workflow worktree has no `node_modules`; module resolution then climbs to a parent checkout on a different pi version and `tsc` reports dozens of unrelated errors. Run `npm ci --ignore-scripts --no-audit --no-fund` in the worktree first.
 - `xcrun simctl` fails when `xcode-select` points at CommandLineTools; prefix iOS runs with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. Homebrew `openjdk@21` works as `JAVA_HOME` for `./gradlew` too.
 - Remote contract revision 16 was claimed while other wave PRs may also claim it; whichever merges second renumbers (see the revision-14 note above for the seven files).
+
+- 2026-09-27 PR recovery: a separate cleanup task removed clean worktrees during active repair. Lock recovery checkouts before editing; all remote branches survived. Tracked diffs were backed up under /tmp/aiden-recovery-*.patch and cleanup was stopped through task coordination.

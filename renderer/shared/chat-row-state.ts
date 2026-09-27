@@ -49,6 +49,8 @@ export interface ChatReadMarkersSnapshot {
   baselineAt: number;
   /** Chat id -> createdAt (epoch ms) of the newest message the user viewed. */
   readThrough: Record<string, number>;
+  /** Message position breaks ties when multiple messages share one millisecond. */
+  readThroughSequence?: Record<string, number>;
 }
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
@@ -71,7 +73,26 @@ export function parseChatReadMarkersSnapshot(value: unknown): ChatReadMarkersSna
     if (++count > MAX_CHAT_READ_MARKERS) return null;
     readThrough[chatId] = at;
   }
-  return { revision: record.revision, baselineAt: record.baselineAt, readThrough };
+  const readThroughSequence: Record<string, number> = {};
+  if (record.readThroughSequence !== undefined) {
+    if (
+      typeof record.readThroughSequence !== "object" ||
+      record.readThroughSequence === null ||
+      Array.isArray(record.readThroughSequence)
+    )
+      return null;
+    for (const [id, sequence] of Object.entries(record.readThroughSequence)) {
+      if (!Object.prototype.hasOwnProperty.call(readThrough, id) || !isTimestamp(sequence))
+        return null;
+      readThroughSequence[id] = sequence;
+    }
+  }
+  return {
+    revision: record.revision,
+    baselineAt: record.baselineAt,
+    readThrough,
+    ...(record.readThroughSequence !== undefined ? { readThroughSequence } : {}),
+  };
 }
 
 /**
@@ -81,10 +102,18 @@ export function parseChatReadMarkersSnapshot(value: unknown): ChatReadMarkersSna
  */
 export function isChatUnread(
   lastAssistantAt: number | undefined,
-  markers: Pick<ChatReadMarkersSnapshot, "baselineAt" | "readThrough"> | null | undefined,
+  markers:
+    | Pick<ChatReadMarkersSnapshot, "baselineAt" | "readThrough" | "readThroughSequence">
+    | null
+    | undefined,
   chatId: string,
+  lastAssistantSequence?: number,
 ): boolean {
   if (!markers || !isTimestamp(lastAssistantAt)) return false;
   const viewed = Math.max(markers.baselineAt, markers.readThrough[chatId] ?? 0);
-  return lastAssistantAt > viewed;
+  if (lastAssistantAt !== viewed) return lastAssistantAt > viewed;
+  const sequence = markers.readThroughSequence?.[chatId];
+  return (
+    isTimestamp(lastAssistantSequence) && isTimestamp(sequence) && lastAssistantSequence > sequence
+  );
 }

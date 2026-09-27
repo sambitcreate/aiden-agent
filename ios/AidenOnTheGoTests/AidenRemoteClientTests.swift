@@ -512,6 +512,17 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: invalid))
     }
 
+    func testReadBoundaryBelongsToOpenedSnapshotEvenWhenLaterOutputSharesItsTimestamp() throws {
+        let time = Date(timeIntervalSince1970: 500)
+        var chat = AidenChat(id: "chat-read", workspaceId: "workspace", title: "Read", providerId: nil, modelId: nil, messages: [], createdAt: time, updatedAt: time, revision: "r1")
+        XCTAssertNil(chat.lastViewedMessageId)
+        chat.messages = [AidenChatMessage(id: "message-1", role: .user, text: "Hello", createdAt: time)]
+        let opened = chat
+        chat.messages.append(AidenChatMessage(id: "message-2", role: .assistant, text: "Reply", createdAt: time))
+        XCTAssertEqual(opened.lastViewedMessageId, "message-1")
+        XCTAssertEqual(chat.lastViewedMessageId, "message-2")
+    }
+
     func testMarkChatReadPostsAnEmptyOrTargetedJSONBody() async throws {
         let client = makeClient()
         var bodies: [String] = []

@@ -753,6 +753,7 @@ data class AidenChat(
     var titlePending: Boolean? = null
 ) {
     val isBotChat: Boolean get() = botId != null
+    val lastViewedMessageId: String? get() = messages.lastOrNull()?.id
     val isTitlePending: Boolean get() = titlePending == true
 
     init {
