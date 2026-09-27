@@ -29,3 +29,5 @@
 ## Review follow-up
 
 Remembered file targets preserve leading/trailing whitespace, so distinct filesystem names cannot share approval authority. Regression covers persisted matching; all 7 rule-book tests pass.
+
+- Follow-up review: reject raw parent-path segments before normalization; command rules permit tab/newline/carriage-return whitespace but reject other ASCII controls before trimming. Regression covers leading and embedded control characters and parent segments.

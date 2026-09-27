@@ -47,17 +47,19 @@ export function emptyToolApprovalRulesDocument(): ToolApprovalRulesDocument {
 function hasControlCharacter(value: string, allowWhitespace: boolean): boolean {
   for (const char of value) {
     const code = char.codePointAt(0)!;
-    if (code === 0) return true;
-    if (!allowWhitespace && (code < 0x20 || code === 0x7f)) return true;
+    if (code < 0x20 || code === 0x7f) {
+      if (allowWhitespace && (code === 0x09 || code === 0x0a || code === 0x0d)) continue;
+      return true;
+    }
   }
   return false;
 }
 
 function normalizeCommandPattern(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
+  if (hasControlCharacter(value, true)) return undefined;
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > MAX_COMMAND_PATTERN_CHARS) return undefined;
-  if (hasControlCharacter(trimmed, true)) return undefined;
   return trimmed;
 }
 
@@ -70,6 +72,7 @@ function normalizePathPattern(value: unknown): string | undefined {
   if (path.posix.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed) || trimmed.startsWith("~")) {
     return undefined;
   }
+  if (trimmed.split("/").includes("..")) return undefined;
   let normalized = path.posix.normalize(trimmed);
   while (normalized.endsWith("/") && normalized.length > 1) normalized = normalized.slice(0, -1);
   if (
