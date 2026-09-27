@@ -22,12 +22,18 @@ struct AgentRunLiveActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    AgentRunIslandBadge(status: context.state.status)
+                    AgentRunIslandBadge(
+                        status: context.state.status,
+                        isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
+                    )
                         .padding(.leading, 18)
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
-                    AgentRunIslandStatusView(state: context.state)
+                    AgentRunIslandStatusView(
+                        state: context.state,
+                        systemMarkedStale: context.isStale
+                    )
                         .padding(.trailing, 18)
                 }
 
@@ -38,7 +44,10 @@ struct AgentRunLiveActivityWidget: Widget {
                     )
                 }
             } compactLeading: {
-                AgentRunIslandCompactMark(status: context.state.status)
+                AgentRunIslandCompactMark(
+                    status: context.state.status,
+                    isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
+                )
             } compactTrailing: {
                 Text(context.state.status.compactTitle)
                     .font(.caption2.weight(.semibold))
@@ -46,7 +55,10 @@ struct AgentRunLiveActivityWidget: Widget {
                     .minimumScaleFactor(0.72)
                     .lineLimit(1)
             } minimal: {
-                AgentRunIslandCompactMark(status: context.state.status)
+                AgentRunIslandCompactMark(
+                    status: context.state.status,
+                    isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
+                )
             }
             .widgetURL(AidenDeepLink.chatURL(
                 instanceId: context.attributes.instanceID,
@@ -248,10 +260,11 @@ private struct AgentRunFreshnessChips: View {
 
 private struct AgentRunIslandBadge: View {
     let status: AgentRunActivityStatus
+    let isStale: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            AgentRunStatusDot(status: status, isStale: false)
+            AgentRunStatusDot(status: status, isStale: isStale)
             Text("Aiden")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
@@ -262,19 +275,24 @@ private struct AgentRunIslandBadge: View {
 
 private struct AgentRunIslandStatusView: View {
     let state: AgentRunActivityAttributes.ContentState
+    let systemMarkedStale: Bool
+
+    private var isStale: Bool {
+        AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale)
+    }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
             Text(state.status.title)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(AgentRunStatusStyle.color(for: state.status, isStale: state.isStale))
+                .foregroundStyle(AgentRunStatusStyle.color(for: state.status, isStale: isStale))
                 .lineLimit(1)
 
             if state.isFinal {
                 Text("Ready")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-            } else if state.isStale {
+            } else if isStale {
                 Text("Latest")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
@@ -294,11 +312,12 @@ private struct AgentRunIslandStatusView: View {
 
 private struct AgentRunIslandCompactMark: View {
     let status: AgentRunActivityStatus
+    let isStale: Bool
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(AgentRunStatusStyle.color(for: status, isStale: false).opacity(0.25))
+                .fill(AgentRunStatusStyle.color(for: status, isStale: isStale).opacity(0.25))
 
             AgentRunStatusMark(status: status, size: 10)
         }

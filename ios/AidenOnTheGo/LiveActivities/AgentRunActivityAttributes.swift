@@ -254,6 +254,7 @@ enum AgentRunActivitySanitizer {
 /// has started, and when the last real agent update arrived.
 enum AgentRunFreshness {
     static let maximumDisplayedToolCalls = 99
+    static let staleAfter: TimeInterval = 300
 
     static func clampedToolCallCount(_ count: Int) -> Int {
         min(max(0, count), 9_999)
@@ -276,6 +277,10 @@ enum AgentRunFreshness {
         systemMarkedStale: Bool
     ) -> Bool {
         !state.isFinal && (state.isStale || systemMarkedStale)
+    }
+
+    static func staleDate(for state: AgentRunActivityAttributes.ContentState) -> Date? {
+        state.isFinal ? nil : state.updatedAt.addingTimeInterval(staleAfter)
     }
 }
 
@@ -316,8 +321,7 @@ enum AgentLiveActivityReusePolicy {
 enum AgentRunActivityStateReducer {
     static func updatingSessionTitle(
         _ title: String,
-        state: AgentRunActivityAttributes.ContentState,
-        now: Date = Date()
+        state: AgentRunActivityAttributes.ContentState
     ) -> AgentRunActivityAttributes.ContentState {
         AgentRunActivityAttributes.ContentState(
             sessionID: state.sessionID,
@@ -326,7 +330,8 @@ enum AgentRunActivityStateReducer {
             currentActivity: state.currentActivity,
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
-            updatedAt: now,
+            // Renaming the chat changes presentation metadata, not run progress.
+            updatedAt: state.updatedAt,
             isStale: state.isStale,
             isFinal: state.isFinal,
             errorSummary: state.errorSummary,
@@ -383,6 +388,15 @@ enum AgentRunActivityStateReducer {
         )
     }
 
+    /// A server status snapshot can refresh labels without claiming new agent progress.
+    static func refreshedStatus(
+        _ status: AgentRunActivityStatus,
+        activity: String,
+        state: AgentRunActivityAttributes.ContentState
+    ) -> AgentRunActivityAttributes.ContentState {
+        statusState(status, activity: activity, state: state, now: state.updatedAt)
+    }
+
     static func settingInterimAssistant(
         _ text: String,
         on state: AgentRunActivityAttributes.ContentState,
@@ -403,8 +417,7 @@ enum AgentRunActivityStateReducer {
     }
 
     static func clearingResponseExcerpt(
-        state: AgentRunActivityAttributes.ContentState,
-        now: Date = Date()
+        state: AgentRunActivityAttributes.ContentState
     ) -> AgentRunActivityAttributes.ContentState {
         AgentRunActivityAttributes.ContentState(
             sessionID: state.sessionID,
@@ -413,7 +426,8 @@ enum AgentRunActivityStateReducer {
             currentActivity: state.currentActivity,
             responseExcerpt: "",
             startedAt: state.startedAt,
-            updatedAt: now,
+            // Clearing a now-disallowed excerpt is a privacy update, not progress.
+            updatedAt: state.updatedAt,
             isStale: state.isStale,
             isFinal: state.isFinal,
             errorSummary: state.errorSummary,
@@ -464,8 +478,7 @@ enum AgentRunActivityStateReducer {
     }
 
     static func stale(
-        state: AgentRunActivityAttributes.ContentState,
-        now: Date = Date()
+        state: AgentRunActivityAttributes.ContentState
     ) -> AgentRunActivityAttributes.ContentState {
         AgentRunActivityAttributes.ContentState(
             sessionID: state.sessionID,

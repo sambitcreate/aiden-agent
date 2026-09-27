@@ -19,6 +19,7 @@ Status: Implemented for review. This is the Hermex 1.7 parity slice for Aiden On
 - The time text uses `Text(date, style: .relative)`, so the system keeps it current while the app is suspended.
 - The chips use soft pill fills and semantic text colors, with no colored borders.
 - Marking a run stale now keeps its last real `updatedAt`. It no longer reports the stale transition as fresh progress.
+- Foreground status reconciliation updates its labels while preserving the progress timestamp and its ActivityKit stale deadline. Expanded Dynamic Island status indicators share the same combined stale state as the freshness chip.
 
 ## Bot deep link
 

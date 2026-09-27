@@ -66,23 +66,36 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
-    func updateStatus(instanceID: String, streamID: String, state: AidenStreamState) async {
+    func updateStatus(
+        instanceID: String,
+        streamID: String,
+        state: AidenStreamState
+    ) async {
         switch state {
         case .queued, .reconciling:
             await update(instanceID: instanceID, streamID: streamID) {
-                AgentRunActivityStateReducer.initialState(
-                    sessionID: $0.sessionID,
-                    sessionTitle: $0.sessionTitle,
-                    startedAt: $0.startedAt,
-                    toolCallCount: $0.toolCallCount
+                AgentRunActivityStateReducer.refreshedStatus(
+                    .starting,
+                    activity: String(localized: "Starting response"),
+                    state: $0
                 )
             }
         case .running:
             await update(instanceID: instanceID, streamID: streamID) {
-                AgentRunActivityStateReducer.responding(state: $0)
+                AgentRunActivityStateReducer.refreshedStatus(
+                    .responding,
+                    activity: String(localized: "Writing response"),
+                    state: $0
+                )
             }
         case .waitingForApproval:
-            await approvalRequired(instanceID: instanceID, streamID: streamID)
+            await update(instanceID: instanceID, streamID: streamID) {
+                AgentRunActivityStateReducer.refreshedStatus(
+                    .waitingForApproval,
+                    activity: String(localized: "Waiting for approval"),
+                    state: $0
+                )
+            }
         case .done:
             await finish(instanceID: instanceID, streamID: streamID, status: .complete, message: String(localized: "Response complete"))
         case .error, .interrupted:
@@ -151,7 +164,7 @@ final class AidenRemoteLiveActivityManager {
                 state: state(for: activity)
             )
             stateByActivityID[activity.id] = state
-            await activity.end(content(for: state, staleDate: nil), dismissalPolicy: .immediate)
+            await activity.end(content(for: state), dismissalPolicy: .immediate)
             stateByActivityID[activity.id] = nil
             if currentActivity?.id == activity.id { currentActivity = nil }
         }
@@ -175,7 +188,7 @@ final class AidenRemoteLiveActivityManager {
         let policy: ActivityUIDismissalPolicy = status == .complete
             ? .after(Date().addingTimeInterval(300))
             : .after(Date().addingTimeInterval(30))
-        await activity.end(content(for: state, staleDate: nil), dismissalPolicy: policy)
+        await activity.end(content(for: state), dismissalPolicy: policy)
         stateByActivityID[activity.id] = nil
         if currentActivity?.id == activity.id { currentActivity = nil }
     }
@@ -202,7 +215,11 @@ final class AidenRemoteLiveActivityManager {
                 let status = try await client.streamStatus(id: streamID)
                 guard isCurrent() else { return }
                 currentActivity = activity
-                await updateStatus(instanceID: instanceID, streamID: streamID, state: status.state)
+                await updateStatus(
+                    instanceID: instanceID,
+                    streamID: streamID,
+                    state: status.state
+                )
             } catch {
                 guard isCurrent() else { return }
                 let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
@@ -251,10 +268,7 @@ final class AidenRemoteLiveActivityManager {
         activity.activityState == .active || activity.activityState == .stale
     }
 
-    private func content(
-        for state: AgentRunActivityAttributes.ContentState,
-        staleDate: Date? = Date().addingTimeInterval(300)
-    ) -> ActivityContent<AgentRunActivityAttributes.ContentState> {
-        ActivityContent(state: state, staleDate: state.isFinal ? nil : staleDate)
+    private func content(for state: AgentRunActivityAttributes.ContentState) -> ActivityContent<AgentRunActivityAttributes.ContentState> {
+        ActivityContent(state: state, staleDate: AgentRunFreshness.staleDate(for: state))
     }
 }

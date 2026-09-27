@@ -242,16 +242,43 @@ final class AidenNativeIntegrationTests: XCTestCase {
         state = AgentRunActivityStateReducer.toolStarted(name: "bash", state: state, now: start + 5)
         state = AgentRunActivityStateReducer.waitingForApproval(state: state, now: start + 6)
         state = AgentRunActivityStateReducer.settingInterimAssistant("interim", on: state, now: start + 7)
-        state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state, now: start + 8)
-        state = AgentRunActivityStateReducer.updatingSessionTitle("Renamed", state: state, now: start + 9)
+        state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state)
+        state = AgentRunActivityStateReducer.updatingSessionTitle("Renamed", state: state)
         XCTAssertEqual(state.toolCallCount, 2)
         XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: state.toolCallCount), "2 tools")
-        XCTAssertEqual(state.updatedAt, start + 9)
+        XCTAssertEqual(state.updatedAt, start + 7)
+
+        // Status events and reconciliation update labels without extending the
+        // progress-based freshness window or resetting it to the run start.
+        let reconciledRunning = AgentRunActivityStateReducer.refreshedStatus(
+            .responding,
+            activity: "Writing response",
+            state: state
+        )
+        XCTAssertEqual(reconciledRunning.updatedAt, start + 7)
+        XCTAssertEqual(
+            AgentRunFreshness.staleDate(for: reconciledRunning),
+            start.addingTimeInterval(307)
+        )
+        let reconciledQueued = AgentRunActivityStateReducer.refreshedStatus(
+            .starting,
+            activity: "Starting response",
+            state: state
+        )
+        XCTAssertEqual(reconciledQueued.updatedAt, start + 7)
+        XCTAssertEqual(reconciledQueued.toolCallCount, 2)
+        let reconciledApproval = AgentRunActivityStateReducer.refreshedStatus(
+            .waitingForApproval,
+            activity: "Waiting for approval",
+            state: state
+        )
+        XCTAssertEqual(reconciledApproval.updatedAt, start + 7)
+        XCTAssertEqual(reconciledApproval.status, .waitingForApproval)
 
         // Going stale is not agent progress: the "updated … ago" chip keeps aging.
-        let stale = AgentRunActivityStateReducer.stale(state: state, now: start + 600)
+        let stale = AgentRunActivityStateReducer.stale(state: state)
         XCTAssertTrue(stale.isStale)
-        XCTAssertEqual(stale.updatedAt, start + 9)
+        XCTAssertEqual(stale.updatedAt, start + 7)
         XCTAssertEqual(stale.toolCallCount, 2)
         XCTAssertTrue(AgentRunFreshness.isStale(stale, systemMarkedStale: false))
 
@@ -267,6 +294,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(done.toolCallCount, 2)
         XCTAssertFalse(AgentRunFreshness.isStale(done, systemMarkedStale: true))
+        XCTAssertNil(AgentRunFreshness.staleDate(for: done))
 
         // A queued/reconciling restart keeps the count the run already earned.
         let restarted = AgentRunActivityStateReducer.initialState(

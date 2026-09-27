@@ -10,6 +10,8 @@ Branch: `feature/live-activity-freshness`. Plan: `docs/plans/live-activity-fresh
   - `toolCallLabel` produces "1 tool", "N tools" or "99+ tools";
   - `isStale` combines the reducer's stale flag with `context.isStale` and ignores final runs.
 - `AgentRunActivityReducer.stale()` keeps the last `updatedAt`, so "Stale 3m ago" reports real agent progress.
+- Foreground stream-status reconciliation updates the displayed state without replacing the last progress time. ActivityKit's `staleDate` is always derived from that progress timestamp, so a status poll cannot restart the five-minute freshness window; title and excerpt-clearing updates also preserve it.
+- The Dynamic Island's expanded badge, trailing status, compact mark, and freshness chips all combine the reducer stale flag with ActivityKit's `context.isStale` signal.
 
 ## Bot deep link
 
