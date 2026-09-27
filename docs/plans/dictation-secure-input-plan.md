@@ -14,16 +14,13 @@ atomic dictation paste (`main/services/dictation-paste.ts`) still reported
 
 ## Detection
 
-- Carbon `IsSecureEventInput` is neither bridged to JXA nor exported by the
-  current macOS SDK (the symbol is absent at link and `dlsym` time on macOS 27).
-- WindowServer publishes `kCGSSessionSecureInputPID` in the current CoreGraphics
-  session dictionary only while some process holds Secure Input. Aiden reads it
-  with a one-line JXA probe (`CGSessionCopyCurrentDictionary`), about 50 ms, with
-  no native helper or new entitlement. The same key appears in
-  `ioreg -n Root -d1` `IOConsoleUsers`, but that route needs multi-session
-  matching and old-style plist parsing.
-- The owning PID is not used to name an app: in testing it pointed at the
-  frontmost app rather than the process that enabled Secure Input.
+- The documented Carbon `IsSecureEventInputEnabled()` API is exported and callable
+  through JXA. The original investigation used the incorrect `IsSecureEventInput`
+  symbol and fell back to an undocumented session dictionary key.
+- Detection now uses Carbon with a bounded timeout. A live test enables and disables
+  a process-owned Secure Input claim, verifying the probe follows both transitions.
+- Clipboard restoration requires AXValue evidence of insertion, keeping the transcript
+  copied if Secure Input changes during focus revalidation or delivery is uncertain.
 
 ## Behavior
 
