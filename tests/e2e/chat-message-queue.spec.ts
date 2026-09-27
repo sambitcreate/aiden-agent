@@ -605,6 +605,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
     await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
     await composer.press("Enter");
     await expect(page.getByRole("status").filter({ hasText: "Compacting chat…" })).toBeVisible();
+    await expect(composer).toHaveValue("");
   };
   const sentTexts = () =>
     lmStudio.requests
@@ -614,8 +615,14 @@ test("messages sent during compaction queue behind it and survive a failed compa
 
   // A failed compaction keeps the queued message and pauses delivery.
   await startCompaction();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await page
+    .locator("[data-sidebar]")
+    .getByRole("button", { name: /^Deterministic E2E response/u })
+    .click();
   await expect(composer).toBeEditable();
   await composer.fill("During compaction retry");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
   await composer.press("Enter");
   await expect(composer).toHaveValue("");
   await expect(queue.getByRole("status")).toHaveText("1 queued · Sends after compaction");

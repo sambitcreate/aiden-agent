@@ -1407,3 +1407,4 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-27 queue while compacting
 - `renderer/components/composer.test.tsx` pins the exact `readOnly={sessionCommandBusy || firstSendPending}` and submission expressions with `assert.match`. Renaming the lock predicate breaks three unrelated tests. I updated the names in place without adding asserts, and put the behavioral coverage in the e2e specs. These greps should be replaced with a rendered-composer test.
+- The async `/compact` result can outlive the slash session, so consume the command token immediately and let only its completion handler report errors. Keep the queue hold as the authority and read it on each composer mount; component-local busy state resets when navigating between chats.

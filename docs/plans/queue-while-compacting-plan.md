@@ -17,14 +17,17 @@ composer, so only the standalone command was a dead end.
   send button becomes **Queue message**, the status line says messages wait
   until compaction finishes, and the queue header reads
   `N queued · Sends after compaction`.
-- Attachments and voice input work during compaction, but slash session
-  actions stay blocked. Export, clone, fork, logout and worktree creation
-  still keep the composer read-only.
+- `/compact` is consumed as soon as its asynchronous action starts, leaving a
+  clear composer for follow-up text while compaction runs. Other slash session
+  actions stay blocked. Attachments and voice input work during compaction.
+  Export, clone, fork, logout and worktree creation still keep the composer
+  read-only.
 - The per-chat `ChatMessageQueue` owns a `holdReason: "compaction"` flag. A
   held queue never claims a message, and a delivery that was already waiting
   on `chats:waitUntilIdle` defers when a hold appears. The flag lives in the
   queue rather than pane state, so the hold stays in place when the user
-  navigates away from the chat and back.
+  navigates away from the chat and back. The composer reads the queue's hold
+  snapshot on mount so its Queue message state also survives that navigation.
 - On a completed compaction (`compacted: true`), or when compaction was
   unnecessary (`already_compact`) or never admitted (`busy`), the hold lifts
   and queued messages deliver in order through the existing

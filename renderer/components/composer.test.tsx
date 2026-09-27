@@ -274,7 +274,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   const completionIndex = composer.indexOf(
     "const attempt = asyncAction ? await attempted.completion : attempted",
   );
-  const handledIndex = composer.indexOf("if (!attempt.handled)");
+  const handledIndex = composer.indexOf("if (!attempt.handled)", completionIndex);
   const commitIndex = composer.lastIndexOf("setText(nextText)");
   for (const index of [attemptIndex, completionIndex, handledIndex, commitIndex]) {
     assert.notEqual(index, -1, "The slash action commit contract must remain present.");

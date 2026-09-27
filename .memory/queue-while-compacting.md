@@ -1,0 +1,9 @@
+# Queue messages while compaction runs — 2026-09-27
+
+Branch: `feature/queue-while-compacting`. Plan: `docs/plans/queue-while-compacting-plan.md`.
+
+Manual compaction keeps the composer editable and holds queued messages until compaction succeeds. `ChatMessageQueue.holdReason` is the durable per-chat state; the composer must derive its active compaction affordance from the queue snapshot as well as its local start state, because the chat-keyed composer remounts when navigating away and back.
+
+The `/compact` slash token is consumed immediately after the asynchronous command starts. Its completion only reports errors/unavailable actions, allowing the now-clear composer to accept messages into the held queue during compaction.
+
+Relevant validation: `npm run test:slash-commands`; `npm run type-check:e2e`; focused `chat-message-queue.spec.ts` compaction scenario.

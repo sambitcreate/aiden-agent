@@ -2524,6 +2524,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={draft ? undefined : steerMessage}
                 onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
+                compactionHeld={queuedState.holdReason === "compaction"}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}

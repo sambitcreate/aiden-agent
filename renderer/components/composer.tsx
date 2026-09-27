@@ -148,6 +148,8 @@ interface ComposerProps {
   onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
+  /** Queue-owned compaction hold, retained across Composer remounts. */
+  compactionHeld?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -308,6 +310,7 @@ export function Composer({
   onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
+  compactionHeld = false,
   isGenerating,
   canStopGeneration = isGenerating,
   stoppingGeneration = false,
@@ -496,9 +499,10 @@ export function Composer({
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
   const [compactionBusy, setCompactionBusy] = React.useState(false);
+  const compactionActive = compactionBusy || compactionHeld;
   // Manual compaction keeps the draft editable when the chat can queue:
   // submissions wait behind compaction instead of locking the composer.
-  const queueDuringCompaction = compactionBusy && Boolean(onQueue);
+  const queueDuringCompaction = compactionActive && Boolean(onQueue);
   const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
@@ -1122,6 +1126,35 @@ export function Composer({
         },
       });
       const asyncAction = attempted.kind === "async";
+      const compactAction =
+        result.command.action.kind === "session" && result.command.action.action === "compact";
+      if (asyncAction && compactAction) {
+        // Start the compaction under the queue hold, then consume the command
+        // token immediately so the editable composer can accept follow-ups.
+        // The async result only owns its completion feedback, not this draft.
+        setText(nextText);
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(nextCaret, nextCaret);
+          setSelection({ start: nextCaret, end: nextCaret });
+        });
+        void attempted.completion.then((attempt) => {
+          if (attempt.error) {
+            toast.error(
+              attempt.error instanceof Error
+                ? attempt.error.message
+                : "That command could not be completed.",
+            );
+          } else if (!attempt.handled) {
+            toast.info("That app action is unavailable right now.");
+          }
+        });
+        return;
+      }
       if (asyncAction) slashActionPendingRef.current = true;
       const attempt = asyncAction ? await attempted.completion : attempted;
       if (asyncAction) slashActionPendingRef.current = false;
@@ -1948,7 +1981,7 @@ export function Composer({
                   {sessionCommandStatus}
                   {queueDuringCompaction ? " Messages you send now wait until it finishes." : null}
                 </Text>
-                {compactionBusy && onCancelCompact ? (
+                {compactionActive && onCancelCompact ? (
                   <Button
                     type="button"
                     variant="transparent"
