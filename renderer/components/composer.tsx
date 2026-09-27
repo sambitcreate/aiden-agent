@@ -89,6 +89,7 @@ import {
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
+import { claimCompactionCommand } from "../lib/compaction-command-admission";
 import {
   loadComposerDraft,
   markComposerSubmission,
@@ -784,8 +785,12 @@ export function Composer({
 
   const compactChat = React.useCallback(
     async (engine?: CompactionEngine) => {
-      if (!onCompactChat || sessionCommandBusy) return;
-      sessionCommandBusyRef.current = true;
+      if (
+        !onCompactChat ||
+        !claimCompactionCommand(sessionCommandBusyRef, sessionCommandBusy, compactionActive)
+      ) {
+        return;
+      }
       setCompactionBusy(true);
       setSessionCommandStatus(
         engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
@@ -821,7 +826,7 @@ export function Composer({
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
-    [inputRef, onCompactChat, sessionCommandBusy],
+    [compactionActive, inputRef, onCompactChat, sessionCommandBusy],
   );
 
   const createWorktreeFromSlash = React.useCallback(

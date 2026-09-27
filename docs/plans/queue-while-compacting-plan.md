@@ -19,7 +19,9 @@ composer, so only the standalone command was a dead end.
   `N queued · Sends after compaction`.
 - `/compact` is consumed as soon as its asynchronous action starts, leaving a
   clear composer for follow-up text while compaction runs. Other slash session
-  actions stay blocked. Attachments and voice input work during compaction.
+  actions stay blocked. Synchronous admission allows only one compaction at a
+  time, including same-tick activations and attempts after a composer remount.
+  Attachments and voice input work during compaction.
   Export, clone, fork, logout and worktree creation still keep the composer
   read-only.
 - The per-chat `ChatMessageQueue` owns a `holdReason: "compaction"` flag. A

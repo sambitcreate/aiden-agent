@@ -583,15 +583,22 @@ test("messages sent during compaction queue behind it and survive a failed compa
 
   // Hold compaction open so the queue can be driven while it runs.
   await app.evaluate(({ ipcMain }) => {
-    const state = { finish: (_result: unknown) => {} };
+    const state = { finish: (_result: unknown) => {}, starts: 0, active: false };
     Object.assign(globalThis, { compactionQueueTest: state });
     ipcMain.removeHandler("chats:compact");
     ipcMain.handle(
       "chats:compact",
-      () =>
-        new Promise((resolve) => {
-          state.finish = resolve;
-        }),
+      () => {
+        state.starts += 1;
+        if (state.active) return { compacted: false, reason: "busy" };
+        state.active = true;
+        return new Promise((resolve) => {
+          state.finish = (result) => {
+            state.active = false;
+            resolve(result);
+          };
+        });
+      },
     );
   });
   const finishCompaction = (result: unknown) =>
@@ -600,6 +607,8 @@ test("messages sent during compaction queue behind it and survive a failed compa
         globalThis as unknown as { compactionQueueTest: { finish: (result: unknown) => void } }
       ).compactionQueueTest.finish(value);
     }, result);
+  const compactionStarts = () =>
+    app.evaluate(() => (globalThis as unknown as { compactionQueueTest: { starts: number } }).compactionQueueTest.starts);
   const startCompaction = async () => {
     await composer.fill("/compact");
     await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
@@ -615,6 +624,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
 
   // A failed compaction keeps the queued message and pauses delivery.
   await startCompaction();
+  await expect.poll(compactionStarts).toBe(1);
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
   await page
     .locator("[data-sidebar]")
@@ -628,6 +638,16 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await composer.press("Enter");
   await expect(composer).toHaveValue("");
   await expect(queue.getByRole("status")).toHaveText("1 queued · Sends after compaction");
+  // The new Composer has no local busy ref; its queue-owned hold must still
+  // block another `/compact`, which could otherwise return `busy` and release
+  // the first operation's hold.
+  await composer.fill("/compact");
+  await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await expect.poll(compactionStarts).toBe(1);
+  await expect(queue.getByRole("status")).toHaveText("1 queued · Sends after compaction");
+  expect(sentTexts()).toEqual([]);
   await finishCompaction({ compacted: false, reason: "compaction_failed" });
   await expect(queue.getByRole("status")).toHaveText("1 queued · Paused");
   await expect(queue.getByRole("listitem")).toContainText("During compaction retry");
@@ -640,6 +660,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
 
   // A completed compaction releases every queued message in order.
   await startCompaction();
+  await expect.poll(compactionStarts).toBe(2);
   await composer.fill("During compaction first");
   await composer.press("Enter");
   await composer.fill("During compaction second");
