@@ -141,6 +141,7 @@ fun AidenChatDetailScreen(
     val currentAgentRoster by viewModel.agentRoster.collectAsState()
     val selectedAgentRoster by viewModel.selectedAgentRoster.collectAsState()
     val agentRosterHistory by viewModel.agentRosterHistory.collectAsState()
+    val interruptingAgentIds by viewModel.interruptingAgentIds.collectAsState()
     val progressConnectionState by viewModel.progressConnectionState.collectAsState()
     // The coordinator updates /server after grant negotiation, which drives the
     // progress capability gate and makes the controls appear without a reload.
@@ -826,8 +827,21 @@ fun AidenChatDetailScreen(
             }
         }
     }
-    selectedAgent?.let { agent ->
-        AidenAgentDetailSheet(agent = agent, onDismiss = { selectedAgent = null })
+    selectedAgent?.let { opened ->
+        // Follow the live current-turn roster so a confirmed stop (or any other
+        // update) replaces the snapshot the sheet was opened with.
+        val agent = currentAgentRoster?.agents?.firstOrNull { it.agentId == opened.agentId } ?: opened
+        val isStopping = agent.agentId in interruptingAgentIds
+        AidenAgentDetailSheet(
+            agent = agent,
+            stopControl = when {
+                isStopping -> AidenAgentStopControl.STOPPING
+                viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
+                else -> AidenAgentStopControl.HIDDEN
+            },
+            onStop = { viewModel.interruptAgent(agent) },
+            onDismiss = { selectedAgent = null }
+        )
     }
 
     if (showRedirectConfirm) {

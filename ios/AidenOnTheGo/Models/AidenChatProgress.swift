@@ -385,7 +385,9 @@ struct AidenChatProgressSheet: View {
         } else {
             let roster = model.agentRoster(for: selectedTurnId)
             VStack(spacing: 0) {
-                Text("Read-only status from the Mac. Private child transcripts stay on the Mac.")
+                Text(model.canInterruptAgents
+                    ? "Live status from the Mac. You can stop a running agent; private child transcripts stay on the Mac."
+                    : "Read-only status from the Mac. Private child transcripts stay on the Mac.")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -426,7 +428,7 @@ struct AidenChatProgressSheet: View {
                     .listStyle(.insetGrouped)
                     .navigationDestination(for: String.self) { agentId in
                         if let agent = roster.agents.first(where: { $0.agentId == agentId }) {
-                            AidenAgentDetailView(agent: agent)
+                            AidenAgentDetailView(model: model, agent: agent)
                         } else {
                             AidenProgressUnavailableView(text: "This agent is no longer in the selected roster.")
                         }
@@ -572,10 +574,43 @@ private struct AidenAgentRosterRow: View {
 
 private struct AidenAgentDetailView: View {
     @Environment(\.aidenPalette) private var palette
-    let agent: AidenRemoteChatAgent
+    let model: AidenChatViewModel
+    let initialAgent: AidenRemoteChatAgent
+    @State private var confirmsStop = false
+
+    init(model: AidenChatViewModel, agent: AidenRemoteChatAgent) {
+        self.model = model
+        self.initialAgent = agent
+    }
+
+    /// Follow the live current-turn roster so a confirmed stop (or any other
+    /// update) replaces the snapshot the row was opened with.
+    private var agent: AidenRemoteChatAgent {
+        model.agentRoster?.agents.first { $0.agentId == initialAgent.agentId } ?? initialAgent
+    }
 
     var body: some View {
         List {
+            if model.canInterrupt(agent) || model.interruptingAgentIds.contains(agent.agentId) {
+                Section {
+                    Button(role: .destructive) {
+                        confirmsStop = true
+                    } label: {
+                        HStack {
+                            Label("Stop agent", systemImage: "stop.circle")
+                            if model.interruptingAgentIds.contains(agent.agentId) {
+                                Spacer()
+                                ProgressView()
+                                    .accessibilityLabel(Text("Stopping"))
+                            }
+                        }
+                    }
+                    .disabled(!model.canInterrupt(agent))
+                    .accessibilityHint(Text("Asks the Mac to stop this delegated agent. The rest of the run continues."))
+                } footer: {
+                    Text("The Mac stops only this agent. The main run and other agents keep going.")
+                }
+            }
             Section("Assignment") {
                 LabeledContent("Role", value: roleLabel)
                 LabeledContent("Status", value: stateLabel)
@@ -615,6 +650,19 @@ private struct AidenAgentDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(agent.label)
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            Text("Stop \(agent.label)?"),
+            isPresented: $confirmsStop,
+            titleVisibility: .visible
+        ) {
+            Button("Stop agent", role: .destructive) {
+                let target = agent
+                Task { await model.interruptAgent(target) }
+            }
+            Button("Keep running", role: .cancel) {}
+        } message: {
+            Text("The Mac stops this delegated agent. You cannot resume it from here.")
+        }
     }
 
     private var roleLabel: String { agent.role.rawValue.capitalized }

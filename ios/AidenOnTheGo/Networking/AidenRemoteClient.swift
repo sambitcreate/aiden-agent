@@ -76,6 +76,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatRunInputFeature = "chat-run-input-v1"
     static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
     static let chatSkillsFeature = "chat-skills-v1"
+    static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -219,6 +220,12 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatSkills: Bool {
         features.contains(Self.chatSkillsFeature)
+    }
+
+    /// The Mac can stop one running delegated agent through its own subagent
+    /// stop path. Advertised only alongside chat-agents-v1.
+    var supportsChatAgentInterrupt: Bool {
+        supportsChatAgents && features.contains(Self.chatAgentInterruptFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -779,6 +786,24 @@ final class AidenRemoteClient: @unchecked Sendable {
         if let turnId, value.turnId != turnId {
             throw AidenRemoteClientError.invalidResponse
         }
+        return value
+    }
+
+    /// Stops one running delegated agent in the chat's current turn and returns
+    /// the refreshed current-turn roster. Stopping an agent that already
+    /// finished is an idempotent no-op on the Mac, so no idempotency key is sent.
+    func interruptAgent(
+        chatId: String,
+        agentId: String
+    ) async throws -> AidenRemoteChatAgentRoster {
+        guard agentId.wholeMatch(of: /^[A-Za-z0-9._:-]{1,128}$/) != nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let value: AidenRemoteChatAgentRoster = try await send(
+            method: "POST",
+            path: ["chats", chatId, "agents", agentId, "interrupt"]
+        )
+        guard value.chatId == chatId else { throw AidenRemoteClientError.invalidResponse }
         return value
     }
 
