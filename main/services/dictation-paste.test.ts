@@ -189,3 +189,21 @@ test(
     assert.match(await runJxa(SECURE_INPUT_PROBE_SCRIPT), /^(secure|clear)$/);
   },
 );
+
+test(
+  "documented Secure Input probe follows a process-owned enable/disable cycle",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const result = await runJxa(`ObjC.import("Carbon");
+var before = Boolean($.IsSecureEventInputEnabled());
+var status = $.EnableSecureEventInput();
+if (status !== 0) throw new Error("Could not enable Secure Input for test");
+var enabled;
+try { enabled = Boolean($.IsSecureEventInputEnabled()); }
+finally { $.DisableSecureEventInput(); }
+JSON.stringify({before: before, enabled: enabled, after: Boolean($.IsSecureEventInputEnabled())});`);
+    const state = JSON.parse(result) as { before: boolean; enabled: boolean; after: boolean };
+    assert.equal(state.enabled, true);
+    assert.equal(state.after, state.before);
+  },
+);
