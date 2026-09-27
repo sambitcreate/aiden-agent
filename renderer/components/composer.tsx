@@ -1975,10 +1975,10 @@ export function Composer({
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
-            {sessionCommandStatus ? (
+            {sessionCommandStatus || compactionActive ? (
               <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
                 <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
-                  {sessionCommandStatus}
+                  {sessionCommandStatus ?? "Compacting chat…"}
                   {queueDuringCompaction ? " Messages you send now wait until it finishes." : null}
                 </Text>
                 {compactionActive && onCancelCompact ? (

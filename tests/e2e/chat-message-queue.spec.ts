@@ -620,6 +620,8 @@ test("messages sent during compaction queue behind it and survive a failed compa
     .locator("[data-sidebar]")
     .getByRole("button", { name: /^Deterministic E2E response/u })
     .click();
+  await expect(page.getByRole("status").filter({ hasText: "Compacting chat…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
   await expect(composer).toBeEditable();
   await composer.fill("During compaction retry");
   await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
