@@ -23,6 +23,10 @@ Model Pad measures the actual scrollport and remaining column. Axis captions and
 
 Duplicate workspace names receive a short stable ID suffix in both visible and accessible names. Worktree branches and folderless workspace identity remain available when paths are hidden. Destructive confirmation and permission-scope review still identify their exact filesystem target.
 
+## Chat width
+
+`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, and composer stay aligned. The dock inset still reserves the floating Aiden mark's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+
 ## Icons and illustrations
 
 Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.

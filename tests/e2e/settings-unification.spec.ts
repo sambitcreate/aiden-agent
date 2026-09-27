@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
@@ -249,6 +249,80 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
   await resizeWindow(390);
   await expect.poll(tileColumns).toBe(2);
   await expect(modeIcon()).toBeHidden();
+});
+
+test("chat width setting resizes the transcript and composer together and persists", async ({
+  aiden,
+}) => {
+  test.setTimeout(120_000);
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1800);
+
+  const prompt = "Chat width geometry probe";
+  await page.locator("textarea").fill(prompt);
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true }).first()).toBeVisible();
+
+  const widths = () =>
+    page.evaluate((text) => {
+      // The transcript column is the shared chat column holding the sent message.
+      const transcript = [...document.querySelectorAll(".chat-content-column")].find(
+        (element) =>
+          !element.matches('[data-browser-composer-inset="true"]') && element.textContent?.includes(text),
+      );
+      const composer = document.querySelector('[data-browser-composer-inset="true"]');
+      if (!transcript || !composer) return null;
+      const a = transcript.getBoundingClientRect();
+      const b = composer.getBoundingClientRect();
+      return {
+        transcript: Math.round(a.width),
+        composer: Math.round(b.width),
+        centerOffset: Math.abs(Math.round(a.left + a.width / 2 - (b.left + b.width / 2))),
+      };
+    }, prompt);
+
+  const chooseWidth = async (label: string) => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
+    const option = page
+      .getByRole("radiogroup", { name: "Chat width", exact: true })
+      .getByRole("radio", { name: label, exact: true });
+    await option.click();
+    await expect(option).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await expect.poll(widths).not.toBeNull();
+  };
+
+  const measured: Record<string, number> = {};
+  for (const label of ["Narrow", "Default", "Wide", "Full"]) {
+    await chooseWidth(label);
+    await expect.poll(async () => {
+      const current = await widths();
+      return current !== null && current.transcript === current.composer && current.centerOffset <= 1;
+    }).toBe(true);
+    measured[label] = (await widths())!.transcript;
+  }
+  expect(measured.Narrow).toBeLessThan(measured.Default);
+  expect(measured.Default).toBeLessThan(measured.Wide);
+  expect(measured.Wide).toBeLessThan(measured.Full);
+
+  // The preference is durable: a relaunch restores the same column width.
+  await chooseWidth("Wide");
+  await expect.poll(async () => {
+    const appearance = JSON.parse(
+      await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+    ).settings?.appearance;
+    return appearance?.chatWidth;
+  }).toBe("wide");
+  page = await aiden.relaunch();
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await page.getByText("Chat width geometry probe").first().click();
+  await expect.poll(async () => (await widths())?.transcript).toBe(measured.Wide);
 });
 
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({
