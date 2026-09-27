@@ -1,6 +1,6 @@
 # Aiden CLI — pi-based headless Aiden Agent
 
-Build `aiden`, a standalone CLI/TUI inside this repo (`packages/cli/`) that runs the Aiden feature set on any machine — including headless Linux servers — on top of the pi coding agent (`@earendil-works/pi-coding-agent`, MIT, pinned to the same 0.84.4 line as the desktop app's `pi-agent-core`/`pi-ai`).
+Build `aiden`, a standalone CLI/TUI inside this repo (`packages/cli/`) that runs the Aiden feature set on any machine — including headless Linux servers — on top of the pi coding agent (`@earendil-works/pi-coding-agent`, MIT, pinned to the same 0.87.1 line as the desktop app's `pi-agent-core`/`pi-ai` since #246).
 
 The TUI is pi's own interactive TUI customized with Aiden themes and (later) extension UI; headless use rides pi's print/JSON/RPC modes. Interop with Aiden Desktop is phased in later (shared stores/formats, then live coordination).
 

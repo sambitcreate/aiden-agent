@@ -19,3 +19,5 @@ Failed-recovery deletion follow-up: after fencing admission and draining loads/w
 Dotted-ID recovery isolation follow-up: DataStore recovery and PR deletion share a complete-basename matcher with the fixed hash/operation/suffix fields, preventing chat-1 from consuming chat-1.json recovery files. Cached and cold deletion regressions cover both directions and both artifact suffixes; startup recovery also preserves sibling bytes. Validation: 98 focused PR tests, 255 portable-config/storage tests, 103 service-boundary tests, TypeScript and Electron build pass. Both independent Sol reviews are clean; current-head hosted checks remain pending.
 
 Recovery-token follow-up: artifact ownership also requires the lowercase UUIDv4 operation token emitted by randomUUID. Non-UUID, wrong-version and wrong-variant lookalikes remain untouched during recovery and deletion. Existing recovery fixtures now use generated-format UUIDs. Validation: 99 focused PR tests, 255 portable-config/storage tests, TypeScript and Electron build pass.
+
+Status (2026-09-27 plan refresh): PR #184 merged 2026-09-23 and shipped in 0.43.0; plan moved to docs/plans/completed/.

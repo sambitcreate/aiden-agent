@@ -1,6 +1,6 @@
 # Scoped MCP server instructions
 
-Status: Implemented for review, 2026-09-22. Baseline origin/main `c8c09e0d2`. This is a separate slice from green skill-policy PR #214 and capability-status PR #226.
+Status: Complete — merged in [PR #229](https://github.com/sambitcreate/aiden-agent/pull/229) on 2026-09-23 and shipped in 0.43.0, alongside skill-policy PR #214 and capability-status PR #226. Original baseline: origin/main `c8c09e0d2`.
 
 ## Behavior and authority
 

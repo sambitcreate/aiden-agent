@@ -14,6 +14,10 @@
 - **Platforms:** iOS Simulator only for v1. Keep `platform` in every contract so Android can slot in later behind the same `DeviceHost` seam.
 - **Also in scope:** SSH device hosts (Phase 5) and 3D device frames (Phase 6). The mobile companion preview is out of scope.
 
+## Status (2026-09-27)
+
+Phases 0–7 merged to main in [PR #252](https://github.com/sambitcreate/aiden-agent/pull/252) on 2026-09-26 and shipped in 0.50.0 behind the `AIDEN_EXPERIMENTAL_DEVICES` flag. Real-Mac acceptance for Phases 4–6 remains before the flag defaults on; SSH hosts are a later follow-up.
+
 ## Status (2026-09-25)
 
 Phases 0–3 and 3.5 are implemented and uncommitted on `worktree-main-20260925`. The spike results are in [simulator-devices-spike.md](simulator-devices-spike.md). The Phase 2 acceptance script passed on a real Mac with Xcode. Phase 3 has its own task plan, [simulator-devices-phase-3.md](simulator-devices-phase-3.md), and an Electron E2E against a fake hub. Phase 4 is implemented except its manual real-simulator exit gate; 5–7 remain. See "Phase 2 as built" and "Phase 3 as built" below for where the code differs from the task text.
