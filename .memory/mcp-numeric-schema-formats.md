@@ -15,3 +15,5 @@ Tests: `main/services/mcp-tool-schema.test.ts` (in `test:mcp`) uses realistic sc
 ## Review follow-up
 
 Draft-07 schema-valued dependencies now normalize too; property-name dependency lists remain unchanged. Added strict-Ajv regression and registered the suite in the core-git CI lane. Focused schema tests (7) and CI policy tests (46) pass.
+
+Independent review identified a silent 64-level cutoff that could leave numeric formats unnormalized. Traversal now uses an iterative worklist and weak object-copy map, preserving raw identity and schema-keyword boundaries while normalizing deep schemas fully; a 2,000-level regression covers this case.

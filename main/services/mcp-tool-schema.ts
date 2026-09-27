@@ -90,32 +90,47 @@ function tighten(
   schema[key] = key === "minimum" ? Math.max(current, bound) : Math.min(current, bound);
 }
 
-function normalizeSchema(value: unknown, depth: number): unknown {
-  if (depth > 64 || !isRecord(value)) return value;
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)) {
-      next[key] = Object.fromEntries(
-        Object.entries(entry).map(([name, schema]) => [name, normalizeSchema(schema, depth + 1)]),
-      );
-    } else if (SUBSCHEMA_ARRAY_KEYWORDS.has(key) && Array.isArray(entry)) {
-      next[key] = entry.map((schema) => normalizeSchema(schema, depth + 1));
-    } else if (SUBSCHEMA_KEYWORDS.has(key) && isRecord(entry)) {
-      next[key] = normalizeSchema(entry, depth + 1);
-    } else {
-      next[key] = entry;
+function normalizeSchema(value: unknown): unknown {
+  const copies = new WeakMap<object, Record<string, unknown>>();
+  const pending: Array<{ source: Record<string, unknown>; target: Record<string, unknown> }> = [];
+  const copySchema = (source: unknown): unknown => {
+    if (!isRecord(source)) return source;
+    const existing = copies.get(source);
+    if (existing) return existing;
+    const target: Record<string, unknown> = {};
+    copies.set(source, target);
+    pending.push({ source, target });
+    return target;
+  };
+  const result = copySchema(value);
+  // A worklist normalizes deep schemas completely without consuming the JS call
+  // stack. Reused schema objects are copied once; raw identity stays untouched.
+  while (pending.length > 0) {
+    const { source, target } = pending.pop()!;
+    for (const [key, entry] of Object.entries(source)) {
+      if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)) {
+        target[key] = Object.fromEntries(
+          Object.entries(entry).map(([name, schema]) => [name, copySchema(schema)]),
+        );
+      } else if (SUBSCHEMA_ARRAY_KEYWORDS.has(key) && Array.isArray(entry)) {
+        target[key] = entry.map(copySchema);
+      } else if (SUBSCHEMA_KEYWORDS.has(key) && isRecord(entry)) {
+        target[key] = copySchema(entry);
+      } else {
+        target[key] = entry;
+      }
+    }
+    const format = typeof target.format === "string" ? target.format.toLowerCase() : undefined;
+    const range = format === undefined ? undefined : NUMERIC_FORMAT_RANGES.get(format);
+    if (range) {
+      delete target.format;
+      if (allowsNumbers(target.type)) {
+        tighten(target, "minimum", range.minimum);
+        tighten(target, "maximum", range.maximum);
+      }
     }
   }
-  const format = typeof next.format === "string" ? next.format.toLowerCase() : undefined;
-  const range = format === undefined ? undefined : NUMERIC_FORMAT_RANGES.get(format);
-  if (range) {
-    delete next.format;
-    if (allowsNumbers(next.type)) {
-      tighten(next, "minimum", range.minimum);
-      tighten(next, "maximum", range.maximum);
-    }
-  }
-  return next;
+  return result;
 }
 
 /**
@@ -123,5 +138,5 @@ function normalizeSchema(value: unknown, depth: number): unknown {
  * by portable range constraints. Non-object input is returned unchanged.
  */
 export function normalizeMcpToolInputSchema<T>(schema: T): T {
-  return normalizeSchema(schema, 0) as T;
+  return normalizeSchema(schema) as T;
 }

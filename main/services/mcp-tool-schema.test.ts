@@ -210,3 +210,18 @@ test("draft-07 dependencies normalize schemas while preserving property lists", 
   assert.equal(validate({ mode: true, retries: 256 }), false);
   assert.equal(validate({ mode: true, retries: 255 }), true);
 });
+
+
+test("deep schemas normalize every numeric leaf without a recursive depth cutoff", () => {
+  const leaf = { type: "integer", format: "uint32" };
+  let schema: Record<string, unknown> = leaf;
+  for (let depth = 0; depth < 2_000; depth += 1) {
+    schema = { type: "object", properties: { child: schema } };
+  }
+  let normalized = normalizeMcpToolInputSchema(schema);
+  for (let depth = 0; depth < 2_000; depth += 1) {
+    normalized = (normalized.properties as Record<string, Record<string, unknown>>).child;
+  }
+  assert.deepEqual(normalized, { type: "integer", minimum: 0, maximum: 4_294_967_295 });
+  assert.deepEqual(leaf, { type: "integer", format: "uint32" });
+});
