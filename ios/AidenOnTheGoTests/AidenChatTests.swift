@@ -950,12 +950,19 @@ final class AidenChatTests: XCTestCase {
             }
             return fixture.response(request)
         }
-        await model.load()
+        await model.load(observeProgress: false)
         model.draft = "Hello"
         XCTAssertTrue(model.canSend)
         let arrived = expectation(description: "consumer events held")
-        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/events") { arrived.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/streams/stream-recovery/events") { arrived.fulfill() }
         defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        // The chat's unrelated progress stream also ends in `/events`. Exercise
+        // it while the stream-consumer hold is armed to prove it cannot steal
+        // the intended gate.
+        model.startProgressObservation()
+        try await waitForProgressRequestCount(1)
+        try await waitForProgressObservationToStop(model)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
         await model.send()
         await fulfillment(of: [arrived], timeout: 2)
         let admitted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
