@@ -169,6 +169,34 @@ export class SubagentControlMainV2 {
     ).state;
   }
 
+  /**
+   * Trusted main-process stop for callers that already authorized the chat
+   * through their own boundary (Aiden Remote). The caller presents only the
+   * persisted chat/workspace scope and a run ID; the renderer owner document
+   * and authority revision stay private to this registry. Only `stop` is
+   * reachable this way; `undefined` means no live control binding exists for
+   * that chat (unknown run, legacy run, or a binding evicted after finishing).
+   */
+  async stopForChat(
+    scope: Omit<SubagentControlDocumentScopeV2, "ownerDocumentId">,
+    runId: string,
+  ): Promise<Extract<SubagentManagementResultV2, { action: "stop" }> | undefined> {
+    const binding = this.bindings.get(runId);
+    if (
+      !binding ||
+      binding.chatId !== scope.chatId ||
+      binding.workspaceId !== scope.workspaceId
+    ) {
+      return undefined;
+    }
+    const result = await this.executeForDocument(
+      { ...scope, ownerDocumentId: binding.ownerDocumentId },
+      { version: 2, action: "stop", runId },
+    );
+    if (result.action !== "stop") throw new Error("Subagent stop returned an unexpected result.");
+    return result;
+  }
+
   async executeForDocument(
     scope: SubagentControlDocumentScopeV2,
     value: SubagentManagementRequestV2 | unknown,
