@@ -1404,3 +1404,7 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Mobile remembered model selection
+- The worktree-isolation guard refuses any command whose arguments contain a runtime value (`$HOME`, `$f`, `$(ls ...)`), including `ANDROID_HOME=$HOME/...` before `./gradlew` and `xcresulttool --path "$(ls -t ...)"`. Spell out absolute paths and list first, then pass the literal name.
+- Stable `xcrun simctl` is missing in agent shells ("unable to find utility simctl"); prefix both `simctl` and `xcodebuild test` with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. `xcodebuild test -quiet` prints little, so read pass/fail from `xcresulttool get test-results summary`.

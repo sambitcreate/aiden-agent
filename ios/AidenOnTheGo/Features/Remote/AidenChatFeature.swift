@@ -388,7 +388,8 @@ enum AidenChatModelAuthority {
         catalog: AidenModelCatalog?,
         selectedProviderId: String?,
         selectedModelId: String?,
-        selectedThinkingLevel: String?
+        selectedThinkingLevel: String?,
+        remembered: AidenChatModelSelection? = nil
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -407,6 +408,9 @@ enum AidenChatModelAuthority {
                 thinkingLevel: selectedThinkingLevel
             )
         }
+        if let remembered = rememberedSelection(remembered, in: catalog) {
+            return remembered
+        }
         var providerId = selectedProviderId
         if providerId == nil || !catalog.providers.contains(where: { $0.id == providerId }) {
             providerId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
@@ -422,6 +426,25 @@ enum AidenChatModelAuthority {
             modelId: modelId,
             thinkingLevel: selectedThinkingLevel ?? model?.effectiveThinkingLevel
         )
+    }
+
+    /// The per-host remembered choice applies only while the host's current
+    /// inventory still offers it as a visible provider/model pair. A missing
+    /// or hidden pair returns nil so the caller falls back to the chat's pair
+    /// and then the host defaults; a stale thinking level falls back to the
+    /// model's own default rather than sending an unsupported level.
+    static func rememberedSelection(
+        _ remembered: AidenChatModelSelection?,
+        in catalog: AidenModelCatalog
+    ) -> AidenChatModelSelection? {
+        guard let providerId = remembered?.providerId,
+              let modelId = remembered?.modelId,
+              let provider = catalog.visibleProviders.first(where: { $0.id == providerId }),
+              let model = provider.visibleModels.first(where: { $0.id == modelId }) else { return nil }
+        let thinkingLevel = remembered?.thinkingLevel.flatMap { level in
+            model.thinkingLevels?.contains(level) == true ? level : nil
+        } ?? model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: thinkingLevel)
     }
 
     static func turnSelection(
@@ -1068,6 +1091,10 @@ final class AidenChatViewModel {
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
+    private let modelPreferenceStore: AidenModelPreferenceStore
+    /// Set once the user picks a model in this chat; from then on the
+    /// in-session choice wins over the remembered per-host preference.
+    @ObservationIgnored private var hasExplicitModelSelection = false
     private let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -1207,6 +1234,7 @@ final class AidenChatViewModel {
         hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
+        modelPreferenceStore: AidenModelPreferenceStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
@@ -1221,6 +1249,7 @@ final class AidenChatViewModel {
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.modelPreferenceStore = modelPreferenceStore
         self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
@@ -1248,6 +1277,7 @@ final class AidenChatViewModel {
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        modelPreferenceStore = .shared
         hapticScope = UUID()
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
@@ -1874,6 +1904,7 @@ final class AidenChatViewModel {
         selectedProviderId = providerId
         selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     func selectModel(_ modelId: String) {
@@ -1881,6 +1912,22 @@ final class AidenChatViewModel {
         guard selectedModelId != modelId else { return }
         selectedModelId = modelId
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
+    }
+
+    /// An explicit composer choice becomes this paired Mac's remembered
+    /// default for later Workspace chats and launches.
+    private func rememberExplicitModelSelection() {
+        hasExplicitModelSelection = true
+        guard !isReadOnlyFixture, !chat.isBotChat, !instanceId.isEmpty else { return }
+        modelPreferenceStore.remember(
+            AidenChatModelSelection(
+                providerId: selectedProviderId,
+                modelId: selectedModelId,
+                thinkingLevel: selectedThinkingLevel
+            ),
+            for: instanceId
+        )
     }
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
@@ -1899,12 +1946,14 @@ final class AidenChatViewModel {
     }
 
     func selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
+        guard !chat.isBotChat else { return }
         let next = [providerId, modelId, thinkingLevel ?? ""]
         let current = [selectedProviderId ?? "", selectedModelId ?? "", selectedThinkingLevel ?? ""]
         guard next != current else { return }
         selectedProviderId = providerId
         selectedModelId = modelId
         selectedThinkingLevel = thinkingLevel
+        rememberExplicitModelSelection()
     }
 
     func send() async {
@@ -2884,7 +2933,10 @@ final class AidenChatViewModel {
             catalog: catalog,
             selectedProviderId: selectedProviderId,
             selectedModelId: selectedModelId,
-            selectedThinkingLevel: selectedThinkingLevel
+            selectedThinkingLevel: selectedThinkingLevel,
+            remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
+                ? nil
+                : modelPreferenceStore.selection(for: instanceId)
         )
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId

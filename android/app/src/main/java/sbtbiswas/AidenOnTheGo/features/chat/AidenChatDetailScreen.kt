@@ -134,6 +134,10 @@ fun AidenChatDetailScreen(
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val selectedSkill by viewModel.selectedSkill.collectAsState()
+    val modelCatalog by viewModel.catalog.collectAsState()
+    val selectedProviderId by viewModel.selectedProviderId.collectAsState()
+    val selectedModelId by viewModel.selectedModelId.collectAsState()
+    val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsState()
     val composerSuggestions by viewModel.composerSuggestions.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
@@ -667,11 +671,19 @@ fun AidenChatDetailScreen(
                             )
                         )
                     },
-                    selectedProvider = null,
-                    selectedModel = null,
-                    selectedThinkingLevel = null,
-                    availableProviders = emptyList(),
-                    onSelectModel = null,
+                    // Bot chats keep their Bot-owned model; only Workspace
+                    // chats expose the composer picker.
+                    selectedProvider = if (chat?.isBotChat == true) null
+                        else modelCatalog?.providers?.firstOrNull { it.id == selectedProviderId },
+                    selectedModel = if (chat?.isBotChat == true) null
+                        else modelCatalog?.providers?.firstOrNull { it.id == selectedProviderId }
+                            ?.models?.firstOrNull { it.id == selectedModelId },
+                    selectedThinkingLevel = if (chat?.isBotChat == true) null else selectedThinkingLevel,
+                    availableProviders = if (chat == null || chat?.isBotChat == true) emptyList()
+                        else modelCatalog?.visibleProviders.orEmpty(),
+                    onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
+                        viewModel.selectModel(provider.id, model.id, level)
+                    },
                     placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,

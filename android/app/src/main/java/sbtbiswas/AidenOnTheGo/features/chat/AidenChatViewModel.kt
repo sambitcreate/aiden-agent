@@ -171,6 +171,8 @@ class AidenChatViewModel(
     private val boundClient = coordinator.client.value
     private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
     private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    private val modelPreferenceStore = coordinator.modelPreferenceStore
+    private var hasExplicitModelSelection = false
 
     private fun activeClient(): AidenRemoteClient? =
         boundClient?.takeIf { coordinator.client.value === it }
@@ -678,6 +680,7 @@ class AidenChatViewModel(
         val firstModel = provider?.visibleModels?.firstOrNull()
         _selectedModelId.value = firstModel?.id
         _selectedThinkingLevel.value = firstModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     fun selectModel(modelId: String) {
@@ -688,10 +691,44 @@ class AidenChatViewModel(
         val provider = catalog?.providers?.firstOrNull { it.id == _selectedProviderId.value }
         val model = provider?.models?.firstOrNull { it.id == modelId }
         _selectedThinkingLevel.value = model?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
+    }
+
+    /** Composer picker choice: a null level means the model's own default. */
+    fun selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
+        val currentChat = _chat.value
+        if (currentChat != null && currentChat.isBotChat) return
+        val model = _catalog.value?.providers?.firstOrNull { it.id == providerId }
+            ?.models?.firstOrNull { it.id == modelId }
+        _selectedProviderId.value = providerId
+        _selectedModelId.value = modelId
+        _selectedThinkingLevel.value = thinkingLevel ?: model?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     fun selectThinkingLevel(level: String?) {
+        val currentChat = _chat.value
+        if (currentChat != null && currentChat.isBotChat) return
         _selectedThinkingLevel.value = level
+        rememberExplicitModelSelection()
+    }
+
+    /**
+     * An explicit composer choice becomes this paired Mac's remembered
+     * default for later Workspace chats and launches, and it stops this chat
+     * from being re-seeded by the remembered value on catalog refreshes.
+     */
+    private fun rememberExplicitModelSelection() {
+        hasExplicitModelSelection = true
+        if (instanceId.isEmpty()) return
+        modelPreferenceStore.remember(
+            instanceId,
+            AidenChatModelSelection(
+                providerId = _selectedProviderId.value,
+                modelId = _selectedModelId.value,
+                thinkingLevel = _selectedThinkingLevel.value
+            )
+        )
     }
 
     fun loadChat() {
@@ -733,7 +770,9 @@ class AidenChatViewModel(
             catalog = _catalog.value,
             selectedProviderId = _selectedProviderId.value,
             selectedModelId = _selectedModelId.value,
-            selectedThinkingLevel = _selectedThinkingLevel.value
+            selectedThinkingLevel = _selectedThinkingLevel.value,
+            remembered = if (hasExplicitModelSelection || instanceId.isEmpty()) null
+            else modelPreferenceStore.selection(instanceId)
         )
         _selectedProviderId.value = selection.providerId
         _selectedModelId.value = selection.modelId

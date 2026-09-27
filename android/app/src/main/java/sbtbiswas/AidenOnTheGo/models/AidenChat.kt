@@ -1364,7 +1364,8 @@ object AidenChatModelAuthority {
         catalog: AidenModelCatalog?,
         selectedProviderId: String?,
         selectedModelId: String?,
-        selectedThinkingLevel: String?
+        selectedThinkingLevel: String?,
+        remembered: AidenChatModelSelection? = null
     ): AidenChatModelSelection {
         if (chat.isBotChat) {
             val provider = catalog?.providers?.firstOrNull { it.id == chat.providerId }
@@ -1384,6 +1385,8 @@ object AidenChatModelAuthority {
             )
         }
 
+        rememberedSelection(catalog, remembered)?.let { return it }
+
         var providerId = selectedProviderId
         if (providerId == null || catalog.providers.none { it.id == providerId }) {
             providerId = catalog.defaults["providerId"] ?: catalog.visibleProviders.firstOrNull()?.id
@@ -1399,6 +1402,26 @@ object AidenChatModelAuthority {
             modelId = modelId,
             thinkingLevel = selectedThinkingLevel ?: model?.effectiveThinkingLevel
         )
+    }
+
+    /**
+     * The per-host remembered choice applies only when the host's current
+     * inventory still offers it as a visible provider/model pair. A missing
+     * or hidden pair returns null so the caller falls back to the chat's pair
+     * and then the host defaults; a stale thinking level falls back to the
+     * model's own default rather than sending an unsupported level.
+     */
+    fun rememberedSelection(
+        catalog: AidenModelCatalog,
+        remembered: AidenChatModelSelection?
+    ): AidenChatModelSelection? {
+        val providerId = remembered?.providerId ?: return null
+        val modelId = remembered.modelId ?: return null
+        val provider = catalog.visibleProviders.firstOrNull { it.id == providerId } ?: return null
+        val model = provider.visibleModels.firstOrNull { it.id == modelId } ?: return null
+        val levels = model.thinkingLevels.orEmpty()
+        val thinkingLevel = remembered.thinkingLevel?.takeIf { it in levels } ?: model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId, modelId, thinkingLevel)
     }
 
     fun turnSelection(
