@@ -101,3 +101,12 @@ test("dictionary matching is independent of the host Turkish locale", () => {
   const entries = parseDictationDictionary([{ from: "IĞDIR", to: "Iğdır" }]);
   assert.equal(applyDictationDictionary("IĞDIR", entries), "Iğdır");
 });
+
+test("replacement selection follows Unicode regex folding without rewriting rule spelling", () => {
+  assert.equal(
+    applyDictationDictionary("İSTANBUL", [{ from: "İSTANBUL", to: "Istanbul" }]),
+    "Istanbul",
+  );
+  assert.equal(applyDictationDictionary("ſ", [{ from: "s", to: "S" }]), "S");
+  assert.equal(applyDictationDictionary("ς", [{ from: "Σ", to: "sigma" }]), "sigma");
+});

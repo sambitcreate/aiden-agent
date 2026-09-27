@@ -62,23 +62,26 @@ export function applyDictationDictionary(
   entries: readonly DictationDictionaryEntry[],
 ): string {
   if (!text || entries.length === 0) return text;
-  const replacements = new Map<string, string>();
+  const replacements = new Map<string, { from: string; to: string }>();
   for (const entry of entries) {
     const key = matchKey(entry.from);
     if (!key || replacements.has(key)) continue;
-    replacements.set(key, entry.to || entry.from);
+    replacements.set(key, { from: entry.from, to: entry.to || entry.from });
   }
   if (replacements.size === 0) return text;
-  const alternatives = [...replacements.keys()]
-    .sort((a, b) => b.length - a.length)
-    .map((key) => key.split(" ").map(escapeRegExp).join("\\s+"));
+  const rules = [...replacements.values()].sort((a, b) => b.from.length - a.from.length);
+  // Keep original Unicode spelling in the pattern. Captures identify the rule
+  // using the regex engine's case folding instead of a different locale map.
+  const alternatives = rules.map(
+    ({ from }) => `(${from.split(" ").map(escapeRegExp).join("\\s+")})`,
+  );
   const pattern = new RegExp(
     `(?<!${WORD_CHAR})(?:${alternatives.join("|")})(?!${WORD_CHAR})`,
     "giu",
   );
-  return text.replace(pattern, (match) => {
-    const replacement = replacements.get(matchKey(match.replace(/\s+/gu, " ")));
-    return replacement ?? match;
+  return text.replace(pattern, (match: string, ...captures: unknown[]) => {
+    const index = rules.findIndex((_rule, index) => typeof captures[index] === "string");
+    return rules[index]?.to ?? match;
   });
 }
 

@@ -28,7 +28,7 @@
 
 ## Review fixes
 - Unmappable hybrid shortcuts latch toggle and announce the fallback at recorder readiness.
-- Dictionary matching uses locale-independent lowercase, consistent across host locales.
+- Dictionary deduplication uses locale-independent lowercase; matching preserves original Unicode spelling and uses regex capture groups to select replacements. Dotted Turkish I, long s, and Greek sigma regressions cover regex case-fold equivalence.
 - Recognizer release runs in the transcription lane under an idle lease, so idle disposal cannot reject model deletion.
 - CLI speech worker handles the shared warm request explicitly.
 - Added shortcut/dictionary regressions; 44 focused tests, CI policy suite, desktop typecheck, and CLI build/typecheck pass. New suites are assigned to CI lanes.
