@@ -130,6 +130,7 @@ import {
   withBotFavoritesMutation,
 } from "./bot-favorites-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
@@ -252,6 +253,7 @@ export interface AidenRemoteRuntime {
     chatId: string,
     approvalId: string,
     decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
   ): boolean;
 }
 
@@ -451,8 +453,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             now: Date.now,
             cancel: (streamId, ownerDocumentId) =>
               llmClient.cancel(streamId, "user_stop", ownerDocumentId),
-            approve: (approvalId, decision, ownerDocumentId) =>
-              llmClient.approve(approvalId, decision, ownerDocumentId),
+            approve: (approvalId, decision, ownerDocumentId, scope) =>
+              llmClient.approve(
+                approvalId,
+                decision,
+                ownerDocumentId,
+                scope ? { scope } : undefined,
+              ),
             submitInput: (input) => llmClient.admitChatRunInput(input),
             respondQuestion: (promptId, response, ownerDocumentId) =>
               llmClient.answerQuestionnaire(promptId, response, ownerDocumentId),
@@ -867,8 +874,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       return revoked;
     },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
-    respondApprovalFromHost: (chatId, approvalId, decision) =>
-      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision) ?? false,
+    respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
+      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
   };
   activeRuntime = runtime;
   return runtime;

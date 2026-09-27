@@ -174,6 +174,12 @@ import {
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
+import {
+  SCOPED_APPROVAL_OFFER,
+  toolApprovalRuleTarget,
+  type ToolApprovalRuleTarget,
+} from "./tool-approval-rules.js";
+import { toolApprovalRules } from "./tool-approval-rules-main.js";
 import { chatMessageToPiMessage, chatUserTextWithAttachments } from "./generation-messages.js";
 import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
 import {
@@ -2618,6 +2624,7 @@ export const llmClient = {
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
+          let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
           if (
             context.toolCall.name === "browser_open" ||
             context.toolCall.name === "browser_navigate"
@@ -2726,6 +2733,31 @@ export const llmClient = {
             ) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
+            }
+            // Only the parent's plain workspace tools can be remembered, and
+            // never for Bot-bound turns whose authority is policy-owned.
+            if (
+              workspaceApproval &&
+              !preparedBotContext &&
+              APPROVAL_TOOL_NAMES.has(context.toolCall.name)
+            ) {
+              scopedRuleTarget = toolApprovalRuleTarget(
+                context.toolCall.name,
+                context.args,
+                workspaceId,
+              );
+              if (scopedRuleTarget) {
+                let remembered: "chat" | "always" | undefined;
+                try {
+                  remembered = await toolApprovalRules.match(params.chatId, scopedRuleTarget);
+                } catch (error) {
+                  logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+                }
+                if (remembered && !signal?.aborted) {
+                  timeline.toolRunning(context.toolCall.id);
+                  return undefined;
+                }
+              }
             }
             if (scheduleApproval && attendedAssistant) {
               try {
@@ -2900,12 +2932,32 @@ export const llmClient = {
                 toolName: context.toolCall.name,
                 summary,
                 details: approvalDetails,
+                ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
               };
             })(),
             signal,
             owner.documentId,
           );
           const allowed = approvalOutcome === "allowed";
+          if (allowed && scopedRuleTarget) {
+            const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+            const scope = toolCallId
+              ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope
+              : undefined;
+            if (scope === "chat" || scope === "always") {
+              try {
+                const workspaceLabel =
+                  scope === "always"
+                    ? (await configStore.getWorkspace(scopedRuleTarget.workspaceId))?.name
+                    : undefined;
+                await toolApprovalRules.grant(scope, params.chatId, scopedRuleTarget, workspaceLabel);
+              } catch (error) {
+                // The user already allowed this call; a failed remember only
+                // means the next identical call asks again.
+                logger.warn("pi", "Could not remember a scoped tool approval.", error);
+              }
+            }
+          }
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && (browserFileApproval || browserActionApproval)) {
             try {

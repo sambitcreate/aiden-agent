@@ -1,5 +1,5 @@
 {
-  "contractRevision": 15,
+  "contractRevision": 16,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -159,7 +159,8 @@
       "toolCallId": "tool_fixture_01",
       "toolName": "write",
       "expiresAt": "2026-08-18T19:06:08.000Z",
-      "canAllow": true
+      "canAllow": true,
+      "scopes": ["once", "chat", "always"]
     }
   },
   "streamInput": {

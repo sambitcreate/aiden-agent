@@ -871,7 +871,10 @@ data class AidenStreamPendingApproval(
     val toolCallId: String,
     val toolName: String,
     @Serializable(with = InstantIso8601Serializer::class) val expiresAt: Instant,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    /** Contract revision 16. Raw names so an unknown future scope never fails
+     * decoding; [AidenApprovalScope.offered] keeps the known ones. */
+    val scopes: List<String>? = null
 )
 
 @Serializable
@@ -1005,10 +1008,47 @@ enum class AidenApprovalDecision {
     @SerialName("deny") DENY
 }
 
+/** Contract revision 16 allow scopes. ONCE authorizes one call; CHAT and
+ * ALWAYS let the Mac remember the exact same tool and target for this chat or,
+ * until revoked in desktop Settings, for the workspace. */
+@Serializable
+enum class AidenApprovalScope(val wireName: String) {
+    @SerialName("once") ONCE("once"),
+    @SerialName("chat") CHAT("chat"),
+    @SerialName("always") ALWAYS("always");
+
+    companion object {
+        /** Known offered scopes in canonical order; anything not broader than
+         * a one-time allow collapses to `[ONCE]`. */
+        fun offered(raw: List<String>?): List<AidenApprovalScope> {
+            val known = raw.orEmpty().toSet()
+            val broader = entries.filter { it != ONCE && known.contains(it.wireName) }
+            return if (broader.isEmpty()) listOf(ONCE) else listOf(ONCE) + broader
+        }
+    }
+}
+
+/** POST /approvals/{id}/respond body. `scope` is dropped for a one-time allow
+ * or any deny so pre-revision-16 hosts see the original body shape. */
+@Serializable
+data class AidenApprovalRequest(
+    val decision: AidenApprovalDecision,
+    val scope: AidenApprovalScope? = null
+) {
+    companion object {
+        fun of(decision: AidenApprovalDecision, scope: AidenApprovalScope?): AidenApprovalRequest =
+            AidenApprovalRequest(
+                decision = decision,
+                scope = scope?.takeIf { decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE }
+            )
+    }
+}
+
 @Serializable
 data class AidenApprovalResponse(
     val approvalId: String,
     val decision: AidenApprovalDecision,
+    val scope: AidenApprovalScope? = null,
     @Serializable(with = InstantIso8601Serializer::class) val resolvedAt: Instant
 )
 
@@ -1020,7 +1060,8 @@ data class AidenPendingApproval(
     val canRespond: Boolean,
     val hasRequiredWriteCapability: Boolean,
     val hostCanAllow: Boolean,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE)
 )
 
 data class AidenApprovalCapabilities(
@@ -1048,6 +1089,12 @@ object AidenApprovalPresentation {
         else -> "Approval Required"
     }
 
+    fun scopeTitle(scope: AidenApprovalScope): String = when (scope) {
+        AidenApprovalScope.ONCE -> "Allow once"
+        AidenApprovalScope.CHAT -> "Allow for this chat"
+        AidenApprovalScope.ALWAYS -> "Always allow"
+    }
+
     fun requiresDesktopConfirmation(approval: AidenPendingApproval): Boolean =
         isAutomation(approval.toolName) && approval.canRespond &&
                 approval.hasRequiredWriteCapability && !approval.hostCanAllow
@@ -1066,6 +1113,7 @@ object AidenPendingApprovalResolution {
         }
         val hasRequiredWriteCapability =
             !AidenApprovalPresentation.isAutomation(approval.toolName) || capabilities.canWriteSchedules
+        val canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         return AidenPendingApproval(
             id = approval.approvalId,
             summary = approval.summary,
@@ -1074,7 +1122,12 @@ object AidenPendingApprovalResolution {
             canRespond = capabilities.canRespond,
             hasRequiredWriteCapability = hasRequiredWriteCapability,
             hostCanAllow = approval.canAllow,
-            canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
+            canAllow = canAllow,
+            scopes = if (canAllow && !AidenApprovalPresentation.isAutomation(approval.toolName)) {
+                AidenApprovalScope.offered(approval.scopes)
+            } else {
+                listOf(AidenApprovalScope.ONCE)
+            }
         )
     }
 }

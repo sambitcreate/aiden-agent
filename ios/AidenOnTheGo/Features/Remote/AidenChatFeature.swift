@@ -2764,7 +2764,11 @@ final class AidenChatViewModel {
         }
     }
 
-    func respondToApproval(_ decision: AidenApprovalDecision, approvalID: String) async {
+    func respondToApproval(
+        _ decision: AidenApprovalDecision,
+        approvalID: String,
+        scope: AidenApprovalScope = .once
+    ) async {
         guard !isReadOnlyPresentation, isConnected, !isRespondingToApproval, !isStopping,
               let approval = pendingApproval, approval.id == approvalID else { return }
         guard approval.expiresAt > Date() else {
@@ -2795,10 +2799,17 @@ final class AidenChatViewModel {
             await restorePendingApproval(streamID: streamID, context: context)
             return
         }
+        // Only a scope the Mac offered for this exact approval is ever sent.
+        let requestedScope: AidenApprovalScope? = decision == .allow && scope != .once
+            && approval.scopes.contains(scope) ? scope : nil
         pendingApproval = nil
         streamState = .running
         do {
-            let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
+            let response = try await coordinator.remoteClient(for: context).respondToApproval(
+                id: approval.id,
+                decision: decision,
+                scope: requestedScope
+            )
             guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
             guard response.approvalId == approval.id, response.decision == decision else {
@@ -5915,8 +5926,11 @@ private struct AidenLiveResponseView: View {
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
+                    scopes: approval.scopes,
                     onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
-                    onAllow: { Task { await model.respondToApproval(.allow, approvalID: approval.id) } }
+                    onAllow: { scope in
+                        Task { await model.respondToApproval(.allow, approvalID: approval.id, scope: scope) }
+                    }
                 )
                 .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
@@ -5981,8 +5995,11 @@ private struct AidenApprovalCard: View {
     let canRespond: Bool
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
+    let scopes: [AidenApprovalScope]
     let onDeny: () -> Void
-    let onAllow: () -> Void
+    let onAllow: (AidenApprovalScope) -> Void
+
+    private var broaderScopes: [AidenApprovalScope] { scopes.filter { $0 != .once } }
 
     private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
 
@@ -6090,8 +6107,26 @@ private struct AidenApprovalCard: View {
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
 
+                    if canAllow && !broaderScopes.isEmpty {
+                        Menu {
+                            ForEach(broaderScopes, id: \.self) { scope in
+                                Button(AidenApprovalPresentation.scopeTitle(scope)) { onAllow(scope) }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.foreground)
+                                .frame(width: 34, height: 34)
+                                .aidenApprovalActionGlass()
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 5)
+                        .accessibilityLabel("More allow options")
+                        .accessibilityHint("Remember this exact action for this chat or always")
+                    }
+
                     if canAllow {
-                        Button(action: onAllow) {
+                        Button { onAllow(.once) } label: {
                             Text(AidenApprovalPresentation.allowTitle(for: kind))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(palette.canvas)

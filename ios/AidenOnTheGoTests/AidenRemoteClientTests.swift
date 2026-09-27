@@ -2093,6 +2093,35 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 10)
     }
 
+    func testApprovalScopeIsSentOnlyForBroaderAllowsAndEchoedBack() async throws {
+        let client = makeClient()
+        var bodies: [[String: Any]] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = (try? Self.jsonBody(request)) ?? [:]
+            bodies.append(body)
+            let decision = body["decision"] as? String ?? "allow"
+            let scope = (body["scope"] as? String).map { ",\"scope\":\"\($0)\"" } ?? ""
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"approvalId\":\"approval-1\",\"decision\":\"\(decision)\"\(scope),\"resolvedAt\":\"2026-08-19T07:00:00.000Z\"}"
+            )
+        }
+
+        let remembered = try await client.respondToApproval(id: "approval-1", decision: .allow, scope: .always)
+        let once = try await client.respondToApproval(id: "approval-1", decision: .allow, scope: .once)
+        let denied = try await client.respondToApproval(id: "approval-1", decision: .deny, scope: .chat)
+
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertEqual(bodies[0]["scope"] as? String, "always")
+        XCTAssertEqual(remembered.scope, .always)
+        // A one-time allow and any deny keep the pre-revision-16 wire shape.
+        XCTAssertEqual(Set(bodies[1].keys), ["decision"])
+        XCTAssertNil(once.scope)
+        XCTAssertEqual(Set(bodies[2].keys), ["decision"])
+        XCTAssertEqual(denied.decision, .deny)
+    }
+
     func testAttachmentUploadTurnProjectionAndRemovalUseBoundedCanonicalRoutes() async throws {
         let client = makeClient()
         let attachmentID = "att_\(String(repeating: "A", count: 43))"

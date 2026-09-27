@@ -125,6 +125,7 @@ import type {
   ChatRunInputMode,
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
+import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
 import {
   parseSubagentHistoryDetailV1,
   parseSubagentRunSnapshot,
@@ -602,8 +603,15 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
-  respondApproval: (chatId: string, approvalId: string, decision: "allow" | "deny") =>
-    invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
+  respondApproval: (
+    chatId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
+  ) =>
+    scope && scope !== "once"
+      ? invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision, scope)
+      : invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
   onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
     onNotification("remote:approval-changed", handler),
@@ -1104,8 +1112,14 @@ export const chatsApi = {
   approve: (
     approvalId: string,
     decision: ApprovalDecision,
-    options?: { formFillExcludedOrders?: number[] },
+    options?: { formFillExcludedOrders?: number[]; scope?: ToolApprovalScope },
   ) => invoke<void>("chat:approve", approvalId, decision, options),
+  /** Persisted "always allow" rules, newest first. */
+  listApprovalRules: () => invoke<ToolApprovalRuleView[]>("chat:listApprovalRules"),
+  revokeApprovalRule: (id: string) =>
+    invoke<{ revoked: boolean }>("chat:revokeApprovalRule", id),
+  revokeAllApprovalRules: () =>
+    invoke<{ revoked: number }>("chat:revokeAllApprovalRules"),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
@@ -1252,6 +1266,8 @@ export interface ApprovalPrompt {
   summary: string;
   details?: ToolApprovalDetails;
   canAllow?: boolean;
+  /** Allow scopes offered for this call; absent means allow once only. */
+  scopes?: ToolApprovalScope[];
   source?: "remote";
 }
 
@@ -1264,6 +1280,7 @@ export interface RemoteApprovalPrompt {
   toolName: string;
   expiresAt: string;
   canAllow: boolean;
+  scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
 }
 interface ChatApproval extends ApprovalPrompt {

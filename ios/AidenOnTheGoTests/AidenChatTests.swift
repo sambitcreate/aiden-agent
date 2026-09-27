@@ -4775,6 +4775,41 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testApprovalScopesAreOfferedOnlyWhenThisDeviceCanAllowAnAction() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let data = Data("""
+        {"approvalId":"approval-1","streamId":"stream-1","chatId":"chat-1","summary":"npm test",
+        "toolCallId":"tool-1","toolName":"run_command","expiresAt":"1970-01-01T02:47:40Z",
+        "canAllow":true,"scopes":["always","future-scope","once","chat"]}
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let wire = try decoder.decode(AidenStreamPendingApproval.self, from: data)
+
+        let allowed = try XCTUnwrap(
+            AidenPendingApprovalResolution.resolve(wire, streamId: "stream-1", chatId: "chat-1", now: now)
+        )
+        // Unknown names are ignored and the order is canonical, once first.
+        XCTAssertEqual(allowed.scopes, [.once, .chat, .always])
+
+        let reviewOnly = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+            wire,
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .init(canRespond: false, canWriteSchedules: true),
+            now: now
+        ))
+        XCTAssertEqual(reviewOnly.scopes, [.once])
+
+        var legacy = wire
+        legacy.scopes = nil
+        XCTAssertEqual(
+            AidenPendingApprovalResolution.resolve(legacy, streamId: "stream-1", chatId: "chat-1", now: now)?.scopes,
+            [.once]
+        )
+        XCTAssertEqual(AidenApprovalScope.offered(["once"]), [.once])
+    }
+
     func testScheduledTaskApprovalRequiresResponseAndScheduleWriteCapabilities() {
         let now = Date(timeIntervalSince1970: 10_000)
         let proposal = AidenStreamPendingApproval(

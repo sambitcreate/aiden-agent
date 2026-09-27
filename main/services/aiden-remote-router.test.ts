@@ -702,10 +702,16 @@ async function fixture(options: {
           decision: "allow" | "deny";
           resolvedAt: string;
         }>,
+        scope?: "once" | "chat" | "always",
       ) => {
-        const result = { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+        const result = {
+          approvalId,
+          decision,
+          ...(scope ? { scope } : {}),
+          resolvedAt: new Date(5_000).toISOString(),
+        };
         const action = async () => {
-          calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
+          calls.push(`approval:${deviceId}:${approvalId}:${decision}${scope ? `:${scope}` : ""}`);
           return result;
         };
         if (runAccess) {
@@ -1986,6 +1992,59 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
     });
     assert.equal(approval.status, 200);
     assert.equal((await approval.json()).decision, "deny");
+  } finally {
+    await app.close();
+  }
+});
+
+test("approval responses accept an allow scope and reject malformed scopes", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  const app = await fixture({
+    capabilities: ["chat:read", "chat:write", "approval:respond"],
+    approvalCanAllow: true,
+  });
+  try {
+    let key = 0;
+    const respond = (body: unknown) =>
+      fetch(`${app.base}/approvals/approval-1/respond`, {
+        method: "POST",
+        headers: { ...headers, "idempotency-key": `approval-scope-key-${String(++key).padStart(4, "0")}` },
+        body: JSON.stringify(body),
+      });
+    for (const invalid of [
+      { decision: "deny", scope: "always" },
+      { decision: "allow", scope: "forever" },
+      { decision: "allow", scope: null },
+      { decision: "allow", scope: "chat", remember: true },
+    ]) {
+      const rejected = await respond(invalid);
+      assert.equal(rejected.status, 400, JSON.stringify(invalid));
+      assert.equal((await rejected.json()).error.code, "invalid_request");
+    }
+    assert.equal(app.calls.some((call) => call.startsWith("approval:")), false);
+
+    const allowed = await respond({ decision: "allow", scope: "always" });
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), {
+      approvalId: "approval-1",
+      decision: "allow",
+      scope: "always",
+      resolvedAt: new Date(5_000).toISOString(),
+    });
+    const plain = await respond({ decision: "allow" });
+    assert.equal(plain.status, 200);
+    assert.equal("scope" in (await plain.json()), false);
+    assert.deepEqual(
+      app.calls.filter((call) => call.startsWith("approval:")),
+      [
+        "approval:device-authorized-12345678:approval-1:allow:always",
+        "approval:device-authorized-12345678:approval-1:allow",
+      ],
+    );
   } finally {
     await app.close();
   }

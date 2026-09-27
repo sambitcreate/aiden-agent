@@ -34,6 +34,11 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  rememberableApprovalScopes,
+  toolApprovalScopeLabel,
+  type ToolApprovalScope,
+} from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ContextMeter } from "../components/context-meter";
@@ -1645,7 +1650,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (
       prompt: ApprovalPrompt,
       decision: "allow" | "deny",
-      options?: { formFillExcludedOrders?: number[] },
+      options?: { formFillExcludedOrders?: number[]; scope?: ToolApprovalScope },
     ) => {
       if (decidingApprovalRef.current) return;
       const decisionChatId = chatId;
@@ -1653,7 +1658,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setDecidingApprovalId(prompt.approvalId);
       try {
         if (prompt.source === "remote") {
-          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+          await aidenRemoteApi.respondApproval(
+            chatId,
+            prompt.approvalId,
+            decision,
+            decision === "allow" ? options?.scope : undefined,
+          );
         } else {
           await chatsApi.approve(prompt.approvalId, decision, options);
         }
@@ -2107,6 +2117,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setFormFillExcludedOrders([]);
   }, [pending?.approvalId]);
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  // Only plain workspace writes and shell commands can be remembered; the main
+  // process offers scopes solely for those, and specialized cards keep once.
+  const pendingRememberScopes =
+    pending && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+      ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
+      : [];
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2430,6 +2446,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       >
                         {pendingFormFill ? "Cancel" : "Deny"}
                       </Button>
+                      {pendingRememberScopes.map((scope) => (
+                        <Button
+                          key={scope}
+                          variant="transparent"
+                          size="small"
+                          disabled={decidingApprovalId === pending.approvalId}
+                          title={
+                            scope === "always"
+                              ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
+                              : "Remember this exact action in this chat until Aiden quits."
+                          }
+                          onClick={() => void decideApproval(pending, "allow", { scope })}
+                        >
+                          {toolApprovalScopeLabel(scope)}
+                        </Button>
+                      ))}
                       {pendingCanAllow ? (
                         <Button
                           variant="accent"

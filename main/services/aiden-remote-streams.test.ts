@@ -213,6 +213,73 @@ test("SSE replay emits frozen envelopes and closes after a terminal event", () =
   assert.match(output.join(""), /"messageId":"assistant-1"/u);
 });
 
+test("approval scopes reach the host only when offered, allowed and chosen", async () => {
+  const decisions: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: (approvalId, decision, _ownerId, scope) => {
+      decisions.push(`${approvalId}:${decision}:${scope ?? "once"}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const ask = (approvalId: string, extra: Record<string, unknown>) =>
+    owner.owner.send("chat:approval", {
+      approvalId,
+      toolCallId: `${approvalId}-call`,
+      toolName: "run_command",
+      summary: "npm test",
+      ...extra,
+    });
+
+  // Unknown names are dropped and the offer is canonicalized.
+  ask("scoped", { scopes: ["always", "bogus", "chat"] });
+  assert.deepEqual(service.pendingApproval("device-1", "stream-1")?.scopes, ["once", "chat", "always"]);
+  const resolved = await service.respondApproval(
+    "device-1",
+    "scoped",
+    "allow",
+    "scope-allow-key-00001",
+    inputPassthrough,
+    "always",
+  );
+  assert.equal(resolved.scope, "always");
+  // A retry with a different scope is a different request.
+  await assert.rejects(
+    service.respondApproval("device-1", "scoped", "allow", "scope-allow-key-00001", inputPassthrough, "chat"),
+    (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
+  );
+
+  // Only "once" offered: the snapshot hides scopes and a broader scope is refused.
+  ask("once-only", { scopes: ["once"] });
+  assert.equal(service.pendingApproval("device-1", "stream-1")?.scopes, undefined);
+  await assert.rejects(
+    service.respondApproval("device-1", "once-only", "allow", "scope-refused-key-001", inputPassthrough, "always"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  const once = await service.respondApproval("device-1", "once-only", "allow", "scope-once-key-000001", inputPassthrough);
+  assert.equal(once.scope, undefined);
+
+  // Host-only structured approvals are never allowable, so never scoped.
+  ask("host-only", { scopes: ["once", "chat"], details: { kind: "not-a-real-kind" } });
+  const hostOnly = service.pendingApproval("device-1", "stream-1");
+  assert.equal(hostOnly?.canAllow, false);
+  assert.equal(hostOnly?.scopes, undefined);
+
+  // From the host UI a deny never widens, and an unoffered scope degrades to once.
+  ask("host-deny", { scopes: ["once", "chat", "always"] });
+  assert.equal(service.respondApprovalFromHost("chat-1", "host-deny", "deny", "always"), true);
+  ask("host-partial", { scopes: ["once", "chat"] });
+  assert.equal(service.respondApprovalFromHost("chat-1", "host-partial", "allow", "always"), true);
+  assert.deepEqual(decisions, [
+    "scoped:allow:always",
+    "once-only:allow:once",
+    "host-deny:deny:once",
+    "host-partial:allow:once",
+  ]);
+});
+
 test("cancel and approval decisions are bound to the owning device and owner identity", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

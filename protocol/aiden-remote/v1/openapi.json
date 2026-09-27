@@ -2064,6 +2064,22 @@
                       "allow",
                       "deny"
                     ]
+                  },
+                  "scope": {
+                    "$ref": "#/components/schemas/ToolApprovalScope",
+                    "description": "Contract revision 16. Optional and valid only with decision allow. once (the default) authorizes this call only; chat and always remember the exact same tool and normalized target for this chat or, until revoked on the desktop, for this workspace. The scope must be one listed in PendingApproval.scopes, otherwise the request is invalid_request."
+                  }
+                },
+                "if": {
+                  "required": [
+                    "scope"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "decision": {
+                      "const": "allow"
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -2092,6 +2108,10 @@
                         "allow",
                         "deny"
                       ]
+                    },
+                    "scope": {
+                      "$ref": "#/components/schemas/ToolApprovalScope",
+                      "description": "Echoed only when the request carried a scope."
                     },
                     "resolvedAt": {
                       "type": "string",
@@ -7447,6 +7467,14 @@
         },
         "additionalProperties": false
       },
+      "ToolApprovalScope": {
+        "type": "string",
+        "enum": [
+          "once",
+          "chat",
+          "always"
+        ]
+      },
       "PendingApproval": {
         "type": "object",
         "required": [
@@ -7485,6 +7513,14 @@
           "canAllow": {
             "type": "boolean",
             "description": "False when exact privileged details are intentionally host-only or the device lacks a capability required to allow this mutation; mobile clients must offer Deny only."
+          },
+          "scopes": {
+            "type": "array",
+            "description": "Contract revision 16. Allow scopes this approval offers, always starting with once. Omitted when only a one-time allow is possible or canAllow is false; older clients that ignore it keep allowing once.",
+            "minItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/ToolApprovalScope"
+            }
           }
         },
         "additionalProperties": false

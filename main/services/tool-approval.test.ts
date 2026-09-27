@@ -126,6 +126,38 @@ test("only the renderer document that received a prompt can decide it", async ()
   assert.equal(await pending, "allowed");
 });
 
+test("an allow scope is honored only when the prompt offered it", async () => {
+  const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const ask = (toolCallId: string, scopes?: Array<"once" | "chat" | "always">) =>
+    approvals.request({
+      streamId: "stream",
+      toolCallId,
+      toolName: "run_command",
+      summary: "npm test",
+      ...(scopes ? { scopes } : {}),
+    });
+  const decideLatest = async (
+    pending: Promise<unknown>,
+    allowed: boolean,
+    scope: unknown,
+  ) => {
+    const prompt = prompts[prompts.length - 1]!;
+    approvals.decide(prompt.approvalId, allowed, undefined, { scope } as never);
+    await pending;
+    return approvals.takeDecisionPayload("stream", prompt.toolCallId)?.scope;
+  };
+
+  assert.equal(await decideLatest(ask("offered", ["once", "chat", "always"]), true, "always"), "always");
+  assert.equal(await decideLatest(ask("chat", ["once", "chat", "always"]), true, "chat"), "chat");
+  // Not offered: a specialized card or a bot turn only allows once.
+  assert.equal(await decideLatest(ask("not-offered"), true, "always"), undefined);
+  assert.equal(await decideLatest(ask("partial", ["once", "chat"]), true, "always"), undefined);
+  // A deny never records a scope, and unknown names are ignored.
+  assert.equal(await decideLatest(ask("denied", ["once", "chat", "always"]), false, "always"), undefined);
+  assert.equal(await decideLatest(ask("unknown", ["once", "chat", "always"]), true, "forever"), undefined);
+});
+
 test("detaching a renderer denies pending and future approvals without aborting the stream", async () => {
   const prompts: Array<{ approvalId: string }> = [];
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));

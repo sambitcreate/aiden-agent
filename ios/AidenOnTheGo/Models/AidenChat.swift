@@ -1646,6 +1646,9 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     let toolName: String
     let expiresAt: Date
     let canAllow: Bool
+    /// Contract revision 16. Raw scope names so an unknown future scope never
+    /// fails decoding; `AidenApprovalScope.offered(_:)` keeps the known ones.
+    var scopes: [String]? = nil
 }
 
 struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
@@ -1784,9 +1787,27 @@ enum AidenApprovalDecision: String, Codable, Sendable {
     case deny
 }
 
+/// Contract revision 16 allow scopes. `once` authorizes one call; `chat` and
+/// `always` let the Mac remember the exact same tool and target for this chat
+/// or, until revoked in desktop Settings, for the workspace.
+enum AidenApprovalScope: String, Codable, Sendable, CaseIterable {
+    case once
+    case chat
+    case always
+
+    /// Known scopes the Mac offered, in canonical order. Anything that is not
+    /// broader than a one-time allow collapses to `[.once]`.
+    static func offered(_ raw: [String]?) -> [AidenApprovalScope] {
+        let known = Set((raw ?? []).compactMap(AidenApprovalScope.init(rawValue:)))
+        let broader = allCases.filter { $0 != .once && known.contains($0) }
+        return broader.isEmpty ? [.once] : [.once] + broader
+    }
+}
+
 struct AidenApprovalResponse: Codable, Equatable, Sendable {
     let approvalId: String
     let decision: AidenApprovalDecision
+    var scope: AidenApprovalScope? = nil
     let resolvedAt: Date
 }
 
@@ -1799,6 +1820,7 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let hasRequiredWriteCapability: Bool
     let hostCanAllow: Bool
     let canAllow: Bool
+    var scopes: [AidenApprovalScope] = [.once]
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -1880,6 +1902,14 @@ enum AidenApprovalPresentation {
         case .scheduledTask: String(localized: "Approve task")
         }
     }
+
+    static func scopeTitle(_ scope: AidenApprovalScope) -> String {
+        switch scope {
+        case .once: String(localized: "Allow once")
+        case .chat: String(localized: "Allow for this chat")
+        case .always: String(localized: "Always allow")
+        }
+    }
 }
 
 enum AidenPendingApprovalResolution {
@@ -1896,6 +1926,7 @@ enum AidenPendingApprovalResolution {
               approval.expiresAt > now else { return nil }
         let kind = AidenApprovalKind(toolName: approval.toolName)
         let hasRequiredWriteCapability = kind != .scheduledTask || capabilities.canWriteSchedules
+        let canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         return AidenPendingApproval(
             id: approval.approvalId,
             summary: approval.summary,
@@ -1904,7 +1935,8 @@ enum AidenPendingApprovalResolution {
             canRespond: capabilities.canRespond,
             hasRequiredWriteCapability: hasRequiredWriteCapability,
             hostCanAllow: approval.canAllow,
-            canAllow: approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
+            canAllow: canAllow,
+            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once]
         )
     }
 }

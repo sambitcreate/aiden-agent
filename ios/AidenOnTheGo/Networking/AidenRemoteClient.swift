@@ -499,6 +499,16 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ApprovalRequest: Encodable {
         let decision: AidenApprovalDecision
+        /// Omitted (not null) when absent so pre-revision-16 hosts accept it.
+        let scope: AidenApprovalScope?
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(decision, forKey: .decision)
+            try container.encodeIfPresent(scope, forKey: .scope)
+        }
+
+        private enum CodingKeys: String, CodingKey { case decision, scope }
     }
 
     private struct ScheduledTaskList: Decodable { let tasks: [AidenScheduledTask] }
@@ -1813,12 +1823,16 @@ final class AidenRemoteClient: @unchecked Sendable {
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = nil,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenApprovalResponse {
         try await send(
             method: "POST",
             path: ["approvals", id, "respond"],
-            body: ApprovalRequest(decision: decision),
+            body: ApprovalRequest(
+                decision: decision,
+                scope: decision == .allow && scope != .once ? scope : nil
+            ),
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }

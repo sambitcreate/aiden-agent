@@ -98,6 +98,7 @@ test("settings can be found by the user's task without knowing feature names", (
     ["connect my ai", "providers"],
     ["see my screen", "computerUse"],
     ["do this every day", "scheduledTasks"],
+    ["stop asking me", "approvals"],
   ]) {
     assert.ok(
       SETTINGS_DESTINATIONS.find((entry) => entry.id === expected)?.keywords.includes(query),
