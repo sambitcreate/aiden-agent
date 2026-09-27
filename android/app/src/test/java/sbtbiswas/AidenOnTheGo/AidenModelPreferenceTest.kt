@@ -22,6 +22,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -98,8 +99,8 @@ class AidenModelPreferenceTest {
         val withChatPair = AidenChatModelAuthority.resolvedSelection(
             chat = workspaceChat("openai", "gpt-5.6"),
             catalog = catalog(fullCatalog),
-            selectedProviderId = "openai",
-            selectedModelId = "gpt-5.6",
+            selectedProviderId = null,
+            selectedModelId = null,
             selectedThinkingLevel = null,
             remembered = AidenChatModelSelection("openai", "gpt-hidden", null)
         )
@@ -152,6 +153,20 @@ class AidenModelPreferenceTest {
         assertNull(AidenModelPreferenceStore(tempFolder.root).selection("mac-b"))
     }
 
+    @Test
+    fun storeNeverPersistsASnapshotPastItsReadLimit() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        val selection = AidenChatModelSelection("p".repeat(256), "m".repeat(256), null)
+        val hostIds = (0 until 400).map { index -> "mac-$index-${"i".repeat(240)}" }
+        hostIds.forEach { store.remember(it, selection) }
+
+        val persisted = File(tempFolder.root, "model_preferences.json")
+        assertTrue(persisted.length() <= 256L * 1024L)
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(selection, relaunched.selection(hostIds.first()))
+        assertNull(relaunched.selection(hostIds.last()))
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun chatRestoresTheLastExplicitChoiceAfterRelaunchAndFallsBackWhenItDisappears() {
@@ -160,8 +175,8 @@ class AidenModelPreferenceTest {
         val server = MockWebServer()
         val catalogBody = AtomicReference(fullCatalog)
         val wireJson = Json(json) { explicitNulls = false }
-        // The host projects its own default pair on a newly created chat.
-        val chat = workspaceChat("google", "gemini-flash")
+        // The current chat pair is valid but differs from the catalog defaults.
+        val chat = workspaceChat("openai", "gpt-5.6")
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.requestUrl!!.encodedPath
@@ -199,7 +214,8 @@ class AidenModelPreferenceTest {
                 }
 
                 val first = launchChat("first")
-                assertEquals("gemini-flash", first.selectedModelId.value)
+                assertEquals("openai", first.selectedProviderId.value)
+                assertEquals("gpt-5.6", first.selectedModelId.value)
                 first.selectModel("openai", "gpt-5.6", "max")
 
                 val relaunched = launchChat("relaunched")

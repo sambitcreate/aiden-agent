@@ -66,19 +66,23 @@ final class AidenModelPreferenceStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard snapshot.selections[instanceID] != entry else { return }
-        snapshot.selections[instanceID] = entry
-        persistLocked()
+        var next = snapshot
+        next.selections[instanceID] = entry
+        persistLocked(next)
     }
 
     func purge(instanceID: String) {
         lock.lock()
         defer { lock.unlock() }
-        guard snapshot.selections.removeValue(forKey: instanceID) != nil else { return }
-        persistLocked()
+        var next = snapshot
+        guard next.selections.removeValue(forKey: instanceID) != nil else { return }
+        persistLocked(next)
     }
 
-    private func persistLocked() {
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+    private func persistLocked(_ next: Snapshot) {
+        guard let data = try? JSONEncoder().encode(next),
+              data.count <= Self.maximumSnapshotBytes else { return }
+        snapshot = next
         defaults.set(data, forKey: Self.snapshotKey)
     }
 

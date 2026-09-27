@@ -3724,6 +3724,54 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "mac-b"))
     }
 
+    func testModelPreferenceStoreKeepsEveryPersistedSnapshotWithinItsReadLimit() throws {
+        let suiteName = "AidenModelPreferenceStoreBounds.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let providerId = String(repeating: "p", count: 256)
+        let modelId = String(repeating: "m", count: 256)
+        let hostIds = (0..<400).map { "mac-\($0)-" + String(repeating: "i", count: 240) }
+        for hostId in hostIds {
+            store.remember(
+                AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: nil),
+                for: hostId
+            )
+        }
+
+        let persisted = try XCTUnwrap(defaults.data(forKey: "aiden.model-preference.v1"))
+        XCTAssertLessThanOrEqual(persisted.count, 262_144)
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(relaunched.selection(for: hostIds[0])?.modelId, modelId)
+        XCTAssertNil(relaunched.selection(for: hostIds[hostIds.count - 1]))
+    }
+
+    @MainActor
+    func testStaleWorkspaceSelectionCannotRestorePreferenceAfterPairRemoval() async throws {
+        let suiteName = "AidenModelPreferenceUnpair.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        var coordinator: AidenRemoteCoordinator?
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            modelPreferenceStore: store,
+            onCoordinator: { coordinator = $0 }
+        )
+        model.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        XCTAssertEqual(store.selection(for: "instance-progress-lifecycle")?.modelId, "gpt-5.6")
+
+        let liveCoordinator = try XCTUnwrap(coordinator)
+        try liveCoordinator.installationStore.remove("instance-progress-lifecycle")
+        store.purge(instanceID: "instance-progress-lifecycle")
+
+        // A delayed composer callback can arrive while the async unpair cleanup
+        // is still running. It must not recreate the entry after the purge.
+        model.selectModel(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"))
+    }
+
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,

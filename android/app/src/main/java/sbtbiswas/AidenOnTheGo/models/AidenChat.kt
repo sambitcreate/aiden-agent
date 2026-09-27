@@ -1387,15 +1387,19 @@ object AidenChatModelAuthority {
 
         rememberedSelection(catalog, remembered)?.let { return it }
 
-        var providerId = selectedProviderId
-        if (providerId == null || catalog.providers.none { it.id == providerId }) {
-            providerId = catalog.defaults["providerId"] ?: catalog.visibleProviders.firstOrNull()?.id
-        }
+        val selectedProvider = catalog.providers.firstOrNull { it.id == selectedProviderId }
+        val chatProvider = catalog.providers.firstOrNull { it.id == chat.providerId }
+        val providerId = selectedProvider?.id ?: chatProvider?.id
+            ?: catalog.defaults["providerId"] ?: catalog.visibleProviders.firstOrNull()?.id
         val provider = catalog.providers.firstOrNull { it.id == providerId }
-        var modelId = selectedModelId
-        if (modelId == null || provider?.models?.any { it.id == modelId } != true) {
-            modelId = catalog.defaults["modelId"] ?: provider?.visibleModels?.firstOrNull()?.id
+        val selectedModel = selectedProvider?.let { currentProvider ->
+            selectedModelId?.takeIf { candidate -> currentProvider.models.any { it.id == candidate } }
         }
+        val chatModel = chat.modelId?.takeIf { candidate ->
+            chatProvider?.id == providerId && provider?.models?.any { it.id == candidate } == true
+        }
+        val modelId = selectedModel ?: chatModel
+            ?: catalog.defaults["modelId"] ?: provider?.visibleModels?.firstOrNull()?.id
         val model = provider?.models?.firstOrNull { it.id == modelId }
         return AidenChatModelSelection(
             providerId = providerId,

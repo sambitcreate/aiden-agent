@@ -60,10 +60,10 @@ class AidenChatViewModel(
     private val _catalog = MutableStateFlow<AidenModelCatalog?>(null)
     val catalog: StateFlow<AidenModelCatalog?> = _catalog.asStateFlow()
 
-    private val _selectedProviderId = MutableStateFlow<String?>(null)
+    private val _selectedProviderId = MutableStateFlow(_chat.value?.providerId)
     val selectedProviderId: StateFlow<String?> = _selectedProviderId.asStateFlow()
 
-    private val _selectedModelId = MutableStateFlow<String?>(null)
+    private val _selectedModelId = MutableStateFlow(_chat.value?.modelId)
     val selectedModelId: StateFlow<String?> = _selectedModelId.asStateFlow()
 
     private val _selectedThinkingLevel = MutableStateFlow<String?>(null)

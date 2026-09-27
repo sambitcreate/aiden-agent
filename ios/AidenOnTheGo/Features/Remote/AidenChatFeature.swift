@@ -1092,6 +1092,7 @@ final class AidenChatViewModel {
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
     private let modelPreferenceStore: AidenModelPreferenceStore
+    @ObservationIgnored private let modelPreferenceContext: AidenRemoteRequestContext?
     /// Set once the user picks a model in this chat; from then on the
     /// in-session choice wins over the remembered per-host preference.
     @ObservationIgnored private var hasExplicitModelSelection = false
@@ -1240,12 +1241,14 @@ final class AidenChatViewModel {
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
+        let preferenceInstanceId = coordinator.activeInstanceId ?? ""
         runtime = .live(
             coordinator: coordinator,
-            instanceId: coordinator.activeInstanceId ?? "",
+            instanceId: preferenceInstanceId,
             cache: cache,
             liveActivities: liveActivities ?? .shared
         )
+        modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
@@ -1274,6 +1277,7 @@ final class AidenChatViewModel {
 #if DEBUG
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
+        modelPreferenceContext = nil
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
@@ -1919,14 +1923,16 @@ final class AidenChatViewModel {
     /// default for later Workspace chats and launches.
     private func rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
-        guard !isReadOnlyFixture, !chat.isBotChat, !instanceId.isEmpty else { return }
+        guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
+              let context = modelPreferenceContext,
+              coordinator.isCurrent(context) else { return }
         modelPreferenceStore.remember(
             AidenChatModelSelection(
                 providerId: selectedProviderId,
                 modelId: selectedModelId,
                 thinkingLevel: selectedThinkingLevel
             ),
-            for: instanceId
+            for: context.instanceId
         )
     }
 

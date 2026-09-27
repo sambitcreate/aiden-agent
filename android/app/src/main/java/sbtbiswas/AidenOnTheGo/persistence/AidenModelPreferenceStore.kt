@@ -52,15 +52,13 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         val thinkingLevel = selection.thinkingLevel?.takeIf(::isSafeId)
         val entry = Entry(providerId, modelId, thinkingLevel)
         if (snapshot.selections[instanceId] == entry) return
-        snapshot = snapshot.copy(selections = snapshot.selections + (instanceId to entry))
-        save()
+        save(snapshot.copy(selections = snapshot.selections + (instanceId to entry)))
     }
 
     @Synchronized
     fun purge(instanceId: String) {
         if (!snapshot.selections.containsKey(instanceId)) return
-        snapshot = snapshot.copy(selections = snapshot.selections - instanceId)
-        save()
+        save(snapshot.copy(selections = snapshot.selections - instanceId))
     }
 
     private fun load() {
@@ -79,15 +77,18 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         )
     }
 
-    private fun save() {
+    private fun save(next: Snapshot) {
+        val encoded = runCatching { json.encodeToString(next) }.getOrNull() ?: return
+        if (encoded.toByteArray(Charsets.UTF_8).size > MAXIMUM_BYTES) return
         try {
             storageDir.mkdirs()
             val temporary = File(storageDir, "$FILE_NAME.tmp")
-            temporary.writeText(json.encodeToString(snapshot), Charsets.UTF_8)
+            temporary.writeText(encoded, Charsets.UTF_8)
             if (!temporary.renameTo(storeFile)) {
-                storeFile.writeText(json.encodeToString(snapshot), Charsets.UTF_8)
+                storeFile.writeText(encoded, Charsets.UTF_8)
                 temporary.delete()
             }
+            snapshot = next
         } catch (_: Exception) {}
     }
 
