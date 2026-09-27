@@ -25,3 +25,7 @@
   - `tool-approval-settings.test.tsx` (new, render)
   - iOS `AidenChatTests` and `AidenRemoteClientTests`
   - Android `AidenChatTest`
+
+## Review follow-up
+
+Remembered file targets preserve leading/trailing whitespace, so distinct filesystem names cannot share approval authority. Regression covers persisted matching; all 7 rule-book tests pass.

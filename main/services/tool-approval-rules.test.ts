@@ -45,7 +45,14 @@ test("rule targets are exact and never wider than the approved call", () => {
     toolApprovalRuleTarget("edit_file", { path: "./src//app.ts/" }, "ws1")?.pattern,
     "src/app.ts",
   );
-  for (const unsafe of ["/etc/hosts", "~/notes.md", "../outside.txt", "src/../../x", "C:\\x.txt", "."]) {
+  for (const unsafe of [
+    "/etc/hosts",
+    "~/notes.md",
+    "../outside.txt",
+    "src/../../x",
+    "C:\\x.txt",
+    ".",
+  ]) {
     assert.equal(toolApprovalRuleTarget("write_file", { path: unsafe }, "ws1"), undefined, unsafe);
   }
   // Only the three parent workspace tools can be remembered, and only in a workspace.
@@ -64,11 +71,17 @@ test("a chat rule matches only the same chat, tool, workspace and exact target",
   assert.equal(await rules.match("chat-a", target), "chat");
   assert.equal(await rules.match("chat-b", target), undefined);
   assert.equal(
-    await rules.match("chat-a", toolApprovalRuleTarget("run_command", { command: "npm test -- --watch" }, "ws1")!),
+    await rules.match(
+      "chat-a",
+      toolApprovalRuleTarget("run_command", { command: "npm test -- --watch" }, "ws1")!,
+    ),
     undefined,
   );
   assert.equal(
-    await rules.match("chat-a", toolApprovalRuleTarget("run_command", { command: "npm test" }, "ws2")!),
+    await rules.match(
+      "chat-a",
+      toolApprovalRuleTarget("run_command", { command: "npm test" }, "ws2")!,
+    ),
     undefined,
   );
   // Chat rules are never persisted or listed in Settings.
@@ -80,8 +93,10 @@ test("a chat rule matches only the same chat, tool, workspace and exact target",
 test("chat rules keep only the newest entries once the per-chat cap is reached", async (t) => {
   const { book } = await diskBook(t);
   const rules = book();
-  const target = (n: number) => toolApprovalRuleTarget("run_command", { command: `echo ${n}` }, "ws1")!;
-  for (let n = 0; n <= MAX_CHAT_TOOL_APPROVAL_RULES; n += 1) await rules.grant("chat", "c", target(n));
+  const target = (n: number) =>
+    toolApprovalRuleTarget("run_command", { command: `echo ${n}` }, "ws1")!;
+  for (let n = 0; n <= MAX_CHAT_TOOL_APPROVAL_RULES; n += 1)
+    await rules.grant("chat", "c", target(n));
   assert.equal(await rules.match("c", target(0)), undefined);
   assert.equal(await rules.match("c", target(1)), "chat");
   assert.equal(await rules.match("c", target(MAX_CHAT_TOOL_APPROVAL_RULES)), "chat");
@@ -140,7 +155,11 @@ test("the persisted rule count is bounded", async (t) => {
   const rules = book();
   assert.equal((await rules.list()).length, MAX_PERSISTED_TOOL_APPROVAL_RULES);
   await assert.rejects(
-    rules.grant("always", "c", toolApprovalRuleTarget("run_command", { command: "echo over" }, "ws1")!),
+    rules.grant(
+      "always",
+      "c",
+      toolApprovalRuleTarget("run_command", { command: "echo over" }, "ws1")!,
+    ),
     /at most 200/u,
   );
   assert.equal((await rules.list()).length, MAX_PERSISTED_TOOL_APPROVAL_RULES);
@@ -156,22 +175,68 @@ test("hand-edited rules that widen or malform a pattern are ignored", async (t) 
       rules: [
         { id: "ok", toolName: "run_command", pattern: "npm test", workspaceId: "ws1", createdAt },
         { id: "dup", toolName: "run_command", pattern: "npm test", workspaceId: "ws1", createdAt },
-        { id: "padded", toolName: "run_command", pattern: " npm test ", workspaceId: "ws1", createdAt },
-        { id: "absolute", toolName: "write_file", pattern: "/etc/passwd", workspaceId: "ws1", createdAt },
-        { id: "dotdot", toolName: "edit_file", pattern: "a/../../b", workspaceId: "ws1", createdAt },
-        { id: "noncanonical", toolName: "edit_file", pattern: "./src/app.ts", workspaceId: "ws1", createdAt },
+        {
+          id: "padded",
+          toolName: "run_command",
+          pattern: " npm test ",
+          workspaceId: "ws1",
+          createdAt,
+        },
+        {
+          id: "absolute",
+          toolName: "write_file",
+          pattern: "/etc/passwd",
+          workspaceId: "ws1",
+          createdAt,
+        },
+        {
+          id: "dotdot",
+          toolName: "edit_file",
+          pattern: "a/../../b",
+          workspaceId: "ws1",
+          createdAt,
+        },
+        {
+          id: "noncanonical",
+          toolName: "edit_file",
+          pattern: "./src/app.ts",
+          workspaceId: "ws1",
+          createdAt,
+        },
         { id: "tool", toolName: "read_file", pattern: "a.txt", workspaceId: "ws1", createdAt },
         { id: "bad id!", toolName: "run_command", pattern: "ls", workspaceId: "ws1", createdAt },
-        { id: "nodate", toolName: "run_command", pattern: "ls", workspaceId: "ws1", createdAt: "soon" },
+        {
+          id: "nodate",
+          toolName: "run_command",
+          pattern: "ls",
+          workspaceId: "ws1",
+          createdAt: "soon",
+        },
       ],
     }),
   );
   const rules = book();
-  assert.deepEqual((await rules.list()).map((rule) => rule.id), ["ok"]);
+  assert.deepEqual(
+    (await rules.list()).map((rule) => rule.id),
+    ["ok"],
+  );
   assert.equal(
     await rules.match("c", toolApprovalRuleTarget("write_file", { path: "etc/passwd" }, "ws1")!),
     undefined,
   );
-  assert.deepEqual(normalizeToolApprovalRulesDocument({ version: 2, rules: [] }), emptyToolApprovalRulesDocument());
+  assert.deepEqual(
+    normalizeToolApprovalRulesDocument({ version: 2, rules: [] }),
+    emptyToolApprovalRulesDocument(),
+  );
   assert.deepEqual(normalizeToolApprovalRulesDocument("nope"), emptyToolApprovalRulesDocument());
+});
+
+test("remembered file rules preserve leading and trailing path whitespace", async (t) => {
+  const { book } = await diskBook(t);
+  const rules = book();
+  const target = (name: string) => toolApprovalRuleTarget("write_file", { path: name }, "ws1")!;
+  await rules.grant("always", "chat-a", target(" notes.md"));
+  assert.equal(await rules.match("chat-a", target(" notes.md")), "always");
+  assert.equal(await rules.match("chat-a", target("notes.md")), undefined);
+  assert.equal(await rules.match("chat-a", target("notes.md ")), undefined);
 });

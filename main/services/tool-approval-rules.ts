@@ -63,14 +63,11 @@ function normalizeCommandPattern(value: unknown): string | undefined {
 
 function normalizePathPattern(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
+  // Whitespace belongs to the filesystem target; never collapse distinct paths.
+  const trimmed = value;
   if (!trimmed || trimmed.length > MAX_PATH_PATTERN_CHARS) return undefined;
   if (hasControlCharacter(trimmed, false)) return undefined;
-  if (
-    path.posix.isAbsolute(trimmed) ||
-    path.win32.isAbsolute(trimmed) ||
-    trimmed.startsWith("~")
-  ) {
+  if (path.posix.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed) || trimmed.startsWith("~")) {
     return undefined;
   }
   let normalized = path.posix.normalize(trimmed);
