@@ -14,6 +14,7 @@ import type {
   SubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant.js";
 import { mergeSubagentSnapshots, type SubagentRunView } from "../lib/subagent-view-state.js";
+import { activeSubagentContextUsage } from "../lib/subagent-context-usage-store.js";
 import {
   SubagentLiveAnnouncementCoordinator,
   captureSubagentChipFocus,
@@ -1175,6 +1176,45 @@ test("the roster separates active and terminal runs without color-only status", 
   assert.match(rosterSource, /aria-setsize=\{node\.setSize\}/u);
   assert.match(rosterSource, /treeRef\.current\?\.querySelector/u);
   assert.doesNotMatch(rosterSource, /document\.querySelector/u);
+});
+
+test("live context readings show only on active roster rows and the running detail", () => {
+  const active = view(run("active"));
+  const hot = view(run("hot", { label: "Deep scout" }));
+  const done = view(
+    run("done", { label: "Final reviewer", state: "completed", finishedAt: 3_000 }),
+  );
+  const readings = new Map([
+    [active.runId, { tokens: 84_000, window: 200_000 }],
+    [hot.runId, { tokens: 170_000, window: 200_000 }],
+    [done.runId, { tokens: 190_000, window: 200_000 }],
+  ]);
+  const shown = activeSubagentContextUsage([active, hot, done], readings);
+
+  const roster = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[active, hot, done]}
+      selectedRunId={active.runId}
+      onSelect={() => undefined}
+      contextUsageByRunId={shown}
+    />,
+  );
+  assert.match(
+    roster,
+    /aria-label="Code scout, scout, Working, context 42 percent, 84K of 200K tokens"/u,
+  );
+  assert.match(roster, /title="Context window: 84K \/ 200K tokens \(42%\)"/u);
+  assert.match(roster, /title="Context window: 170K \/ 200K tokens \(85%\)"/u);
+  assert.match(roster, /aria-label="Final reviewer, scout, Finished"/u);
+  assert.doesNotMatch(roster, /data-subagent-context-usage="done"/u);
+  assert.doesNotMatch(roster, /95%/u);
+
+  const detail = renderToStaticMarkup(
+    <SubagentDetail run={active.snapshot!} contextUsage={shown.get(active.runId)} />,
+  );
+  assert.match(detail, /Context window: 84K \/ 200K tokens \(42%\)/u);
+  const withoutReading = renderToStaticMarkup(<SubagentDetail run={done.snapshot!} />);
+  assert.doesNotMatch(withoutReading, /Context window:/u);
 });
 
 test("presentation-only saving and stale states stay visible without rewriting protocol state", () => {

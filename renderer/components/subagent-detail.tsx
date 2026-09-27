@@ -11,6 +11,11 @@ import type {
   SubagentMilestoneKind,
   SubagentRunSnapshot,
 } from "../shared/subagent-runs";
+import {
+  subagentContextIsApproachingLimit,
+  subagentContextUsageLabels,
+  type SubagentContextUsageV1,
+} from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
@@ -75,6 +80,11 @@ function UnrenderableSubagentUpdate({ content }: { content: string }) {
   );
 }
 
+function subagentContextSummary(usage: SubagentContextUsageV1): string {
+  const labels = subagentContextUsageLabels(usage);
+  return `Context window: ${labels.amount} (${labels.percent})`;
+}
+
 export interface SubagentDetailProps {
   run: SubagentRunSnapshot;
   effectActivity?: readonly SubagentEffectActivityV1[];
@@ -86,6 +96,8 @@ export interface SubagentDetailProps {
   refreshError?: string | null;
   onRetryRefresh?: () => void;
   now?: number;
+  /** Live context reading; supplied only while the run is active. */
+  contextUsage?: SubagentContextUsageV1;
   className?: string;
 }
 
@@ -102,6 +114,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       refreshError = null,
       onRetryRefresh,
       now = Date.now(),
+      contextUsage,
       className,
     },
     headingRef,
@@ -244,6 +257,20 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 >
                   Model: {run.modelId}
                 </Text>
+                {contextUsage ? (
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="tertiary"
+                    className={cn(
+                      "mt-0.5 tabular-nums",
+                      subagentContextIsApproachingLimit(contextUsage) && "text-support-warning",
+                    )}
+                    data-subagent-detail-context-usage="true"
+                  >
+                    {subagentContextSummary(contextUsage)}
+                  </Text>
+                ) : null}
                 {run.version === 2 ? (
                   <Text
                     as="p"

@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 Live subagent context window
+- A fresh workflow worktree has no `node_modules`, so `tsc` reports hundreds of misleading pi-ai type errors. Run `npm ci` before the first type-check.
+- The worktree guard refuses a heredoc and a `python3` run in the same Bash command. Write the script to the scratchpad and run it as a separate command.
+- Adding a field to `SubagentRunSnapshot` is costly: the exact-key parsers reject it on older builds, and revision/replay checks gate history reads. Live, per-response data belongs on a separate notification channel.

@@ -986,6 +986,17 @@ async function prepareGeneration(
       chatId: params.chatId,
       workspaceId: workspace.id,
       modelId: model.id,
+      contextWindow: model.contextWindow,
+      // Presentation-only: bypasses persistence and the Remote progress
+      // revision, which only track durable snapshots.
+      onContextUsage: (runId, usage) => {
+        sendGeneration(streamId, "chat:subagent-context", {
+          streamId,
+          chatId: params.chatId,
+          runId,
+          usage,
+        });
+      },
       prepareSnapshot: (snapshot) => subagentPersistence.prepare(snapshot),
       onControlSnapshot: async (snapshot) => {
         subagentPersistence.projectControlSnapshot(snapshot);
