@@ -559,6 +559,39 @@ test("reads and writes survive a restart of the whole store", async (t) => {
   });
 });
 
+test("hand-edited dictation preferences reach consumers only in supported shapes", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const file = await readJson<Record<string, unknown>>(h.settingsFile);
+  const settings = (file.settings ?? file) as Record<string, unknown>;
+  Object.assign(settings, {
+    dictationActivationMode: "double-tap",
+    localVoiceIdleUnloadMinutes: -5,
+    dictationDictionary: [
+      { from: "  aiden  ", to: "Aiden" },
+      { from: 42, to: "nope" },
+      { from: "AIDEN", to: "duplicate" },
+      { from: "pie", to: "Pi" },
+    ],
+  });
+  await fs.writeFile(h.settingsFile, JSON.stringify(file, null, 2), "utf-8");
+
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const runtime = await restarted.getSettings();
+  assert.equal(runtime.dictationActivationMode, undefined);
+  assert.equal(runtime.localVoiceIdleUnloadMinutes, undefined);
+  assert.deepEqual(runtime.dictationDictionary, [
+    { from: "aiden", to: "Aiden" },
+    { from: "pie", to: "Pi" },
+  ]);
+});
+
 test("every install ends up with at least one workspace", async (t) => {
   const h = await harness(t);
   const workspaces = await h.store.listWorkspaces();

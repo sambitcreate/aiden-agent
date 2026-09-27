@@ -14,6 +14,8 @@ import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { dictationPlatformBehavior } from "./dictation-platform.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
+import { applyDictationDictionary, parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
+import { resolveDictationActivationMode } from "../../renderer/shared/dictation-preferences.js";
 
 import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
 
@@ -60,6 +62,25 @@ const coordinator = new DictationCoordinator({
     activeLinuxDictationHoldShortcut() ||
     (dictationPlatformBehavior().holdToTalk &&
       (await configStore.getSettings()).dictationHoldToTalk === true),
+  getActivationMode: async () => {
+    const settings = await configStore.getSettings();
+    // Linux reports releases only while the portal bound a hold shortcut; macOS
+    // watches the physical key when the platform supports it.
+    const linuxHold = activeLinuxDictationHoldShortcut();
+    const releaseCapable = linuxHold || dictationPlatformBehavior().holdToTalk;
+    return resolveDictationActivationMode(
+      linuxHold ? { ...settings, dictationHoldToTalk: true } : settings,
+      releaseCapable,
+    );
+  },
+  warmUp: async () => {
+    const settings = await configStore.getSettings();
+    if (settings.voiceProvider !== "local" || !settings.localVoiceModel) return;
+    const { warmLocalVoice } = await import("./parakeet.js");
+    await warmLocalVoice(settings.localVoiceModel);
+  },
+  applyDictionary: async (text) =>
+    applyDictationDictionary(text, parseDictationDictionary((await configStore.getSettings()).dictationDictionary)),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
   cleanupTranscript: cleanupDictationTranscript,
   ...(process.platform === "linux" ? { startReleaseWatch: subscribeLinuxDictationRelease } : {}),

@@ -882,6 +882,9 @@ export interface AppSettings {
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
   dictationHoldToTalk?: boolean;
+  dictationActivationMode?: import("../shared/dictation-preferences").DictationActivationMode;
+  dictationDictionary?: import("../shared/dictation-dictionary").DictationDictionaryEntry[];
+  localVoiceIdleUnloadMinutes?: number;
   dictationSilenceStop?: boolean;
   dictationCleanup?: boolean;
   dictationSounds?: boolean;

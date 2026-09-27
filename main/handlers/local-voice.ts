@@ -3,7 +3,12 @@
 // services/parakeet.ts and services/local-models.ts.
 
 import { ipcMain } from "../platform.js";
-import { engineStatus, transcribePcmBase64, releaseRecognizer } from "../services/parakeet.js";
+import {
+  engineStatus,
+  transcribePcmBase64,
+  releaseRecognizer,
+  warmLocalVoice,
+} from "../services/parakeet.js";
 import {
   listModels,
   downloadModel,
@@ -35,6 +40,16 @@ export { asString, pcmToFloat32 };
 export function registerLocalVoiceHandlers(): void {
   // ── Engine ───────────────────────────────────────────────────────────
   ipcMain.handle("localVoice:status", async () => engineStatus());
+  // Preload the recognizer when the composer mic starts. Best effort: a failed
+  // warm-up is reported by the transcription that follows, not here.
+  ipcMain.handle("localVoice:warm", async (_event, id: unknown) => {
+    const modelId = asString(id, "id");
+    try {
+      await warmLocalVoice(modelId);
+    } catch {
+      // Ignored: transcription surfaces the actionable error.
+    }
+  });
 
   // ── Model management ─────────────────────────────────────────────────
   ipcMain.handle("localModels:list", async () => listModels());

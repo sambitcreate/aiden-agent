@@ -71,6 +71,11 @@ function getRecognizer(modelId: string, modelDirectory: string): OfflineRecogniz
   return recognizer;
 }
 
+/** Load (or reuse) the recognizer so the first transcription skips model load. */
+export function warmRecognizer(modelId: string, modelDirectory: string): void {
+  getRecognizer(modelId, modelDirectory);
+}
+
 export function releaseRecognizer(modelId: string): void {
   recognizers.delete(modelId);
 }

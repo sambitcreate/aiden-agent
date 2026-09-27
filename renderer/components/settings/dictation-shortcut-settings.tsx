@@ -28,6 +28,11 @@ import {
   type AccessibilityPermissionState,
 } from "../../lib/accessibility-permission-core";
 import { useAppCapabilities } from "../../lib/app-capabilities";
+import {
+  isDictationActivationMode,
+  resolveDictationActivationMode,
+  type DictationActivationMode,
+} from "../../shared/dictation-preferences";
 
 async function openAccessibilitySettings(): Promise<void> {
   try {
@@ -225,18 +230,21 @@ export function DictationShortcutSettings() {
   const settings = useSettings();
   const [holdBusy, setHoldBusy] = React.useState(false);
   const canChooseHold = capabilities.dictationHoldToTalk || capabilities.dictationHoldSetup;
-  const holdToTalk = capabilities.dictationHoldToTalk && settings.data?.dictationHoldToTalk === true;
+  const activationMode: DictationActivationMode = resolveDictationActivationMode(
+    settings.data ?? {},
+    capabilities.dictationHoldToTalk,
+  );
   const silenceStop = settings.data?.dictationSilenceStop === true;
   const cleanup = settings.data?.dictationCleanup === true;
   const sounds = settings.data?.dictationSounds === true;
 
   const patch = async (next: {
-    dictationHoldToTalk?: boolean;
+    dictationActivationMode?: DictationActivationMode;
     dictationSilenceStop?: boolean;
     dictationCleanup?: boolean;
     dictationSounds?: boolean;
   }) => {
-    if (next.dictationHoldToTalk !== undefined) setHoldBusy(true);
+    if (next.dictationActivationMode !== undefined) setHoldBusy(true);
     try {
       await settingsApi.set(next);
       await qc.invalidateQueries({ queryKey: queryKeys.settings });
@@ -265,8 +273,13 @@ export function DictationShortcutSettings() {
         orientation="vertical"
       >
         <RadioGroup
-          value={holdToTalk ? "hold" : "toggle"}
-          onValueChange={(value) => void patch({ dictationHoldToTalk: canChooseHold && value === "hold" })}
+          value={activationMode}
+          onValueChange={(value) =>
+            void patch({
+              dictationActivationMode:
+                canChooseHold && isDictationActivationMode(value) ? value : "toggle",
+            })
+          }
           orientation="vertical"
           aria-label="Dictation shortcut behavior"
           disabled={holdBusy}
@@ -280,6 +293,17 @@ export function DictationShortcutSettings() {
                 {capabilities.dictationHoldSetup && !capabilities.dictationHoldToTalk
                   ? "Choose this to let your desktop assign a hold shortcut for this session."
                   : "Hold the shortcut while speaking; release it to transcribe."}
+              </span>
+            </span>
+          </Label>
+          ) : null}
+          {canChooseHold ? (
+          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
+            <RadioGroupItem value="hybrid" className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-regular text-primary">Tap or hold</span>
+              <span className="mt-0.5 block text-small text-secondary">
+                Tap to start and tap again to stop, or hold while speaking and release to transcribe.
               </span>
             </span>
           </Label>
@@ -298,7 +322,7 @@ export function DictationShortcutSettings() {
       <Field
         label="Stop after silence"
         description={capabilities.dictationHoldToTalk
-          ? "Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
+          ? "Applies to every shortcut behavior. Release or press the shortcut again to stop manually."
           : "Press the shortcut again to stop manually."}
       >
         <Switch

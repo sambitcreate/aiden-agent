@@ -23,6 +23,7 @@ import {
   replaceSubagentStopPendingOwner,
 } from "../lib/subagent-stop-pending.js";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate.js";
+import { resolveDictationActivationMode } from "../shared/dictation-preferences.js";
 import type { ChatMessage } from "../lib/types.js";
 
 function source(relativePath: string): string {
@@ -635,12 +636,13 @@ test("dictation settings match host support even with a saved hold preference", 
   assert.equal(parseAppCapabilities({ platform: "linux", dictationHoldToTalk: false }).dictationHoldToTalk, false);
   assert.equal(parseAppCapabilities({ platform: "darwin", dictationHoldToTalk: true }).dictationHoldToTalk, true);
   assert.equal(parseAppCapabilities({ dictationHoldToTalk: "true" }).dictationHoldToTalk, false);
-  const source = readFileSync(new URL("./settings/dictation-shortcut-settings.tsx", import.meta.url), "utf8");
-  assert.match(source, /const holdToTalk = capabilities\.dictationHoldToTalk && settings\.data\?\.dictationHoldToTalk === true/u);
-  assert.match(source, /canChooseHold \? \([\s\S]*?<RadioGroupItem value="hold"/u);
-  assert.match(source, /dictationHoldToTalk: canChooseHold && value === "hold"/u);
-  assert.match(source, /value=\{holdToTalk \? "hold" : "toggle"\}/u);
-  assert.match(source, /Press the global dictation shortcut once to start and again to stop\./u);
+  // A saved hold or hybrid preference shows (and behaves) as toggle on a host
+  // that cannot report key releases; the Settings radio reads this value.
+  for (const dictationActivationMode of ["hold", "hybrid"]) {
+    const saved = { dictationHoldToTalk: true, dictationActivationMode };
+    assert.equal(resolveDictationActivationMode(saved, false), "toggle");
+    assert.equal(resolveDictationActivationMode(saved, true), dictationActivationMode);
+  }
 });
 
 test("Linux main capabilities enable existing Bot surfaces without enabling Apple integrations", () => {

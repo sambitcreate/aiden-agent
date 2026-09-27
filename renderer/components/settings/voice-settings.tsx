@@ -28,6 +28,7 @@ import {
   type CloudVoiceProvider,
 } from "../../shared/voice-models";
 import { DictationShortcutSettings } from "./dictation-shortcut-settings";
+import { DictationDictionarySettings } from "./dictation-dictionary-settings";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
@@ -168,6 +169,7 @@ export function VoiceSettings() {
 
       {provider === "local" ? <LocalVoiceSettings /> : null}
       <DictationShortcutSettings />
+      <DictationDictionarySettings />
 
       <GeminiVoiceSetupDialog
         open={geminiDialogOpen}

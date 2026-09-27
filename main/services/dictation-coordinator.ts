@@ -1,4 +1,8 @@
 import type { DictationProgress, DictationStatePayload } from "../../renderer/shared/dictation.js";
+import {
+  HYBRID_TAP_THRESHOLD_MS,
+  type DictationActivationMode,
+} from "../../renderer/shared/dictation-preferences.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
 export type DictationStage = "idle" | "starting" | "recording" | "transcribing" | "delivering";
@@ -15,6 +19,12 @@ export interface DictationCoordinatorDeps {
   logError: (message: string, error: unknown) => void;
   now?: () => number;
   isHoldToTalk?: () => boolean | Promise<boolean>;
+  /** Preferred over isHoldToTalk; `hybrid` treats a quick tap as toggle and a hold as push-to-talk. */
+  getActivationMode?: () => DictationActivationMode | Promise<DictationActivationMode>;
+  /** Best-effort preload of the transcription model when a recording starts. */
+  warmUp?: () => void | Promise<void>;
+  /** User dictionary applied to the final transcript before delivery. */
+  applyDictionary?: (text: string) => string | Promise<string>;
   /** Optional polish after STT; must return the original text on failure. */
   cleanupTranscript?: (text: string) => Promise<string>;
   shouldCleanup?: () => boolean | Promise<boolean>;
@@ -49,7 +59,10 @@ export class DictationCoordinator {
   private watchdogTimer: NodeJS.Timeout | null = null;
   private queue: Promise<void> = Promise.resolve();
   private disposed = false;
+  /** Whether releasing the shortcut stops this operation (hold, or hybrid until a tap latches it). */
   private holdToTalk = false;
+  private mode: DictationActivationMode = "toggle";
+  private pressedAt = 0;
   private holdKeyCode: number | null = null;
   private holdWatchActive = false;
   private pendingRelease = false;
@@ -65,6 +78,29 @@ export class DictationCoordinator {
 
   get currentOperationId(): string | null {
     return this.operationId;
+  }
+
+  /** Activation mode frozen for the current (or most recent) operation. */
+  get currentMode(): DictationActivationMode {
+    return this.mode;
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  /** Hybrid only: the shortcut stopped being watched, so behave as a latched toggle. */
+  private latchHybridToggle(): boolean {
+    if (this.mode !== "hybrid") return false;
+    this.holdToTalk = false;
+    if (this.stage === "recording") {
+      this.deps.broadcast({
+        state: "recording",
+        operationId: this.operationId ?? undefined,
+        message: "Press the shortcut again to stop.",
+      });
+    }
+    return true;
   }
 
   private enqueue(operation: () => Promise<void> | void): Promise<void> {
@@ -149,6 +185,7 @@ export class DictationCoordinator {
         () => {
           this.holdWatchActive = false;
           this.stopHoldWatch = null;
+          if (this.latchHybridToggle()) return;
           this.deps.broadcast({
             state: "recording",
             operationId: this.operationId ?? undefined,
@@ -157,6 +194,7 @@ export class DictationCoordinator {
         },
       );
       if (typeof stop !== "function") {
+        if (this.latchHybridToggle()) return;
         this.deps.broadcast({
           state: "recording",
           operationId: this.operationId ?? undefined,
@@ -169,11 +207,27 @@ export class DictationCoordinator {
     } catch (error) {
       this.holdWatchActive = false;
       this.deps.logError("Could not watch the dictation shortcut for release.", error);
+      if (this.latchHybridToggle()) return;
       this.deps.broadcast({
         state: "recording",
         operationId: this.operationId ?? undefined,
         message: "Release monitoring unavailable — press again to stop.",
       });
+    }
+  }
+
+  private watchesFromPress(): boolean {
+    return Boolean(this.deps.startReleaseWatch) || this.mode === "hybrid";
+  }
+
+  private startWarmUp(): void {
+    if (!this.deps.warmUp) return;
+    try {
+      void Promise.resolve(this.deps.warmUp()).catch((error: unknown) => {
+        this.deps.logError("Could not warm up the transcription model.", error);
+      });
+    } catch (error) {
+      this.deps.logError("Could not warm up the transcription model.", error);
     }
   }
 
@@ -186,7 +240,13 @@ export class DictationCoordinator {
   }
 
   private async refreshHoldMode(): Promise<void> {
-    this.holdToTalk = (await this.deps.isHoldToTalk?.()) === true;
+    if (this.deps.getActivationMode) {
+      const mode = await this.deps.getActivationMode();
+      this.mode = mode === "hold" || mode === "hybrid" ? mode : "toggle";
+    } else {
+      this.mode = (await this.deps.isHoldToTalk?.()) === true ? "hold" : "toggle";
+    }
+    this.holdToTalk = this.mode !== "toggle";
     const code = await this.deps.getHoldKeyCode?.();
     this.holdKeyCode = typeof code === "number" ? code : null;
   }
@@ -201,6 +261,9 @@ export class DictationCoordinator {
 
   /** Hotkey press. Toggle mode starts/stops; hold mode starts, ignores down-repeats, and stops once release is in flight. */
   press(): Promise<void> {
+    // Stamp the physical press now, not when the queue reaches it, so a
+    // hybrid tap is measured from the user's key-down.
+    const pressedAt = this.now();
     return this.enqueue(async () => {
       this.clearHideTimer();
       this.clearReleaseTimer();
@@ -210,9 +273,13 @@ export class DictationCoordinator {
         await this.refreshHoldMode();
         this.stage = "starting";
         this.pendingRelease = false;
+        this.pressedAt = pressedAt;
         this.operationSequence += 1;
-        this.operationId = `${(this.deps.now ?? Date.now)()}-${this.operationSequence}`;
-        if (this.deps.startReleaseWatch) this.beginHoldWatch();
+        this.operationId = `${this.now()}-${this.operationSequence}`;
+        this.startWarmUp();
+        // Hybrid must observe the key-up from the start to tell a tap from a
+        // hold; plain hold keeps watching only once capture is live.
+        if (this.watchesFromPress()) this.beginHoldWatch();
         try {
           const created = await this.deps.showPill();
           if (created) this.pillReady = false;
@@ -226,12 +293,15 @@ export class DictationCoordinator {
         if (this.stage === "starting" && this.pillReady) {
           this.stage = "recording";
           this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
-          if (!this.deps.startReleaseWatch) this.beginHoldWatch();
+          if (!this.watchesFromPress()) this.beginHoldWatch();
           if (this.pendingRelease) this.stopIfRecording();
         }
         return;
       }
       if (this.stage === "starting") {
+        // Hybrid watches the key from the first press, so a press while it is
+        // still held is an OS repeat, not a stop request.
+        if (this.mode === "hybrid" && this.holdToTalk && this.holdWatchActive) return;
         // A toggle-mode second press and a hold-mode release can arrive while
         // permission/settings/microphone startup is still in flight. Latch it
         // so the first recorder frame cannot outlive the user's stop action.
@@ -265,9 +335,20 @@ export class DictationCoordinator {
 
   /** Hold-to-talk key-up, with a short grace so OS repeats do not cut capture. */
   release(expectedOperationId?: string | null): Promise<void> {
+    const releasedAt = this.now();
     return this.enqueue(async () => {
       if (expectedOperationId !== undefined && expectedOperationId !== this.operationId) return;
       if (!this.holdToTalk) return;
+      if (
+        this.mode === "hybrid" &&
+        (this.stage === "starting" || this.stage === "recording") &&
+        releasedAt - this.pressedAt < HYBRID_TAP_THRESHOLD_MS
+      ) {
+        // A tap: keep recording until the next press, exactly like toggle.
+        this.endHoldWatch();
+        this.holdToTalk = false;
+        return;
+      }
       if (this.stage === "starting") {
         this.pendingRelease = true;
         return;
@@ -301,7 +382,7 @@ export class DictationCoordinator {
       if (this.stage === "starting") {
         this.stage = "recording";
         this.deps.broadcast({ state: "recording", operationId: this.operationId ?? undefined });
-        if (!this.deps.startReleaseWatch) this.beginHoldWatch();
+        if (!this.watchesFromPress()) this.beginHoldWatch();
         if (this.pendingRelease) this.stopIfRecording();
       }
     });
@@ -351,6 +432,14 @@ export class DictationCoordinator {
           }
         } catch (error) {
           this.deps.logError("Dictation cleanup failed; using the original transcript.", error);
+        }
+        if (this.deps.applyDictionary) {
+          try {
+            const corrected = (await this.deps.applyDictionary(transcript)).trim();
+            if (corrected) transcript = corrected.slice(0, MAX_TRANSCRIPT_LENGTH);
+          } catch (error) {
+            this.deps.logError("Dictation dictionary failed; using the unmodified transcript.", error);
+          }
         }
         const pasteResult = await this.deps.paste(transcript);
         const outcome = typeof pasteResult === "string" ? pasteResult : pasteResult.outcome;

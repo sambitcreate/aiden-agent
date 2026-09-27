@@ -1404,3 +1404,7 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 feature/dictation-parakeet-modes
+- The worktree-isolation guard refuses Bash heredocs whose body contains backticks or template literals (e.g. `cat >> file <<EOF` with TypeScript). Use the Edit/Write tools, or write a Python script to the scratchpad and run it by path.
+- Tests that call a settings view function directly (to reach real handlers without rendering) fail with a hooks TypeError if the view uses `React.useId`; keep such views hook-free or pass ids in as props.

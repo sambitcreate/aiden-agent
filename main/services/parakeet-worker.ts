@@ -1,6 +1,6 @@
 import { pcmToFloat32 } from "../handlers/voice-codec.js";
 import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
-import { engineStatus, releaseRecognizer, transcribePcm } from "./parakeet-engine.js";
+import { engineStatus, releaseRecognizer, transcribePcm, warmRecognizer } from "./parakeet-engine.js";
 import {
   isParakeetParentMessage,
   PARAKEET_PROTOCOL_VERSION,
@@ -32,6 +32,15 @@ parentPort.on("message", (event) => {
         requestId: message.requestId,
         ready: status.ready,
         error: status.error,
+      });
+      return;
+    }
+    if (message.kind === "warm") {
+      warmRecognizer(message.modelId, message.modelDirectory);
+      post({
+        version: PARAKEET_PROTOCOL_VERSION,
+        kind: "result",
+        requestId: message.requestId,
       });
       return;
     }

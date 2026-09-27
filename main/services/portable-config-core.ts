@@ -1,5 +1,7 @@
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
+import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -699,6 +701,16 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   retainKnownValue("telegramActivity", ["quiet", "thinking", "tools", "verbose"]);
   retainKnownValue("telegramRendering", ["rich", "html"]);
   retainKnownValue("telegramVoiceMode", ["hidden", "mirror", "always"]);
+  retainKnownValue("dictationActivationMode", ["toggle", "hold", "hybrid"]);
+  if (settings.dictationDictionary !== undefined) {
+    runtime.dictationDictionary = parseDictationDictionary(settings.dictationDictionary);
+  }
+  if (
+    settings.localVoiceIdleUnloadMinutes !== undefined &&
+    !isLocalVoiceIdleUnloadMinutes(settings.localVoiceIdleUnloadMinutes)
+  ) {
+    delete runtime.localVoiceIdleUnloadMinutes;
+  }
   if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete runtime.telegramAllowedUserId;
   if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
     delete runtime.telegramThinkingLevel;
