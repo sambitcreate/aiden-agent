@@ -245,7 +245,10 @@ class AidenChatViewModel(
 
     fun setChatForegrounded(foregrounded: Boolean) {
         isChatForegrounded = foregrounded
-        if (foregrounded) liveNotificationManager?.dismissNotification(chatId)
+        if (foregrounded) {
+            liveNotificationManager?.dismissNotification(chatId)
+            _chat.value?.let(::reportChatViewed)
+        }
     }
 
     /** Attach the standalone chat progress stream while the detail screen is foregrounded. */
@@ -1851,7 +1854,7 @@ class AidenChatViewModel(
      * every surface. Best effort: a failed report only leaves a stale dot.
      */
     private fun reportChatViewed(chat: AidenChat) {
-        if (chat.isBotChat || isReadOnlyPresentation ||
+        if (!isChatForegrounded || chat.isBotChat || isReadOnlyPresentation ||
             coordinator.serverInfo.value?.supportsChatReadState != true ||
             reportedReadRevision == chat.revision
         ) return

@@ -21,3 +21,5 @@ Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). R
 - Read markers persist message position alongside time, and summary metadata carries the assistant position internally. Equal-millisecond replies compare message order; stale reports cannot move the boundary backward. Positions never enter Remote summary JSON.
 - CI registry assigns all four newly added test files.
 - Desktop focused tests (67), CI policy and typecheck pass; Android chat-summary tests and the iOS AidenRemoteClientTests simulator suite pass.
+
+Independent review found that Android background reconciliation could mark an unseen reply read. Read reporting now requires the chat foreground lifecycle flag and reports the current snapshot when the screen resumes; an HTTP-backed ViewModel regression covers background refresh, resume boundaries, and duplicate suppression.
