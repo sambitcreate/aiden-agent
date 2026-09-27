@@ -1404,3 +1404,6 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 MCP numeric schema formats
+- In a fresh worktree, `npm run type-check` in `packages/cli` fails with `Cannot find module '../../dist/app/advisor-runtime.vendor.mjs'` until `npm run build` has produced `dist/app/`. Build the CLI first; the error is not caused by the change under test.

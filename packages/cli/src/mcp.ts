@@ -15,6 +15,7 @@ import type { McpServer } from "../../../main/services/types.js";
 import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer, createNoRedirectFetch } from "../../../main/services/mcp-presets.js";
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
+import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { JsonStore, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 
@@ -160,7 +161,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     const inventory = await inspectTools(server, signal);
     return inventory.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: tool.description ?? tool.name,
-      parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
+      parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const fresh = (await inspectTools(server, signal)).find(({ name }) => name === tool.name);
         if (JSON.stringify(fresh) !== JSON.stringify(tool)) throw new Error("MCP tool schema or effects changed. Refresh the connection before using it.");
