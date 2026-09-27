@@ -184,10 +184,6 @@ try {
 				now += 10_000;
 				return selectionCount === 1 ? "Direct" : "Guided";
 			}
-			if (selectionCount === 3) {
-				now += 5_000;
-				return "Done";
-			}
 			now += options.timeout;
 			return undefined;
 		},
@@ -199,11 +195,10 @@ try {
 		options: [
 			{ label: "Direct", description: "Take action." },
 			{ label: "Guided", description: "Explain each step." },
-			{ label: "Balanced", description: "Mix both approaches." },
 		],
 	};
 	const result = await request("call-one", [question, { ...question, multiSelect: false }], controller.signal, 30);
-	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000, 5_000])) {
+	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000])) {
 		throw new Error("per-question timeouts reset the deadline: " + JSON.stringify(timeouts));
 	}
 	if (

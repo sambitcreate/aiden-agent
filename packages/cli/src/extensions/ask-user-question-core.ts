@@ -69,7 +69,10 @@ export async function requestQuestionnaire(
 				const remaining = question.options
 					.map((option) => option.label)
 					.filter((label) => !selected.includes(label));
-				if (remaining.length === 0) break;
+				if (remaining.length === 0) {
+					if (selected.length > 0) answers.push({ questionIndex: index, kind: "multi", selected });
+					break;
+				}
 				const selection = await select(
 					`${title} — picked: ${selected.join(", ") || "none"}`,
 					["Done", "Skip question", ...remaining],
