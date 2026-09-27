@@ -161,18 +161,27 @@ test("needs-attention activity carries the pending question and stays bounded", 
     undefined,
   );
   assert.equal(
-    parseSubagentRunSnapshotV2({ ...attention, activity: "Use key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD?" }),
+    parseSubagentRunSnapshotV2({
+      ...attention,
+      activity: "Use key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD?",
+    }),
     undefined,
   );
 });
 
 test("pending question falls back to generic copy only when no text exists", () => {
   assert.equal(subagentPendingQuestion(v2("needs_attention")), undefined);
-  assert.equal(subagentPendingQuestion({ state: "running", activity: "Approve the push?" }), undefined);
+  assert.equal(
+    subagentPendingQuestion({ state: "running", activity: "Approve the push?" }),
+    undefined,
+  );
   assert.equal(subagentPendingQuestion({ state: "needs_attention" }), undefined);
 
   for (const empty of [undefined, 42, "", "   \n\t  "]) {
-    assert.equal(subagentPendingQuestionActivity(empty), SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY);
+    assert.equal(
+      subagentPendingQuestionActivity(empty),
+      SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
+    );
   }
   assert.equal(
     subagentPendingQuestionActivity("Approve   writing\nto package.json?\r\n"),
@@ -239,4 +248,14 @@ test("history detail accepts only bounded sanitized effect activity envelopes", 
     }),
     undefined,
   );
+});
+
+test("pending questions redact control-split credentials before flattening", () => {
+  for (const control of ["\u000b", "\u0000", "\u001b"]) {
+    const activity = subagentPendingQuestionActivity(
+      `Use s${control}k-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD?`,
+    );
+    assert.doesNotMatch(activity, /abcdefghijklmnopqrstuvwxyz0123456789/u);
+    assert.ok(parseSubagentRunSnapshotV2({ ...v2("needs_attention"), activity }));
+  }
 });

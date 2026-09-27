@@ -26,3 +26,7 @@ coordinator not activated); the lifecycle is ready for it.
 Tests: `renderer/shared/subagent-runs-v2.test.ts`,
 `main/services/subagents/background-lifecycle-v2.test.ts`,
 `renderer/components/subagents-panel.test.tsx`.
+
+## Review follow-up
+
+Redact original question text before flattening controls, preserving detection of control-split credentials. Added NUL/vertical-tab/escape regressions; all 11 V2 shared tests pass.

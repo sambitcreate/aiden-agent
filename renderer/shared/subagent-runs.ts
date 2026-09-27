@@ -550,7 +550,7 @@ export function subagentPendingQuestionActivity(question: unknown): string {
       .join("")
       .replace(/\s+/gu, " ")
       .trim();
-  const sanitized = singleLine(sanitizeSubagentSnapshotText(singleLine(question)));
+  const sanitized = singleLine(sanitizeSubagentSnapshotText(question));
   if (!sanitized) return SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY;
   let bounded = sanitized;
   if (bounded.length > MAX_SUBAGENT_ACTIVITY_CHARS) {
@@ -559,7 +559,9 @@ export function subagentPendingQuestionActivity(question: unknown): string {
     const prefix = boundedUnicodePrefix(bounded, MAX_SUBAGENT_ACTIVITY_CHARS - 4);
     const wordBreak = prefix.lastIndexOf(" ");
     const cut =
-      wordBreak >= Math.floor(MAX_SUBAGENT_ACTIVITY_CHARS / 2) ? prefix.slice(0, wordBreak) : prefix;
+      wordBreak >= Math.floor(MAX_SUBAGENT_ACTIVITY_CHARS / 2)
+        ? prefix.slice(0, wordBreak)
+        : prefix;
     bounded = `${cut.replace(/[\s.,;:!?-]+$/u, "")}...`;
   }
   return safeText(bounded, MAX_SUBAGENT_ACTIVITY_CHARS)
