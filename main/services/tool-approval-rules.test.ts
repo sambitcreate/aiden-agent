@@ -241,9 +241,8 @@ test("remembered file rules preserve leading and trailing path whitespace", asyn
   assert.equal(await rules.match("chat-a", target("notes.md ")), undefined);
 });
 
-
 test("remembered rules reject parent segments and non-whitespace command controls", () => {
-  for (const path of ["src/../notes.md", "src/../../notes.md", "../notes.md"]) {
+  for (const path of ["src/../notes.md", "src/../../notes.md", "../notes.md", "..\\outside.txt", "src\\..\\outside.txt", "src/..\\outside.txt"]) {
     assert.equal(toolApprovalRuleTarget("write_file", { path }, "ws1"), undefined);
   }
   for (const control of ["\u0000", "\u0007", "\u0008", "\u000b", "\u000c", "\u001b", "\u007f"]) {

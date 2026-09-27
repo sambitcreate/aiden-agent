@@ -72,7 +72,7 @@ function normalizePathPattern(value: unknown): string | undefined {
   if (path.posix.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed) || trimmed.startsWith("~")) {
     return undefined;
   }
-  if (trimmed.split("/").includes("..")) return undefined;
+  if (trimmed.split(/[\\/]/u).includes("..")) return undefined;
   let normalized = path.posix.normalize(trimmed);
   while (normalized.endsWith("/") && normalized.length > 1) normalized = normalized.slice(0, -1);
   if (
