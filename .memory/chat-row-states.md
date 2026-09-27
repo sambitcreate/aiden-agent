@@ -23,3 +23,9 @@ Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). R
 - Desktop focused tests (67), CI policy and typecheck pass; Android chat-summary tests and the iOS AidenRemoteClientTests simulator suite pass.
 
 Independent review found that Android and iOS background reconciliation could mark an unseen reply read. Both clients now require the detail to be foregrounded and report the current snapshot on resume; Android's HTTP-backed ViewModel regression covers background refresh, resume boundaries, and duplicate suppression, while iOS tests cover visible-scene admission and stale-sidebar callbacks.
+
+## Linux E2E follow-up
+
+PR #280's Linux x64 run flagged two chat queue specs after relaunch and rapid sidebar navigation. The tests now wait for a usable composer, confirm `aria-current` selection, and verify the persisted transcript or restored Stop action before proceeding. This keeps startup/index and New Agent navigation from racing the assertion without sleeps, repeated clicks, timeout increases, or production changes.
+
+Validation: both focused specs passed five times each on macOS (10/10) and three times each under Xvfb in an isolated OrbStack Linux x64 container (6/6, retries disabled). E2E typecheck, build, and diff checks pass.

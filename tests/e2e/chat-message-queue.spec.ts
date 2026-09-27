@@ -67,11 +67,19 @@ test("workspace bar auto-hides after sending and its appearance setting survives
 }) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
+  const persistedMessage = "Hide the bar after this persisted user message.";
+  const composer = () => page.locator("textarea");
   const bar = () => page.locator(".composer-context-collapse");
+  const transcriptMessage = (text: string) =>
+    page.getByRole("main").getByText(text, { exact: true }).last();
+  const sentChat = () =>
+    page
+      .locator("[data-sidebar]")
+      .getByRole("button", { name: /^Deterministic E2E response/u });
   await expect(bar()).toBeVisible();
-  await page.locator("textarea").fill("Hide the bar after this persisted user message.");
+  await composer().fill(persistedMessage);
   await expect(bar()).toHaveAttribute("data-collapsed", "false");
-  await page.locator("textarea").press("Enter");
+  await composer().press("Enter");
   await expect(bar()).toHaveAttribute("data-collapsed", "true");
   await expect(bar()).toHaveAttribute("inert", "");
   await expect(bar()).toHaveAttribute("aria-hidden", "true");
@@ -88,10 +96,17 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   const openSentChat = async () => {
     const back = page.getByRole("button", { name: "Back to app", exact: true });
     if (await back.isVisible()) await back.click();
-    await page
-      .locator("[data-sidebar]")
-      .getByRole("button", { name: /^Deterministic E2E response/u })
-      .click();
+    // The app can still be resolving its startup/index route after the window
+    // appears. Wait until that route has produced a usable composer before
+    // sending a sidebar selection that could otherwise be superseded.
+    await expect(composer()).toBeVisible();
+    await expect(composer()).toBeEnabled();
+    await expect(sentChat()).toBeVisible();
+    if ((await sentChat().getAttribute("aria-current")) !== "page") {
+      await sentChat().click();
+    }
+    await expect(sentChat()).toHaveAttribute("aria-current", "page");
+    await expect(transcriptMessage(persistedMessage)).toBeVisible();
   };
   // The Appearance page no longer exposes these controls; drive the
   // underlying settings fields through settings:set instead. Live
@@ -485,14 +500,31 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
   const composer = page.locator("textarea");
-  await composer.fill("Stop after returning to this chat");
+  const originalMessage = "Stop after returning to this chat";
+  const originalChat = () =>
+    page
+      .locator("[data-sidebar]")
+      .getByRole("button", { name: /^Stop after returning to this chat/u });
+  const transcriptMessage = () =>
+    page.getByRole("main").getByText(originalMessage, { exact: true }).last();
+  const stop = () => page.getByRole("button", { name: "Stop generating" });
+  await composer.fill(originalMessage);
   await composer.press("Enter");
-  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await expect(stop()).toBeEnabled();
+  await expect(originalChat()).toHaveAttribute("aria-current", "page");
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
-  await page.locator("[data-sidebar]")
-    .getByRole("button", { name: /^Stop after returning to this chat/u }).click();
-  await page.getByRole("button", { name: "Stop generating" }).click();
-  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  // Wait for New Agent's draft route to replace the old chat selection before
+  // navigating back; otherwise the two async route changes can overlap.
+  await expect(originalChat()).not.toHaveAttribute("aria-current", "page");
+  await expect(composer).toBeVisible();
+  await expect(composer).toBeEnabled();
+  await expect(originalChat()).toBeVisible();
+  await originalChat().click();
+  await expect(originalChat()).toHaveAttribute("aria-current", "page");
+  await expect(transcriptMessage()).toBeVisible();
+  await expect(stop()).toBeEnabled();
+  await stop().click();
+  await expect(stop()).toBeHidden();
   await composer.fill("Fresh turn after returning and stopping");
   await composer.press("Enter");
   await expect.poll(() => lmStudio.requests.filter(
