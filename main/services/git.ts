@@ -1328,7 +1328,13 @@ export class GitService {
       this.branchCache.delete(canonical);
       for (let attempt = 0; attempt < 3; attempt++) {
         const identity = await this.rootReadIdentity(canonical);
-        const repo = await this.repository(canonical, owner);
+        let repo: GitRepository | null;
+        try { repo = await this.repository(canonical, owner); }
+        catch (error) {
+          if (!owner.aborted && identity &&
+              await this.repositorySignature(identity.paths) !== identity.signature) continue;
+          throw error;
+        }
         if (identity && await this.repositorySignature(identity.paths) !== identity.signature) continue;
         // Nested/unusual layouts remain uncached. The filesystem proof only
         // qualifies reuse of Git's result; it never replaces Git discovery.
@@ -1362,13 +1368,21 @@ export class GitService {
       for (;;) {
         if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
         const repo = current;
-        const value = repo
-          ? await this.stableRead(repo, () => operation(repo, owner), owner)
-          : await operation(null, owner);
+        let result: { value: T } | { error: unknown };
+        try {
+          result = { value: repo
+            ? await this.stableRead(repo, () => operation(repo, owner), owner)
+            : await operation(null, owner) };
+        } catch (error) { result = { error }; }
         if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
         if (!repo?.readIdentity ||
             (await fs.realpath(cwd).catch(() => undefined) === repo.cwd &&
-             await this.repositorySignature(repo.readIdentity.paths) === repo.readIdentity.signature)) return value;
+             await this.repositorySignature(repo.readIdentity.paths) === repo.readIdentity.signature)) {
+          if ("error" in result) throw result.error;
+          return result.value;
+        }
+        // A disappearing/replaced root can fail a subprocess as well as return
+        // stale data. Retry either outcome only when its routing proof changed.
         this.invalidate(repo.commonDir);
         this.repositoryCache.delete(repo.cwd);
         current = await this.readRepository(cwd, owner);

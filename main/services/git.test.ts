@@ -4890,7 +4890,12 @@ test("GitService retries a read across root replacement and discovers newly nest
     if (args[0] === "status" && !swapped) {
       swapped = true;
       await fs.rename(repository, `${repository}-old`);
-      await fs.rename(replacement, repository);
+      let missingRootError: unknown;
+      try { await original(cwd, ["remote"], options); }
+      catch (error) { missingRootError = error; }
+      finally { await fs.rename(replacement, repository); }
+      assert.ok(missingRootError, "the real Git command must fail while its cwd is absent");
+      throw missingRootError;
     }
     return result;
   };
@@ -5039,7 +5044,17 @@ test("GitService retries config and linked common-directory changes during disco
     const result = await linkedRun(cwd, args, options);
     if (args[0] === "rev-parse" && args[1] === "--git-common-dir" && !switched) {
       switched = true;
-      await fs.writeFile(path.join(admin, "commondir"), `${otherCommon}\n`);
+      const pointer = path.join(admin, "commondir");
+      await fs.rename(pointer, `${pointer}-old`);
+      let missingPointerError: unknown;
+      try { await linkedRun(cwd, ["rev-parse", "--show-toplevel"], options); }
+      catch (error) { missingPointerError = error; }
+      finally {
+        await fs.writeFile(pointer, `${otherCommon}\n`);
+        await fs.rm(`${pointer}-old`);
+      }
+      assert.ok(missingPointerError, "discovery must fail while its common-directory pointer is absent");
+      throw missingPointerError;
     }
     return result;
   };
@@ -5068,11 +5083,19 @@ test("GitService rejects late cache publications from a replaced root across ali
     const oldInfoFinished = gitReadGate();
     let readingNewRoot = false;
     let heldOnce = false;
+    const activeCommands = new Set<ReturnType<typeof original>>();
     runner.run = async (cwd, args, options) => {
-      const result = await original(cwd, args, options);
+      const pending = original(cwd, args, options);
+      activeCommands.add(pending);
+      let result: Awaited<typeof pending>;
+      try { result = await pending; }
+      finally { activeCommands.delete(pending); }
       const hold = kind === "info" ? args[0] === "status" : args[0] === "for-each-ref" && args.includes("refs/heads");
       if (hold && !heldOnce) {
         heldOnce = true;
+        // Hold a complete old command batch: this fixture tests late cache
+        // publication, while the adjacent test covers missing-root failures.
+        await Promise.all([...activeCommands]);
         if (kind === "branches") await oldInfoFinished.promise;
         held.resolve();
         await releaseOldRead.promise;
