@@ -1,0 +1,42 @@
+# Android selected-image preparation
+
+Baseline: `a9baa4aa3027893e5455043083465c34b4c8b4ac` (2026-09-27).
+
+Scope: AND-03 from `docs/audits/performance-2026-09-27/android.md`, implemented on `feature/perf-android-images`. Synthetic fixtures only; no account, provider, catalog, or inference requests. Server/wire contracts, transcript presentation, draft persistence, and cache architecture are unchanged.
+
+## Before / after ledger
+
+| Invariant | Before | After | Evidence |
+| --- | --- | --- | --- |
+| Selected URI metadata, validation, conversion and Base64 | Compose Main coroutine; only bounded file read switched to IO | Whole preparation callback executes on IO under one shared mutex | JVM held worker assertion compares against the actual Main executor thread; Main can query state and invoke Send while worker is held |
+| Preparation concurrency | Each picker callback independently launched work | One preparation worker across chats; ordered batches per chat, one URI at a time; capacity rechecked when queued batch starts | Overlapping held selections and ten-item batch test |
+| Send admission | Preparation and upload were absent from `canSend` | Batch counter reserves Send synchronously before the first suspension; upload also blocks Send; UI collects both states | Held preparation, cancellation of first owner while second waits, production `send()` attempt, accepted attachment order |
+| Large conversion decode | Full decode up to 40 MP before scaling | Power-of-two sampling retains sufficient pixels for largest 3072-edge candidate; exact scaling afterwards | 6400×4000 transparent synthetic PNG conversion yields 3072×1920 with alpha retained |
+| Bitmap ownership | Intermediates awaited GC | Scaled, oriented and sampled bitmaps recycled in `finally`, including early success/cancellation | Code ownership inspection and exercised codec output paths |
+| Original PNG/JPEG | Validated <=8 MiB payload passed through | Byte-identical passthrough including metadata | Instrumented PNG/JPEG byte equality |
+| Converted EXIF orientation | BitmapFactory conversion dropped orientation metadata without applying it | Native platform EXIF orientation applied to converted pixels, including mirror variants; passthrough untouched | Instrumented 90-degree JPEG conversion; other orientations code-inspected |
+| Validation | 32 MiB source, 8 MiB upload, 16,384 edge and 40 MP source caps | Same admission caps before sampled allocation; unsuccessful native compression cannot yield an empty upload | Instrumented invalid bytes and over-dimension image rejection |
+| Cancellation | Broad exception handler swallowed cancellation and continued selection | Cancellation rethrown, checks between read chunks/codec candidates, no next upload after cancellation; client identity checked after preparation/upload | JVM held cancelled selection and remaining selection ownership |
+
+For a 6400×4000 source, sampling by two reduces decoded pixel count from 25.6 million to 6.4 million before exact scaling. These are dimension-derived counts, **not measured RSS or peak allocation**. Encoded source bytes, compressed candidates, Base64 strings and codec internals still consume memory.
+
+## Verification
+
+The focused JVM regression fails when the worker hop is deliberately removed (restoring the baseline Main execution behavior), with `Preparation must not run on Main`. It passes with the hop restored. This is a controlled behavioral mutation of the new seam, not a claim that the new API compiled on untouched main.
+
+Executed with JDK 21 (`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`) and the existing Android SDK:
+
+- Initial `./android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:compileDebugAndroidTestKotlin --max-workers=2`: 251 JVM tests, zero failures/errors/skips; lint and instrumented Kotlin compilation pass.
+- Final full rerun after moving upload-cache Base64 decoding before POST: 250/251 passed. Existing `heldTurnReceiptPreservesOtherOwnerAndCannotCrossRemoval` timed out at its initial `sender.isLoading` wait (`AidenChatTest.kt:344`, before send/attachment work). The new attachment regression passed. Failure XML preserved at `/tmp/aiden-image-final-timeout.xml`; log `/tmp/aiden-image-validation-final.log`. One permitted targeted rerun of that case plus the new preparation regression passed **2/2**, followed by passing lintDebug and compileDebugAndroidTestKotlin (`/tmp/aiden-image-final-targeted.log`). No timeout increase or retry workaround was introduced. This failure remains an unresolved flaky-test observation. The failed wait precedes `updateDraft`, `canSend`, and `send`; that test uses no attachments and never invokes preparation/upload. Init, loadChat, HTTP chat loading and cache acceptance are unchanged by this patch. Thus no new worker or preparation gate participates in the timed-out path. The full-run XML also contains a Main-dispatcher teardown exception from terminal reconciliation; its causal relationship to the timeout is not established. A baseline failure was not reproduced, so this is source-based scope attribution, not a proven root cause.
+- `:app:connectedDebugAndroidTest` with runner class filters for the three `preparation*` methods in `AidenImageCarouselUiTest`: **3 executed, 3 passed** on existing `Medium_Phone_API_36.1`, Android 16/API 36.1, ARM64 emulator, debug build. These are executed codec correctness checks, not merely compilation. Other instrumented UI tests were compiled but not executed.
+- The controlled baseline-dispatch mutation failed one focused JVM test; restoring worker dispatch passed. Logs: `/tmp/aiden-image-baseline-dispatch.log`, `/tmp/aiden-image-validation.log`, `/tmp/aiden-image-validation-final.log`, `/tmp/aiden-image-instrumentation.log` (local ephemeral artifacts).
+
+Tests extend existing Gradle-discovered classes; no new test file or npm script was introduced. No physical device was connected. Existing emulator launched headlessly for these synthetic tests; no account setup or paired server was used.
+
+## Boundaries
+
+Native codec calls and a provider's blocking stream read cannot be interrupted halfway through by coroutine cancellation. Cancellation is checked at stage/chunk boundaries, and `withContext` suppresses publication after cancellation. The worker retains its mutex until the blocking stage returns, avoiding overlap with a still-running cancelled conversion. Metadata provider calls are also off Main.
+
+The post-upload image cache write remains on its existing owner to avoid introducing cache/purge ordering changes in this scoped task. Its Base64 decode runs off Main before the upload request, followed by an identity recheck; no new suspension is introduced between receipt publication and cache save. AND-01/AND-02 and other cache work remain separate.
+
+No physical-device frame timing, p95/p99 input latency, energy, thermal, or peak RSS measurements are claimed. Emulator correctness does not establish physical-device performance. HEIC availability remains platform-decoder dependent; no new decoder or dependency was added. Original valid PNG/JPEG byte passthrough intentionally retains original dimensions below the established validation caps.

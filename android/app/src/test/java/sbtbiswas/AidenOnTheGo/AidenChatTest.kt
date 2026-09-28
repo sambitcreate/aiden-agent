@@ -10,6 +10,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -467,7 +470,10 @@ class AidenChatTest {
     fun failedSendCannotRestoreDraftAfterInstallationPurge() = assertFailedSendDraft(purgeWhileSending = true)
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false) {
+    @Test fun selectedAttachmentPreparationKeepsMainResponsiveAndSendReservedThroughCancellation() =
+        assertFailedSendDraft(checkPreparation = true)
+
+    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val turnArrived = CountDownLatch(1)
@@ -486,6 +492,13 @@ class AidenChatTest {
                     turnArrived.countDown()
                     check(releaseTurn.await(5, TimeUnit.SECONDS)) { "Send response was not released" }
                     MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-draft","retryable":true}}""")
+                }
+                "/api/aiden/v1/chats/chat-draft/attachments" -> {
+                    val name = json.parseToJsonElement(request.body.readUtf8()).jsonObject["name"]!!.jsonPrimitive.content
+                    MockResponse().setResponseCode(201).setBody(json.encodeToString(AidenAttachmentReference(
+                        id = "att_" + name.padEnd(43, 'x'), name = name, mimeType = "text/plain",
+                        kind = AidenAttachmentKind.TEXT, size = 1, expiresAt = Instant.now().plusSeconds(600)
+                    )))
                 }
                 "/api/aiden/v1/chats/chat-draft" -> MockResponse().setBody(json.encodeToString(initialChat))
                 else -> MockResponse().setResponseCode(404)
@@ -518,6 +531,58 @@ class AidenChatTest {
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 model.updateDraft("Original unsent text")
                 assertTrue(model.canSend)
+                if (checkPreparation) {
+                    val mainThread = Thread.currentThread()
+                    val entered = CountDownLatch(1)
+                    val release = CountDownLatch(1)
+                    val nextEntered = CountDownLatch(1)
+                    val nextRelease = CountDownLatch(1)
+                    val first = launch(start = CoroutineStart.UNDISPATCHED) {
+                        model.prepareAndUpload(listOf(1, 2)) {
+                            assertNotSame("Preparation must not run on Main", mainThread, Thread.currentThread())
+                            entered.countDown()
+                            check(release.await(5, TimeUnit.SECONDS))
+                            null
+                        }
+                    }
+                    val second = launch(start = CoroutineStart.UNDISPATCHED) {
+                        model.prepareAndUpload(listOf(3)) {
+                            nextEntered.countDown()
+                            check(nextRelease.await(5, TimeUnit.SECONDS))
+                            null
+                        }
+                    }
+                    try {
+                        withContext(Dispatchers.IO) { assertTrue(entered.await(5, TimeUnit.SECONDS)) }
+                        assertEquals(2, model.preparingAttachmentBatches.value)
+                        assertEquals(1L, nextEntered.count)
+                        assertFalse(model.canSend)
+                        model.send()
+                        assertFalse(model.isStarting.value)
+                        assertEquals("Original unsent text", model.draft.value)
+                        first.cancel()
+                        release.countDown()
+                        first.join()
+                        withContext(Dispatchers.IO) { assertTrue(nextEntered.await(5, TimeUnit.SECONDS)) }
+                        assertEquals(1, model.preparingAttachmentBatches.value)
+                        assertFalse(model.canSend)
+                    } finally {
+                        release.countDown()
+                        nextRelease.countDown()
+                        first.cancelAndJoin()
+                        second.join()
+                    }
+                    val order = mutableListOf<Int>()
+                    model.prepareAndUpload((1..10).toList()) {
+                        order.add(it)
+                        if (it == 4) error("Invalid provider selection")
+                        AidenAttachmentUpload.Text(name = "selection-$it", mimeType = "text/plain", text = "x")
+                    }
+                    assertEquals((1..10).toList(), order)
+                    assertEquals((1..10).filter { it != 4 }.map { "selection-$it" }, model.pendingAttachments.value.map { it.name })
+                    assertEquals(0, model.preparingAttachmentBatches.value)
+                    assertTrue(model.canSend)
+                }
                 model.send()
                 withContext(Dispatchers.IO) { assertTrue(turnArrived.await(5, TimeUnit.SECONDS)) }
                 assertTrue(model.isStarting.value)
