@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -4722,4 +4724,697 @@ test("GitService redacts credentials from command failures", async (t) => {
 test("GitService fails soft for non-repositories", async (t) => {
   const directory = await temporaryDirectory(t);
   assert.deepEqual(await new GitService().info(directory), { isRepo: false });
+});
+
+function gitReadGate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+// Observe actual command admission while retaining the real Git executable and
+// parser. Held responses below exercise races without scheduler-based sleeps.
+function observeGitCommands(service: GitService) {
+  const runner = service as unknown as {
+    run(cwd: string, args: string[], options?: { signal?: AbortSignal }): Promise<{
+      stdout: string; stderr: string; exitCode: number;
+    }>;
+  };
+  const original = runner.run.bind(service);
+  const commands: string[][] = [];
+  runner.run = (cwd, args, options) => {
+    commands.push(args);
+    return original(cwd, args, options);
+  };
+  return { commands, runner };
+}
+
+test("GitService shares cold consumers and validates discovery without warm subprocesses", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { commands } = observeGitCommands(service);
+  const results = await Promise.all(Array.from({ length: 10 }, () => service.info(repository)));
+  assert.ok(results.every(info => info.branch === "main" && info.uncommitted === 0));
+  assert.equal(commands.length, 6, "one discovery and status flight for all consumers");
+  commands.length = 0;
+  for (let i = 0; i < 10; i++) assert.equal((await service.info(repository)).branch, "main");
+  assert.equal(commands.length, 0, "warm reads validate filesystem identity without Git processes");
+  t.diagnostic("10 concurrent cold info reads: 6 commands; 10 sequential warm info reads: 0 commands (baseline warm: 30)");
+});
+
+test("GitService shares info with branches but keeps external status freshness", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const { commands } = observeGitCommands(service);
+  const [info, branches] = await Promise.all([service.info(repository), service.branches(repository)]);
+  assert.equal(info.branch, branches.current);
+  assert.equal(commands.filter(args => args[0] === "status").length, 1);
+  commands.length = 0;
+  await fs.writeFile(path.join(repository, "external.txt"), "external edit\n");
+  assert.equal((await service.info(repository)).uncommitted, 1);
+  assert.equal(commands.filter(args => args[0] === "rev-parse").length, 3);
+  assert.equal(commands.filter(args => args[0] === "status").length, 1);
+  await git(repository, ["switch", "-c", "external-ref"]);
+  assert.equal((await service.info(repository)).branch, "external-ref");
+  await git(repository, ["remote", "add", "example", "https://example.invalid/repo.git"]);
+  assert.equal((await service.info(repository)).hasRemote, true);
+  assert.ok(commands.some(args => args[0] === "rev-parse"), "config changes rediscover routing");
+});
+
+test("GitService does not let one cancelled subscriber cancel another", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService();
+  const { runner, commands } = observeGitCommands(service);
+  const original = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  runner.run = async (cwd, args, options) => {
+    const result = await original(cwd, args, options);
+    if (args[0] === "status") { started.resolve(); await release.promise; }
+    return result;
+  };
+  const owner = new AbortController();
+  const healthy = new AbortController();
+  const first = service.info(repository, owner.signal);
+  const rejected = assert.rejects(first, (error) => error instanceof GitServiceError && error.code === "aborted");
+  const second = service.info(repository, healthy.signal);
+  try {
+    await started.promise;
+    owner.abort();
+    await rejected;
+    release.resolve();
+    assert.equal((await second).branch, "main");
+    assert.equal(commands.filter(args => args[0] === "status").length, 1);
+  } finally { release.resolve(); owner.abort(); healthy.abort(); await Promise.allSettled([first, second]); }
+});
+
+test("GitService abandons cancelled flights and does not publish their late cache results", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner, commands } = observeGitCommands(service);
+  const original = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  const drained = gitReadGate();
+  let heldSignal: AbortSignal | undefined;
+  runner.run = async (cwd, args, options) => {
+    const result = await original(cwd, args, options);
+    if (args[0] === "status" && !heldSignal) {
+      heldSignal = options?.signal;
+      started.resolve();
+      await release.promise;
+      drained.resolve();
+    }
+    return result;
+  };
+  const owner = new AbortController();
+  const pending = service.info(repository, owner.signal);
+  const rejected = assert.rejects(pending, (error) => error instanceof GitServiceError && error.code === "aborted");
+  try {
+    await started.promise;
+    owner.abort();
+    await rejected;
+    assert.equal(heldSignal?.aborted, true);
+    await fs.writeFile(path.join(repository, "after-abort.txt"), "new\n");
+    assert.equal((await service.info(repository)).uncommitted, 1);
+    release.resolve();
+    await drained.promise;
+    assert.equal((await service.info(repository)).uncommitted, 1);
+    const before = commands.length;
+    await assert.rejects(service.review(repository, owner.signal), error => error instanceof GitServiceError && error.code === "aborted");
+    assert.equal(commands.length, before, "already-aborted review must not discover a repository");
+  } finally { release.resolve(); owner.abort(); await Promise.allSettled([pending]); }
+});
+
+test("GitService invalidates read identity for root replacements, aliases and linked pointers", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  await git(replacement, ["switch", "-c", "replacement"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  assert.equal((await service.info(repository)).branch, "main");
+  await fs.rename(repository, `${repository}-old`);
+  await fs.rename(replacement, repository);
+  assert.equal((await service.info(repository)).branch, "replacement");
+  const alias = path.join(path.dirname(repository), "alias");
+  await fs.symlink(repository, alias, "dir");
+  assert.equal((await service.info(alias)).branch, "replacement");
+  await fs.unlink(alias);
+  await fs.symlink(`${repository}-old`, alias, "dir");
+  assert.equal((await service.info(alias)).branch, "main");
+  const linked = path.join(path.dirname(repository), "linked");
+  const otherLinked = path.join(path.dirname(repository), "other-linked");
+  await git(repository, ["worktree", "add", "-b", "linked-branch", linked]);
+  await git(`${repository}-old`, ["worktree", "add", "-b", "other-branch", otherLinked]);
+  assert.equal((await service.info(linked)).branch, "linked-branch");
+  const { commands } = observeGitCommands(service);
+  assert.equal((await service.info(linked)).branch, "linked-branch");
+  assert.equal(commands.length, 0);
+  await fs.copyFile(path.join(otherLinked, ".git"), path.join(linked, ".git"));
+  assert.equal((await service.info(linked)).branch, "other-branch");
+  // A cached display result must not choose a mutation's repository or branch.
+  await service.createBranch(linked, "write-after-pointer-change");
+  assert.equal(await git(`${repository}-old`, ["rev-parse", "refs/heads/write-after-pointer-change"]), await git(`${repository}-old`, ["rev-parse", "HEAD"]));
+  await assert.rejects(git(repository, ["rev-parse", "refs/heads/write-after-pointer-change"]));
+});
+
+test("GitService retries a read across root replacement and discovers newly nested repositories", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  await git(replacement, ["switch", "-c", "new-root"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const original = runner.run;
+  let swapped = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await original(cwd, args, options);
+    if (args[0] === "status" && !swapped) {
+      swapped = true;
+      await fs.rename(repository, `${repository}-old`);
+      let missingRootError: unknown;
+      try { await original(cwd, ["remote"], options); }
+      catch (error) { missingRootError = error; }
+      finally { await fs.rename(replacement, repository); }
+      assert.ok(missingRootError, "the real Git command must fail while its cwd is absent");
+      throw missingRootError;
+    }
+    return result;
+  };
+  assert.equal((await service.info(repository)).branch, "new-root");
+  const nested = path.join(repository, "nested");
+  await fs.mkdir(nested);
+  assert.equal((await service.info(nested)).branch, "new-root");
+  await git(nested, ["init", "--initial-branch=nested"]);
+  assert.equal((await service.info(nested)).branch, "nested");
+});
+
+async function observeReviewReads(t: test.TestContext) {
+  const root = await temporaryDirectory(t);
+  const probe = await fs.open(path.join(root, "probe"), "w+");
+  const prototype = Object.getPrototypeOf(probe) as fs.FileHandle;
+  await probe.close();
+  const original = prototype.read;
+  const metrics = { active: 0, peak: 0, bytes: 0, calls: 0 };
+  t.mock.method(prototype, "read", async function (this: fs.FileHandle, ...args: Parameters<fs.FileHandle["read"]>) {
+    metrics.active++;
+    metrics.peak = Math.max(metrics.peak, metrics.active);
+    metrics.calls++;
+    try {
+      const result = await Reflect.apply(original, this, args);
+      metrics.bytes += result.bytesRead;
+      return result;
+    } finally { metrics.active--; }
+  });
+  return metrics;
+}
+
+test("GitService bounds wide untracked statistics and reuses verified counts", async (t) => {
+  const repository = await createRepository(t);
+  const contents = "line\n".repeat(200);
+  for (let i = 0; i < 100; i++) await fs.writeFile(path.join(repository, `file-${String(i).padStart(3, "0")}.txt`), contents);
+  const metrics = await observeReviewReads(t);
+  const service = new GitService({ cacheTtlMs: 0, reviewStatsMaxBytes: 10_010 });
+  const first = await service.review(repository);
+  assert.equal(first.files.length, 100);
+  assert.equal(first.summary.additions, 2000);
+  assert.equal(first.summary.unavailableStats, 90);
+  assert.equal(first.commit.allowed, true, "display stats budget does not weaken the independent commit snapshot");
+  assert.equal(metrics.peak, 1);
+  assert.equal(metrics.bytes, 10_000);
+  const second = await service.review(repository);
+  assert.equal(second.summary.unavailableStats, 80, "verified cached counts cost no file-read budget");
+  assert.equal(metrics.bytes, 20_000);
+  const edited = path.join(repository, "file-000.txt");
+  await fs.writeFile(edited, "changed\n");
+  const third = await service.review(repository);
+  assert.equal(third.files.find(file => file.path === "file-000.txt")?.additions, 1);
+  assert.notEqual(third.commit.snapshot, first.commit.snapshot);
+  await assert.rejects(service.commit(repository, { message: "Stale budgeted review", expectedSnapshot: first.commit.snapshot!, mode: "all" }), error => error instanceof GitServiceError && error.code === "stale_snapshot");
+  t.diagnostic(`100 untracked files of 1,000 bytes; first refresh: 10,000 fallback bytes, peak 1 read, 90 explicitly unavailable stats`);
+});
+
+test("GitService cancels bounded line inspection and rejects post-stat growth counts", async (t) => {
+  const repository = await createRepository(t);
+  const target = path.join(repository, "untracked.txt");
+  await fs.writeFile(target, "a\n".repeat(100_000));
+  const root = await temporaryDirectory(t);
+  const probe = await fs.open(path.join(root, "probe"), "w+");
+  const prototype = Object.getPrototypeOf(probe) as fs.FileHandle;
+  await probe.close();
+  const original = prototype.read;
+  const owner = new AbortController();
+  let calls = 0;
+  t.mock.method(prototype, "read", async function (this: fs.FileHandle, ...args: Parameters<fs.FileHandle["read"]>) {
+    const result = await Reflect.apply(original, this, args);
+    calls++;
+    owner.abort();
+    return result;
+  });
+  const service = new GitService();
+  await assert.rejects(service.review(repository, owner.signal), error => error instanceof GitServiceError && error.code === "aborted");
+  // Allow cancellation cleanup to close its descriptor before inspecting again.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1);
+  t.mock.restoreAll();
+  let grew = false;
+  let bytes = 0;
+  t.mock.method(prototype, "read", async function (this: fs.FileHandle, ...args: Parameters<fs.FileHandle["read"]>) {
+    if (!grew) { grew = true; await fs.appendFile(target, "late\n".repeat(100_000)); }
+    const result = await Reflect.apply(original, this, args);
+    bytes += result.bytesRead;
+    return result;
+  });
+  const review = await service.review(repository);
+  assert.equal(review.summary.unavailableStats, 1);
+  assert.equal(review.files[0].additions, undefined);
+  assert.equal(bytes, 200_001, "growth is capped at original size plus one EOF probe");
+});
+
+test("GitService keeps the default freshness deadline and invalidates linked consumers on mutation", async (t) => {
+  const repository = await createRepository(t);
+  const linked = path.join(path.dirname(repository), "linked-freshness");
+  await git(repository, ["worktree", "add", "-b", "linked", linked]);
+  const service = new GitService();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const { commands } = observeGitCommands(service);
+  await service.info(repository);
+  await service.branches(linked);
+  commands.length = 0;
+  await service.info(repository);
+  assert.equal(commands.length, 0);
+  now += 1001;
+  await fs.writeFile(path.join(repository, "external-freshness.txt"), "changed\n");
+  assert.equal((await service.info(repository)).uncommitted, 1);
+  assert.equal(commands.length, 6, "the existing one-second TTL still expires discovery and status");
+  await service.createBranch(repository, "fresh-mutation");
+  assert.ok((await service.branches(linked)).branches.includes("fresh-mutation"), "common-directory mutation invalidates a linked consumer immediately");
+});
+
+test("GitService retries config and linked common-directory changes during discovery", async (t) => {
+  const repository = await createRepository(t);
+  const other = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const original = runner.run;
+  let moved = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await original(cwd, args, options);
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel" && !moved) {
+      moved = true;
+      await git(repository, ["config", "core.worktree", other]);
+    }
+    return result;
+  };
+  await service.info(repository);
+  const review = await service.review(repository);
+  assert.equal(review.commit.repositoryRoot, false, "a racing core.worktree change cannot authorize a root-only display capability");
+  assert.equal(await git(repository, ["rev-parse", "--show-toplevel"]), await fs.realpath(other));
+
+  await git(repository, ["config", "--unset", "core.worktree"]);
+  const linked = path.join(path.dirname(repository), "linked-routing-race");
+  await git(repository, ["worktree", "add", "-b", "linked-routing", linked]);
+  await git(other, ["branch", "other-only"]);
+  const admin = await git(linked, ["rev-parse", "--absolute-git-dir"]);
+  const otherCommon = await fs.realpath(path.join(other, ".git"));
+  const linkedService = new GitService({ cacheTtlMs: 60_000 });
+  const linkedObserver = observeGitCommands(linkedService);
+  const linkedRun = linkedObserver.runner.run;
+  const initialTopLevel = gitReadGate();
+  let switched = false;
+  linkedObserver.runner.run = async (cwd, args, options) => {
+    const result = await linkedRun(cwd, args, options);
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") initialTopLevel.resolve();
+    if (args[0] === "rev-parse" && args[1] === "--git-common-dir" && !switched) {
+      // Complete the sibling discovery command before deliberately removing
+      // its pointer, so exactly one controlled failure drives the retry.
+      await initialTopLevel.promise;
+      switched = true;
+      const pointer = path.join(admin, "commondir");
+      await fs.rename(pointer, `${pointer}-old`);
+      let missingPointerError: unknown;
+      try { await linkedRun(cwd, ["rev-parse", "--show-toplevel"], options); }
+      catch (error) { missingPointerError = error; }
+      finally {
+        await fs.writeFile(pointer, `${otherCommon}\n`);
+        await fs.rm(`${pointer}-old`);
+      }
+      assert.ok(missingPointerError, "discovery must fail while its common-directory pointer is absent");
+      throw missingPointerError;
+    }
+    return result;
+  };
+  const branches = await linkedService.branches(linked);
+  assert.ok(branches.branches.includes("other-only"));
+  assert.equal(linkedObserver.commands.filter(args => args[0] === "rev-parse" && args[1] === "--is-inside-work-tree").length, 2, "changed commondir must rediscover the mutation epoch owner");
+  // Mutation in the new common dir must invalidate the linked display cache.
+  await linkedService.createBranch(other, "after-routing-race");
+  assert.ok((await linkedService.branches(linked)).branches.includes("after-routing-race"));
+});
+
+test("GitService rejects late cache publications from a replaced root across aliases", async (t) => {
+  for (const kind of ["info", "branches"] as const) {
+    const repository = await createRepository(t);
+    const replacement = await createRepository(t);
+    await git(replacement, ["switch", "-c", "after-swap"]);
+    const alias = path.join(path.dirname(repository), "second-reader");
+    await fs.symlink(repository, alias, "dir");
+    const service = new GitService({ cacheTtlMs: 60_000 });
+    const { runner } = observeGitCommands(service);
+    const original = runner.run;
+    const held = gitReadGate();
+    const releaseOldRead = gitReadGate();
+    const oldProofBlocked = gitReadGate();
+    const releaseOldProof = gitReadGate();
+    const oldInfoFinished = gitReadGate();
+    let readingNewRoot = false;
+    let heldOnce = false;
+    const activeCommands = new Set<ReturnType<typeof original>>();
+    runner.run = async (cwd, args, options) => {
+      const pending = original(cwd, args, options);
+      activeCommands.add(pending);
+      let result: Awaited<typeof pending>;
+      try { result = await pending; }
+      finally { activeCommands.delete(pending); }
+      const hold = kind === "info" ? args[0] === "status" : args[0] === "for-each-ref" && args.includes("refs/heads");
+      if (hold && !heldOnce) {
+        heldOnce = true;
+        // Hold a complete old command batch: this fixture tests late cache
+        // publication, while the adjacent test covers missing-root failures.
+        await Promise.all([...activeCommands]);
+        if (kind === "branches") await oldInfoFinished.promise;
+        held.resolve();
+        await releaseOldRead.promise;
+      } else if (readingNewRoot && args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+        releaseOldRead.resolve();
+        await oldProofBlocked.promise;
+      }
+      return result;
+    };
+    const internals = service as unknown as {
+      setCached(cache: unknown, key: string, commonDir: string, value: { branch?: string; current?: string }, identity?: string): void;
+      repositorySignature(paths: string[]): Promise<string | undefined>;
+    };
+    const setCached = internals.setCached.bind(service);
+    const signature = internals.repositorySignature.bind(service);
+    let blockNextProof = false;
+    internals.setCached = (cache, key, commonDir, value, identity) => {
+      setCached(cache, key, commonDir, value, identity);
+      if (value.branch === "main" && value.current === undefined) oldInfoFinished.resolve();
+      if (readingNewRoot && (kind === "info" ? value.branch === "main" : value.current === "main")) blockNextProof = true;
+    };
+    internals.repositorySignature = async paths => {
+      const result = await signature(paths);
+      if (blockNextProof) {
+        blockNextProof = false;
+        oldProofBlocked.resolve();
+        await releaseOldProof.promise;
+      }
+      return result;
+    };
+    const oldRead = service[kind](repository);
+    void oldRead.catch(() => undefined);
+    let newRead: ReturnType<typeof service.info> | ReturnType<typeof service.branches> | undefined;
+    try {
+      await held.promise;
+      await fs.rename(repository, `${repository}-old`);
+      await fs.rename(replacement, repository);
+      readingNewRoot = true;
+      newRead = service[kind](alias);
+      const value = await newRead;
+      assert.equal("branches" in value ? value.current : value.branch, "after-swap", `${kind} must not reuse the old identity's late result`);
+      if ("branches" in value) assert.ok(value.branches.includes("after-swap"));
+      releaseOldProof.resolve();
+      const refreshed = await oldRead;
+      assert.equal("branches" in refreshed ? refreshed.current : refreshed.branch, "after-swap");
+    } finally {
+      releaseOldRead.resolve();
+      oldProofBlocked.resolve();
+      releaseOldProof.resolve();
+      await Promise.allSettled([oldRead, newRead]);
+    }
+  }
+});
+
+test("GitService keeps nested readers independent across ancestor replacement", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  const nested = path.join(repository, "nested");
+  await fs.mkdir(nested);
+  await fs.mkdir(path.join(replacement, "nested"));
+  await git(replacement, ["switch", "-c", "new-ancestor"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  const laterStatus = gitReadGate();
+  let held = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status") {
+      if (!held) { held = true; started.resolve(); await release.promise; }
+      else laterStatus.resolve();
+    }
+    return result;
+  };
+  const earlier = service.info(nested);
+  void earlier.catch(() => undefined);
+  let later: ReturnType<typeof service.info> | undefined;
+  try {
+    await started.promise;
+    await fs.rename(repository, `${repository}-old`);
+    await fs.rename(replacement, repository);
+    later = service.info(nested);
+    // A finite rejection timer makes an incorrectly joined old flight fail
+    // without allowing fixture teardown to strand its held request.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([laterStatus.promise, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("new nested reader joined the previous ancestor's flight")), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.equal((await later).branch, "new-ancestor");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([earlier, later]);
+  }
+});
+
+test("GitService verifies cached counts against the file opened after path resolution", async (t) => {
+  const repository = await createRepository(t);
+  const filePath = path.join(repository, "cached-count.txt");
+  await fs.writeFile(filePath, "one\n");
+  const service = new GitService();
+  assert.equal((await service.review(repository)).files[0]?.additions, 1);
+  const canonical = await fs.realpath(filePath);
+  const original = fsPromises.realpath;
+  let replaced = false;
+  t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof original>) => {
+    const value = await Reflect.apply(original, fsPromises, args);
+    if (String(value) === canonical && !replaced) {
+      replaced = true;
+      const next = `${filePath}.replacement`;
+      await fs.writeFile(next, "two\nrows\n");
+      await fs.rename(next, filePath);
+    }
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const raced = await service.review(repository);
+  assert.equal(replaced, true);
+  assert.equal(raced.files[0]?.additions, undefined, "a replaced path must not receive the prior inode's cached count");
+  assert.equal(raced.summary.unavailableStats, 1);
+  assert.equal((await service.review(repository)).files[0]?.additions, 2);
+});
+
+test("GitService reuses proven snapshot symlink counts without extra budgeted target reads", async (t) => {
+  const repository = await createRepository(t);
+  const link = path.join(repository, "link.txt");
+  await fs.symlink("first", link);
+  const service = new GitService({ reviewStatsMaxBytes: 0 });
+  const original = fsPromises.readlink;
+  let reads = 0;
+  let replaceWith: string | undefined;
+  t.mock.method(fsPromises, "readlink", async (...args: Parameters<typeof original>) => {
+    const value = await Reflect.apply(original, fsPromises, args);
+    if (String(args[0]).endsWith("/link.txt")) {
+      reads++;
+      if (replaceWith !== undefined) {
+        await fs.unlink(link);
+        await fs.symlink(replaceWith, link);
+        replaceWith = undefined;
+      }
+    }
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const review = await service.review(repository);
+  assert.equal(review.files[0]?.additions, 1, "stable snapshot data needs no additional statistics byte budget");
+  assert.equal(reads, 1, "only the independent authoritative snapshot reads the link target");
+  for (const target of ["a\nb\n!", "longer-target".repeat(50)]) {
+    replaceWith = target;
+    reads = 0;
+    const raced = await service.review(repository);
+    assert.equal(reads, 1);
+    assert.equal(raced.files[0]?.additions, undefined, "same-size and growing replacement links must lose their count proof");
+    assert.equal(raced.summary.unavailableStats, 1);
+  }
+});
+
+test("GitService never rereads replaced symlink targets against an obsolete byte reservation", async (t) => {
+  const repository = await createRepository(t);
+  const link = path.join(repository, "racing-link.txt");
+  await fs.symlink("first", link);
+  const originalStat = fsPromises.lstat;
+  const originalLink = fsPromises.readlink;
+  let snapshotFinished = false;
+  let replacement: string | undefined;
+  let fallbackBytes = 0;
+  t.mock.method(fsPromises, "lstat", async (...args: Parameters<typeof originalStat>) => {
+    const value = await Reflect.apply(originalStat, fsPromises, args);
+    if (snapshotFinished && replacement && String(args[0]).endsWith("/racing-link.txt")) {
+      await fs.unlink(link);
+      await fs.symlink(replacement, link);
+      replacement = undefined;
+    }
+    return value;
+  });
+  t.mock.method(fsPromises, "readlink", async (...args: Parameters<typeof originalLink>) => {
+    const value = await Reflect.apply(originalLink, fsPromises, args);
+    if (snapshotFinished && String(args[0]).endsWith("/racing-link.txt")) fallbackBytes += Buffer.byteLength(value);
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (const target of ["a\nb\n!", "longer-target".repeat(50)]) {
+    snapshotFinished = false;
+    replacement = undefined;
+    await fs.unlink(link);
+    await fs.symlink("first", link);
+    const service = new GitService({ reviewStatsMaxBytes: 6 });
+    const internals = service as unknown as { reviewSnapshot(...args: unknown[]): Promise<unknown> };
+    const snapshot = internals.reviewSnapshot.bind(service);
+    internals.reviewSnapshot = async (...args) => {
+      const result = await snapshot(...args);
+      snapshotFinished = true;
+      return result;
+    };
+    replacement = target;
+    fallbackBytes = 0;
+    const review = await service.review(repository);
+    assert.equal(replacement, undefined, "the fixture must replace the link after fallback lstat");
+    assert.equal(review.files[0]?.additions, undefined);
+    assert.equal(review.summary.unavailableStats, 1);
+    assert.ok(fallbackBytes <= 6, "fallback target IO must fit the reserved aggregate budget even if the link grows");
+  }
+});
+
+
+test("GitService keeps indirect core.worktree readers independent across ancestor replacement", async (t) => {
+  const repository = await createRepository(t);
+  const checkout = path.dirname(repository);
+  await fs.copyFile(path.join(repository, "README.md"), path.join(checkout, "README.md"));
+  await git(repository, ["config", "core.worktree", checkout]);
+  assert.equal(await git(repository, ["rev-parse", "--is-inside-work-tree"]), "true");
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  const laterStatus = gitReadGate();
+  let held = false;
+  let initialCount = 0;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status") {
+      if (!held) {
+        held = true;
+        initialCount = parseGitStatus(result.stdout).uncommitted;
+        started.resolve();
+        await release.promise;
+      } else laterStatus.resolve();
+    }
+    return result;
+  };
+  const earlier = service.info(repository);
+  void earlier.catch(() => undefined);
+  let later: ReturnType<typeof service.info> | undefined;
+  try {
+    await Promise.race([started.promise, earlier.then(() => { throw new Error("expected status admission"); })]);
+    const previous = `${checkout}-old`;
+    await fs.rename(checkout, previous);
+    t.after(() => fs.rm(previous, { recursive: true, force: true }));
+    await fs.mkdir(checkout);
+    await fs.rename(path.join(previous, "repository"), repository);
+    await fs.copyFile(path.join(repository, "README.md"), path.join(checkout, "README.md"));
+    await fs.writeFile(path.join(checkout, "fresh.txt"), "new checkout\n");
+    later = service.info(repository);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([laterStatus.promise, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("indirect checkout joined a prior root's status flight")), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.equal((await later).uncommitted, initialCount + 1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([earlier, later]);
+  }
+});
+
+test("GitService validates public info after joining branch-owned status work", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  await git(replacement, ["switch", "-c", "new-root"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const statusStarted = gitReadGate();
+  const releaseStatus = gitReadGate();
+  const infoJoined = gitReadGate();
+  let held = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status" && !held) {
+      held = true;
+      statusStarted.resolve();
+      await releaseStatus.promise;
+    }
+    return result;
+  };
+  const internals = service as unknown as {
+    sharedRead<T>(key: string, signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  };
+  const sharedRead = internals.sharedRead.bind(service);
+  const subscriptions = new Map<string, number>();
+  internals.sharedRead = (key, signal, operation) => {
+    const result = sharedRead(key, signal, operation);
+    if (key.startsWith("[")) {
+      const kind = (JSON.parse(key) as string[])[0];
+      const count = (subscriptions.get(kind) ?? 0) + 1;
+      subscriptions.set(kind, count);
+      // Both the prior mixed flight and the distinct raw-status flight must
+      // have admitted the second subscriber before replacing the repository.
+      if ((kind === "info" || kind === "repository-info") && count === 2) infoJoined.resolve();
+    }
+    return result;
+  };
+  const branches = service.branches(repository);
+  void branches.catch(() => undefined);
+  let info: ReturnType<typeof service.info> | undefined;
+  try {
+    await statusStarted.promise;
+    info = service.info(repository);
+    await infoJoined.promise;
+    await fs.rename(repository, `${repository}-old`);
+    await fs.rename(replacement, repository);
+    releaseStatus.resolve();
+    assert.equal((await info).branch, "new-root");
+    assert.equal((await branches).current, "new-root");
+  } finally {
+    releaseStatus.resolve();
+    await Promise.allSettled([branches, info]);
+  }
 });

@@ -83,3 +83,11 @@ completed-upload failure remains unreproduced (unchanged full chat suite passed
 208/208 locally); per-mode assertion labels and failed-CI xcresult preservation
 provide diagnostic evidence without relaxing assertions or timeouts. Parent audit
 papercuts retain both original failing run attempts and the unresolved upload flake.
+
+Integrated origin/main 137ce6bd1 by ordinary merge after the parent verified the
+PR's pre-integration head 30b042b4 green. Only papercut append sections conflicted;
+kept both. Root script names/test chains retain both parents' entries, and the
+reused exact iOS stream gate remains alongside main's catalog/publication tests.
+The Remote revision is unchanged by this branch. Advisor drift coverage passes;
+a broader direct CLI extension invocation lacked its required built dist/app,
+so its process-launch failure is not runtime validation.
