@@ -1,3 +1,5 @@
+// Run with the target checkout's node_modules/.bin/tsx, not plain node.
+// Arguments: <absolute target checkout> <output JSON path>. See ../measurement-protocol.md.
 import { performance } from 'node:perf_hooks';
 import { writeFileSync } from 'node:fs';
 import { platform, release, arch } from 'node:os';

@@ -54,3 +54,19 @@ Initial proposed invariants: no app-owned continuous render loop after a static 
 ```
 
 After each implementation, update both this audit's ledger and the relevant specialist item. Preserve failed experiments and their explanation. A functional test pass does not fill a missing energy measurement.
+
+
+## Reproduce the Remote append counter fixture
+
+Use the repository's lockfile-installed `tsx` runner; plain `node` cannot execute all TypeScript constructs in the imported service on the supported Node line. Set `fixture` to this audit checkout's helper, `target` to the checkout being measured, and `output` to a new writable JSON path. Install the target checkout's pinned dependencies with `npm ci` if absent. The helper itself performs no network or persistence work.
+
+```sh
+fixture="/absolute/path/to/audit-checkout/docs/audits/performance-2026-09-27/evidence/stream-baseline.mts"
+target="/absolute/path/to/checkout-being-measured"
+output="/tmp/aiden-stream-reproduction.json"
+"$target/node_modules/.bin/tsx" "$fixture" "$target" "$output"
+```
+
+Measure baseline `a9baa4aa3027893e5455043083465c34b4c8b4ac` and accounting implementation `c4f195f4a5fd98dfd0a54b141e2a503e3c6b4797` in separate checkouts, using the same fixture and different output paths. Expected mechanism evidence is 64 versus 0 full snapshot calls for each 64-append scenario; the final serialized sizes must agree. Do not overwrite the original evidence files with reproduction timings.
+
+The command was re-executed during review using the browser worktree (its stream service is unchanged from baseline) and the accounting worktree, each with its own installed `tsx`: both scenarios reproduced 64→0 calls and identical final sizes (11,561 and 4,211,361 bytes). Node 26.10.0, Darwin 27 arm64; exploratory timings remain separate from physical-device performance acceptance. Local reproduction artifacts: `/tmp/aiden-performance-batch-1/cycle-1/benchmark-{before,after}-repro.json`.

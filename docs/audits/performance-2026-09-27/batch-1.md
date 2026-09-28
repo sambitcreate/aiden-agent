@@ -1,6 +1,6 @@
 # Performance batch 1 orchestration
 
-Status: implementation PRs published; CI/comment follow-up pending. User authorized separate worktrees, GPT-6 Astra medium implementers, fresh-context GPT-6 Astra medium edge-case reviewers, PR publication, then 15-minute CI/comment remediation cycles until exact-head checks are green and no actionable comments remain. Merging is not included.
+Status: first CI/comment follow-up found review items; remediation in progress. User authorized separate worktrees, GPT-6 Astra medium implementers, fresh-context GPT-6 Astra medium edge-case reviewers, PR publication, then 15-minute CI/comment remediation cycles until exact-head checks are green and no actionable comments remain. Merging is not included.
 
 All four lanes start independently at `a9baa4aa3027893e5455043083465c34b4c8b4ac`. Three concurrent subagent slots mean implementation/review waves. Reviews use `fork_turns: none`; reviewers receive scope, worktree, base and verification obligations, without inheriting implementer reasoning.
 
@@ -51,3 +51,16 @@ Open mobile model/transcript and dictation PRs were inspected by title/scope to 
 All four implementation PRs were published by **2026-09-28T02:40:07Z** (Remote #285 creation). The first hosted CI/comment inspection is due at or after **2026-09-28T02:55:07Z**, then every 15 minutes while unfinished. Include audit/tracking #281 and implementations #282/#283/#284/#285. Check exact current head, not earlier passes. Fresh reviews are complete for all four published implementation heads. Android test-harness follow-up was independently reviewed and published at `e2d1a5dc`; five focused checks passed. Its clean-source full suite remains 251/252 with an initial-load timeout. A bounded HTTP diagnostic execution passed 252/252 with probes, which establishes neither the cause nor a final clean-source pass. No further unchanged retries are planned.
 
 - Android cleanup follow-up passed fresh-context Astra medium review with 5/5 focused checks and was pushed to #284. The startup timeout remains separately unresolved; diagnostic probes were removed. All four implementation lanes and the Android follow-up now have independent reviews.
+
+
+## Hosted follow-up 1 — 2026-09-28 02:56 UTC
+
+All five exact heads were inspected after the required wait: #281 `ad4ef395`, #282 `0a56d0ce`, #283 `c68550e5`, #284 `e2d1a5dc`, #285 `c4f195f4`. No requested reviewers; CI remains queued/running across the batch, so no PR is declared complete.
+
+- #281: one unresolved reproducibility suggestion. Added explicit installed-`tsx` invocation and executed it against both baseline-equivalent and changed stream sources; 64→0 snapshot calls and equal final bytes reproduced.
+- #282: reviewer identified Electron's window-wide effect when an attached guest holds an unthrottled lease. Implementation agent is establishing the activity exception's bounds and adding native validation/documentation; fresh review required before push.
+- #283: reviewer identified transcript publication followed by catalog credential revocation while purge is pending. Implementation agent is adding prompt mounted-model redaction and a held-purge ordering regression; fresh review required before push.
+- #284: no review threads. Linux arm64 job [108767808300](https://github.com/sambitcreate/aiden-agent/actions/runs/36371118746/job/108767808300) failed during AppImage packaging with upstream HTTP 500, after tests/build reached packaging. A targeted job retry request was rejected because the containing workflow is still running; no retry has started. Allow one infrastructure retry after workflow completion; do not change Android code for this packaging response. The local startup timeout remains separately unresolved.
+- #285: no review threads; completed checks pass, others remain pending.
+
+Raw snapshots and failed-job log are local under `/tmp/aiden-performance-batch-1/cycle-1/`. Monitoring remains active. Pending CI and external failures are not passes.
