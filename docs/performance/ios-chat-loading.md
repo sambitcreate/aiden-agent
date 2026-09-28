@@ -48,3 +48,20 @@ Use an unused result-bundle path when repeating the command. To reproduce the be
 ## Measurement limits
 
 This is deterministic dependency/race evidence, not production navigation latency, p50/p95, frame-time, energy, or physical-device acceptance. No 0/100/500 ms timing sweep was collected. Fresh publication no longer depends on catalog release; cached publication behavior and stream restoration were not redesigned. No dependency installation, release, or deployment is part of this change.
+
+## PR #283 revocation redaction follow-up
+
+Review [4118130725](https://github.com/sambitcreate/aiden-agent/pull/283#discussion_r4118130725) found the opposite response ordering was not covered: a fresh transcript could publish before the sibling catalog reported `credential_revoked`. The coordinator waits for installation cleanup before changing the product shell to pairing, and the model's removal callback previously kept those messages.
+
+The existing lifetime-removal callback now clears `chat.messages` synchronously before asynchronous cleanup. It does not publish an empty replacement to the cache or add a new request. Ordinary catalog failures do not invalidate the lifetime and keep the transcript; the existing success/503 held-catalog test explicitly checks content again after release.
+
+`testCatalogRevocationRedactsPublishedTranscriptBeforePurgeCompletes` publishes a real successful chat GET, releases a held catalog 401, and holds the existing removal-cleanup seam. It verifies the shell's connection state is still connected and an independently opened cache still reads the old disk transcript, while the mounted model already has no messages. After cleanup it checks pairing state, empty model and purged disk. Against `c68550e5`, this test actually executed and failed both redaction assertions (one test, two failures); `/tmp/aiden-perf-ios-redaction-before.xcresult` and `.log`. No simulator infrastructure retry was needed for that baseline.
+
+The change is local to the iOS lifetime callback; Android's independent chat/catalog loaders and separate lifecycle were inspected, and no shared contract, transcript format or rendering component changed. Follow-up validation on the same explicit iPhone 17 Pro / iOS27.0 simulator and Xcode27.0 destination above:
+
+- Full `AidenChatTests`: **213 executed, zero failures**, `/tmp/aiden-perf-ios-redaction-after.xcresult` and `.log`.
+- After strengthening the ordinary503 test with a post-release content assertion, the two affected tests executed and passed using `test-without-building`: `/tmp/aiden-perf-ios-redaction-final-retry.xcresult` and `.log`. The production code was unchanged from the full213 run.
+- The initial final two-test run stalled after build/app launch but before XCTest started. After roughly three minutes it was interrupted and its app terminated; evidence `/tmp/aiden-perf-ios-redaction-final.log` and `/tmp/aiden-perf-ios-redaction-launch-sample.txt`. Its single infrastructure retry passed. This launch failure is retained as a limitation rather than counted as a passing test run.
+- `npm run test:ios-release`:20 Ruby tests/42 assertions and32 Node tests passed; `/tmp/aiden-perf-ios-redaction-policy.log`.
+
+No physical-device acceptance or timing claim is added.

@@ -1268,6 +1268,9 @@ final class AidenChatViewModel {
     }
 
     private func handleRemoval() {
+        // The shell can remain mounted while removal/revocation awaits cleanup.
+        // Redact published content synchronously with lifetime invalidation.
+        chat.messages = []
         draftPersistenceTask?.cancel()
         draftPersistenceTask = nil
         draftSession = nil

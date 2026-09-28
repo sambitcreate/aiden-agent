@@ -808,6 +808,7 @@ final class AidenChatTests: XCTestCase {
             XCTAssertEqual(model.selectedModelId, "user-choice")
             XCTAssertEqual(model.selectedThinkingLevel, "high")
             XCTAssertEqual(model.catalog == nil, fails)
+            XCTAssertEqual(model.chat.messages.map(\.text), ["Fresh transcript"])
             XCTAssertNil(model.presentedError)
             XCTAssertFalse(model.isLoading)
         }
@@ -861,6 +862,49 @@ final class AidenChatTests: XCTestCase {
             let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
             XCTAssertNil(persisted)
         }
+    }
+
+    @MainActor
+    func testCatalogRevocationRedactsPublishedTranscriptBeforePurgeCompletes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-published-revocation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let cleanup = AidenChatWriteTestGate()
+        var coordinator: AidenRemoteCoordinator!
+        let published = expectation(description: "fresh transcript published")
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+            onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in published.fulfill() })
+        var remote = model.chat
+        remote.messages = [AidenChatMessage(id: "private", role: .assistant, text: "Published private transcript", createdAt: Date())]
+        let fixture = AidenStreamRecoveryFixture(chat: remote)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/models") == true {
+                return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again","requestId":"catalog","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.beforeRemovalAttachmentCleanup = { await cleanup.waitIfArmed() }
+        await cleanup.arm()
+        let held = expectation(description: "catalog revocation held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+        let loading = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [held, published], timeout: 3)
+        XCTAssertEqual(model.chat.messages.map(\.text), ["Published private transcript"])
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await waitForChatWrite(cleanup)
+        // The shell has not switched to pairing and disk cleanup is suspended.
+        // The still-mounted model must already have redacted its transcript.
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let beforePurge = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(beforePurge?.messages.map(\.text), ["Published private transcript"])
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertFalse(model.canSend)
+        await cleanup.release()
+        await loading.value
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        let afterPurge = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(afterPurge)
     }
 
     @MainActor
