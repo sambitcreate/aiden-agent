@@ -5116,10 +5116,11 @@ test("GitService rejects late cache publications from a replaced root across ali
       readingNewRoot = true;
       newRead = service[kind](alias);
       const value = await newRead;
-      assert.equal(value.branch, "after-swap", `${kind} must not reuse the old identity's late result`);
+      assert.equal("branches" in value ? value.current : value.branch, "after-swap", `${kind} must not reuse the old identity's late result`);
       if ("branches" in value) assert.ok(value.branches.includes("after-swap"));
       releaseOldProof.resolve();
-      assert.equal((await oldRead).branch, "after-swap");
+      const refreshed = await oldRead;
+      assert.equal("branches" in refreshed ? refreshed.current : refreshed.branch, "after-swap");
     } finally {
       releaseOldRead.resolve();
       oldProofBlocked.resolve();
