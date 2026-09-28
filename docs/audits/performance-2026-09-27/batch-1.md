@@ -29,3 +29,8 @@ Open mobile model/transcript and dictation PRs were inspected by title/scope to 
 
 - Created four attached managed worktrees from current origin/main; existing audit worktree retains the central ledger.
 - Started browser, Android and iOS implementers; installed pinned root dependencies in the stream worktree for baseline preparation. No catalog refresh or real-account traffic.
+
+- Remote baseline captured before implementation: 64 small appends produce 64 full snapshot calls both with empty retention and ~4.2 MB retained history. Five measured samples after one warmup: ~2.6–2.9 ms vs ~90–104 ms; Node 26.10.0, Darwin 27 arm64, concurrent build load. These are exploratory wall times, not hardware energy or release acceptance. Raw fixture/results retained under `evidence/`.
+
+- Baseline stream suite: 59/59 passed before modification.
+- Heartbeat `performance-batch-pr-follow-up` created at 15-minute intervals. It waits until all implementation PRs are published plus 15 minutes before the first hosted follow-up; then fixes and rechecks exact heads until clean.

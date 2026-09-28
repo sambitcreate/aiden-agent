@@ -1,0 +1,40 @@
+{
+  "scenario": "No persistence/subscribers; 64 synthetic appends with 0 or 32 retained 128-KiB chunks",
+  "runtime": "v26.10.0",
+  "platform": "darwin",
+  "release": "27.0.0",
+  "arch": "arm64",
+  "note": "Local microbenchmark during concurrent builds; wall time exploratory only. Snapshot-call counts are deterministic. No GPU/energy claim.",
+  "rows": [
+    {
+      "retainedChunks": 0,
+      "warmups": 1,
+      "samplesMs": [
+        2.7690000000000055,
+        2.7638749999999987,
+        2.63708299999999,
+        2.766582999999997,
+        2.864083999999991
+      ],
+      "appends": 64,
+      "snapshotCallsDuringAppends": 64,
+      "beforeSnapshotBytes": 368,
+      "afterSnapshotBytes": 11561
+    },
+    {
+      "retainedChunks": 32,
+      "warmups": 1,
+      "samplesMs": [
+        93.92487500000004,
+        90.03120799999999,
+        93.03399999999999,
+        104.14883299999997,
+        96.3014169999999
+      ],
+      "appends": 64,
+      "snapshotCallsDuringAppends": 64,
+      "beforeSnapshotBytes": 4200168,
+      "afterSnapshotBytes": 4211361
+    }
+  ]
+}
