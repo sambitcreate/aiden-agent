@@ -1,4 +1,4 @@
-// Share the filesystem budget across Files, Gemini and legacy Remote listings.
+// Shared budget for bulk workspace-index metadata and legacy file issuance.
 export const WORKSPACE_METADATA_CONCURRENCY = 4;
 const MAX_WAITING_BATCHES = 64;
 let batchActive = false;

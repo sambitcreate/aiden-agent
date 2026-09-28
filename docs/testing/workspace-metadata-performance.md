@@ -56,3 +56,27 @@ Fresh independent gpt-6-astra medium re-review cleared production/tests and inde
 Benchmark now includes overlapping Files/Gemini/Remote requests and copies baseline metadata/identity helpers too, allowing comparison against the initial published56120a385 head. `repeatedFileStats` counts repeated file-path stats, including repeated index scans in overlapping cases; it must not be read as identity-only work there. Root stats and directory reads are included in total counters but outside bulk admission. New-head hosted checks/reviews are required after push.
 
 Comparison against initial published56120a385 (no injected latency): three overlapping requests peak at12 stats before versus4 after, on both wide and deep trees. Counts remain16003 wide /15943 deep stats, with identical projected outputs and no content reads/opens. Wide concurrent completion550→601ms and deep455→558ms: aggregate admission intentionally trades some concurrent throughput for bounded shared filesystem pressure. Single-request peaks remain4; this follow-up does not claim additional single-request speedup.
+
+
+## Remote Bot follow-up and caller inventory
+
+Pullfrog review5343756347 found the Bot listing identity loop outside the shared budget. Bot listings now admit each identity check through the same gate, retain serial policy revalidation after admission, and issue handles only after the shared cancellation/drain check. Active and archived Bot authority/error mappings stay separate from workspace authority. The two new regressions fail on published6fc57fae: overlapping Bot/workspace stat peak6 exceeds4, and a revocation during identity inspection still issues1 handle. Both pass with the follow-up (peak<=4 and zero revoked handles).
+
+The budget covers **bulk metadata for recursive workspace file snapshots and their legacy file-handle issuance**, not all filesystem or opaque-handle work in the process:
+
+| Caller / operation | Budget coverage |
+| --- | --- |
+| Desktop Files (`main/handlers/workspaces.ts`) | Shared per-entry index metadata |
+| Eligible Gemini turn preparation (`llm-client.ts`) | Same shared per-entry index metadata |
+| Headless CLI `files list` (`packages/cli/src/git-commands.ts`) | Same per-entry index helper, with its own process-local budget |
+| Legacy Remote workspace file snapshot (`aiden-remote-files.ts`) | Index metadata and independently inspected file identities |
+| Legacy Remote Bot file snapshot (`aiden-remote-bot-files.ts`), active or archived authority | Index metadata and serial, policy-revalidated file identities |
+| Root admission, directory enumeration, sorting | Existing per-request behavior, outside this per-entry budget |
+| Secure native lazy Files browsing | Existing bounded native direct-child enumeration and reused confined identities; separate path, unchanged |
+| Approved-root workspace picker (`aiden-remote-workspace-browser.ts`) | Separate setup/registration authority surface; serial root/directory/breadcrumb identity checks retain their existing limits and are outside recursive file snapshots |
+| One-off handle validation for read/write, directory handles/cursors | Existing authority operations, outside bulk listing admission |
+
+Searched every production caller of `listWorkspaceFiles` and `inspectAidenFilesystemIdentity`. The only remaining bulk identity loop is the approved-root workspace picker listed above, deliberately excluded from this file-snapshot scope. This is not a process-wide syscall cap. Both native Bot Files models retain their generic error handling and opaque DTO validation; no route or wire changes are required.
+
+
+Fresh independent Astra medium caller/blast-radius review cleared the Bot follow-up; its43 tests passed with1 existing Linux-only skip. The CLI inventory omission it identified is corrected above. Final local reruns: full Remote537 passed/1 skipped; Android55 tests passed across workspace, Remote client and Bot contracts; iOS13 simulator tests passed (workspace11 plus Bot routes and scoped-grant revocation). TypeScript and scoped ESLint passed. Paginated recheck of38 other open PRs found no overlap in the Bot/identity/helper follow-up files (#85:295 files, #37:209). Latest-head hosted checks and bot re-review remain separate gates after push.
