@@ -20,7 +20,7 @@ void app.whenReady().then(async () => {
     id: owner.webContents.id, documentId: "native-throttle-test",
     isDestroyed: () => owner.isDestroyed(), send: () => {}, onInvalidated: () => () => {},
   });
-  type Tab = { state: BrowserTab; view: WebContentsView; initialLoad: Promise<void>; backgroundThrottling: BrowserBackgroundThrottling; recording?: { recorder: BrowserWindow } };
+  type Tab = { state: BrowserTab; view: WebContentsView; initialLoad: Promise<void>; backgroundThrottling: BrowserBackgroundThrottling; recording?: { recorder: BrowserWindow; stopTimer: ReturnType<typeof setTimeout> } };
   const native = browser as unknown as {
     create(workspace: string, url: string, profile: undefined, show: boolean): Promise<Tab>;
     capture(tab: Tab): Promise<BrowserImage>;
@@ -71,6 +71,119 @@ void app.whenReady().then(async () => {
   cancelledStart.abort(new Error("cancel recorder startup"));
   await assert.rejects(native.startRecording(tab, 10, cancelledStart.signal), /cancel recorder startup/);
   assert.equal(wc.getBackgroundThrottling(), true);
+  // Electron aggregates compositor throttling across an attached window. Exercise
+  // the real host's minimized lifecycle, including a sibling that owns no lease.
+  native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
+  const sibling = await native.create("throttle", "about:blank", undefined, false);
+  await sibling.initialLoad;
+  owner.contentView.addChildView(sibling.view);
+  sibling.view.setBounds({ x: 610, y: 0, width: 100, height: 100 });
+  sibling.view.setVisible(true);
+  await owner.loadURL("about:blank");
+  const attachment = () => {
+    assert.ok(owner.contentView.children.includes(tab.view), "recorded guest stays in its host");
+    assert.ok(owner.contentView.children.includes(sibling.view), "sibling stays attached");
+  };
+  const policies = () => [owner.webContents, sibling.view.webContents, wc]
+    .map(contents => contents.getBackgroundThrottling());
+  assert.deepEqual(policies(), [true, true, true]);
+  const observedContents = [owner.webContents, sibling.view.webContents];
+  await Promise.all(observedContents.map(contents => contents.executeJavaScript(
+    "globalThis.fixtureFrames = 0; requestAnimationFrame(function tick() { globalThis.fixtureFrames++; requestAnimationFrame(tick); });",
+  )));
+  const frameSamples: Array<{ phase: string; elapsedMs: number; host: number; sibling: number; visibility: string[] }> = [];
+  const sampleFrames = async (phase: string) => {
+    const read = () => Promise.all(observedContents.map(contents => contents.executeJavaScript(
+      "({frames: globalThis.fixtureFrames, visibility: document.visibilityState})",
+    ))) as Promise<Array<{ frames: number; visibility: string }>>;
+    const before = await read();
+    const started = Date.now();
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const after = await read();
+    frameSamples.push({ phase, elapsedMs: Date.now() - started,
+      host: after[0].frames - before[0].frames, sibling: after[1].frames - before[1].frames,
+      visibility: after.map(value => value.visibility),
+    });
+  };
+  // Linux CI runs bare Xvfb without a window manager to acknowledge minimization.
+  // Use native hide/show there; macOS/Windows exercise real minimize/restore.
+  const backgroundMode = process.platform === "linux" ? "hidden" : "minimized";
+  const isBackgrounded = () => backgroundMode === "hidden" ? !owner.isVisible() : owner.isMinimized();
+  const backgrounded = new Promise<void>(resolve => {
+    if (backgroundMode === "hidden") owner.once("hide", () => resolve());
+    else owner.once("minimize", () => resolve());
+  });
+  if (backgroundMode === "hidden") owner.hide();
+  else owner.minimize();
+  await backgrounded;
+  assert.equal(isBackgrounded(), true);
+  attachment();
+  await sampleFrames(`${backgroundMode} idle`);
+  await native.startRecording(tab, 10);
+  await sampleFrames(`${backgroundMode} recording`);
+  const duringRecordingPolicies = policies();
+  assert.deepEqual(duringRecordingPolicies, [true, true, false]);
+  // The host/sibling getters describe their own scheduler preference, NOT the
+  // window compositor: Electron's native aggregator allows window-wide drawing.
+  const minimizedTimer = await command("new Promise(resolve => setTimeout(() => resolve('minimized timer'), 10))");
+  assert.equal(minimizedTimer.value, "minimized timer");
+  const concurrentAbort = new AbortController();
+  let enteredAction!: () => void;
+  const entered = new Promise<void>(resolve => { enteredAction = resolve; });
+  const concurrent = browser.command("throttle", {
+    action: "evaluate", tabId: tab.state.id, expression: "new Promise(() => {})",
+  }, { source: "user", signal: concurrentAbort.signal, beforeEffect: enteredAction });
+  await entered;
+  concurrentAbort.abort(new Error("cancel attached action"));
+  await assert.rejects(concurrent, /cancel attached action/);
+  assert.equal(wc.getBackgroundThrottling(), false, "recording survives another owner's cancellation");
+  const minimizedVideo = await native.stopRecording(tab);
+  assert.ok(minimizedVideo.sizeBytes > 16);
+  assert.equal(isBackgrounded(), true, "stopping capture must not restore the host window");
+  attachment();
+  const afterRecordingPolicies = policies();
+  assert.deepEqual(afterRecordingPolicies, [true, true, true]);
+  await sampleFrames(`${backgroundMode} after stop`);
+  // Exercise the production five-minute expiry without a five-minute sleep.
+  // Keep real timers/native encoder startup; retain the actual stop timer callback.
+  const schedule = globalThis.setTimeout;
+  const timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; delay?: number }>();
+  globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const timer = schedule(callback, delay, ...args);
+    timers.set(timer, { callback: () => callback(...args), delay });
+    return timer;
+  }) as typeof setTimeout;
+  try {
+    await native.startRecording(tab, 10);
+  } finally {
+    globalThis.setTimeout = schedule;
+  }
+  const expiring = tab.recording!;
+  const expiry = timers.get(expiring.stopTimer)!;
+  assert.equal(expiry.delay, 5 * 60_000, "active recording has a five-minute capture limit");
+  const autoStopped = new Promise<void>(resolve => expiring.recorder.once("closed", () => resolve()));
+  clearTimeout(expiring.stopTimer);
+  expiry.callback();
+  await autoStopped;
+  assert.equal(tab.state.recording, false);
+  assert.deepEqual(policies(), [true, true, true], "automatic stop releases the window's last exception");
+  assert.equal(isBackgrounded(), true);
+  attachment();
+  owner.contentView.removeChildView(sibling.view);
+  native.close(sibling);
+  const restored = new Promise<void>(resolve => {
+    if (backgroundMode === "hidden") owner.once("show", () => resolve());
+    else owner.once("restore", () => resolve());
+  });
+  if (backgroundMode === "hidden") owner.show();
+  else owner.restore();
+  await restored;
+  assert.equal(isBackgrounded(), false);
+  const attachedWindow = {
+    duringRecordingPolicies, afterRecordingPolicies, frameSamples,
+    minimizedTimer: minimizedTimer.value, recordingBytes: minimizedVideo.sizeBytes,
+    backgroundMode, stayedBackgrounded: true, preservedAttachments: true, automaticStopDelayMs: expiry.delay,
+  };
   const extraTabs = await Promise.all([1, 2].map(() => native.create("throttle", "about:blank", undefined, false)));
   await Promise.all(extraTabs.map(extra => extra.initialLoad));
   const idlePolicies = [tab, ...extraTabs].map(extra => extra.view.webContents.getBackgroundThrottling());
@@ -95,7 +208,7 @@ void app.whenReady().then(async () => {
     electron: process.versions.electron, platform: process.platform, idlePolicy, idlePolicies,
     screenshotBytes: Buffer.from(screenshot.data, "base64").length,
     timerResult: value.value, recordingBytes: video.sizeBytes,
-    cancellationRestored: true, failureRestored: true, crashRestored: true,
+    cancellationRestored: true, failureRestored: true, crashRestored: true, attachedWindow,
   }, null, 2));
   owner.destroy();
   clearTimeout(deadline);

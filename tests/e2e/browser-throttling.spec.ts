@@ -65,5 +65,10 @@ test("hidden browser scheduling is owned by active automation and capture", asyn
   expect(JSON.parse(result)).toMatchObject({
     idlePolicy: true, timerResult: "timer", cancellationRestored: true,
     failureRestored: true, crashRestored: true,
+    attachedWindow: {
+      duringRecordingPolicies: [true, true, false],
+      afterRecordingPolicies: [true, true, true],
+      stayedBackgrounded: true, preservedAttachments: true, automaticStopDelayMs: 300_000,
+    },
   });
 });

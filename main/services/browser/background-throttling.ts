@@ -1,4 +1,9 @@
-/** Scoped exceptions to Electron's normal background scheduling policy. */
+/**
+ * Ownership is per guest, but Electron also disables the attached host window's
+ * compositor throttling while ANY guest owns an exception. Host/sibling getters
+ * do not reflect that aggregate effect. Keep leases scoped to active operations;
+ * recording intentionally retains this window-wide exception until it stops.
+ */
 export class BrowserBackgroundThrottling {
   private releases = new Set<() => void>();
   constructor(private readonly target: {
