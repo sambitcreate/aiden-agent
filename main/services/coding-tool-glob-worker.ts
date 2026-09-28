@@ -19,7 +19,9 @@ const seeds = matcher.set.map((parts, pattern) => {
   const expanded = matcher.globParts[pattern].join('/');
   const root = isAbsolute(expanded) ? parse(expanded).root : '';
   let current = root || '.';
-  let index = root ? root.split('/').length - 1 : 0;
+  let index = root ? root.split('/').length - Number(root.endsWith('/')) : 0;
+  // A bare UNC share consumes every segment; match the root directory itself.
+  if (index === parts.length) parts.push('');
   // Resolve literal prefixes only. A globstar followed by .. is never collapsed.
   while (index < parts.length - 1 && typeof parts[index] === 'string') {
     current = join(current, parts[index++]);

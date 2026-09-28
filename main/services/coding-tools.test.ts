@@ -2549,6 +2549,10 @@ test("foreground glob worker preserves Windows drive and UNC roots in expanded a
   const require = createRequire(import.meta.url);
   const fixtures = [
     { pattern: "C:/repo/*.ts", expected: "C:\\repo\\a.ts" },
+    { pattern: "C:/", expected: "C:\\" },
+    { pattern: "//server/share", expected: "\\\\server\\share\\" },
+    { pattern: "//server/share/", expected: "\\\\server\\share\\" },
+    { pattern: "{src/*.js,//server/share}", expected: "\\\\server\\share\\" },
     { pattern: "C:\\repo\\*.ts", expected: "C:\\repo\\a.ts" },
     { pattern: "//server/share/repo/*.ts", expected: "\\\\server\\share\\repo\\a.ts" },
     { pattern: "{C:/repo/*.ts,src/*.js}", expected: "C:\\repo\\a.ts" },

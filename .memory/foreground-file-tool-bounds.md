@@ -65,3 +65,8 @@ and diagnostics CI lane. Its Node runner bundles an isolated entry (Electron
 explicitly external), owns workspace/profile fixtures, clears ELECTRON_RUN_AS_NODE,
 and waits for child close after success/error/30s deadline/SIGINT/SIGTERM before
 cleanup. CI policy coverage enforces this mandatory package-script invocation.
+
+A later Pullfrog run found bare UNC share roots without a terminal slash. Consume
+the complete platform root, and use an empty terminal segment for directory-self
+matching when that consumes the whole pattern. Existing Windows worker fixtures
+now cover drive roots, bare UNC shares with/without slash, and mixed relative arms.
