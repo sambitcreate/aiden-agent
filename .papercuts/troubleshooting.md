@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-28 workspace metadata performance validation
+
+- Default xcrun resolved Command Line Tools, so simctl was unavailable. Set DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer explicitly for simulator listing/XCTest; 11 workspace tests passed on iOS27. Android used Android Studio's bundled JBR plus the existing SDK, with 12 focused tests passing.
+- Synthetic timing varied substantially while independent native builds and tests shared the host. Repeated after those local builds completed, recorded unchanged syscall counts/peak concurrency and identical projections as structural evidence, and retained the initial wide-index regression caveat rather than claiming uniform latency improvement. No test retries or timeouts changed.
