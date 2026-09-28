@@ -5,7 +5,7 @@
 import { pullRequestRepositoryFromPushEndpoint } from "../../renderer/shared/chat-pull-requests.js";
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
-import { constants as fsConstants, type Stats } from "fs";
+import { constants as fsConstants, type BigIntStats, type Stats } from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -174,6 +174,7 @@ interface RemoteRefs {
 interface ReviewSnapshot {
   complete: boolean;
   value?: string;
+  symlinkStats?: Map<string, { signature: string; additions: number }>;
 }
 
 interface SnapshotFileCacheEntry {
@@ -954,6 +955,10 @@ function terminateProcessGroup(child: ChildProcess, signal: NodeJS.Signals): voi
   }
 }
 
+function reviewFileSignature(stats: BigIntStats): string {
+  return `${stats.dev}:${stats.ino}:${stats.mode}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+}
+
 export class GitService {
   private readonly gitBinary: string;
   private readonly maxBufferBytes: number;
@@ -1307,7 +1312,8 @@ export class GitService {
     } catch { return undefined; }
   }
 
-  private async readRepository(cwd: string, signal: AbortSignal): Promise<GitRepository | null> {
+  private async readRepository(cwd: string, signal: AbortSignal, share = true): Promise<GitRepository | null> {
+    if (!share) return this.repository(cwd, signal);
     // Resolve aliases on every read, including after a workspace symlink swaps.
     let canonical: string;
     try { canonical = await fs.realpath(cwd); } catch { return null; }
@@ -1336,23 +1342,27 @@ export class GitService {
     });
   }
 
-  private displayRead<T>(
+  private async displayRead<T>(
     cwd: string,
     key: string,
     signal: AbortSignal | undefined,
     operation: (repo: GitRepository | null, signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    return this.sharedRead(
-      JSON.stringify([key, path.resolve(cwd)]),
-      signal,
-      async (owner) => {
+    if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+    const canonical = await fs.realpath(cwd).catch(() => undefined);
+    // Nested/unusual workspaces have no complete routing proof. Keep both
+    // discovery and display reads independent, so a new owner never joins an
+    // old ancestor's flight after replacement.
+    const candidateIdentity = canonical ? await this.rootReadIdentity(canonical) : undefined;
+    const share = Boolean(candidateIdentity);
+    const read = async (owner: AbortSignal) => {
         for (;;) {
           if (owner.aborted)
             throw new GitServiceError(
               "aborted",
               "Git operation was cancelled.",
             );
-          const repo = await this.readRepository(cwd, owner);
+          const repo = await this.readRepository(cwd, owner, share);
           const value = repo
             ? await this.stableRead(repo, () => operation(repo, owner), owner)
             : await operation(null, owner);
@@ -1371,8 +1381,9 @@ export class GitService {
           this.invalidate(repo.commonDir);
           this.repositoryCache.delete(repo.cwd);
         }
-      },
-    );
+    };
+    return share ? this.sharedRead(JSON.stringify([key, path.resolve(cwd), candidateIdentity?.signature]), signal, read)
+      : read(signal ?? new AbortController().signal);
   }
 
   private requireRepository(repo: GitRepository | null): GitRepository {
@@ -1597,6 +1608,7 @@ export class GitService {
     coreFileMode: boolean,
     signal?: AbortSignal,
   ): Promise<ReviewSnapshot> {
+    const symlinkStats = new Map<string, { signature: string; additions: number }>();
     const hash = createHash("sha256");
     hash.update("aiden-git-review-v1\u0000");
     hash.update(rawStatus);
@@ -1611,15 +1623,22 @@ export class GitService {
         const stats = await fs.lstat(lexicalPath);
         hash.update(`\u0000mode:${stats.mode.toString(8)}\u0000`);
         if (stats.isSymbolicLink()) {
+          const linkStats = await fs.lstat(lexicalPath, { bigint: true });
+          if (!linkStats.isSymbolicLink()) return { complete: false, symlinkStats };
           const target = await fs.readlink(lexicalPath);
+          const signature = reviewFileSignature(linkStats);
+          if (Buffer.byteLength(target) === Number(linkStats.size) &&
+              reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) === signature) {
+            symlinkStats.set(file.path, { signature, additions: countTextLines(target) });
+          }
           totalBytes += Buffer.byteLength(target);
-          if (totalBytes > this.snapshotMaxBytes) return { complete: false };
+          if (totalBytes > this.snapshotMaxBytes) return { complete: false, symlinkStats };
           hash.update("symlink\u0000");
           hash.update(target);
           continue;
         }
-        if (!stats.isFile()) return { complete: false };
-        if (totalBytes + stats.size > this.snapshotMaxBytes) return { complete: false };
+        if (!stats.isFile()) return { complete: false, symlinkStats };
+        if (totalBytes + stats.size > this.snapshotMaxBytes) return { complete: false, symlinkStats };
         totalBytes += stats.size;
         const cacheKey = `${repo.cwd}\u0000${file.path}`;
         const signature = [
@@ -1640,7 +1659,7 @@ export class GitService {
             contents.byteLength !== stats.size ||
             totalBytes - stats.size + contents.byteLength > this.snapshotMaxBytes
           ) {
-            return { complete: false };
+            return { complete: false, symlinkStats };
           }
           digest = createHash("sha256").update(contents).digest("hex");
           this.snapshotFileCache.delete(cacheKey);
@@ -1654,11 +1673,11 @@ export class GitService {
         hash.update("file\u0000");
         hash.update(digest);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { complete: false };
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { complete: false, symlinkStats };
         hash.update("missing\u0000");
       }
     }
-    return { complete: true, value: hash.digest("hex") };
+    return { complete: true, value: hash.digest("hex"), symlinkStats };
   }
 
   private async coreFileMode(repo: GitRepository, signal?: AbortSignal): Promise<boolean> {
@@ -1756,14 +1775,16 @@ export class GitService {
         const lexicalPath = lexicalWorkspacePath(repo.cwd, file.path);
         const lexicalStats = await fs.lstat(lexicalPath, { bigint: true });
         if (lexicalStats.isSymbolicLink()) {
-          const reserved = Number(lexicalStats.size) + 1;
-          if (reserved > remainingStatsBytes) continue;
-          remainingStatsBytes -= reserved;
-          const target = await fs.readlink(lexicalPath);
-          if (Buffer.byteLength(target) >= reserved) continue;
-          file.additions = countTextLines(target);
-          file.deletions = 0;
-          file.binary = false;
+          // Node readlink cannot limit target allocation. Reuse the independent
+          // snapshot's already-read target count instead of doing another read
+          // against an earlier lstat-sized reservation.
+          const captured = snapshot.symlinkStats?.get(file.path);
+          if (captured?.signature === reviewFileSignature(lexicalStats) &&
+              reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) === captured.signature) {
+            file.additions = captured.additions;
+            file.deletions = 0;
+            file.binary = false;
+          }
           continue;
         }
         const canonicalPath = await fs.realpath(lexicalPath);
@@ -1779,21 +1800,12 @@ export class GitService {
           lexicalStats.size > BigInt(this.maxBufferBytes)
         )
           continue;
-        const signature = (value: typeof lexicalStats) =>
-          `${value.dev}:${value.ino}:${value.mode}:${value.size}:${value.mtimeNs}:${value.ctimeNs}`;
+        const signature = reviewFileSignature;
         const before = signature(lexicalStats);
         const cacheKey = `${repo.cwd}\u0000${file.path}`;
         const cached = this.reviewStatsCache.get(cacheKey);
-        if (cached?.signature === before) {
-          file.additions = cached.additions;
-          file.deletions = cached.deletions;
-          file.binary = cached.binary;
-          continue;
-        }
-        // Reserve the EOF probe as well; post-stat growth never expands a read.
         const capacity = Number(lexicalStats.size) + 1;
-        if (capacity > remainingStatsBytes) continue;
-        remainingStatsBytes -= capacity;
+        if (cached?.signature !== before && capacity > remainingStatsBytes) continue;
         handle = await fs.open(
           canonicalPath,
           fsConstants.O_RDONLY |
@@ -1801,6 +1813,15 @@ export class GitService {
             fsConstants.O_NONBLOCK,
         );
         if (signature(await handle.stat({ bigint: true })) !== before) continue;
+        if (cached?.signature === before) {
+          if (signature(await fs.lstat(lexicalPath, { bigint: true })) !== before) continue;
+          file.additions = cached.additions;
+          file.deletions = cached.deletions;
+          file.binary = cached.binary;
+          continue;
+        }
+        // Reserve the EOF probe as well; post-stat growth never expands a read.
+        remainingStatsBytes -= capacity;
         const buffer = Buffer.alloc(capacity);
         let length = 0;
         while (length < capacity) {

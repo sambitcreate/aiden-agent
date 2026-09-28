@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -5127,5 +5129,161 @@ test("GitService rejects late cache publications from a replaced root across ali
       releaseOldProof.resolve();
       await Promise.allSettled([oldRead, newRead]);
     }
+  }
+});
+
+test("GitService keeps nested readers independent across ancestor replacement", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  const nested = path.join(repository, "nested");
+  await fs.mkdir(nested);
+  await fs.mkdir(path.join(replacement, "nested"));
+  await git(replacement, ["switch", "-c", "new-ancestor"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  const laterStatus = gitReadGate();
+  let held = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status") {
+      if (!held) { held = true; started.resolve(); await release.promise; }
+      else laterStatus.resolve();
+    }
+    return result;
+  };
+  const earlier = service.info(nested);
+  void earlier.catch(() => undefined);
+  let later: ReturnType<typeof service.info> | undefined;
+  try {
+    await started.promise;
+    await fs.rename(repository, `${repository}-old`);
+    await fs.rename(replacement, repository);
+    later = service.info(nested);
+    // A finite rejection timer makes an incorrectly joined old flight fail
+    // without allowing fixture teardown to strand its held request.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([laterStatus.promise, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("new nested reader joined the previous ancestor's flight")), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.equal((await later).branch, "new-ancestor");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([earlier, later]);
+  }
+});
+
+test("GitService verifies cached counts against the file opened after path resolution", async (t) => {
+  const repository = await createRepository(t);
+  const filePath = path.join(repository, "cached-count.txt");
+  await fs.writeFile(filePath, "one\n");
+  const service = new GitService();
+  assert.equal((await service.review(repository)).files[0]?.additions, 1);
+  const canonical = await fs.realpath(filePath);
+  const original = fsPromises.realpath;
+  let replaced = false;
+  t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof original>) => {
+    const value = await Reflect.apply(original, fsPromises, args);
+    if (String(value) === canonical && !replaced) {
+      replaced = true;
+      const next = `${filePath}.replacement`;
+      await fs.writeFile(next, "two\nrows\n");
+      await fs.rename(next, filePath);
+    }
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const raced = await service.review(repository);
+  assert.equal(replaced, true);
+  assert.equal(raced.files[0]?.additions, undefined, "a replaced path must not receive the prior inode's cached count");
+  assert.equal(raced.summary.unavailableStats, 1);
+  assert.equal((await service.review(repository)).files[0]?.additions, 2);
+});
+
+test("GitService reuses proven snapshot symlink counts without extra budgeted target reads", async (t) => {
+  const repository = await createRepository(t);
+  const link = path.join(repository, "link.txt");
+  await fs.symlink("first", link);
+  const service = new GitService({ reviewStatsMaxBytes: 0 });
+  const original = fsPromises.readlink;
+  let reads = 0;
+  let replaceWith: string | undefined;
+  t.mock.method(fsPromises, "readlink", async (...args: Parameters<typeof original>) => {
+    const value = await Reflect.apply(original, fsPromises, args);
+    if (String(args[0]).endsWith("/link.txt")) {
+      reads++;
+      if (replaceWith !== undefined) {
+        await fs.unlink(link);
+        await fs.symlink(replaceWith, link);
+        replaceWith = undefined;
+      }
+    }
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const review = await service.review(repository);
+  assert.equal(review.files[0]?.additions, 1, "stable snapshot data needs no additional statistics byte budget");
+  assert.equal(reads, 1, "only the independent authoritative snapshot reads the link target");
+  for (const target of ["a\nb\n!", "longer-target".repeat(50)]) {
+    replaceWith = target;
+    reads = 0;
+    const raced = await service.review(repository);
+    assert.equal(reads, 1);
+    assert.equal(raced.files[0]?.additions, undefined, "same-size and growing replacement links must lose their count proof");
+    assert.equal(raced.summary.unavailableStats, 1);
+  }
+});
+
+test("GitService never rereads replaced symlink targets against an obsolete byte reservation", async (t) => {
+  const repository = await createRepository(t);
+  const link = path.join(repository, "racing-link.txt");
+  await fs.symlink("first", link);
+  const originalStat = fsPromises.lstat;
+  const originalLink = fsPromises.readlink;
+  let snapshotFinished = false;
+  let replacement: string | undefined;
+  let fallbackBytes = 0;
+  t.mock.method(fsPromises, "lstat", async (...args: Parameters<typeof originalStat>) => {
+    const value = await Reflect.apply(originalStat, fsPromises, args);
+    if (snapshotFinished && replacement && String(args[0]).endsWith("/racing-link.txt")) {
+      await fs.unlink(link);
+      await fs.symlink(replacement, link);
+      replacement = undefined;
+    }
+    return value;
+  });
+  t.mock.method(fsPromises, "readlink", async (...args: Parameters<typeof originalLink>) => {
+    const value = await Reflect.apply(originalLink, fsPromises, args);
+    if (snapshotFinished && String(args[0]).endsWith("/racing-link.txt")) fallbackBytes += Buffer.byteLength(value);
+    return value;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (const target of ["a\nb\n!", "longer-target".repeat(50)]) {
+    snapshotFinished = false;
+    replacement = undefined;
+    await fs.unlink(link);
+    await fs.symlink("first", link);
+    const service = new GitService({ reviewStatsMaxBytes: 6 });
+    const internals = service as unknown as { reviewSnapshot(...args: unknown[]): Promise<unknown> };
+    const snapshot = internals.reviewSnapshot.bind(service);
+    internals.reviewSnapshot = async (...args) => {
+      const result = await snapshot(...args);
+      snapshotFinished = true;
+      return result;
+    };
+    replacement = target;
+    fallbackBytes = 0;
+    const review = await service.review(repository);
+    assert.equal(replacement, undefined, "the fixture must replace the link after fallback lstat");
+    assert.equal(review.files[0]?.additions, undefined);
+    assert.equal(review.summary.unavailableStats, 1);
+    assert.ok(fallbackBytes <= 6, "fallback target IO must fit the reserved aggregate budget even if the link grows");
   }
 });
