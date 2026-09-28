@@ -1262,71 +1262,76 @@ export class GitService {
     }
   }
 
-  private async readRepository(
-    cwd: string,
-    signal: AbortSignal,
-  ): Promise<GitRepository | null> {
+  private async rootReadIdentity(cwd: string): Promise<
+    { paths: string[]; signature: string; commonDir: string } | undefined
+  > {
+    try {
+      const marker = path.join(cwd, ".git");
+      const basePaths = [cwd, marker];
+      const baseSignature = await this.repositorySignature(basePaths);
+      const markerStat = await fs.lstat(marker);
+      const readPointer = async (filePath: string): Promise<string> => {
+        const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+        try {
+          const stat = await handle.stat();
+          if (!stat.isFile() || stat.size > 4096) throw new Error("Unsupported Git pointer");
+          const buffer = Buffer.alloc(4097);
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          if (bytesRead !== stat.size) throw new Error("Changed Git pointer");
+          return buffer.subarray(0, bytesRead).toString("utf8");
+        } finally { await handle.close(); }
+      };
+      let gitDir = marker;
+      if (markerStat.isFile()) {
+        const pointer = await readPointer(marker);
+        if (!pointer.startsWith("gitdir: ")) return undefined;
+        gitDir = path.resolve(cwd, pointer.slice(8).trim());
+      } else if (!markerStat.isDirectory()) return undefined;
+      const commonPointer = path.join(gitDir, "commondir");
+      const adminPaths = [gitDir, commonPointer];
+      const adminSignature = await this.repositorySignature(adminPaths);
+      let commonPath = gitDir;
+      try { commonPath = path.resolve(gitDir, (await readPointer(commonPointer)).trim()); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const commonDir = await fs.realpath(commonPath);
+      const paths = [...basePaths, ...adminPaths, commonPath, commonDir,
+        path.join(gitDir, "config"), path.join(gitDir, "config.worktree"),
+        path.join(commonDir, "config")];
+      const signature = await this.repositorySignature(paths);
+      // Pointer parsing must describe the same routing files as the proof.
+      if (!signature || !baseSignature || !adminSignature ||
+          baseSignature !== await this.repositorySignature(basePaths) ||
+          adminSignature !== await this.repositorySignature(adminPaths)) return undefined;
+      return { paths, signature, commonDir };
+    } catch { return undefined; }
+  }
+
+  private async readRepository(cwd: string, signal: AbortSignal): Promise<GitRepository | null> {
     // Resolve aliases on every read, including after a workspace symlink swaps.
     let canonical: string;
-    try {
-      canonical = await fs.realpath(cwd);
-    } catch {
-      return null;
-    }
+    try { canonical = await fs.realpath(cwd); } catch { return null; }
     return this.sharedRead(`repository:${canonical}`, signal, async (owner) => {
       // Match the existing display TTL: included/global Git configuration can
       // affect discovery without touching the local config files below.
       const cached = this.getCached(this.repositoryCache, canonical);
-      if (
-        cached?.readIdentity &&
-        (await this.repositorySignature(cached.readIdentity.paths)) ===
-          cached.readIdentity.signature
-      ) {
-        return cached;
-      }
+      if (cached?.readIdentity &&
+          await this.repositorySignature(cached.readIdentity.paths) === cached.readIdentity.signature) return cached;
       this.repositoryCache.delete(canonical);
       this.infoCache.delete(canonical);
       this.branchCache.delete(canonical);
-      const discoveryPaths = [canonical, path.join(canonical, ".git")];
-      const beforeDiscovery = await this.repositorySignature(discoveryPaths);
-      const repo = await this.repository(canonical, owner);
-      // A nested workspace can acquire a nearer .git at any ancestor. Keep Git
-      // authoritative there instead of retaining an incomplete discovery proof.
-      if (!repo || repo.cwd !== repo.topLevel) return repo;
-      try {
-        const marker = path.join(repo.cwd, ".git");
-        const markerStat = await fs.lstat(marker);
-        let gitDir = marker;
-        if (markerStat.isFile() && markerStat.size <= 4096) {
-          const pointer = await fs.readFile(marker, "utf8");
-          if (!pointer.startsWith("gitdir: ")) return repo;
-          gitDir = path.resolve(repo.cwd, pointer.slice(8).trim());
-        } else if (!markerStat.isDirectory()) return repo;
-        const paths = [
-          repo.cwd,
-          marker,
-          gitDir,
-          repo.commonDir,
-          path.join(gitDir, "commondir"),
-          path.join(gitDir, "config"),
-          path.join(gitDir, "config.worktree"),
-          path.join(repo.commonDir, "config"),
-        ];
-        const signature = await this.repositorySignature(paths);
-        if (
-          signature &&
-          beforeDiscovery &&
-          beforeDiscovery ===
-            (await this.repositorySignature(discoveryPaths)) &&
-          !owner.aborted
-        ) {
-          repo.readIdentity = { paths, signature };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const identity = await this.rootReadIdentity(canonical);
+        const repo = await this.repository(canonical, owner);
+        if (identity && await this.repositorySignature(identity.paths) !== identity.signature) continue;
+        // Nested/unusual layouts remain uncached. The filesystem proof only
+        // qualifies reuse of Git's result; it never replaces Git discovery.
+        if (repo && identity && repo.cwd === repo.topLevel && repo.commonDir === identity.commonDir && !owner.aborted) {
+          repo.readIdentity = identity;
           this.setCached(this.repositoryCache, canonical, repo.commonDir, repo);
         }
-      } catch {
-        /* Unusual layouts remain uncached display reads. */
+        return repo;
       }
-      return repo;
+      throw new GitServiceError("stale_snapshot", "The repository changed during discovery. Refresh and try again.");
     });
   }
 

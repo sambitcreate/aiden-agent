@@ -5002,3 +5002,49 @@ test("GitService keeps the default freshness deadline and invalidates linked con
   await service.createBranch(repository, "fresh-mutation");
   assert.ok((await service.branches(linked)).branches.includes("fresh-mutation"), "common-directory mutation invalidates a linked consumer immediately");
 });
+
+test("GitService retries config and linked common-directory changes during discovery", async (t) => {
+  const repository = await createRepository(t);
+  const other = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const original = runner.run;
+  let moved = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await original(cwd, args, options);
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel" && !moved) {
+      moved = true;
+      await git(repository, ["config", "core.worktree", other]);
+    }
+    return result;
+  };
+  await service.info(repository);
+  const review = await service.review(repository);
+  assert.equal(review.commit.repositoryRoot, false, "a racing core.worktree change cannot authorize a root-only display capability");
+  assert.equal(await git(repository, ["rev-parse", "--show-toplevel"]), await fs.realpath(other));
+
+  await git(repository, ["config", "--unset", "core.worktree"]);
+  const linked = path.join(path.dirname(repository), "linked-routing-race");
+  await git(repository, ["worktree", "add", "-b", "linked-routing", linked]);
+  await git(other, ["branch", "other-only"]);
+  const admin = await git(linked, ["rev-parse", "--absolute-git-dir"]);
+  const otherCommon = await fs.realpath(path.join(other, ".git"));
+  const linkedService = new GitService({ cacheTtlMs: 60_000 });
+  const linkedObserver = observeGitCommands(linkedService);
+  const linkedRun = linkedObserver.runner.run;
+  let switched = false;
+  linkedObserver.runner.run = async (cwd, args, options) => {
+    const result = await linkedRun(cwd, args, options);
+    if (args[0] === "rev-parse" && args[1] === "--git-common-dir" && !switched) {
+      switched = true;
+      await fs.writeFile(path.join(admin, "commondir"), `${otherCommon}\n`);
+    }
+    return result;
+  };
+  const branches = await linkedService.branches(linked);
+  assert.ok(branches.branches.includes("other-only"));
+  assert.equal(linkedObserver.commands.filter(args => args[0] === "rev-parse" && args[1] === "--is-inside-work-tree").length, 2, "changed commondir must rediscover the mutation epoch owner");
+  // Mutation in the new common dir must invalidate the linked display cache.
+  await linkedService.createBranch(other, "after-routing-race");
+  assert.ok((await linkedService.branches(linked)).branches.includes("after-routing-race"));
+});
