@@ -5,6 +5,7 @@
 import * as React from "react";
 import { ChevronRight, CircleAlert } from "lucide-react";
 import { Text } from "./ui";
+import { useStickySectionCollapse } from "../lib/sticky-section";
 import {
   activityIssueCount,
   activityLine,
@@ -73,7 +74,10 @@ function TickerRow({ step }: { step: AgentStep }) {
     ? step.finishedAt === undefined
     : step.status === "pending" || step.status === "running";
   return (
-    <div className="activity-feed-row flex h-6 min-w-0 items-center">
+    <div
+      className="activity-feed-row flex h-6 min-w-0 items-center"
+      data-activity-stage={activityLine(step).stage}
+    >
       <span
         className={`activity-feed-detail-label min-w-0 truncate text-mini text-secondary ${
           active ? "agent-thinking-shimmer" : ""
@@ -87,7 +91,11 @@ function TickerRow({ step }: { step: AgentStep }) {
 
 function TrailRow({ step }: { step: AgentStep }) {
   return (
-    <div className="flex min-h-5 min-w-0 items-start py-px" role="listitem">
+    <div
+      className="flex min-h-5 min-w-0 items-start py-px"
+      role="listitem"
+      data-activity-stage={activityLine(step).stage}
+    >
       <span className="activity-feed-detail-label min-w-0 break-words text-mini text-secondary">
         <StepLine step={step} />
       </span>
@@ -106,6 +114,12 @@ export function ActivityFeed({
   const [exiting, setExiting] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const autoOpenKeyRef = React.useRef<string | null>(null);
+  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } =
+    useStickySectionCollapse<HTMLDetailsElement, HTMLElement>();
+
+  React.useLayoutEffect(() => {
+    if (!open) restoreAfterCollapse();
+  }, [open, restoreAfterCollapse]);
 
   React.useEffect(() => {
     if (timeline) {
@@ -207,7 +221,8 @@ export function ActivityFeed({
 
   return (
     <details
-      className="activity-feed group/activity min-w-0"
+      ref={sectionRef}
+      className="transcript-sticky-section activity-feed group/activity min-w-0"
       data-presence={presence}
       data-animate={animate ? "true" : "false"}
       data-state={open ? "open" : "closed"}
@@ -215,7 +230,11 @@ export function ActivityFeed({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary
-        className={`-mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none ${
+        ref={headerRef}
+        onClick={() => {
+          if (open) noteCollapse();
+        }}
+        className={`transcript-sticky-header -mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors focus-visible:outline-none ${
           showTicker ? "items-end" : "items-center"
         }`}
       >
