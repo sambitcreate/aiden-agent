@@ -34,6 +34,7 @@ void app.whenReady().then(async () => {
       "**/*/*.ts",
       "{src,link}/**/*",
       "src/**/..",
+      `{${path.join(root, "src/*.ts")},src/sub/*.ts}`,
     ];
     for (const pattern of globs) {
       const expected: string[] = [];

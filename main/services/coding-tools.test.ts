@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import * as fs from "node:fs/promises";
+import fsPromises, * as fs from "node:fs/promises";
+import { Worker } from "node:worker_threads";
+import { syncBuiltinESMExports } from "node:module";
+import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -2224,12 +2227,22 @@ test("foreground glob agrees with native glob on normal patterns, hidden paths a
     for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
     await fs.symlink("src", path.join(root, "link"));
     await fs.symlink("sub", path.join(root, "src/alias"));
-    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts")]) {
+    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
       const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
       assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
     }
     await fs.writeFile(path.join(root, ".env"), "SECRET");
     assert.equal(await foregroundText(root, "glob", { pattern: ".env" }), "[no matches]");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-glob-outside-"));
+    try {
+      await fs.writeFile(path.join(outside, "outside.txt"), "PRIVATE");
+      const opened: string[] = [];
+      assert.equal(await foregroundText(root, "glob", { pattern: `{${path.join(outside, "*.txt")},src/*.js}` }, undefined, {
+        beforeDirectoryOpen: (directory) => { opened.push(directory); },
+      }), "src/b.js");
+      assert.ok(opened.every((directory) => !directory.includes(path.basename(outside))));
+    } finally { await fs.rm(outside, { recursive: true, force: true }); }
+
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -2341,4 +2354,189 @@ test("foreground matcher capacity rejects excess work and recovers after concurr
   const outcomes = await settled;
   assert.ok(outcomes.every((outcome) => outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled"));
   assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["other", "safe"], 1)), [1]);
+});
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+test("foreground callers cancel pending reads and late acquisitions while handles retain an owner", { timeout: 15_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-pending-"));
+  await fs.writeFile(path.join(root, "a.txt"), "needle");
+  try {
+    for (const phase of ["acquire", "read"] as const) {
+      for (const [name, params] of [["read_file", { path: "a.txt" }], ["list_dir", {}], ["glob", { pattern: "*" }], ["grep", { pattern: "needle" }]] as const) {
+        const entered = deferred(); const release = deferred(); const closed = deferred();
+        const controller = new AbortController();
+        let reads = 0; let closes = 0;
+        const method = name === "read_file" ? "open" : "opendir";
+        const original = fsPromises[method];
+        // Delay the actual descriptor acquisition/read promise, not just a tool hook.
+        t.mock.method(fsPromises, method, async (...args: unknown[]) => {
+          const handle = await Reflect.apply(original, fsPromises, args);
+          const read = handle.read.bind(handle); const close = handle.close.bind(handle);
+          handle.read = async (...readArgs: unknown[]) => {
+            reads++;
+            if (phase === "read") { entered.resolve(); await release.promise; }
+            return Reflect.apply(read, handle, readArgs);
+          };
+          handle.close = async () => { closes++; await close(); closed.resolve(); };
+          if (phase === "acquire") { entered.resolve(); await release.promise; }
+          return handle;
+        });
+        syncBuiltinESMExports();
+        const call = foregroundText(root, name, params, controller.signal);
+        try {
+          await entered.promise;
+          controller.abort(new Error("pending I/O cancelled"));
+          await assert.rejects(call, /pending I\/O cancelled/);
+          assert.equal(closes, 0, "pending I/O still owns its handle");
+          release.resolve();
+          await closed.promise;
+          assert.equal(closes, 1);
+          assert.equal(reads, phase === "acquire" ? 0 : 1, "no subsequent reads after cancellation");
+        } finally {
+          release.resolve();
+          t.mock.restoreAll(); syncBuiltinESMExports();
+        }
+      }
+    }
+    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground deadline returns while a directory read is pending and closes it when settled", { timeout: 12_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-deadline-"));
+  const entered = deferred(); const release = deferred(); const closed = deferred();
+  const original = fsPromises.opendir;
+  let reads = 0; let closes = 0;
+  t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof original>) => {
+    const directory = await original(...args);
+    const read = directory.read.bind(directory); const close = directory.close.bind(directory);
+    directory.read = (async () => { reads++; entered.resolve(); await release.promise; return read(); }) as typeof directory.read;
+    directory.close = (async () => { closes++; await close(); closed.resolve(); }) as typeof directory.close;
+    return directory;
+  });
+  syncBuiltinESMExports();
+  try {
+    const call = foregroundText(root, "list_dir", {});
+    await entered.promise;
+    assert.match(await call, /search stopped after 5000 ms/);
+    assert.equal(closes, 0);
+    release.resolve(); await closed.promise;
+    assert.equal(reads, 1); assert.equal(closes, 1);
+  } finally {
+    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("foreground operation admission remains bounded through repeated cancellation and late cleanup", { timeout: 5_000 }, async () => {
+  const scope = new ForegroundReadOperations(2);
+  const controllers = [new AbortController(), new AbortController()];
+  const pending = controllers.map(() => deferred());
+  const cleaning = controllers.map(() => deferred());
+  const cleanup = controllers.map(() => deferred());
+  const completed = controllers.map(() => deferred());
+  const started = controllers.map(() => deferred());
+  const calls = controllers.map((controller, i) => scope.run(controller.signal, undefined, async (signal) => {
+    started[i]!.resolve();
+    try { await pending[i]!.promise; signal.throwIfAborted(); return "unexpected"; }
+    finally { cleaning[i]!.resolve(); await cleanup[i]!.promise; completed[i]!.resolve(); }
+  }, () => "deadline"));
+  const rejected = calls.map((call) => assert.rejects(call, /cancelled/));
+  await Promise.all(started.map((gate) => gate.promise));
+  for (let i = 0; i < 2; i++) controllers[i]!.abort(new Error("cancelled"));
+  await Promise.all(rejected);
+  const run = () => scope.run(undefined, undefined, async () => "recovered", () => "deadline");
+  for (let i = 0; i < 8; i++) await assert.rejects(run(), /operations are busy/);
+  pending[0]!.reject(new Error("late I/O failure")); pending[1]!.resolve();
+  await Promise.all(cleaning.map((gate) => gate.promise));
+  await assert.rejects(run(), /operations are busy/, "cleanup retains admission");
+  cleanup.forEach((gate) => gate.resolve());
+  await Promise.all(completed.map((gate) => gate.promise));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(await run(), "recovered");
+});
+
+test("foreground cleanup failures quarantine admission and undefined failures still reject", async () => {
+  const scope = new ForegroundReadOperations(1);
+  await assert.rejects(scope.run(undefined, undefined, async () => {
+    await closeForegroundResource({ close: async () => { throw new Error("close failed"); } });
+  }, () => undefined), ForegroundReadCleanupError);
+  await assert.rejects(scope.run(undefined, undefined, async () => "unused", () => "timeout"), /operations are busy/);
+  const fresh = new ForegroundReadOperations(1);
+  const result = await Promise.allSettled([fresh.run(undefined, undefined, async () => { throw undefined; }, () => undefined)]);
+  assert.equal(result[0]!.status, "rejected");
+  assert.equal(await fresh.run(undefined, undefined, async () => "ok", () => "timeout"), "ok");
+});
+
+test("foreground workers terminate on cancellation while traversal callbacks remain pending", { timeout: 8_000 }, async (t) => {
+  const terminated = deferred();
+  let terminationCount = 0;
+  const originalTerminate = Worker.prototype.terminate;
+  t.mock.method(Worker.prototype, "terminate", async function (this: Worker) {
+    const code = await originalTerminate.call(this);
+    if (++terminationCount === 4) terminated.resolve();
+    return code;
+  });
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const started = controllers.map(() => deferred());
+  const release = deferred();
+  const calls = controllers.map((controller, i) => withCodingToolMatcher("grep", "safe", Date.now() + 5_000, controller.signal, async () => {
+    started[i]!.resolve(); await release.promise; controller.signal.throwIfAborted();
+  }));
+  const settled = Promise.allSettled(calls);
+  try {
+    await Promise.all(started.map((gate) => gate.promise));
+    controllers.forEach((controller) => controller.abort(new Error("pending traversal cancelled")));
+    await terminated.promise;
+    assert.equal(terminationCount, 4, "workers terminate without waiting for the traversal callback");
+    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async () => undefined), /searches are busy/);
+  } finally { release.resolve(); await settled; t.mock.restoreAll(); }
+  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), [0]);
+});
+
+test("foreground tools retain global admission until both root metadata requests settle", { timeout: 8_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-metadata-"));
+  await fs.writeFile(path.join(root, "a.txt"), "needle");
+  const tool = buildCodingTools(root).find((tool) => tool.name === "read_file")!;
+  const started = deferred(); const release = deferred(); const metadataSettled = deferred();
+  const stat = fsPromises.stat; const realpath = fsPromises.realpath;
+  let pendingStats = 0; let completedStats = 0;
+  t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof realpath>) => {
+    if (args[0] === root) throw new Error("first metadata request failed");
+    return realpath(...args);
+  });
+  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof stat>) => {
+    if (args[0] === root) {
+      if (++pendingStats === 4) started.resolve();
+      await release.promise;
+    }
+    const result = await stat(...args);
+    if (args[0] === root && ++completedStats === 4) metadataSettled.resolve();
+    return result;
+  });
+  syncBuiltinESMExports();
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const calls = controllers.map((controller) => tool.execute("pending", { path: "a.txt" }, controller.signal));
+  const rejections = calls.map((call) => assert.rejects(call, /metadata cancelled/));
+  try {
+    await started.promise;
+    controllers.forEach((controller) => controller.abort(new Error("metadata cancelled")));
+    await Promise.all(rejections);
+    for (let i = 0; i < 8; i++) await assert.rejects(tool.execute("excess", { path: "a.txt" }), /operations are busy/);
+    assert.equal(pendingStats, 4, "excess calls never start another syscall");
+  } finally {
+    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
+    // Let all four original owners observe the completed metadata pair.
+    await metadataSettled.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  try {
+    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

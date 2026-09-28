@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { closeForegroundResource } from "./foreground-read-scope.js";
 import { createRequire } from "node:module";
 import {
   CODING_GLOB_WORKER_SOURCE,
@@ -88,6 +89,17 @@ async function withWorker<T>(
     failure = error;
     rejectPending?.(error);
   };
+  let termination: Promise<number> | undefined;
+  const terminate = () => termination ??= worker.terminate();
+  const abortWorker = () => {
+    failed(signal?.reason ?? new Error("File search cancelled."));
+    void terminate().catch(failed);
+  };
+  signal?.addEventListener("abort", abortWorker, { once: true });
+  const lifetimeTimer = setTimeout(() => {
+    failed(new CodingToolMatchTimeout());
+    void terminate().catch(failed);
+  }, Math.max(0, deadline - Date.now()));
   worker.on("error", failed);
   worker.on("exit", () => failed(new Error("File search matcher exited.")));
   const receive = (request?: unknown) =>
@@ -124,7 +136,9 @@ async function withWorker<T>(
     const ready = await receive();
     return await run(receive, ready);
   } finally {
-    await worker.terminate();
+    clearTimeout(lifetimeTimer);
+    signal?.removeEventListener("abort", abortWorker);
+    await closeForegroundResource({ close: async () => { await terminate(); } });
     activeMatchers--;
   }
 }

@@ -5,7 +5,7 @@
  * rather than matching a flattened pathname. Filesystem access stays on the host.
  */
 export const CODING_GLOB_WORKER_SOURCE = `
-const { join, isAbsolute } = require('node:path');
+const { join, isAbsolute, parse, sep } = require('node:path');
 const { Minimatch, GLOBSTAR } = require(workerData.minimatchPath);
 const matcher = new Minimatch(workerData.pattern, {
   nocase: process.platform === 'win32' || process.platform === 'darwin',
@@ -15,8 +15,11 @@ const matcher = new Minimatch(workerData.pattern, {
 if (matcher.set.length > 1000) throw new Error('Glob expands to too many alternatives.');
 const seen = new Set();
 const seeds = matcher.set.map((parts, pattern) => {
-  let current = isAbsolute(workerData.pattern) ? '/' : '.';
-  let index = 0;
+  // Brace expansion may mix roots; never infer an arm's root from the whole pattern.
+  const expanded = matcher.globParts[pattern].join('/');
+  const root = isAbsolute(expanded) ? parse(expanded).root : '';
+  let current = root || '.';
+  let index = root ? root.split(sep).length - 1 : 0;
   // Resolve literal prefixes only. A globstar followed by .. is never collapsed.
   while (index < parts.length - 1 && typeof parts[index] === 'string') {
     current = join(current, parts[index++]);

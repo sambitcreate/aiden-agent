@@ -29,8 +29,21 @@ deadline with an incomplete notice. A fixed-source worker receives model input a
 data and is terminated/awaited on every exit. Four concurrent workers are allowed;
 additional searches return a busy error. This adds roughly 17 ms per tiny grep on
 the quiet fixture run (see raw samples), versus sub-millisecond baseline calls.
-It buys cancellable matching and removes regex execution from Electron's main
+It provides cancellable matching and removes regex execution from Electron's main
 thread. The worker is not retained between calls.
+
+A foreground operation scope covers pending filesystem I/O as well as matching.
+Cancellation rejects the caller promptly; the five-second search deadline returns
+an explicit incomplete notice even if a syscall is still pending. An issued
+kernel syscall cannot be cancelled in JavaScript: its owner keeps one of four
+process-wide admission slots until the original operation and descriptor cleanup
+settle. Late acquisitions close without another read, late errors remain observed,
+and a failed close quarantines capacity rather than admitting unbounded work.
+Worker termination begins on cancellation/deadline even while traversal is pending.
+Deferred-I/O tests cover acquisition/read cancellation across all four tools,
+concurrent and repeated cancellation, blocked cleanup, and capacity recovery.
+A deadline while I/O is pending returns only the notice, without partial results.
+
 
 Parent hidden-file/credential policy remains distinct from the stricter child
 policy. Read_file still supports safe symlinks and metadata, excludes .env secrets,
@@ -39,7 +52,7 @@ Glob uses pinned minimatch 9.0.9 with Node fs.glob parser options. It tracks
 segment positions and link traversal states without prematurely normalizing
 `**/..`. Filesystem access stays on the bounded host. The first independent review
 found gaps in a flattened-path matcher; the replacement has differential tests
-for absolute paths, braces/extglobs, globstars, linked prefixes, linked wildcard
+for absolute paths, mixed absolute/relative brace arms, braces/extglobs, globstars, linked prefixes, linked wildcard
 paths, and glob-dependent parent segments. Node traversal attribution is in
 THIRD_PARTY_NOTICES.md.
 
@@ -64,7 +77,7 @@ Run behavioral acceptance and the Electron smoke:
 ```sh
 npx tsx --test main/services/coding-tools.test.ts main/services/generation-runtime.test.ts
 npm run type-check
-npx eslint main/services/coding-tools.ts main/services/coding-tool-matcher.ts main/services/coding-tool-glob-worker.ts main/services/coding-tools.test.ts scripts/benchmark-foreground-file-tools.ts scripts/smoke-foreground-file-tools.ts
+npx eslint main/services/coding-tools.ts main/services/coding-tool-matcher.ts main/services/coding-tool-glob-worker.ts main/services/foreground-read-scope.ts main/services/coding-tools.test.ts scripts/benchmark-foreground-file-tools.ts scripts/smoke-foreground-file-tools.ts
 node node_modules/electron/install.js
 npx esbuild scripts/smoke-foreground-file-tools.ts --bundle --platform=node --format=esm --packages=external --external:electron --outfile=build/main/foreground-file-tools-smoke.mjs
 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron build/main/foreground-file-tools-smoke.mjs

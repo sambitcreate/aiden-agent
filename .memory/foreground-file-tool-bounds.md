@@ -39,3 +39,15 @@ First independent Astra review found safe-link/brace and glob-dependent ..
 compatibility gaps in the initial flattened-path matcher. Replaced that approach
 with segment-state traversal and added differential fixtures before publication.
 Re-review and hosted exact-head CI/bot review remain delivery gates.
+
+
+PR #288 Pullfrog follow-up: derive each brace-expanded glob arm's root independently;
+native differential tests cover mixed absolute/relative alternatives and reject an
+outside-root arm before opening its directory. Foreground read/list/glob/grep now
+share four operation owners. Caller abort and search deadline settle independently
+of pending filesystem I/O; the original operation retains its slot through late
+I/O and cleanup. An issued syscall itself is not cancellable. Late handles close
+without further reads; failed cleanup quarantines admission. Root verification
+awaits both started metadata requests even if one fails. Worker termination starts
+on lifetime abort/deadline while its traversal callback may still be pending.
+The stalled-I/O deadline result is an explicit notice without partial output.

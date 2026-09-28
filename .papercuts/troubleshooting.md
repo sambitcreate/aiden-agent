@@ -1409,3 +1409,15 @@ because their native file-mutator test binary had not been built. Run
 
 - Node built-in ESM namespaces retain their bindings when a benchmark wraps the default fs/promises export. Call `syncBuiltinESMExports()` after instrumentation and restoration; otherwise byte counters misleadingly report zero. The clean 0.87.1 runner now reproduces the original 16 MiB read.
 - A standalone Electron ESM smoke must externalize `electron` explicitly (tsconfig path resolution otherwise bundles its npm launcher), and register `app.whenReady().then(...)` without top-level-awaiting readiness. Electron waits for module evaluation before ready; top-level await deadlocks the fixture. The resulting fixed-source worker is validated in pinned Electron 43.1.1 / Node 24.18.0.
+
+
+### Foreground pending-I/O review follow-up (2026-09-28, PR #288)
+
+Pullfrog found mixed-root brace glob arms and cancellation waiting on pending
+filesystem reads. Cover syscall ownership as well as matcher termination: retain
+admission through original I/O/cleanup, and fence late handle acquisitions. Worker
+message ports are absent from Node `_getActiveHandles()` after its one-shot ready
+listener is removed, even for a live idle worker. The initial lifecycle test failed
+`0 !== 4`; corrected the oracle to await the actual Worker.terminate promises while
+traversal stays deferred, then independently assert held admission and recovery.
+This was a deterministic test-oracle failure, not a passing rerun or timeout change.
