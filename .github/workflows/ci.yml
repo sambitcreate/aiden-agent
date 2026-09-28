@@ -271,7 +271,17 @@ jobs:
           -configuration Debug
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoSimulatorDerivedData'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
+
+      - name: Preserve failed iOS simulator test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+          retention-days: 7
+          if-no-files-found: warn
 
   android:
     name: Android build and APK

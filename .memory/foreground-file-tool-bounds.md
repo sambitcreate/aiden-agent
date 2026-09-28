@@ -74,3 +74,12 @@ now cover drive roots, bare UNC shares with/without slash, and mixed relative ar
 Published Electron smoke receipts normalize the synthetic workspace prefix to
 `<workspace>` while assertions retain real absolute paths. The counter receipts
 already use repository-relative module paths and contain no author-local root.
+
+Hosted CI follow-up reused the narrowly scoped consumer-gate correction already
+present in PRs #278/#280: hold the exact recovery stream endpoint, then deliberately
+run unrelated progress before sending. Reverting only the exact endpoint to
+`/events` reproduces a progress-observer timeout in the simulator. The separate
+completed-upload failure remains unreproduced (unchanged full chat suite passed
+208/208 locally); per-mode assertion labels and failed-CI xcresult preservation
+provide diagnostic evidence without relaxing assertions or timeouts. Parent audit
+papercuts retain both original failing run attempts and the unresolved upload flake.

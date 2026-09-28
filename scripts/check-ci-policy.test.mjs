@@ -202,6 +202,15 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
   assert.ok(jobs.ios.steps.some((step) => step.run?.includes("xcodebuild build-for-testing")));
+  const simulator = jobs["ios-simulator"];
+  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test"));
+  const simulatorResults = simulator.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
+  assert.equal(simulatorTest["continue-on-error"], undefined);
+  assert.equal(simulatorResults.if, "failure()");
+  assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+  assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
+  assert.equal(simulatorResults.with["retention-days"], 7);
   assert.equal(jobs.verify.steps.filter((step) => step.run === "npm run build").length, 1);
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
