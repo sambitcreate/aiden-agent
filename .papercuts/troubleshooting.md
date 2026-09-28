@@ -1407,6 +1407,12 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
 
+## 2026-09-28 workspace metadata performance validation
+
+- Default xcrun resolved Command Line Tools, so simctl was unavailable. Set DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer explicitly for simulator listing/XCTest; 11 workspace tests passed on iOS27. Android used Android Studio's bundled JBR plus the existing SDK, with 12 focused tests passing.
+- Synthetic timing varied substantially while independent native builds and tests shared the host. Repeated after those local builds completed, recorded unchanged syscall counts/peak concurrency and identical projections as structural evidence, and retained the initial wide-index regression caveat rather than claiming uniform latency improvement. No test retries or timeouts changed.
+- Pullfrog run [36474940274](https://github.com/sambitcreate/aiden-agent/actions/runs/36474940274/job/109106167447) reported `Linux recovery inspection detects current-user open descriptors` returning `unknown` instead of `clear` after close (`workspace-files.test.ts:343`). The probe and assertion are unchanged from baseline a9baa4aa. One isolated Linux Docker comparison of the bundled baseline and current test passed both; this does not reproduce or resolve the bot-environment failure. The probe deliberately returns `unknown` when a same-user /proc descriptor cannot be inspected; the test assumes the entire same-user process namespace is inspectable. Preserve that fail-closed behavior and track test-environment isolation separately; no retries, timeout changes, or weakened assertions were added.
+
 ## 2026-09-28 — Git performance lane verification
 
 - This shell's default developer tools point at Command Line Tools (`xcrun simctl` missing), and `java_home` finds no default JDK. Scoped mobile checks work with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and Android Studio's bundled JBR (`JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home`), without changing global settings.

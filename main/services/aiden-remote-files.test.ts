@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { listWorkspaceFiles } from "./workspace-files.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
 import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
@@ -278,4 +281,122 @@ test("lazy save reserves capacity before mutation and renews the returned handle
   const saved = await service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version });
   now += 2;
   assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
+});
+
+async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-legacy-metadata-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (let start = 0; start < count; start += 100) {
+    await Promise.all(Array.from({ length: Math.min(100, count - start) }, (_, offset) =>
+      fs.writeFile(path.join(root, `file${start + offset}.txt`), "data")));
+  }
+  const workspace: Workspace = { id: "workspace", name: "Project", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+  const application = createWorkspaceEnvironmentApplicationService({
+    configStore: { getWorkspace: async () => workspace },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    assertManagedWorktreeAdmission: async () => undefined,
+    realpath: fs.realpath, stat: fs.stat,
+  });
+  const owners = new AidenRemoteWorkspaceOwnerRegistry();
+  const handles = new AidenOpaqueHandleStore({ maxEntries: capacity });
+  const service = new AidenRemoteFileService({ instanceId: "instance", application, owners, handles });
+  return { root, service, owners, handles };
+}
+
+test("legacy Remote listing overlaps bounded identity checks and keeps 4,000 ordered handles", async (t) => {
+  const { service, handles } = await legacyFixture(t, 4_001);
+  const original = fsPromises.stat;
+  const visits = new Map<string, number>();
+  let active = 0;
+  let peak = 0;
+  let identities = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    const name = String(args[0]);
+    if (!name.endsWith(".txt")) return original(...args);
+    const visit = (visits.get(name) ?? 0) + 1;
+    visits.set(name, visit);
+    if (visit === 1) return original(...args);
+    identities += 1;
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  const index = await service.list("device", "workspace");
+  assert.equal(index.truncated, true);
+  assert.equal(index.entries.length, 4_000);
+  assert.deepEqual(index.entries.map(entry => entry.displayPath), Array.from({ length: 4_000 }, (_, i) => `file${i}.txt`));
+  assert.equal(new Set(index.entries.map(entry => entry.id)).size, 4_000);
+  assert.equal(handles.storedTokenMaterialForTesting().length, 4_000);
+  assert.equal(identities, 4_000, "fresh identity checks must not be replaced by index metadata");
+  assert.ok(peak > 1 && peak <= 4, `peak identity concurrency: ${peak}`);
+  assert.equal(active, 0);
+});
+
+test("legacy Remote revocation drains identity work without issuing cancelled handles", async (t) => {
+  const { service, owners, handles } = await legacyFixture(t, 12);
+  const original = fsPromises.stat;
+  const visits = new Map<string, number>();
+  let active = 0;
+  let identities = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    const name = String(args[0]);
+    if (!name.endsWith(".txt")) return original(...args);
+    const visit = (visits.get(name) ?? 0) + 1;
+    visits.set(name, visit);
+    if (visit === 1) return original(...args);
+    const ordinal = ++identities;
+    active += 1;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (ordinal === 1) owners.revokeDevice("device");
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  await assert.rejects(service.list("device", "workspace"), (error: unknown) =>
+    error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable");
+  assert.equal(active, 0);
+  assert.ok(identities <= 4);
+  assert.equal(handles.storedTokenMaterialForTesting().length, 0);
+});
+
+test("legacy Remote bounded issuance preserves capacity errors", async (t) => {
+  const { service, handles } = await legacyFixture(t, 12, 2);
+  await assert.rejects(service.list("device", "workspace"), (error: unknown) =>
+    error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429);
+  assert.equal(handles.storedTokenMaterialForTesting().length, 2);
+});
+
+test("overlapping Remote and desktop listings share one four-operation metadata budget", async (t) => {
+  const { service, root } = await legacyFixture(t, 24);
+  const original = fsPromises.stat;
+  let active = 0;
+  let peak = 0;
+  let calls = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    if (!String(args[0]).endsWith(".txt")) return original(...args);
+    calls += 1;
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  const [remote, secondRemote, desktop] = await Promise.all([
+    service.list("device", "workspace"), service.list("second-device", "workspace"), listWorkspaceFiles(root),
+  ]);
+  assert.deepEqual(remote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
+  assert.deepEqual(secondRemote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
+  assert.equal(calls, 120, "every listing stays fresh and every Remote identity is inspected");
+  assert.ok(peak > 1 && peak <= 4, `aggregate metadata concurrency: ${peak}`);
+  assert.equal(active, 0);
+  await assert.rejects(service.read("second-device", "workspace", remote.entries[0]!.id));
 });
