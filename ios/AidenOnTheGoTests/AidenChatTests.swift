@@ -774,6 +774,127 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testTranscriptPublishesWhileCatalogIsHeldIncludingCatalogFailure() async throws {
+        for fails in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-delay-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let cache = AidenChatCache(root: root)
+            let published = expectation(description: "fresh transcript admitted before catalog release")
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache) { _ in published.fulfill() }
+            var remote = model.chat
+            remote.messages = [AidenChatMessage(id: "fresh", role: .assistant, text: "Fresh transcript", createdAt: Date())]
+            let fixture = AidenStreamRecoveryFixture(chat: remote)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                if request.url?.path.hasSuffix("/models") == true {
+                    if fails {
+                        return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Catalog unavailable","requestId":"catalog","retryable":true}}"#.utf8))
+                    }
+                    return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"Default"},{"id":"user-choice","label":"User choice"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+                }
+                return fixture.response(request)
+            }
+            let held = expectation(description: "catalog held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+            let loading = Task { await model.load(observeProgress: false) }
+            await fulfillment(of: [held, published], timeout: 3)
+            XCTAssertEqual(model.chat.messages.map(\.text), ["Fresh transcript"])
+            XCTAssertNil(model.catalog)
+            let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            XCTAssertEqual(persisted?.messages.map(\.text), ["Fresh transcript"])
+            // A choice made while the optional request is suspended owns the composer.
+            model.selectModel(providerId: "openai", modelId: "user-choice", thinkingLevel: "high")
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            XCTAssertEqual(model.selectedModelId, "user-choice")
+            XCTAssertEqual(model.selectedThinkingLevel, "high")
+            XCTAssertEqual(model.catalog == nil, fails)
+            XCTAssertNil(model.presentedError)
+            XCTAssertFalse(model.isLoading)
+        }
+    }
+
+    @MainActor
+    func testChatFailureDoesNotDiscardSuccessfulCatalog() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-failure-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root))
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.contains("/chats/") == true {
+                return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Transcript unavailable","requestId":"chat","retryable":true}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(model.selectedModelId, "gpt-5.6")
+        XCTAssertNotNil(model.catalog)
+    }
+
+    @MainActor
+    func testHeldCatalogCannotPublishAfterRemovalOrUnpair() async throws {
+        for unpair in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-invalidation-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let cache = AidenChatCache(root: root)
+            var coordinator: AidenRemoteCoordinator!
+            let published = expectation(description: "transcript published")
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+                onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in published.fulfill() })
+            let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+            let held = expectation(description: "catalog held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+            let loading = Task { await model.load(observeProgress: false) }
+            await fulfillment(of: [held, published], timeout: 3)
+            if unpair {
+                let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+                await coordinator.removeInstallation(installation.id)
+            } else {
+                await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            XCTAssertNil(model.catalog)
+            XCTAssertFalse(model.canSend)
+            let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            XCTAssertNil(persisted)
+        }
+    }
+
+    @MainActor
+    func testCatalogRevocationFencesHeldTranscript() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-revocation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        var publications = 0
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+            onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in publications += 1 })
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/models") == true {
+                return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again","requestId":"catalog","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let held = expectation(description: "transcript held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        let loading = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [held], timeout: 3)
+        for _ in 0..<300 where coordinator.installationStore.activeInstallation != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(coordinator.installationStore.activeInstallation)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+        XCTAssertEqual(publications, 0)
+        XCTAssertNil(model.catalog)
+        XCTAssertFalse(model.canSend)
+    }
+
+    @MainActor
     func testRejectedDetailLoadDoesNotMutateOrPublish() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rejected-load-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
