@@ -35,9 +35,13 @@ thread. The worker is not retained between calls.
 Parent hidden-file/credential policy remains distinct from the stricter child
 policy. Read_file still supports safe symlinks and metadata, excludes .env secrets,
 and rejects outside-root targets. Grep retains hidden/symlink/dependency ignores.
-Glob retains Node matching semantics for the tested normal patterns and explicit
-in-root linked prefixes, while now limiting traversal. Differential tests include
-absolute paths, braces/extglobs, `**`, directory roots and linked prefixes.
+Glob uses pinned minimatch 9.0.9 with Node fs.glob parser options. It tracks
+segment positions and link traversal states without prematurely normalizing
+`**/..`. Filesystem access stays on the bounded host. The first independent review
+found gaps in a flattened-path matcher; the replacement has differential tests
+for absolute paths, braces/extglobs, globstars, linked prefixes, linked wildcard
+paths, and glob-dependent parent segments. Node traversal attribution is in
+THIRD_PARTY_NOTICES.md.
 
 Pinned Electron 43.1.1 / Node 24.18.0 smoke uses a bundled entry and real app main
 process. It verifies native glob compatibility, JS lookbehind/backreferences,
@@ -60,7 +64,7 @@ Run behavioral acceptance and the Electron smoke:
 ```sh
 npx tsx --test main/services/coding-tools.test.ts main/services/generation-runtime.test.ts
 npm run type-check
-npx eslint main/services/coding-tools.ts main/services/coding-tool-matcher.ts main/services/coding-tools.test.ts scripts/benchmark-foreground-file-tools.ts scripts/smoke-foreground-file-tools.ts
+npx eslint main/services/coding-tools.ts main/services/coding-tool-matcher.ts main/services/coding-tool-glob-worker.ts main/services/coding-tools.test.ts scripts/benchmark-foreground-file-tools.ts scripts/smoke-foreground-file-tools.ts
 node node_modules/electron/install.js
 npx esbuild scripts/smoke-foreground-file-tools.ts --bundle --platform=node --format=esm --packages=external --external:electron --outfile=build/main/foreground-file-tools-smoke.mjs
 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron build/main/foreground-file-tools-smoke.mjs

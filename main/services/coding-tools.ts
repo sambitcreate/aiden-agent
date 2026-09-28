@@ -7,7 +7,7 @@
 
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import { CodingToolMatchTimeout, withCodingToolMatcher } from "./coding-tool-matcher.js";
+import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   constants as fsConstants,
@@ -1397,61 +1397,78 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
       throwIfAborted(signal, "File search cancelled.");
       validateParentPattern(pattern);
       const budget = parentScanBudget();
-      const matches: string[] = [];
+      const matches = new Set<string>();
       const root = await verifyWorkspaceRoot(workspace, signal);
-      const normalized = path.isAbsolute(pattern) ? path.relative(workspace.lexical, pattern) : path.normalize(pattern);
-      const segments = normalized.split(path.sep);
-      const magicIndex = segments.findIndex((segment) => /[*?[\]{}()!+@]/.test(segment));
-      const base = magicIndex < 0 ? path.dirname(normalized) : segments.slice(0, magicIndex).join(path.sep) || ".";
-      const pending = [{ relative: base, shallow: false }];
-      const displayPath = (candidate: string) => path.isAbsolute(pattern) ? path.resolve(workspace.lexical, candidate) : candidate;
       try {
-        await withCodingToolMatcher("glob", normalized, budget.deadline, signal, async (match) => {
-          if (magicIndex >= 0 && (await match([base === "." ? "" : `${base}${path.sep}`], 1)).length) {
-            const { full } = await resolveExistingInRoot(workspace, base, signal);
-            if (!isEnvironmentSecretPath(path.relative(root, full))) matches.push(displayPath(base));
-          }
-          while (pending.length && !parentScanStopped(budget, signal)) {
-            const { relative, shallow } = pending.pop()!;
-            let entries: Dirent[];
-            try {
-              entries = await parentDirectoryEntries(workspace, resolveInRoot(workspace.lexical, relative), budget, signal);
-            } catch {
-              throwIfAborted(signal, "File search cancelled.");
-              await verifyWorkspaceRoot(workspace, signal);
-              budget.warnings.add("… [search incomplete: unreadable or changed paths skipped]");
-              continue;
-            }
-            const candidates = entries.map((entry) => path.join(relative, entry.name));
-            const matchInputs = candidates.flatMap((candidate, index) => [candidate, entries[index]!.isDirectory() ? `${candidate}${path.sep}` : candidate]);
-            const indices = new Set((await match(matchInputs, matchInputs.length)).map((index) => Math.floor(index / 2)));
-            for (let index = 0; index < entries.length; index++) {
+        await withCodingToolGlob(pattern, budget.deadline, signal, async (seeds, step) => {
+          const pending = [...seeds].reverse();
+          const acceptMatches = async (candidates: string[]) => {
+            for (const candidate of candidates) {
               if (parentScanStopped(budget, signal)) break;
-              const entry = entries[index]!;
-              const candidate = candidates[index]!;
-              if (isEnvironmentSecretPath(candidate)) continue;
-              // Native globstar does not recurse through symlinks. Explicit linked
-              // prefixes are resolved above and remain confined to the workspace.
-              if (magicIndex >= 0 && (normalized.includes("**") || candidate.split(path.sep).length < segments.length) && entry.isDirectory() && !shallow) pending.push({ relative: candidate, shallow: false });
-              if (!indices.has(index)) continue;
-              // Node glob allows one linked-directory level for a terminal **/*.
-              if (!shallow && entry.isSymbolicLink() && normalized.endsWith(`**${path.sep}*`)) {
-                pending.push({ relative: candidate, shallow: true });
-              }
+              if (matches.has(candidate)) continue;
               try {
                 const canonical = assertRealPathInRoot(root, await fs.realpath(resolveInRoot(workspace.lexical, candidate)), candidate);
-                if (isEnvironmentSecretPath(path.relative(root, canonical))) continue;
+                if (isEnvironmentSecretPath(candidate) || isEnvironmentSecretPath(path.relative(root, canonical))) continue;
               } catch {
                 throwIfAborted(signal, "File search cancelled.");
                 continue;
               }
-              if (matches.length === MAX_GLOB_MATCHES) {
+              if (matches.size === MAX_GLOB_MATCHES) {
                 budget.warnings.add(`… [truncated at ${MAX_GLOB_MATCHES} matches]`);
                 budget.stopped = true;
                 break;
               }
-              matches.push(displayPath(candidate));
+              matches.add(candidate);
             }
+          };
+          while (pending.length && !parentScanStopped(budget, signal)) {
+            const task = pending.pop()!;
+            let full: string;
+            let directory: boolean;
+            try {
+              const resolved = await resolveExistingInRoot(workspace, task.path, signal);
+              full = resolved.full;
+              if (isEnvironmentSecretPath(task.path) || isEnvironmentSecretPath(path.relative(root, full))) continue;
+              directory = (await fs.stat(full)).isDirectory();
+            } catch {
+              throwIfAborted(signal, "File search cancelled.");
+              await verifyWorkspaceRoot(workspace, signal);
+              continue;
+            }
+            const prepared = await step({ task, directory });
+            await acceptMatches(prepared.matches);
+            if (prepared.done || parentScanStopped(budget, signal)) continue;
+            let entries: { name: string; directory: boolean; link: boolean }[];
+            if (prepared.literal !== undefined) {
+              if (budget.entries >= MAX_GLOB_ENTRIES) {
+                budget.stopped = true;
+                budget.warnings.add(`… [scan stopped after ${MAX_GLOB_ENTRIES} entries]`);
+                break;
+              }
+              budget.entries++;
+              try {
+                const lexical = resolveInRoot(workspace.lexical, path.join(task.path, prepared.literal));
+                await workspace.testObserver?.beforeEntryAccess?.(lexical);
+                const stat = await fs.lstat(lexical);
+                workspace.testObserver?.onDirectoryEntry?.(lexical);
+                entries = [{ name: prepared.literal, directory: stat.isDirectory(), link: stat.isSymbolicLink() }];
+              } catch {
+                throwIfAborted(signal, "File search cancelled.");
+                continue;
+              }
+            } else {
+              try {
+                entries = (await parentDirectoryEntries(workspace, full, budget, signal)).map((entry) => ({ name: entry.name, directory: entry.isDirectory(), link: entry.isSymbolicLink() }));
+              } catch {
+                throwIfAborted(signal, "File search cancelled.");
+                await verifyWorkspaceRoot(workspace, signal);
+                budget.warnings.add("… [search incomplete: unreadable or changed paths skipped]");
+                continue;
+              }
+            }
+            const next = await step({ task, directory, entries });
+            await acceptMatches(next.matches);
+            pending.push(...next.tasks.reverse());
           }
         });
       } catch (error) {
@@ -1459,8 +1476,7 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
         budget.warnings.add(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`);
       }
       await verifyWorkspaceRoot(workspace, signal);
-      matches.sort();
-      return textResult(formatBoundedSearchResult(matches, "[no matches]", [...budget.warnings]));
+      return textResult(formatBoundedSearchResult([...matches].sort(), "[no matches]", [...budget.warnings]));
     },
   };
 }

@@ -21,8 +21,10 @@ file and 10 MiB total (including probes), and skips a growing oversized file.
 
 JavaScript RegExp remains native JS, including lookbehind and backreferences,
 inside a fixed-source owned worker. Model patterns are workerData, never code.
-Glob uses Node matchesGlob with native-compatible directory and explicit linked
-prefix handling. Native-glob differential fixtures cover ordinary patterns,
+Glob parses bounded patterns with pinned minimatch 9.0.9 using Node fs.glob
+options, then tracks glob segment positions and linked traversal states in the
+worker. Host-side filesystem access remains bounded and confined. Traversal
+rules are adapted from Node.js (MIT notice included). Native-glob differential fixtures cover ordinary patterns,
 braces, extglobs, hidden paths, absolute paths, directory roots and symlinks.
 Patterns have a new explicit 1,000-character ceiling. At most four matchers can
 run concurrently; excess searches report busy. Cancellation, errors and deadlines
@@ -33,4 +35,7 @@ No Remote DTO, transcript/activity UI, native implementation or onboarding
 capability changed. iOS/Android consumers were inspected: they use unchanged tool
 names/labels, not filesystem scanning/matching internals. No plan status changed.
 Evidence and repeatable commands: docs/performance/foreground-file-tools-2026-09-28/.
-Independent Astra review and hosted exact-head CI/bot review are delivery gates.
+First independent Astra review found safe-link/brace and glob-dependent ..
+compatibility gaps in the initial flattened-path matcher. Replaced that approach
+with segment-state traversal and added differential fixtures before publication.
+Re-review and hosted exact-head CI/bot review remain delivery gates.

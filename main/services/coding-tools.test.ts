@@ -12,6 +12,7 @@ import {
   runCommandEnv,
   summarizeToolCall,
 } from "./coding-tools.js";
+import { withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { createShareImageTool } from "./share-image-tool.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 
@@ -2219,10 +2220,11 @@ test("foreground grep retains JS patterns and stays cancellable during catastrop
 test("foreground glob agrees with native glob on normal patterns, hidden paths and safe links", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-glob-"));
   try {
-    await fs.mkdir(path.join(root, "src")); await fs.mkdir(path.join(root, ".meta"));
-    for (const file of ["src/a.ts", "src/b.js", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
+    await fs.mkdir(path.join(root, "src/sub"), { recursive: true }); await fs.mkdir(path.join(root, ".meta"));
+    for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
     await fs.symlink("src", path.join(root, "link"));
-    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", path.join(root, "src/*.ts")]) {
+    await fs.symlink("sub", path.join(root, "src/alias"));
+    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts")]) {
       const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
       assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
     }
@@ -2319,4 +2321,24 @@ test("foreground reads reject non-regular FIFOs without waiting for a writer", {
     await execFileAsync("mkfifo", [path.join(root, "pipe")]);
     await assert.rejects(foregroundText(root, "read_file", { path: "pipe" }), /not a regular file/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test("foreground matcher capacity rejects excess work and recovers after concurrent cancellations", async () => {
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const ready = controllers.map(() => (() => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { resolve, promise }; })());
+  const calls = controllers.map((controller, index) => withCodingToolMatcher(
+    "grep", "^(a+)+$", Date.now() + 5_000, controller.signal,
+    async (match) => { ready[index]!.resolve(); return await match(["a".repeat(100_000) + "!"], 1); },
+  ));
+  const settled = Promise.allSettled(calls);
+  try {
+    await Promise.all(ready.map((entry) => entry.promise));
+    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), /searches are busy/);
+  } finally {
+    for (const controller of controllers) controller.abort(new Error("capacity test cancelled"));
+  }
+  const outcomes = await settled;
+  assert.ok(outcomes.every((outcome) => outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled"));
+  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["other", "safe"], 1)), [1]);
 });

@@ -17,7 +17,8 @@ void app.whenReady().then(async () => {
       const block = result.content[0];
       return block?.type === "text" ? block.text : "";
     };
-    await fs.mkdir(path.join(root, "src"));
+    await fs.mkdir(path.join(root, "src/sub"), { recursive: true });
+    await fs.writeFile(path.join(root, "src/sub/b.ts"), "");
     await fs.writeFile(path.join(root, "src/a.ts"), "foobar foofoo\n");
     await fs.symlink("src", path.join(root, "link"));
     const globs = [
@@ -30,6 +31,9 @@ void app.whenReady().then(async () => {
       "src/*.{ts,js}",
       "link/*.ts",
       "*/a.ts",
+      "**/*/*.ts",
+      "{src,link}/**/*",
+      "src/**/..",
     ];
     for (const pattern of globs) {
       const expected: string[] = [];
