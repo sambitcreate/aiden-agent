@@ -79,7 +79,7 @@ async function smoke() {
       {
         electron: process.versions.electron,
         node: process.version,
-        globs,
+        globs: globs.map((pattern) => pattern.replaceAll(root, "<workspace>")),
         cancellationMs,
         deadline: "settled with incomplete notice",
         workerPortsAfter: resources.length,

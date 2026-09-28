@@ -70,3 +70,7 @@ A later Pullfrog run found bare UNC share roots without a terminal slash. Consum
 the complete platform root, and use an empty terminal segment for directory-self
 matching when that consumes the whole pattern. Existing Windows worker fixtures
 now cover drive roots, bare UNC shares with/without slash, and mixed relative arms.
+
+Published Electron smoke receipts normalize the synthetic workspace prefix to
+`<workspace>` while assertions retain real absolute paths. The counter receipts
+already use repository-relative module paths and contain no author-local root.

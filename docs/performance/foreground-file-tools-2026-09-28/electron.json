@@ -14,15 +14,15 @@
     "**/*/*.ts",
     "{src,link}/**/*",
     "src/**/..",
-    "{/Users/sambitbiswas/.codex/worktrees/4e14/aiden-agent/build/foreground-smoke-0uGmSU/workspace/src/*.ts,src/sub/*.ts}"
+    "{<workspace>/src/*.ts,src/sub/*.ts}"
   ],
   "cancellationMs": [
-    151.54775000000006,
-    151.97033299999998,
-    152.3012500000001,
-    152.90824999999995,
-    152.47225000000003,
-    152.56825000000003
+    150.49379199999998,
+    151.28300000000002,
+    151.60524999999996,
+    152.44187499999998,
+    153.01933400000007,
+    152.536333
   ],
   "deadline": "settled with incomplete notice",
   "workerPortsAfter": 0,
