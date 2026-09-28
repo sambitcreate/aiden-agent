@@ -1445,3 +1445,20 @@ reaped Electron, and removal of the temporary bundle/workspace/profile.
 - PR #287 local full suite (`/tmp/aiden-git-publish-full.log`, head `96f3e527`): `GitService retries a read across root replacement and discovers newly nested repositories` intermittently failed with "not a git repository" while another Git subprocess overlapped the rename. Earlier local pointer-race validation also exposed a missing `commondir` failure. Fixed the underlying changed-identity error path and made both tests deterministic; no timeout/retry increase. The cache-publication fixture now waits for the initial command batch before swapping, preventing an unrelated command failure from stranding its cache gate. These were local failures, so there is no hosted run URL.
 
 - PR #287 hosted run [36476435704, core-git job](https://github.com/sambitcreate/aiden-agent/actions/runs/36476435704/job/109111328876), head `2ce5e3e4`: `GitService retries config and linked common-directory changes during discovery` returned correct branches but observed three discoveries instead of the expected two. The deliberate missing-pointer fixture could also fail the parallel initial `--show-toplevel`, admitting a retry before pointer restoration. Gate pointer removal on the sibling command's completion; keep the exact two-discovery assertion and all behavioral checks. No job rerun or timeout/retry increase. Completed job logs are accessible while the overall run remains active using `gh api --allow-escape-sequences .../actions/jobs/<id>/logs`; `gh run view --log-failed` waits for the whole run.
+
+### Foreground Electron smoke cleanup admission (2026-09-28, PR #288)
+
+During main integration, the local pinned-Electron smoke overlapped iOS compilation
+and its repeated cancellation loop rejected with “Filesystem operations are busy”
+instead of the expected cancellation reason (`/tmp/foreground-integration-electron.log`).
+The harness treated caller rejection as disposal even though bounded operation
+owners intentionally retain pending I/O and worker cleanup. Observe and join the
+original operation promises between samples, then yield to their admission-release
+handler; retain the existing hard process deadline, production four-owner limit,
+cancellation timing samples, and final no-MessagePort assertion. No blind retry or
+fixed sleep is used to hide admission failure.
+Astra review required retaining late ForegroundReadCleanupError values even after
+removing settled promises from the observed set. The smoke now fails on any such
+cleanup error. A temporary Worker.terminate wrapper that waited for real termination
+then rejected reproduced the new assertion failure; removing the injection restores
+the normal smoke. This proves a late quarantine error cannot be hidden by joining.

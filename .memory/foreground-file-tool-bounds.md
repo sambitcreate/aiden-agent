@@ -91,3 +91,12 @@ reused exact iOS stream gate remains alongside main's catalog/publication tests.
 The Remote revision is unchanged by this branch. Advisor drift coverage passes;
 a broader direct CLI extension invocation lacked its required built dist/app,
 so its process-launch failure is not runtime validation.
+
+Integration smoke revealed that sequential caller cancellations can fill retained
+cleanup slots under host load. The smoke now observes and joins original operation
+promises before each next sample and after the deadline sample; the production
+owner contract, caller timing, and process hard deadline are unchanged. Merged iOS
+chat XCTest passed 214/214 on the selected iOS 27 simulator.
+The observer retains late cleanup errors and asserts none; fault injection after
+real worker termination confirms cleanup quarantine fails the smoke even after
+caller cancellation has already settled.
