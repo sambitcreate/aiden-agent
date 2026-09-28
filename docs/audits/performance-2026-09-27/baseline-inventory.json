@@ -1,0 +1,17 @@
+{
+  "baseline_commit": "a9baa4aa3027893e5455043083465c34b4c8b4ac",
+  "app_version": "0.50.0",
+  "electron_declared": "^43.1.1",
+  "host_system": "Darwin",
+  "host_release": "27.0.0",
+  "host_architecture": "arm64",
+  "root_dependencies_installed": false,
+  "evidence_kind": "source/environment inventory; not a runtime performance benchmark",
+  "source_file_counts": {
+    "main": 1168,
+    "renderer": 501,
+    "ios": 69,
+    "android": 125,
+    "packages/cli": 71
+  }
+}

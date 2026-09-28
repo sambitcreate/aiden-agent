@@ -1404,3 +1404,10 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-27 — performance audit setup
+
+- The requested five GPT Astra medium specialists exceed this session's three simultaneous subagent slots. Run three specialists, then the remaining two after slots free; keep all five domain reports in the same isolated worktree.
+- A fresh managed worktree has no root `node_modules` or packaged runtime. Source findings and environment inventory are valid evidence, but runtime GPU/battery baselines remain unmeasured. Do not reuse July bundle sizes or September mobile timings as current measurements.
+- The July performance plan contains findings now fixed by other work (including settled streaming RAF and utility-process local voice). Revalidate old entries against the audit SHA before prioritizing them.
+- Managed worktree defaults to current remote main, which is newer than the original checkout. Its tracked `.memory/` records supersede old ignored `PROJECT-CONTEXT.md`/`PLANNED.md` summaries; inspect the new worktree memory directly before carrying forward historical findings.

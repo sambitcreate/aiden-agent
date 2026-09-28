@@ -5,6 +5,12 @@ Date: 2026-07-27
 Audit snapshot: dirty working tree on `feature/aiden-assistant-plan-777723` at `7299340282f84fb816f1615f54a27bf97390f6fe`; findings refer to the current filesystem, not only `HEAD`  
 Scope: Electron main/preload, React renderer, native helpers, storage, IPC, networking, background services, packaging, and macOS lifecycle
 
+## September 2026 re-audit
+
+Current evidence and the living before/after ledger are in [the September 27 whole-app audit](../audits/performance-2026-09-27/README.md), based on `a9baa4aa3027893e5455043083465c34b4c8b4ac`. That audit extends coverage to iOS, Android and shared runtime paths with five specialist reviews. Optimization implementation and runtime measurement remain pending.
+
+The July snapshot below is retained as historical planning context. Its statement that implementation has not started describes that snapshot, not every subsequent related change. Several items have since shipped through other work: bounded streaming reveal scheduling, utility-process local speech recognition, MCP connection single-flight, renderer crash recovery, diagnostic journals, and stronger storage/input boundaries. Revalidate each remaining item against current source; do not reuse historical bundle sizes, process-rate estimates or mobile timings as fresh measurements. The September reports distinguish retained problems, existing mitigations and measurement hypotheses.
+
 ## Executive verdict
 
 Aiden has several good foundations: renderer sandboxing and typed IPC boundaries, bounded updater cadence, generation abort bookkeeping, terminal cleanup on renderer destruction, error boundaries, and a broad passing test suite. The performance problem is not one bad framework choice. It is a set of unbounded or always-on paths that compound:
