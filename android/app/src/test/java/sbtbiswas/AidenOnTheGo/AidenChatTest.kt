@@ -1834,6 +1834,19 @@ class AidenChatTest {
     }
 
     @Test
+    fun pendingToolCallReadsAsPreparingUntilItRuns() {
+        val pending = AidenAgentStep(
+            id = "read-pending", order = 0, kind = AidenAgentStep.Kind.TOOL,
+            toolName = "read_file", label = "Read file",
+            status = AidenAgentStepStatus.PENDING, startedAt = 1000.0,
+            updatedAt = 1000.0, contentOffset = 0, target = "src/app.ts"
+        )
+        assertEquals("Preparing Read file", AidenAgentActivityPresentation.line(pending))
+        val running = pending.copy(status = AidenAgentStepStatus.RUNNING, updatedAt = 1200.0)
+        assertEquals("Reading src/app.ts", AidenAgentActivityPresentation.line(running))
+    }
+
+    @Test
     fun compactionMetricsUseExistingActivityDetail() {
         val step = AidenAgentStep(
             id = "compact-1", order = 0, kind = AidenAgentStep.Kind.TOOL,

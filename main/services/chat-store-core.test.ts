@@ -655,6 +655,34 @@ test("persists reasoning only on assistant messages", async (t) => {
   assert.equal(updated?.messages[1]?.reasoning, undefined);
 });
 
+test("assistant turn stats survive restart and reach the renderer; malformed or misplaced stats do not", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-turn-stats-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  const turnStats = {
+    version: 1 as const,
+    startedAt: 10_000,
+    finishedAt: 22_400,
+    usage: { input: 1_200, output: 830, cacheRead: 11_200, cacheWrite: 0, total: 13_230, requests: 2 },
+  };
+  await store.appendMessage(chat.id, { role: "assistant", content: "Answer.", turnStats });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Clock skew.",
+    turnStats: { ...turnStats, finishedAt: 5 },
+  });
+  await store.appendMessage(chat.id, { role: "user", content: "Spoofed.", turnStats });
+
+  const restarted = createChatStore(async () => directory);
+  const loaded = await restarted.get(chat.id);
+  assert.ok(loaded);
+  assert.deepEqual(loaded.messages[0]?.turnStats, turnStats);
+  assert.equal(loaded?.messages[1]?.turnStats, undefined);
+  assert.equal(loaded?.messages[2]?.turnStats, undefined);
+  assert.deepEqual(chatForRenderer(loaded)?.messages[0]?.turnStats, turnStats);
+});
+
 test("persists only normalized user skill provenance", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});
