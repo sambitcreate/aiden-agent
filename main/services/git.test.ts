@@ -5039,10 +5039,15 @@ test("GitService retries config and linked common-directory changes during disco
   const linkedService = new GitService({ cacheTtlMs: 60_000 });
   const linkedObserver = observeGitCommands(linkedService);
   const linkedRun = linkedObserver.runner.run;
+  const initialTopLevel = gitReadGate();
   let switched = false;
   linkedObserver.runner.run = async (cwd, args, options) => {
     const result = await linkedRun(cwd, args, options);
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") initialTopLevel.resolve();
     if (args[0] === "rev-parse" && args[1] === "--git-common-dir" && !switched) {
+      // Complete the sibling discovery command before deliberately removing
+      // its pointer, so exactly one controlled failure drives the retry.
+      await initialTopLevel.promise;
       switched = true;
       const pointer = path.join(admin, "commondir");
       await fs.rename(pointer, `${pointer}-old`);
