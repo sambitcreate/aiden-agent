@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-28 — Foreground file-tool performance fixtures
+
+- Node built-in ESM namespaces retain their bindings when a benchmark wraps the default fs/promises export. Call `syncBuiltinESMExports()` after instrumentation and restoration; otherwise byte counters misleadingly report zero. The clean 0.87.1 runner now reproduces the original 16 MiB read.
+- A standalone Electron ESM smoke must externalize `electron` explicitly (tsconfig path resolution otherwise bundles its npm launcher), and register `app.whenReady().then(...)` without top-level-awaiting readiness. Electron waits for module evaluation before ready; top-level await deadlocks the fixture. The resulting fixed-source worker is validated in pinned Electron 43.1.1 / Node 24.18.0.

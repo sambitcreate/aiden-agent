@@ -1,0 +1,49 @@
+{
+  "modulePath": "main/services/coding-tools.ts",
+  "node": "v22.22.3",
+  "platform": "darwin",
+  "arch": "arm64",
+  "piVersion": "0.87.1",
+  "read": {
+    "inputBytes": 16777216,
+    "bytesRead": 200001,
+    "outputChars": 200014
+  },
+  "abortedGrep": {
+    "rejected": true,
+    "bytesRead": 0
+  },
+  "smallGrepMs": [
+    20.772999999999996,
+    17.98208299999999,
+    17.47387500000002,
+    17.484375,
+    17.382083000000023,
+    17.51716700000003,
+    16.555041000000017,
+    16.932082999999977,
+    17.844750000000033,
+    18.124041999999974
+  ],
+  "wideFixtureEntries": 10100,
+  "scans": [
+    {
+      "name": "list_dir",
+      "enumeratedEntries": 10000,
+      "outputChars": 58,
+      "incompleteNotice": true
+    },
+    {
+      "name": "glob",
+      "enumeratedEntries": 10000,
+      "outputChars": 49,
+      "incompleteNotice": true
+    },
+    {
+      "name": "grep",
+      "enumeratedEntries": 10000,
+      "outputChars": 49,
+      "incompleteNotice": true
+    }
+  ]
+}

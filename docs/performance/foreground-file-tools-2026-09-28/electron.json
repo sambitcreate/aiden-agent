@@ -1,0 +1,26 @@
+{
+  "electron": "43.1.1",
+  "node": "v24.18.0",
+  "globs": [
+    "*",
+    "**",
+    "**/*",
+    "**/*.ts",
+    "src/**",
+    "src",
+    "src/*.{ts,js}",
+    "link/*.ts",
+    "*/a.ts"
+  ],
+  "cancellationMs": [
+    150.44795899999997,
+    152.30762500000003,
+    151.294625,
+    153.20070899999996,
+    152.88079199999993,
+    152.90762500000005
+  ],
+  "deadline": "settled with incomplete notice",
+  "workerPortsAfter": 0,
+  "result": "passed"
+}
