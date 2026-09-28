@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.ViewModelStore
 import java.io.File
 import java.time.Instant
@@ -8,6 +10,9 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
@@ -45,6 +50,60 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    // clear() requests cancellation; children can still resume on Main to finish cleanup.
+    private suspend fun ViewModelStore.clearAndJoin() {
+        val jobs = keys().mapNotNull { get(it)?.viewModelScope?.coroutineContext?.get(Job) }
+        clear()
+        jobs.forEach { it.join() }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun viewModelCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() {
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val owners = ViewModelStore()
+        val release = CompletableDeferred<Unit>()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val model = object : ViewModel() {}
+                owners.put("held-finalizer", model)
+                val entered = CompletableDeferred<Unit>()
+                var finalizedOnMain = false
+                val mainThread = Thread.currentThread()
+                val child = model.viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            entered.complete(Unit)
+                            withContext(Dispatchers.IO) { release.await() }
+                            assertSame(mainThread, Thread.currentThread())
+                            finalizedOnMain = true
+                        }
+                    }
+                }
+                val cleanup = launch(start = CoroutineStart.UNDISPATCHED) { owners.clearAndJoin() }
+                try {
+                    withTimeout(5_000) { entered.await() }
+                    assertFalse("Cleanup must wait while a cancelled child still needs Main", cleanup.isCompleted)
+                    assertFalse(finalizedOnMain)
+                } finally {
+                    release.complete(Unit)
+                    child.join()
+                    cleanup.join()
+                }
+                assertTrue(finalizedOnMain)
+                assertTrue(model.viewModelScope.coroutineContext[Job]!!.isCompleted)
+            }
+        } finally {
+            release.complete(Unit)
+            runBlocking(dispatcher) { owners.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+        }
+    }
+
     @Test fun readAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         val message = AidenChatMessage("a", AidenChatRole.ASSISTANT, "partial answer", createdAt = Instant.now())
         assertTrue(message.isReadAloudEligible)
@@ -276,7 +335,7 @@ class AidenChatTest {
             }
         } finally {
             releaseInitialLoad.countDown()
-            runBlocking(dispatcher) { viewModels.clear() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -425,7 +484,7 @@ class AidenChatTest {
                             assertEquals(if (mode == "remove") "Fresh readmission" else null, reopened.loadChat("turn-instance", initial.id)?.title)
                         }
                         assertEquals(if (mode in listOf("newer_post", "ordered_posts")) 2 else 1, postCount.get())
-                    } finally { release.countDown(); getRelease.countDown(); owners.clear(); server.shutdown(); root.deleteRecursively() }
+                    } finally { release.countDown(); getRelease.countDown(); owners.clearAndJoin(); server.shutdown(); root.deleteRecursively() }
                 }
             }
         } finally { Dispatchers.resetMain(); main.close() }
@@ -602,7 +661,7 @@ class AidenChatTest {
                 assertEquals(expected, model.draft.value)
                 assertEquals("Try again", model.presentedError.value)
                 assertTrue(model.chat.value!!.messages.isEmpty())
-                viewModels.clear()
+                viewModels.clearAndJoin()
                 // A fresh store is the process-restart read path, not the ViewModel's memory.
                 val reopened = AidenChatDraftStore(directory)
                 assertEquals(
@@ -612,7 +671,7 @@ class AidenChatTest {
             }
         } finally {
             releaseTurn.countDown()
-            runBlocking(dispatcher) { viewModels.clear() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -878,7 +937,7 @@ class AidenChatTest {
             releaseNew.countDown()
             release.countDown()
             finishRead.countDown()
-            runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin(); scopeJob.cancelAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -1600,7 +1659,7 @@ class AidenChatTest {
                         cache.saveChat(initial.copy(title = "New owner"), "instance-a")
                         assertEquals("New owner", reopened.loadChat("instance-a", initial.id)?.title)
                         assertNotNull(reopened.loadChat("instance-b", initial.id))
-                    } finally { viewModels.clear(); root.deleteRecursively() }
+                    } finally { viewModels.clearAndJoin(); root.deleteRecursively() }
                 }
             }
         } finally { Dispatchers.resetMain(); dispatcher.close() }

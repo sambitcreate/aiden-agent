@@ -33,6 +33,14 @@ Executed with JDK 21 (`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents
 
 Tests extend existing Gradle-discovered classes; no new test file or npm script was introduced. No physical device was connected. Existing emulator launched headlessly for these synthetic tests; no account setup or paired server was used.
 
+## Test lifetime investigation (PR #284)
+
+The failed full-run XML showed cancelled ViewModel children resuming after `Dispatchers.resetMain()`, including terminal reconciliation. `ViewModelStore.clear()` cancels the scope but does not wait for its children to finish. The same clear/reset/close sequence exists in baseline `a9baa4aa3027893e5455043083465c34b4c8b4ac`; this is a pre-existing harness lifetime defect. The image regression itself joins its two preparation jobs before returning, but reused the same unsafe ViewModel cleanup as the older chat tests.
+
+`AidenChatTest` now captures the stored ViewModel scope jobs, clears the store, and joins those jobs before Main reset, executor shutdown, server shutdown or fixture deletion. The run-control coordinator scope is also cancelled and joined. A controlled regression holds a cancelled ViewModel child's finalizer across IO suspension and checks that cleanup stays pending until the child resumes on Main and finishes. Removing only the join reproduces the failure deterministically (`Cleanup must wait while a cancelled child still needs Main`); restoring it passes. This proves the lifetime invariant without a timeout increase, retries, exception suppression, or production change.
+
+Focused restored validation passed **3/3**: the lifetime regression, the previous held-turn failure, and image preparation. The one full run after the harness change still failed **1/252** at the held-turn initial `sender.isLoading` wait (now line 403, previously 344); all other 251 passed. Its XML contains no missing-Main teardown exception. Therefore the lifetime fix does **not** resolve or establish the cause of the initial-load timeout, and full JVM validation remains failing. No further unchanged full-suite retry was run. Logs/XML: `/tmp/aiden-lifetime-mutation.log`, `/tmp/aiden-lifetime-mutation.xml`, `/tmp/aiden-lifetime-restored.log`, `/tmp/aiden-lifetime-restored.xml`, `/tmp/aiden-lifetime-full.log`, `/tmp/aiden-lifetime-full.xml`. These are ephemeral local artifacts, not hosted run links. Separate `lintDebug` and `compileDebugAndroidTestKotlin` validation passed (`/tmp/aiden-lifetime-static.log`).
+
 ## Boundaries
 
 Native codec calls and a provider's blocking stream read cannot be interrupted halfway through by coroutine cancellation. Cancellation is checked at stage/chunk boundaries, and `withContext` suppresses publication after cancellation. The worker retains its mutex until the blocking stage returns, avoiding overlap with a still-running cancelled conversion. Metadata provider calls are also off Main.
