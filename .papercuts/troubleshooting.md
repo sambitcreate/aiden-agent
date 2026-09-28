@@ -1398,15 +1398,6 @@ because their native file-mutator test binary had not been built. Run
 - `node scripts/build-native-helpers.mjs --docker ...` bind-mounts the repo and leaves Linux ELF helpers in `build/native`. Rebuild the macOS helpers before you run local native tests, or they fail with `spawn ENOEXEC`.
 - After merging main, run `npm ci`. #71 added `bonjour-service`, and without it `tsc` fails.
 
-## 2026-09-26 PR #121 merge of #246 (pi 0.87.1)
-- The CLI bundles main/services, so it has to use the same pi version as root. Bump `packages/cli` `@earendil-works/pi-coding-agent` to match, otherwise mixing 0.84 and 0.87 types breaks `tsc`.
-- In 0.87 chord is nested, not hoisted, so declare it directly in `packages/cli`. Its exports are import-only, so `require.resolve` in the build's external check fails even when chord is installed. The check needs an ESM resolve fallback.
-- 0.87 pulls in `proxy-agent-negotiate`, which has an optional `import("kerberos")`. Add it to the CLI external allowlist.
-- 0.87 storage v1 journal headers use `v: 4`, not `version: 4`. Session import has to accept both.
-
-## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
-- A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
-
 ## 2026-09-28 — Foreground file-tool performance fixtures
 
 - Node built-in ESM namespaces retain their bindings when a benchmark wraps the default fs/promises export. Call `syncBuiltinESMExports()` after instrumentation and restoration; otherwise byte counters misleadingly report zero. The clean 0.87.1 runner now reproduces the original 16 MiB read.
@@ -1437,15 +1428,6 @@ runner's hard deadline caught that pre-handler failure and removed fixtures; the
 corrected registered smoke passes. SIGTERM validation also proved nonzero exit,
 reaped Electron, and removal of the temporary bundle/workspace/profile.
 
-## 2026-09-28 — Git performance lane verification
-
-- This shell's default developer tools point at Command Line Tools (`xcrun simctl` missing), and `java_home` finds no default JDK. Scoped mobile checks work with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and Android Studio's bundled JBR (`JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home`), without changing global settings.
-- Sharing branches with info by canonical path accidentally split the same caller's flight on macOS (`/var` input vs `/private/var` resolved path). The real-Git command-count fixture exposed two status invocations; preserving the original caller path for the nested info subscription restores one flight. Identity validation still uses canonical paths.
-
-- PR #287 local full suite (`/tmp/aiden-git-publish-full.log`, head `96f3e527`): `GitService retries a read across root replacement and discovers newly nested repositories` intermittently failed with "not a git repository" while another Git subprocess overlapped the rename. Earlier local pointer-race validation also exposed a missing `commondir` failure. Fixed the underlying changed-identity error path and made both tests deterministic; no timeout/retry increase. The cache-publication fixture now waits for the initial command batch before swapping, preventing an unrelated command failure from stranding its cache gate. These were local failures, so there is no hosted run URL.
-
-- PR #287 hosted run [36476435704, core-git job](https://github.com/sambitcreate/aiden-agent/actions/runs/36476435704/job/109111328876), head `2ce5e3e4`: `GitService retries config and linked common-directory changes during discovery` returned correct branches but observed three discoveries instead of the expected two. The deliberate missing-pointer fixture could also fail the parallel initial `--show-toplevel`, admitting a retry before pointer restoration. Gate pointer removal on the sibling command's completion; keep the exact two-discovery assertion and all behavioral checks. No job rerun or timeout/retry increase. Completed job logs are accessible while the overall run remains active using `gh api --allow-escape-sequences .../actions/jobs/<id>/logs`; `gh run view --log-failed` waits for the whole run.
-
 ### Foreground Electron smoke cleanup admission (2026-09-28, PR #288)
 
 During main integration, the local pinned-Electron smoke overlapped iOS compilation
@@ -1462,3 +1444,27 @@ removing settled promises from the observed set. The smoke now fails on any such
 cleanup error. A temporary Worker.terminate wrapper that waited for real termination
 then rejected reproduced the new assertion failure; removing the injection restores
 the normal smoke. This proves a late quarantine error cannot be hidden by joining.
+
+## 2026-09-26 PR #121 merge of #246 (pi 0.87.1)
+- The CLI bundles main/services, so it has to use the same pi version as root. Bump `packages/cli` `@earendil-works/pi-coding-agent` to match, otherwise mixing 0.84 and 0.87 types breaks `tsc`.
+- In 0.87 chord is nested, not hoisted, so declare it directly in `packages/cli`. Its exports are import-only, so `require.resolve` in the build's external check fails even when chord is installed. The check needs an ESM resolve fallback.
+- 0.87 pulls in `proxy-agent-negotiate`, which has an optional `import("kerberos")`. Add it to the CLI external allowlist.
+- 0.87 storage v1 journal headers use `v: 4`, not `version: 4`. Session import has to accept both.
+
+## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
+- A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-28 workspace metadata performance validation
+
+- Default xcrun resolved Command Line Tools, so simctl was unavailable. Set DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer explicitly for simulator listing/XCTest; 11 workspace tests passed on iOS27. Android used Android Studio's bundled JBR plus the existing SDK, with 12 focused tests passing.
+- Synthetic timing varied substantially while independent native builds and tests shared the host. Repeated after those local builds completed, recorded unchanged syscall counts/peak concurrency and identical projections as structural evidence, and retained the initial wide-index regression caveat rather than claiming uniform latency improvement. No test retries or timeouts changed.
+- Pullfrog run [36474940274](https://github.com/sambitcreate/aiden-agent/actions/runs/36474940274/job/109106167447) reported `Linux recovery inspection detects current-user open descriptors` returning `unknown` instead of `clear` after close (`workspace-files.test.ts:343`). The probe and assertion are unchanged from baseline a9baa4aa. One isolated Linux Docker comparison of the bundled baseline and current test passed both; this does not reproduce or resolve the bot-environment failure. The probe deliberately returns `unknown` when a same-user /proc descriptor cannot be inspected; the test assumes the entire same-user process namespace is inspectable. Preserve that fail-closed behavior and track test-environment isolation separately; no retries, timeout changes, or weakened assertions were added.
+
+## 2026-09-28 — Git performance lane verification
+
+- This shell's default developer tools point at Command Line Tools (`xcrun simctl` missing), and `java_home` finds no default JDK. Scoped mobile checks work with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and Android Studio's bundled JBR (`JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home`), without changing global settings.
+- Sharing branches with info by canonical path accidentally split the same caller's flight on macOS (`/var` input vs `/private/var` resolved path). The real-Git command-count fixture exposed two status invocations; preserving the original caller path for the nested info subscription restores one flight. Identity validation still uses canonical paths.
+
+- PR #287 local full suite (`/tmp/aiden-git-publish-full.log`, head `96f3e527`): `GitService retries a read across root replacement and discovers newly nested repositories` intermittently failed with "not a git repository" while another Git subprocess overlapped the rename. Earlier local pointer-race validation also exposed a missing `commondir` failure. Fixed the underlying changed-identity error path and made both tests deterministic; no timeout/retry increase. The cache-publication fixture now waits for the initial command batch before swapping, preventing an unrelated command failure from stranding its cache gate. These were local failures, so there is no hosted run URL.
+
+- PR #287 hosted run [36476435704, core-git job](https://github.com/sambitcreate/aiden-agent/actions/runs/36476435704/job/109111328876), head `2ce5e3e4`: `GitService retries config and linked common-directory changes during discovery` returned correct branches but observed three discoveries instead of the expected two. The deliberate missing-pointer fixture could also fail the parallel initial `--show-toplevel`, admitting a retry before pointer restoration. Gate pointer removal on the sibling command's completion; keep the exact two-discovery assertion and all behavioral checks. No job rerun or timeout/retry increase. Completed job logs are accessible while the overall run remains active using `gh api --allow-escape-sequences .../actions/jobs/<id>/logs`; `gh run view --log-failed` waits for the whole run.

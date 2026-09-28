@@ -100,3 +100,18 @@ chat XCTest passed 214/214 on the selected iOS 27 simulator.
 The observer retains late cleanup errors and asserts none; fault injection after
 real worker termination confirms cleanup quarantine fails the smoke even after
 caller cancellation has already settled.
+
+A later actual papercut conflict required merging main ea65d03c3 (workspace
+metadata PR #286 plus catalog refresh). Preserved both records and consolidated
+this lane's notes in an interior section to avoid repeated EOF append conflicts.
+Workspace recursive metadata/legacy identity batching keeps its separate FIFO
+four-inspection budget; foreground coding tools retain their independent four
+operation owners. Neither budget is a cap on all process filesystem syscalls.
+No Remote revision, native source, or foreground production code changed here.
+Independent Astra integration review confirmed no nested admission or shared release
+path between the budgets. Combined foreground/generation tests passed 56/56;
+workspace/Remote suites passed 43 with one existing platform skip after building
+the required native worktree-file-io test helper (initial ENOENT was a missing
+fixture prerequisite). Type-check, 47 CI-policy tests, and the joined Electron
+smoke with zero worker ports passed. Prior 214 iOS tests still cover unchanged
+native source; exact new-head hosted gates remain required.
