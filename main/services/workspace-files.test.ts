@@ -342,3 +342,104 @@ test(
     assert.equal(await linuxRecoveryUse(file), "clear");
   },
 );
+
+test("workspace indexing overlaps at most four stats and preserves numeric tree ordering", async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "src"));
+  await fs.mkdir(path.join(root, "dist"));
+  for (const name of ["file10.txt", "file2.txt", "file1.txt", "file3.txt", "file4.txt", "src/child.txt"]) {
+    await fs.writeFile(path.join(root, name), name);
+  }
+  const original = fsPromises.stat;
+  let active = 0;
+  let peak = 0;
+  let calls = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    if (!String(args[0]).endsWith(".txt")) return original(...args);
+    calls += 1;
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  const index = await listWorkspaceFiles(root);
+  assert.deepEqual(index.entries.map(entry => entry.path), [
+    "src", "src/child.txt", "file1.txt", "file2.txt", "file3.txt", "file4.txt", "file10.txt",
+  ]);
+  assert.equal(index.skippedDirectories, 1);
+  assert.equal(index.truncated, false);
+  assert.equal(calls, 6);
+  assert.ok(peak > 1 && peak <= 4, `peak metadata concurrency: ${peak}`);
+  assert.equal(active, 0);
+});
+
+for (const failure of ["cancel", "stat failure"] as const) {
+  test(`workspace indexing drains its bounded batch on ${failure}`, async (t) => {
+    const root = await workspace(t);
+    for (let index = 0; index < 12; index += 1) await fs.writeFile(path.join(root, `${index}.txt`), "data");
+    const controller = new AbortController();
+    const original = fsPromises.stat;
+    let active = 0;
+    let calls = 0;
+    fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+      if (!String(args[0]).endsWith(".txt")) return original(...args);
+      const ordinal = ++calls;
+      active += 1;
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (ordinal === 1) {
+          if (failure === "cancel") controller.abort();
+          else throw new Error("metadata unavailable");
+        }
+        return await original(...args);
+      } finally { active -= 1; }
+    }) as typeof fsPromises.stat;
+    syncBuiltinESMExports();
+    t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+    await assert.rejects(listWorkspaceFiles(root, controller.signal), failure === "cancel" ? /cancelled/ : /metadata unavailable/);
+    assert.equal(active, 0, "operation must not release ownership before its reads settle");
+    assert.ok(calls <= 4, `started ${calls} metadata operations after failure`);
+  });
+}
+
+test("fresh workspace indexes observe external writes, renames and root replacement", async (t) => {
+  const parent = await workspace(t);
+  const root = path.join(parent, "root");
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "first.txt"), "one");
+  assert.equal((await listWorkspaceFiles(root)).entries[0]?.size, 3);
+  await fs.writeFile(path.join(root, "first.txt"), "longer external edit");
+  await fs.rename(path.join(root, "first.txt"), path.join(root, "second.txt"));
+  const refreshed = await listWorkspaceFiles(root);
+  assert.deepEqual(refreshed.entries.map(entry => [entry.path, entry.size]), [["second.txt", 20]]);
+  await fs.rename(root, path.join(parent, "previous"));
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "replacement.txt"), "new");
+  assert.deepEqual((await listWorkspaceFiles(root)).entries.map(entry => entry.path), ["replacement.txt"]);
+});
+
+test("workspace batches preserve depth cutoff and file versus directory symlinks", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "source.txt"), "data");
+  await fs.symlink(path.join(root, "source.txt"), path.join(root, "alias.txt"));
+  await fs.symlink(path.join(root, "missing"), path.join(root, "broken"));
+  let directory = root;
+  for (let depth = 0; depth < 22; depth += 1) {
+    directory = path.join(directory, "nested");
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "leaf.txt"), "leaf");
+  }
+  await fs.symlink(path.join(root, "nested"), path.join(root, "linked-directory"));
+  const index = await listWorkspaceFiles(root);
+  assert.equal(index.truncated, true);
+  assert.equal(index.entries.filter(entry => entry.name === "leaf.txt").length, 20);
+  assert.equal(Math.max(...index.entries.map(entry => entry.depth)), 20);
+  assert.equal(index.entries.find(entry => entry.path === "alias.txt")?.kind, "file");
+  assert.equal(index.entries.find(entry => entry.path === "alias.txt")?.size, 4);
+  assert.equal(index.entries.find(entry => entry.path === "broken")?.kind, "symlink");
+  assert.equal(index.entries.find(entry => entry.path === "linked-directory")?.kind, "symlink");
+  assert.equal(index.entries.some(entry => entry.path.startsWith("linked-directory/")), false);
+});
