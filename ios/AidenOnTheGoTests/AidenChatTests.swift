@@ -3523,6 +3523,23 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Recalled chat history")
     }
 
+    func testPendingToolCallReadsAsPreparingUntilItRuns() throws {
+        var step = AidenAgentStep(
+            id: "read-pending", order: 0, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .pending, startedAt: 1_000,
+            updatedAt: 1_000, finishedAt: nil, contentOffset: 0,
+            durationMs: nil, target: "src/app.ts", detail: nil, lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Preparing Read file")
+        step = AidenAgentStep(
+            id: "read-pending", order: 0, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .running, startedAt: 1_000,
+            updatedAt: 1_200, finishedAt: nil, contentOffset: 0,
+            durationMs: nil, target: "src/app.ts", detail: nil, lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Reading src/app.ts")
+    }
+
     func testCompactionMetricsUseExistingActivityDetail() throws {
         let step = AidenAgentStep(
             id: "compact-1", order: 0, kind: .tool, toolName: "compact_context",

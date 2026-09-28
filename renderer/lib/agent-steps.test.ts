@@ -114,6 +114,18 @@ test("splits a row into a verb and the object it acted on", () => {
   );
 });
 
+test("a tool call whose arguments are still streaming reads as preparing, not as work", () => {
+  const preparing = step("read", 0, "read_file", "pending", { label: "Read file", target: "src/app.ts" });
+  assert.equal(activityLineText(preparing), "Preparing Read file");
+  assert.equal(activityLine(preparing).stage, "preparing");
+  // Still in flight, so the turn keeps its live treatment.
+  assert.equal(isActiveStep(preparing), true);
+
+  const running = { ...preparing, status: "running" as const };
+  assert.equal(activityLineText(running), "Reading src/app.ts");
+  assert.equal(activityLine(running).stage, undefined);
+});
+
 test("alternates prose and grouped activity at exact assistant-text boundaries", () => {
   const content = "Before.Between.After.";
   const rows = assistantPresentationRows(
