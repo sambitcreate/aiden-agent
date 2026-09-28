@@ -1404,3 +1404,8 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
+
+## 2026-09-28 — Git performance lane verification
+
+- This shell's default developer tools point at Command Line Tools (`xcrun simctl` missing), and `java_home` finds no default JDK. Scoped mobile checks work with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and Android Studio's bundled JBR (`JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home`), without changing global settings.
+- Sharing branches with info by canonical path accidentally split the same caller's flight on macOS (`/var` input vs `/private/var` resolved path). The real-Git command-count fixture exposed two status invocations; preserving the original caller path for the nested info subscription restores one flight. Identity validation still uses canonical paths.

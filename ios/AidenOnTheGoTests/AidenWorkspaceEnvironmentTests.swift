@@ -4,6 +4,15 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    func testGitReviewPreservesUnavailableLineCounts() throws {
+        let data = Data(#"{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}"#.utf8)
+        let review = try AidenRemoteJSONDecoder.decode(AidenGitReview.self, from: data)
+        XCTAssertEqual(review.files[0].additions, 3)
+        XCTAssertEqual(review.files[0].deletions, 0)
+        XCTAssertNil(review.files[1].additions)
+        XCTAssertNil(review.files[1].deletions)
+    }
+
     @MainActor
     func testCachedDocumentDoesNotDisableLiveTreePaging() {
         let model = AidenWorkspaceFilesModel(workspace: AidenWorkspace(
