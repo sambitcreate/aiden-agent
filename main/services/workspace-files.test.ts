@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { mapWorkspaceMetadata } from "./workspace-metadata.js";
 import {
   linuxRecoveryUse,
   listWorkspaceFiles,
@@ -442,4 +443,74 @@ test("workspace batches preserve depth cutoff and file versus directory symlinks
   assert.equal(index.entries.find(entry => entry.path === "broken")?.kind, "symlink");
   assert.equal(index.entries.find(entry => entry.path === "linked-directory")?.kind, "symlink");
   assert.equal(index.entries.some(entry => entry.path.startsWith("linked-directory/")), false);
+});
+
+test("queued metadata cancels promptly without releasing another request's active budget", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const active = mapWorkspaceMetadata([1], async value => { started(); await held; return value; });
+  await entered;
+  const controller = new AbortController();
+  let cancelledCalls = 0;
+  const cancelled = mapWorkspaceMetadata([2], async value => { cancelledCalls += 1; return value; }, controller.signal);
+  const rejection = assert.rejects(cancelled, /cancelled/);
+  controller.abort();
+  let nextStarted = false;
+  const next = mapWorkspaceMetadata([3], async value => { nextStarted = true; return value; });
+  try {
+    await rejection;
+    assert.equal(cancelledCalls, 0);
+    assert.equal(nextStarted, false);
+  } finally { release(); }
+  assert.deepEqual(await active, [1]);
+  assert.deepEqual(await next, [3]);
+});
+
+test("metadata admission bounds its waiting queue and recovers after queued cancellation", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const active = mapWorkspaceMetadata([1], async value => { started(); await held; return value; });
+  await entered;
+  const controllers = Array.from({ length: 64 }, () => new AbortController());
+  let waitingCalls = 0;
+  const queued = controllers.map(controller => mapWorkspaceMetadata([2], async value => {
+    waitingCalls += 1;
+    return value;
+  }, controller.signal).then(() => null, error => error as Error));
+  try {
+    await assert.rejects(mapWorkspaceMetadata([3], async value => value), /Too many workspace metadata requests/);
+    controllers.forEach(controller => controller.abort());
+    assert.ok((await Promise.all(queued)).every(error => error?.message.includes("cancelled")));
+    assert.equal(waitingCalls, 0);
+  } finally {
+    controllers.forEach(controller => controller.abort());
+    release();
+    await active;
+  }
+  assert.deepEqual(await mapWorkspaceMetadata([4], async value => value), [4]);
+});
+
+test("a synchronous metadata inspector failure still drains its started siblings", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let settled = false;
+  const operation = mapWorkspaceMetadata([1, 2], value => {
+    if (value === 1) throw new Error("metadata failed synchronously");
+    started();
+    return held.then(() => value);
+  }).finally(() => { settled = true; });
+  const rejection = assert.rejects(operation, /metadata failed synchronously/);
+  try {
+    await entered;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+  } finally { release(); }
+  await rejection;
+  assert.deepEqual(await mapWorkspaceMetadata([3], async value => value), [3]);
 });

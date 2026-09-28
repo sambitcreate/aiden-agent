@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { listWorkspaceFiles } from "./workspace-files.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
 import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
@@ -370,4 +371,32 @@ test("legacy Remote bounded issuance preserves capacity errors", async (t) => {
   await assert.rejects(service.list("device", "workspace"), (error: unknown) =>
     error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429);
   assert.equal(handles.storedTokenMaterialForTesting().length, 2);
+});
+
+test("overlapping Remote and desktop listings share one four-operation metadata budget", async (t) => {
+  const { service, root } = await legacyFixture(t, 24);
+  const original = fsPromises.stat;
+  let active = 0;
+  let peak = 0;
+  let calls = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    if (!String(args[0]).endsWith(".txt")) return original(...args);
+    calls += 1;
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  const [remote, secondRemote, desktop] = await Promise.all([
+    service.list("device", "workspace"), service.list("second-device", "workspace"), listWorkspaceFiles(root),
+  ]);
+  assert.deepEqual(remote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
+  assert.deepEqual(secondRemote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
+  assert.equal(calls, 120, "every listing stays fresh and every Remote identity is inspected");
+  assert.ok(peak > 1 && peak <= 4, `aggregate metadata concurrency: ${peak}`);
+  assert.equal(active, 0);
+  await assert.rejects(service.read("second-device", "workspace", remote.entries[0]!.id));
 });

@@ -20,10 +20,19 @@ assert.ok(Number.isFinite(latencyMs) && latencyMs >= 0 && latencyMs <= 100);
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-metadata-benchmark-"));
 const servicePath = path.resolve("main/services");
 try {
-  for (const name of ["workspace-files", "aiden-remote-files"]) {
-    const source = execFileSync("git", ["show", `${baseline}:main/services/${name}.ts`], { encoding: "utf8" });
+  const baselineModules = ["workspace-files", "aiden-remote-files", "workspace-metadata", "aiden-remote-opaque-handles"];
+  for (const name of baselineModules) {
+    let source: string;
+    try {
+      source = execFileSync("git", ["show", `${baseline}:main/services/${name}.ts`], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      if (name === "workspace-metadata") continue; // Not present before batching.
+      throw error;
+    }
     const rewritten = source.replace(/from "\.\/([^"]+)\.js"/gu, (_, dependency: string) =>
-      `from "${pathToFileURL(path.join(dependency === "workspace-files" ? temporary : servicePath, `${dependency}.ts`)).href}"`);
+      `from "${pathToFileURL(path.join(baselineModules.includes(dependency) ? temporary : servicePath, `${dependency}.ts`)).href}"`);
     await fs.writeFile(path.join(temporary, `${name}.ts`), rewritten);
   }
   const beforeFiles = await import(pathToFileURL(path.join(temporary, "workspace-files.ts")).href);
@@ -50,7 +59,7 @@ try {
       workspaceMutationGate: new WorkspaceMutationGate(), workspaceOperationRegistry: new WorkspaceOperationRegistry(),
       assertManagedWorktreeAdmission: async () => undefined, realpath: fs.realpath, stat: fs.stat,
     });
-    for (const operation of ["gemini-index", "legacy-remote"] as const) {
+    for (const operation of ["gemini-index", "legacy-remote", "overlapping-listings"] as const) {
       let expected: unknown;
       for (const variant of variants) {
         const originals = { stat: fs.stat, realpath: fs.realpath, readdir: fs.readdir, readFile: fs.readFile, open: fs.open };
@@ -88,13 +97,23 @@ try {
           const service = new variant.Remote({ instanceId: "benchmark", application, owners: new AidenRemoteWorkspaceOwnerRegistry() });
           const value = operation === "gemini-index"
             ? await variant.list(root)
-            : await service.list("device", workspace.id);
+            : operation === "legacy-remote"
+              ? await service.list("device", workspace.id)
+              : await (async () => {
+                const [files, gemini, remote] = await Promise.all([
+                  variant.list(root), variant.list(root), service.list("device", workspace.id),
+                ]);
+                return {
+                  ...remote,
+                  concurrentSnapshots: [files, gemini].map(index => buildGeminiWorkspaceSnapshot(index, { isRepo: false })),
+                };
+              })();
           const comparable = operation === "gemini-index"
             ? buildGeminiWorkspaceSnapshot(value as Awaited<ReturnType<typeof listWorkspaceFiles>>, { isRepo: false })
             : { ...value, snapshotId: "omitted", entries: value.entries.map(entry => ({ ...entry, id: "omitted" })) };
           if (variant.name === "before") expected = comparable;
           else assert.deepEqual(comparable, expected, "ordering, truncation and projected metadata must match");
-          results.push({ shape, operation, variant: variant.name, elapsedMs: Math.round(performance.now() - started), entries: value.entries.length, ...calls, peakStats, identityStats, peakIdentities });
+          results.push({ shape, operation, variant: variant.name, elapsedMs: Math.round(performance.now() - started), entries: value.entries.length, ...calls, peakStats, repeatedFileStats: identityStats, peakRepeatedFileStats: peakIdentities });
         } finally { Object.assign(fs, originals); syncBuiltinESMExports(); }
       }
     }

@@ -7,7 +7,7 @@ Baseline a9baa4aa3027893e5455043083465c34b4c8b4ac; branch feature/workspace-meta
 - Desktop Files and eligible Gemini preparation share the existing fresh recursive index. Metadata now runs in batches of at most four, bounded by remaining entry capacity. Commit results in enumeration order; preserve breadth-first selection, numeric final ordering, 4,000 entries, depth20, skip counters and symlink treatment. A pre-aborted index does no filesystem work.
 - Legacy Remote listing still separately inspects every identity. Four claims checks may overlap, then handles issue serially in index order after cancellation is checked. Cancellation/stat failure drains the batching layer before returning. Capacity keeps the existing 429 response; omission, expiry, device/workspace/revision checks and read/write validation remain intact. No new file content reads or open handles.
 - No completed-index cache, in-flight deduplication, or authority metadata reuse. Sizes and timestamps contribute to Gemini's exact snapshot, and external writes/renames/root replacements must be visible on the next request. Total stat/identity work is unchanged: this reduces serial wait time, not repeated-work counts. Fresh traversal, directory materialization/sorting, and Gemini's awaited preparation remain. The secure native lazy path and non-Mac fallback are unchanged.
-- Concurrency is per operation, not global. Index metadata remains non-atomic. Existing nested identity realpath Promise.all behavior is unchanged; batch draining does not claim every failed helper's sibling syscall has settled.
+- Bulk per-entry inspections now share one FIFO batch budget across requests: at most four active inspections and 64 waiting batches. Queued cancellation removes its waiter immediately; started work drains before handoff. Root admission and directory enumeration stay outside this budget as before. Index metadata remains non-atomic. Identity inspection now drains both realpath lookups on failure before releasing the shared budget.
 
 ## Reproduction and evidence
 
@@ -43,3 +43,16 @@ Wide index: 4001 stats, 1 realpath, 1 readdir in both versions. Wide legacy: 800
 No UI, onboarding, protocol, plan status, model catalog, deployment or provider traffic change. Publication and exact-head hosted CI/Pullfrog/Hermes acceptance follow separately.
 
 The optional1ms stat-delay sample returned wide index7455→1963ms, wide legacy15813→3218ms, deep index5504→1420ms, deep legacy14997→17999ms. The last sample was slower despite peak concurrency4; shared-host scheduling affects wall time even with simulated latency. No latency threshold is a test acceptance gate.
+
+
+## Pullfrog aggregate-budget follow-up
+
+Pullfrog review5343514849 on56120a385 flagged that independent four-operation batches could multiply filesystem pressure across requests. Added shared FIFO admission with a64-batch waiting cap, prompt cancellation while queued, drain-before-handoff for started checks, and explicit overload rejection. Queue-full requests follow the existing workspace error path; handle capacity still uses429. Avoids caching/deduplication or authority reuse. Slow filesystem calls can hold the active batch; queued cancellation does not wait for them.
+
+The identity helper now awaits both root/candidate realpath results even if one fails, closing the previous sibling-lookup drain limitation. Behavioral tests cover two simultaneous Remote listings plus a desktop index, canceled waiters without releasing another request's budget, queue overflow/recovery, synchronous inspector failures, and failed identity sibling draining.
+
+Fresh independent gpt-6-astra medium re-review cleared production/tests and independently ran46 tests,1 Linux-only skip. Full test:aiden-remote rerun:535 passed,1 existing skip. Android12 and iOS simulator11 workspace tests passed again. TypeScript/scoped ESLint/whitespace pass. No native implementation or wire shape change.
+
+Benchmark now includes overlapping Files/Gemini/Remote requests and copies baseline metadata/identity helpers too, allowing comparison against the initial published56120a385 head. `repeatedFileStats` counts repeated file-path stats, including repeated index scans in overlapping cases; it must not be read as identity-only work there. Root stats and directory reads are included in total counters but outside bulk admission. New-head hosted checks/reviews are required after push.
+
+Comparison against initial published56120a385 (no injected latency): three overlapping requests peak at12 stats before versus4 after, on both wide and deep trees. Counts remain16003 wide /15943 deep stats, with identical projected outputs and no content reads/opens. Wide concurrent completion550→601ms and deep455→558ms: aggregate admission intentionally trades some concurrent throughput for bounded shared filesystem pressure. Single-request peaks remain4; this follow-up does not claim additional single-request speedup.
