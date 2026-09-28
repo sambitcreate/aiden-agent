@@ -64,16 +64,16 @@ Append evidence as each optimization is implemented. Record exact before/after c
 | Item | Before | After | Status |
 | --- | --- | --- | --- |
 | DG-01/03/04: transcript/highlight/scroll | Full historical row traversal; unbounded block highlighting; immediate + scheduled follow. Runtime not measured | Pending | Proposed |
-| DG-02 / DP-01: offscreen frames/browser | Mounted artifact frames; browser guests set `backgroundThrottling: false`. GPU/energy not measured | Pending | Proposed |
+| DG-02 / DP-01: offscreen frames/browser | Mounted artifact frames; browser guests set `backgroundThrottling: false`. GPU/energy not measured | DP-01: native fixture policies false→true for 3 hidden guests; active capture/automation/recording pass. DG-02 pending; GPU/energy unmeasured | Browser [PR #282](https://github.com/sambitcreate/aiden-agent/pull/282), reviewed; artifacts proposed |
 | DP-02/04: worker timeout / MCP quit | Timeout rejects request without killing worker; MCP close excluded from awaited quit group. Exit latency not measured | Pending | Proposed |
 | DP-03/05/06: residency / discovery / schedules | No measured residency budget; serial tool discovery; no distinct-task concurrency cap in scheduler | Pending | Proposed |
 | DG-10 / DP-07: first usable shell | App-info/provider reads and main recovery precede shell/window readiness. Latency not measured | Pending | Proposed |
 | IOS-01/02: stream/cache bounds | Unbounded default AsyncThrowingStream queue; admitted chat map lacks aggregate eviction. Peak memory not measured | Pending | Proposed |
-| IOS-03/06/07: loading / retries / cache | Chat/catalog tuple gates fresh publication; fixed 1 s progress retry; summaries encoded twice. Latency/energy not measured | Pending | Proposed |
-| AND-01/02/03: UI-thread work | Draft writes, detail cache persistence and selected-image conversion run on Main paths. Runtime not measured | Pending | Proposed |
+| IOS-03/06/07: loading / retries / cache | Chat/catalog tuple gates fresh publication; fixed 1 s progress retry; summaries encoded twice | IOS-03: fresh visible+durable chat before held catalog release, including 503; 212 XCTests pass. IOS-06/07 pending; no device timing | Loading [PR #283](https://github.com/sambitcreate/aiden-agent/pull/283), reviewed; other items proposed |
+| AND-01/02/03: UI-thread work | Draft writes, detail cache persistence and selected-image conversion run on Main paths | AND-03: serial worker preparation; three emulator codec tests pass; 6400×4000 conversion samples to 6.4M decoded pixels versus 25.6M. AND-01/02 pending; RSS/energy unmeasured | Images [PR #284](https://github.com/sambitcreate/aiden-agent/pull/284), reviewed; local suite startup timeout still under investigation |
 | AND-04/05/06/07: navigation / lists / live rendering | Both product surfaces composed; expanded workspace rows nested in one lazy item; activity-owned detail models; growing live-string work. Runtime not measured | Pending | Proposed |
 | AND-08: optimistic unknown outcomes | Pending send key retained in memory; generic errors revert optimistic row; create calls default to fresh keys. Duplicate outcome not reproduced | Pending | Design and fault-reproduction prerequisite |
-| SDR-1/2: stream accounting / metadata | Full retained-journal clone/stringify per append; all payloads read on ordinary index update. Runtime not measured | Pending | Proposed |
+| SDR-1/2: stream accounting / metadata | SDR-1: 64 appends → 64 full snapshots; all payloads read on ordinary index update | SDR-1: 64 appends → 0 full snapshots, identical final byte sizes; 62 stream tests + 7,452 independent byte comparisons pass. SDR-2 pending | Accounting [PR #285](https://github.com/sambitcreate/aiden-agent/pull/285), reviewed; index proposed |
 | SDR-3/4/5: persistence / CLI / attachments | Whole retained snapshots and chats rewritten; CLI replacement performs two atomic writes/four explicit fsync calls. Runtime not measured | Pending | Proposed |
 | SDR-6/7: Pi history / residency | Context rebuilt for each missing message; session map has no idle capacity policy. Runtime not measured | Pending | Proposed |
 
