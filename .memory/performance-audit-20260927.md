@@ -20,3 +20,5 @@ Four independent implementation PRs published after individual fresh-context GPT
 Android follow-up e2d1a5dc independently reviewed (5/5 focused checks) and published to #284. Proven Main teardown cleanup is fixed, while initial HTTP setup timeout remains unresolved; instrumented 252/252 is not a final clean-source full pass.
 
 First hosted pass 02:56 UTC: #281 tsx command suggestion addressed; browser window-wide lease impact and iOS publication-before-revocation findings delegated for fixes + fresh reviews. #284 Linux arm64 AppImage HTTP500; targeted rerun rejected while workflow active, zero retry executions yet. All PRs still have pending CI. See batch-1.md.
+
+First hosted review findings addressed: #281 b6b0eb372 reproducible tsx command; #282 deec0c010 source-verified window-wide exception + native lifecycle coverage (fresh154units/native1); #283 cb53bbe6a synchronous mounted transcript redaction during revoked cleanup (fresh3tests). All three threads replied/resolved. New-head CI pending; #284 arm64 upstream500 retry must wait for workflow completion; no rerun executed. Automation remains ACTIVE, no merges.

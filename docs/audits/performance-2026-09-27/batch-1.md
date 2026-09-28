@@ -1,15 +1,15 @@
 # Performance batch 1 orchestration
 
-Status: first CI/comment follow-up found review items; remediation in progress. User authorized separate worktrees, GPT-6 Astra medium implementers, fresh-context GPT-6 Astra medium edge-case reviewers, PR publication, then 15-minute CI/comment remediation cycles until exact-head checks are green and no actionable comments remain. Merging is not included.
+Status: first review follow-ups published after independent review; current-head CI remains pending. User authorized separate worktrees, GPT-6 Astra medium implementers, fresh-context GPT-6 Astra medium edge-case reviewers, PR publication, then 15-minute CI/comment remediation cycles until exact-head checks are green and no actionable comments remain. Merging is not included.
 
 All four lanes start independently at `a9baa4aa3027893e5455043083465c34b4c8b4ac`. Three concurrent subagent slots mean implementation/review waves. Reviews use `fork_turns: none`; reviewers receive scope, worktree, base and verification obligations, without inheriting implementer reasoning.
 
 | Lane | Worktree (under ~/.codex/worktrees/) | Branch | Implementation | Independent review | PR / CI |
 | --- | --- | --- | --- | --- | --- |
-| Browser throttling DP-01 | perf-browser-throttling/aiden-agent | feature/perf-browser-throttling | Committed `0a56d0ce` | Fresh review clear; 16 focused tests | [#282](https://github.com/sambitcreate/aiden-agent/pull/282), awaiting batch CI cycle |
-| Stream accounting SDR-1 | perf-stream-accounting/aiden-agent | feature/perf-stream-accounting | Committed `c4f195f4` | Fresh review clear; 62 tests + 7,452 independent byte comparisons | [#285](https://github.com/sambitcreate/aiden-agent/pull/285), awaiting batch CI cycle |
-| Android images AND-03 | perf-android-images/aiden-agent | feature/perf-android-images | Published `e2d1a5dc`; includes test-lifetime cleanup | Fresh product and cleanup reviews clear; cleanup checks 5/5; full-suite flake unresolved | [#284](https://github.com/sambitcreate/aiden-agent/pull/284), awaiting batch CI cycle |
-| iOS chat loading IOS-03 | perf-ios-chat-loading/aiden-agent | feature/perf-ios-chat-loading | Committed `c68550e5` | Fresh review clear; independent 212/212 | [#283](https://github.com/sambitcreate/aiden-agent/pull/283), awaiting batch CI cycle |
+| Browser throttling DP-01 | perf-browser-throttling/aiden-agent | feature/perf-browser-throttling | Published `deec0c01` | Initial and window-scope reviews clear; follow-up 154 units + native 1/1 | [#282](https://github.com/sambitcreate/aiden-agent/pull/282), current-head CI pending |
+| Stream accounting SDR-1 | perf-stream-accounting/aiden-agent | feature/perf-stream-accounting | Committed `c4f195f4` | Fresh review clear; 62 tests + 7,452 independent byte comparisons | [#285](https://github.com/sambitcreate/aiden-agent/pull/285), current-head CI pending |
+| Android images AND-03 | perf-android-images/aiden-agent | feature/perf-android-images | Published `e2d1a5dc`; includes test-lifetime cleanup | Fresh product and cleanup reviews clear; cleanup checks 5/5; full-suite flake unresolved | [#284](https://github.com/sambitcreate/aiden-agent/pull/284), current-head CI pending |
+| iOS chat loading IOS-03 | perf-ios-chat-loading/aiden-agent | feature/perf-ios-chat-loading | Published `cb53bbe6` | Initial and revocation reviews clear; follow-up 3 focused tests | [#283](https://github.com/sambitcreate/aiden-agent/pull/283), current-head CI pending |
 
 ## Gates per lane
 
@@ -64,3 +64,12 @@ All five exact heads were inspected after the required wait: #281 `ad4ef395`, #2
 - #285: no review threads; completed checks pass, others remain pending.
 
 Raw snapshots and failed-job log are local under `/tmp/aiden-performance-batch-1/cycle-1/`. Monitoring remains active. Pending CI and external failures are not passes.
+
+
+### Follow-up remediation published — 2026-09-28 03:07 UTC
+
+- #281 reproducibility suggestion fixed in `b6b0eb372`, replied with reproduction counters and resolved its thread.
+- #282 published `deec0c010` after fresh-context Astra review. Native attached/minimized lifecycle test and 154 browser units independently pass. Documentation now explicitly accepts Electron's shared-window compositor exception during active browser operations, states unbounded debugger/disk awaits, and distinguishes auto-stop cleanup from explicit-stop export validation. Raw host/sibling RAF observations do not establish compositor quiescence. Review thread replied to with evidence and resolved; no production behavior change in this follow-up.
+- #283 published `cb53bbe6a` after fresh-context Astra review. Synchronous removal redaction clears messages before purge suspension. New held-purge regression reproduces two pre-fix assertion failures; fixed production full suite 213/213, final focused 2/2 after a launch-only retry, independent reviewer 3/3 without retry. Ordinary optional-catalog failures preserve transcript/selection. Review thread replied to with evidence and resolved.
+- #284 packaging retry remains pending workflow completion; none has run. Its local initial-load timeout remains unproven and distinct from hosted packaging failure.
+- Next routine hosted snapshot is 03:10 UTC. Passing checks from superseded browser/iOS/audit commits cannot accept the new heads. Keep monitoring all five PRs; do not merge.
