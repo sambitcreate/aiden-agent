@@ -9,6 +9,15 @@ import {
 } from "./aiden-remote-streams.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
+function assertExactSnapshotBytes(service: AidenRemoteStreamService): void {
+  // Independent oracle includes UTF-8 encoding, all JSON punctuation, metadata,
+  // and identities retained after a journal disappears.
+  const actual = Buffer.byteLength(JSON.stringify(service.snapshot()), "utf8");
+  const accounting = service as unknown as { snapshotBytes(): number };
+  assert.equal(accounting.snapshotBytes(), actual);
+  assert.ok(actual <= 16 * 1_024 * 1_024);
+}
+
 function fixture() {
   let now = 1_000;
   const cancelled: string[] = [];
@@ -73,6 +82,9 @@ test("remote stream forwards the renderer-safe chronological timeline without ra
   const event = app.service.snapshot().streams[0]?.events[1];
   assert.equal(event?.type, "timeline");
   assert.deepEqual(event?.payload, { timeline });
+  timeline.steps[0]!.detail = "mutated caller value";
+  assert.deepEqual(app.service.snapshot().streams[0]!.events[1]!.payload, event!.payload);
+  assertExactSnapshotBytes(app.service);
   assert.doesNotMatch(JSON.stringify(event), /cat |\.ssh/u);
 });
 
@@ -601,6 +613,10 @@ test("legacy label-only timeline journals load into the current safe timeline sh
   const legacy = app.service.snapshot();
   legacy.streams[0]!.events[1]!.payload = { label: "Run command" };
 
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000, cancel: () => true, approve: () => true, snapshot: legacy,
+  });
+  assertExactSnapshotBytes(restored);
   const normalized = normalizeAidenRemoteStreamSnapshot(legacy);
   const payload = normalized.streams[0]!.events[1]!.payload;
   assert.equal("label" in payload, false);
@@ -668,16 +684,21 @@ test("aggregate stream journals stay within the durable snapshot budget", async 
     approve: () => true,
     persist: async (snapshot) => { normalizeAidenRemoteStreamSnapshot(snapshot); },
   });
+  const old = service.create("device-1", "old", "old-chat", "old-turn");
+  old.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
   for (let streamIndex = 0; streamIndex < 3; streamIndex += 1) {
     const owner = service.create("device-1", `stream-${streamIndex}`, `chat-${streamIndex}`, `turn-${streamIndex}`);
     for (let index = 0; index < 35; index += 1) {
       owner.owner.send("chat:delta", { delta: `${streamIndex}:${index}:` + "x".repeat(199_990) });
+      assertExactSnapshotBytes(service);
     }
   }
   await service.settlePersistence();
   const snapshot = service.snapshot();
   assert.doesNotThrow(() => normalizeAidenRemoteStreamSnapshot(snapshot));
   assert.equal(Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= 16 * 1_024 * 1_024, true);
+  assert.equal(snapshot.streams.some((stream) => stream.streamId === "old"), false);
+  assert.equal(service.turnIdFor("old-chat", "old"), "old-turn");
 });
 
 test("restart restores terminal journals and marks active work interrupted", () => {
@@ -694,6 +715,7 @@ test("restart restores terminal journals and marks active work interrupted", () 
   const status = restarted.status("device-1", "stream-1");
   assert.equal(status.state, "interrupted");
   assert.equal(status.lastSequence, 3);
+  assertExactSnapshotBytes(restarted);
 });
 
 test("revocation closes only the selected device streams and approval expiry denies safely", async () => {
@@ -889,6 +911,7 @@ test("disconnect and response errors release blocked SSE delivery", () => {
     assert.equal(client.output.length, 1);
     assert.equal(client.response.listenerCount("drain"), 0);
     assert.deepEqual(app.cancelled, []);
+    assertExactSnapshotBytes(app.service);
   }
 });
 
@@ -1024,6 +1047,7 @@ for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-t
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "not_found",
     );
     assert.deepEqual(app.cancelled, []);
+    assertExactSnapshotBytes(app.service);
   });
 }
 
@@ -1690,4 +1714,88 @@ test("cancellation settles a pending question with a cancelled response", async 
     ),
     (error: unknown) => (error as { code?: string }).code === "question_expired",
   );
+});
+
+
+test("snapshot accounting follows Unicode payloads, state changes, pruning, restore and revocation", async () => {
+  const app = fixture();
+  assertExactSnapshotBytes(app.service);
+  const device = 'device-雪😀"\\\n';
+  const owner = app.service.create(device, "stream-1", "chat-1", "turn-1");
+  const deltas = Array.from({ length: 120 }, (_, index) => `${index}:雪😀\n\t"\\`);
+  for (const delta of deltas) {
+    app.setNow(10 ** (1 + delta.length % 9));
+    owner.owner.send("chat:delta", { delta });
+    assertExactSnapshotBytes(app.service);
+  }
+  const retained = app.service.snapshot().streams[0]!;
+  assert.equal(retained.events.filter((event) => event.type === "text_delta")
+    .map((event) => event.payload.text).join(""), deltas.join(""));
+  // A consumer may mutate an exported snapshot without changing the journal.
+  retained.events[1]!.payload.text = "external mutation";
+  assertExactSnapshotBytes(app.service);
+  assert.equal(app.service.snapshot().streams[0]!.events[1]!.payload.text, deltas[0]);
+  owner.owner.send("chat:approval", { approvalId: "approval-1", summary: "雪😀\nRun?" });
+  assert.equal(app.service.status(device, "stream-1").state, "waiting_for_approval");
+  assertExactSnapshotBytes(app.service);
+  owner.owner.send("chat:error", { cancelled: true });
+  assertExactSnapshotBytes(app.service);
+  const saved = app.service.snapshot();
+  const restored = new AidenRemoteStreamService({
+    now: () => 1_000, cancel: () => true, approve: () => true, snapshot: saved,
+  });
+  saved.streams[0]!.events[1]!.payload.text = "mutated restore source";
+  assertExactSnapshotBytes(restored);
+  assert.equal(restored.snapshot().streams[0]!.events[1]!.payload.text, deltas[0]);
+  await restored.revokeDevice(device);
+  assertExactSnapshotBytes(restored);
+  assert.equal(restored.snapshot().streams.length, 0);
+  assert.equal(restored.turnIdFor("chat-1", "stream-1"), "turn-1");
+  app.setNow(10 ** 12);
+  app.service.create("other", "stream-2", "chat-2", "turn-2");
+  assertExactSnapshotBytes(app.service);
+  assert.equal(app.service.snapshot().streams.length, 1);
+  assert.equal(app.service.snapshot().turnIndex!.length, 2);
+});
+
+test("snapshot accounting covers escaped identities and bounded turn index eviction", async () => {
+  const app = fixture();
+  const unusual = '雪😀"\\\n';
+  app.service.create(unusual, unusual, unusual, unusual);
+  assertExactSnapshotBytes(app.service);
+  await app.service.revokeDevice(unusual);
+  for (let index = 0; index < 1_030; index++) {
+    const owner = app.service.create("device", `s-${index}`, `c-${index}`, `t-${index}`);
+    owner.owner.send("chat:error", {});
+    app.setNow(1_000 + (index + 1) * 24 * 60 * 60 * 1_000);
+  }
+  assertExactSnapshotBytes(app.service);
+  assert.equal(app.service.snapshot().turnIndex!.length, 1_024);
+  assert.equal(app.service.turnIdFor("c-0", "s-0"), undefined);
+  assert.equal(app.service.turnIdFor("c-1029", "s-1029"), "t-1029");
+});
+
+test("event count and byte trimming keep exact accounting and contiguous newest replay", () => {
+  const app = fixture();
+  const owner = app.service.create("device", "stream", "chat", "turn");
+  for (let index = 0; index < 4_100; index++) {
+    owner.owner.send("chat:delta", { delta: `chunk-${index}` });
+  }
+  assertExactSnapshotBytes(app.service);
+  let events = app.service.snapshot().streams[0]!.events;
+  assert.equal(events.length, 4_096);
+  assert.equal(events[0]!.sequence, 6);
+  assert.equal(events[events.length - 1]!.payload.text, "chunk-4099");
+  for (let index = 0; index < 50; index++) {
+    owner.owner.send("chat:delta", { delta: "雪".repeat(100_000) });
+  }
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
+  assertExactSnapshotBytes(app.service);
+  events = app.service.snapshot().streams[0]!.events;
+  assert.ok(events.length < 50, "the per-stream byte limit prunes old events");
+  assert.equal(events[events.length - 1]!.type, "done");
+  assert.equal(events[events.length - 1]!.terminal, true);
+  for (let index = 1; index < events.length; index++) {
+    assert.equal(events[index]!.sequence, events[index - 1]!.sequence + 1);
+  }
 });
