@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fsPromises, * as fs from "node:fs/promises";
+import { runInNewContext } from "node:vm";
+import { createRequire } from "node:module";
+import { CODING_GLOB_WORKER_SOURCE, type CodingGlobTask, type CodingGlobReply } from "./coding-tool-glob-worker.js";
 import { Worker } from "node:worker_threads";
 import { syncBuiltinESMExports } from "node:module";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
@@ -2539,4 +2542,31 @@ test("foreground tools retain global admission until both root metadata requests
   try {
     assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test("foreground glob worker preserves Windows drive and UNC roots in expanded arms", () => {
+  const require = createRequire(import.meta.url);
+  const fixtures = [
+    { pattern: "C:/repo/*.ts", expected: "C:\\repo\\a.ts" },
+    { pattern: "C:\\repo\\*.ts", expected: "C:\\repo\\a.ts" },
+    { pattern: "//server/share/repo/*.ts", expected: "\\\\server\\share\\repo\\a.ts" },
+    { pattern: "{C:/repo/*.ts,src/*.js}", expected: "C:\\repo\\a.ts" },
+    { pattern: "{src/*.js,//server/share/repo/*.ts}", expected: "\\\\server\\share\\repo\\a.ts" },
+  ];
+  for (const { pattern, expected } of fixtures) {
+    // Execute the production worker engine with Windows path/parser semantics.
+    const engine = runInNewContext(`${CODING_GLOB_WORKER_SOURCE}; ({ seeds, globStep });`, {
+      process: { platform: "win32" },
+      workerData: { pattern, minimatchPath: require.resolve("minimatch") },
+      require: (name: string) => name === "node:path" ? path.win32 : require(name),
+    }) as { seeds: CodingGlobTask[]; globStep(request: unknown): CodingGlobReply };
+    const matches: string[] = [];
+    for (const task of engine.seeds) {
+      const prepared = engine.globStep({ task, directory: true });
+      matches.push(...prepared.matches);
+      if (!prepared.done) matches.push(...engine.globStep({ task, directory: true, entries: [{ name: "a.ts", directory: false, link: false }] }).matches);
+    }
+    assert.deepEqual(matches, [expected], pattern);
+  }
 });

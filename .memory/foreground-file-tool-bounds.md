@@ -51,3 +51,9 @@ without further reads; failed cleanup quarantines admission. Root verification
 awaits both started metadata requests even if one fails. Worker termination starts
 on lifetime abort/deadline while its traversal callback may still be pending.
 The stalled-I/O deadline result is an explicit notice without partial output.
+
+Completion audit also caught the expanded-root offset using host separators even
+though minimatch globParts are slash-normalized. Count normalized slashes so
+Windows drive and UNC roots skip exactly their parsed prefix. Production-worker
+VM fixtures use path.win32 and minimatch platform win32, covering slash/backslash
+drive spelling, UNC, and mixed absolute/relative arms; prior code fails the fixture.

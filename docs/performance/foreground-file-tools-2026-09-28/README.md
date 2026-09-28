@@ -53,7 +53,8 @@ segment positions and link traversal states without prematurely normalizing
 `**/..`. Filesystem access stays on the bounded host. The first independent review
 found gaps in a flattened-path matcher; the replacement has differential tests
 for absolute paths, mixed absolute/relative brace arms, braces/extglobs, globstars, linked prefixes, linked wildcard
-paths, and glob-dependent parent segments. Node traversal attribution is in
+paths, and glob-dependent parent segments. Worker-engine fixtures also exercise
+Windows drive and UNC roots with Windows path/parser semantics. Node traversal attribution is in
 THIRD_PARTY_NOTICES.md.
 
 Pinned Electron 43.1.1 / Node 24.18.0 smoke uses a bundled entry and real app main
