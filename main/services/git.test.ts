@@ -5066,12 +5066,6 @@ test("GitService rejects late cache publications from a replaced root across ali
     const oldProofBlocked = gitReadGate();
     const releaseOldProof = gitReadGate();
     const oldInfoFinished = gitReadGate();
-    const info = service.info.bind(service);
-    service.info = async (...args) => {
-      const result = await info(...args);
-      oldInfoFinished.resolve();
-      return result;
-    };
     let readingNewRoot = false;
     let heldOnce = false;
     runner.run = async (cwd, args, options) => {
@@ -5097,6 +5091,7 @@ test("GitService rejects late cache publications from a replaced root across ali
     let blockNextProof = false;
     internals.setCached = (cache, key, commonDir, value, identity) => {
       setCached(cache, key, commonDir, value, identity);
+      if (value.branch === "main" && value.current === undefined) oldInfoFinished.resolve();
       if (readingNewRoot && (kind === "info" ? value.branch === "main" : value.current === "main")) blockNextProof = true;
     };
     internals.repositorySignature = async paths => {
@@ -5285,5 +5280,58 @@ test("GitService never rereads replaced symlink targets against an obsolete byte
     assert.equal(review.files[0]?.additions, undefined);
     assert.equal(review.summary.unavailableStats, 1);
     assert.ok(fallbackBytes <= 6, "fallback target IO must fit the reserved aggregate budget even if the link grows");
+  }
+});
+
+
+test("GitService keeps indirect core.worktree readers independent across ancestor replacement", async (t) => {
+  const repository = await createRepository(t);
+  const checkout = path.dirname(repository);
+  await fs.copyFile(path.join(repository, "README.md"), path.join(checkout, "README.md"));
+  await git(repository, ["config", "core.worktree", checkout]);
+  assert.equal(await git(repository, ["rev-parse", "--is-inside-work-tree"]), "true");
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const started = gitReadGate();
+  const release = gitReadGate();
+  const laterStatus = gitReadGate();
+  let held = false;
+  let initialCount = 0;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status") {
+      if (!held) {
+        held = true;
+        initialCount = parseGitStatus(result.stdout).uncommitted;
+        started.resolve();
+        await release.promise;
+      } else laterStatus.resolve();
+    }
+    return result;
+  };
+  const earlier = service.info(repository);
+  void earlier.catch(() => undefined);
+  let later: ReturnType<typeof service.info> | undefined;
+  try {
+    await Promise.race([started.promise, earlier.then(() => { throw new Error("expected status admission"); })]);
+    const previous = `${checkout}-old`;
+    await fs.rename(checkout, previous);
+    t.after(() => fs.rm(previous, { recursive: true, force: true }));
+    await fs.mkdir(checkout);
+    await fs.rename(path.join(previous, "repository"), repository);
+    await fs.copyFile(path.join(repository, "README.md"), path.join(checkout, "README.md"));
+    await fs.writeFile(path.join(checkout, "fresh.txt"), "new checkout\n");
+    later = service.info(repository);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([laterStatus.promise, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("indirect checkout joined a prior root's status flight")), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.equal((await later).uncommitted, initialCount + 1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([earlier, later]);
   }
 });

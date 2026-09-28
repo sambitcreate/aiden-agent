@@ -1317,7 +1317,7 @@ export class GitService {
     // Resolve aliases on every read, including after a workspace symlink swaps.
     let canonical: string;
     try { canonical = await fs.realpath(cwd); } catch { return null; }
-    return this.sharedRead(`repository:${canonical}`, signal, async (owner) => {
+    const discovered = await this.sharedRead(`repository:${canonical}`, signal, async (owner) => {
       // Match the existing display TTL: included/global Git configuration can
       // affect discovery without touching the local config files below.
       const cached = this.getCached(this.repositoryCache, canonical);
@@ -1340,6 +1340,8 @@ export class GitService {
       }
       throw new GitServiceError("stale_snapshot", "The repository changed during discovery. Refresh and try again.");
     });
+    // Unsupported discovery is only a hint; admit an independent current tuple.
+    return discovered?.readIdentity ? discovered : this.repository(cwd, signal);
   }
 
   private async displayRead<T>(
@@ -1349,41 +1351,32 @@ export class GitService {
     operation: (repo: GitRepository | null, signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+    const callerSignal = signal ?? new AbortController().signal;
     const canonical = await fs.realpath(cwd).catch(() => undefined);
-    // Nested/unusual workspaces have no complete routing proof. Keep both
-    // discovery and display reads independent, so a new owner never joins an
-    // old ancestor's flight after replacement.
     const candidateIdentity = canonical ? await this.rootReadIdentity(canonical) : undefined;
-    const share = Boolean(candidateIdentity);
+    // Discovery must confirm root identity before a query may join a flight.
+    // Nested and indirect core.worktree layouts keep independent query owners.
+    const admitted = await this.readRepository(cwd, callerSignal, Boolean(candidateIdentity));
     const read = async (owner: AbortSignal) => {
-        for (;;) {
-          if (owner.aborted)
-            throw new GitServiceError(
-              "aborted",
-              "Git operation was cancelled.",
-            );
-          const repo = await this.readRepository(cwd, owner, share);
-          const value = repo
-            ? await this.stableRead(repo, () => operation(repo, owner), owner)
-            : await operation(null, owner);
-          if (owner.aborted)
-            throw new GitServiceError(
-              "aborted",
-              "Git operation was cancelled.",
-            );
-          if (
-            !repo?.readIdentity ||
-            ((await fs.realpath(cwd).catch(() => undefined)) === repo.cwd &&
-              (await this.repositorySignature(repo.readIdentity.paths)) ===
-                repo.readIdentity.signature)
-          )
-            return value;
-          this.invalidate(repo.commonDir);
-          this.repositoryCache.delete(repo.cwd);
-        }
+      let current = admitted;
+      for (;;) {
+        if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+        const repo = current;
+        const value = repo
+          ? await this.stableRead(repo, () => operation(repo, owner), owner)
+          : await operation(null, owner);
+        if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+        if (!repo?.readIdentity ||
+            (await fs.realpath(cwd).catch(() => undefined) === repo.cwd &&
+             await this.repositorySignature(repo.readIdentity.paths) === repo.readIdentity.signature)) return value;
+        this.invalidate(repo.commonDir);
+        this.repositoryCache.delete(repo.cwd);
+        current = await this.readRepository(cwd, owner);
+      }
     };
-    return share ? this.sharedRead(JSON.stringify([key, path.resolve(cwd), candidateIdentity?.signature]), signal, read)
-      : read(signal ?? new AbortController().signal);
+    return admitted?.readIdentity
+      ? this.sharedRead(JSON.stringify([key, path.resolve(cwd), admitted.readIdentity.signature]), signal, read)
+      : read(callerSignal);
   }
 
   private requireRepository(repo: GitRepository | null): GitRepository {
@@ -1528,26 +1521,20 @@ export class GitService {
     };
   }
 
+  private async repositoryInfo(repo: GitRepository, signal: AbortSignal): Promise<GitInfo> {
+    return this.stableRead(repo, async () => {
+      const cached = repo.readIdentity ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature) : undefined;
+      if (cached) return cached;
+      const value = await this.status(repo, signal);
+      if (signal.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+      if (repo.readIdentity) this.setCached(this.infoCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
+      return value;
+    }, signal);
+  }
+
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
-    return this.displayRead(cwd, "info", signal, async (repo, signal) => {
-      if (!repo) return { isRepo: false };
-      return this.stableRead(
-        repo,
-        async () => {
-          const cached = repo.readIdentity ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature) : undefined;
-          if (cached) return cached;
-          const value = await this.status(repo, signal);
-          if (signal.aborted)
-            throw new GitServiceError(
-              "aborted",
-              "Git operation was cancelled.",
-            );
-          if (repo.readIdentity) this.setCached(this.infoCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
-          return value;
-        },
-        signal,
-      );
-    });
+    return this.displayRead(cwd, "info", signal, (repo, owner) =>
+      repo ? this.repositoryInfo(repo, owner) : Promise.resolve({ isRepo: false }));
   }
 
   async branches(cwd: string, signal?: AbortSignal): Promise<GitBranches> {
@@ -1565,7 +1552,12 @@ export class GitService {
           const cached = repo.readIdentity ? this.getCached(this.branchCache, repo.cwd, repo.readIdentity.signature) : undefined;
           if (cached) return cached;
           const [info, localResult, remoteRefs] = await Promise.all([
-            this.info(cwd, signal),
+            // Reuse the already admitted repository, avoiding another discovery
+            // before joining an overlapping info read (also with a zero TTL).
+            repo.readIdentity
+              ? this.sharedRead(JSON.stringify(["info", path.resolve(cwd), repo.readIdentity.signature]), signal,
+                owner => this.repositoryInfo(repo, owner))
+              : this.repositoryInfo(repo, signal),
             this.run(
               repo.cwd,
               [
