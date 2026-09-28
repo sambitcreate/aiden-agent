@@ -51,15 +51,21 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
     // clear() requests cancellation; children can still resume on Main to finish cleanup.
-    private suspend fun ViewModelStore.clearAndJoin() {
+    // A cancelled test caller must finish this barrier before disposing shared resources.
+    private suspend fun ViewModelStore.clearAndJoin() = withContext(NonCancellable) {
         val jobs = keys().mapNotNull { get(it)?.viewModelScope?.coroutineContext?.get(Job) }
         clear()
         jobs.forEach { it.join() }
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
-    fun viewModelCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() {
+    fun viewModelCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() = exerciseViewModelCleanup(false)
+
+    @Test
+    fun cancelledCallerCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() = exerciseViewModelCleanup(true)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun exerciseViewModelCleanup(cancelCaller: Boolean) {
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val owners = ViewModelStore()
         val release = CompletableDeferred<Unit>()
@@ -83,17 +89,28 @@ class AidenChatTest {
                         }
                     }
                 }
-                val cleanup = launch(start = CoroutineStart.UNDISPATCHED) { owners.clearAndJoin() }
+                var resourcesReleased = false
+                val cleanup = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        if (cancelCaller) awaitCancellation()
+                    } finally {
+                        owners.clearAndJoin()
+                        resourcesReleased = true
+                    }
+                }
+                if (cancelCaller) cleanup.cancel()
                 try {
                     withTimeout(5_000) { entered.await() }
                     assertFalse("Cleanup must wait while a cancelled child still needs Main", cleanup.isCompleted)
                     assertFalse(finalizedOnMain)
+                    assertFalse(resourcesReleased)
                 } finally {
                     release.complete(Unit)
                     child.join()
                     cleanup.join()
                 }
                 assertTrue(finalizedOnMain)
+                assertTrue("Cleanup must finish releasing resources even when its caller was cancelled", resourcesReleased)
                 assertTrue(model.viewModelScope.coroutineContext[Job]!!.isCompleted)
             }
         } finally {
