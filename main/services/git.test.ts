@@ -5335,3 +5335,58 @@ test("GitService keeps indirect core.worktree readers independent across ancesto
     await Promise.allSettled([earlier, later]);
   }
 });
+
+test("GitService validates public info after joining branch-owned status work", async (t) => {
+  const repository = await createRepository(t);
+  const replacement = await createRepository(t);
+  await git(replacement, ["switch", "-c", "new-root"]);
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  const { runner } = observeGitCommands(service);
+  const run = runner.run;
+  const statusStarted = gitReadGate();
+  const releaseStatus = gitReadGate();
+  const infoJoined = gitReadGate();
+  let held = false;
+  runner.run = async (cwd, args, options) => {
+    const result = await run(cwd, args, options);
+    if (args[0] === "status" && !held) {
+      held = true;
+      statusStarted.resolve();
+      await releaseStatus.promise;
+    }
+    return result;
+  };
+  const internals = service as unknown as {
+    sharedRead<T>(key: string, signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  };
+  const sharedRead = internals.sharedRead.bind(service);
+  const subscriptions = new Map<string, number>();
+  internals.sharedRead = (key, signal, operation) => {
+    const result = sharedRead(key, signal, operation);
+    if (key.startsWith("[")) {
+      const kind = (JSON.parse(key) as string[])[0];
+      const count = (subscriptions.get(kind) ?? 0) + 1;
+      subscriptions.set(kind, count);
+      // Both the prior mixed flight and the distinct raw-status flight must
+      // have admitted the second subscriber before replacing the repository.
+      if ((kind === "info" || kind === "repository-info") && count === 2) infoJoined.resolve();
+    }
+    return result;
+  };
+  const branches = service.branches(repository);
+  void branches.catch(() => undefined);
+  let info: ReturnType<typeof service.info> | undefined;
+  try {
+    await statusStarted.promise;
+    info = service.info(repository);
+    await infoJoined.promise;
+    await fs.rename(repository, `${repository}-old`);
+    await fs.rename(replacement, repository);
+    releaseStatus.resolve();
+    assert.equal((await info).branch, "new-root");
+    assert.equal((await branches).current, "new-root");
+  } finally {
+    releaseStatus.resolve();
+    await Promise.allSettled([branches, info]);
+  }
+});

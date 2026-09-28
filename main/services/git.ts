@@ -1522,14 +1522,19 @@ export class GitService {
   }
 
   private async repositoryInfo(repo: GitRepository, signal: AbortSignal): Promise<GitInfo> {
-    return this.stableRead(repo, async () => {
+    const read = (owner: AbortSignal) => this.stableRead(repo, async () => {
       const cached = repo.readIdentity ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature) : undefined;
       if (cached) return cached;
-      const value = await this.status(repo, signal);
-      if (signal.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+      const value = await this.status(repo, owner);
+      if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
       if (repo.readIdentity) this.setCached(this.infoCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
       return value;
-    }, signal);
+    }, owner);
+    // Raw status work has its own key. Every display owner must still perform
+    // its own routing validation after receiving a shared result.
+    return repo.readIdentity
+      ? this.sharedRead(JSON.stringify(["repository-info", repo.cwd, repo.readIdentity.signature]), signal, read)
+      : read(signal);
   }
 
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
@@ -1552,12 +1557,9 @@ export class GitService {
           const cached = repo.readIdentity ? this.getCached(this.branchCache, repo.cwd, repo.readIdentity.signature) : undefined;
           if (cached) return cached;
           const [info, localResult, remoteRefs] = await Promise.all([
-            // Reuse the already admitted repository, avoiding another discovery
-            // before joining an overlapping info read (also with a zero TTL).
-            repo.readIdentity
-              ? this.sharedRead(JSON.stringify(["info", path.resolve(cwd), repo.readIdentity.signature]), signal,
-                owner => this.repositoryInfo(repo, owner))
-              : this.repositoryInfo(repo, signal),
+            // Reuse admission and share raw status; outer reads each validate
+            // routing after completion, including when the display TTL is zero.
+            this.repositoryInfo(repo, signal),
             this.run(
               repo.cwd,
               [
