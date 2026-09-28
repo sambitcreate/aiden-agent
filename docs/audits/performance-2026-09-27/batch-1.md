@@ -8,7 +8,7 @@ All four lanes start independently at `a9baa4aa3027893e5455043083465c34b4c8b4ac`
 | --- | --- | --- | --- | --- | --- |
 | Browser throttling DP-01 | perf-browser-throttling/aiden-agent | feature/perf-browser-throttling | Published `deec0c01` | Initial and window-scope reviews clear; follow-up 154 units + native 1/1 | [#282](https://github.com/sambitcreate/aiden-agent/pull/282), current-head CI pending |
 | Stream accounting SDR-1 | perf-stream-accounting/aiden-agent | feature/perf-stream-accounting | Committed `c4f195f4` | Fresh review clear; 62 tests + 7,452 independent byte comparisons | [#285](https://github.com/sambitcreate/aiden-agent/pull/285), current-head CI pending |
-| Android images AND-03 | perf-android-images/aiden-agent | feature/perf-android-images | Published `e2d1a5dc`; includes test-lifetime cleanup | Fresh product and cleanup reviews clear; cleanup checks 5/5; full-suite flake unresolved | [#284](https://github.com/sambitcreate/aiden-agent/pull/284), current-head CI pending |
+| Android images AND-03 | perf-android-images/aiden-agent | feature/perf-android-images | Published `632f11a5`; includes cancellation-safe test cleanup | Fresh product and cleanup reviews clear; cleanup checks 5/5; full-suite flake unresolved | [#284](https://github.com/sambitcreate/aiden-agent/pull/284), current-head CI pending |
 | iOS chat loading IOS-03 | perf-ios-chat-loading/aiden-agent | feature/perf-ios-chat-loading | Published `cb53bbe6` | Initial and revocation reviews clear; follow-up 3 focused tests | [#283](https://github.com/sambitcreate/aiden-agent/pull/283), current-head CI pending |
 
 ## Gates per lane
@@ -73,3 +73,17 @@ Raw snapshots and failed-job log are local under `/tmp/aiden-performance-batch-1
 - #283 published `cb53bbe6a` after fresh-context Astra review. Synchronous removal redaction clears messages before purge suspension. New held-purge regression reproduces two pre-fix assertion failures; fixed production full suite 213/213, final focused 2/2 after a launch-only retry, independent reviewer 3/3 without retry. Ordinary optional-catalog failures preserve transcript/selection. Review thread replied to with evidence and resolved.
 - #284 packaging retry remains pending workflow completion; none has run. Its local initial-load timeout remains unproven and distinct from hosted packaging failure.
 - Next routine hosted snapshot is 03:10 UTC. Passing checks from superseded browser/iOS/audit commits cannot accept the new heads. Keep monitoring all five PRs; do not merge.
+
+
+## Hosted follow-up 2 — 2026-09-28 03:11 UTC
+
+Exact heads checked: #281 `601e3dc61`, #282 `deec0c010`, #283 `cb53bbe6a`, #284 `e2d1a5dcb`, #285 `c4f195f4`. No requested reviewers. No unresolved review threads on #281/#282/#283/#285; their CI remains pending, with #285 at 16 successful checks and four running (three Electron shards and iOS simulator).
+
+#284 has a new actionable test-cleanup review: a cancelled caller can bypass `Job.join()` in the teardown barrier. The lifetime agent is implementing a non-cancellable join phase and a cancelled-caller held-finalizer regression; fresh review is required before publication. Its Android build check now passes, but that does not erase the earlier local clean-suite timeout. Linux arm64 packaging's upstream HTTP500 still awaits its single retry: the containing workflow has queued jobs, so no rerun was requested again. No unrelated source or workflow changes. Raw hosted snapshot: `/tmp/aiden-performance-batch-1/cycle-2/`.
+
+
+### Cancelled-caller cleanup published — 2026-09-28 03:15 UTC
+
+#284 follow-up `632f11a57` shields scope capture, store clear and all joins with `NonCancellable` without changing dispatcher. Both normal and cancelled callers are covered by a real held-finalizer regression. Removing the shield deterministically fails; restored implementer checks 5/5 and fresh-context independent checks 5/5 pass. No production behavior, timeout or retry policy changed. Review thread replied to with evidence and resolved. Earlier local HTTP setup flake remains unexplained.
+
+The new #284 head supersedes `e2d1a5dc` and receives new CI. Do **not** retry the old-head arm64 AppImage job; no retry execution occurred. Track the new head's packaging result. All current checks must pass before completion. Next routine hosted snapshot: 03:25 UTC.
