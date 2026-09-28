@@ -14,15 +14,15 @@
     "**/*/*.ts",
     "{src,link}/**/*",
     "src/**/..",
-    "{/var/folders/bb/wd_m6tl14y5c1wklxz3sj9840000gn/T/aiden-electron-file-tools-dzVPQW/src/*.ts,src/sub/*.ts}"
+    "{/Users/sambitbiswas/.codex/worktrees/4e14/aiden-agent/build/foreground-smoke-0uGmSU/workspace/src/*.ts,src/sub/*.ts}"
   ],
   "cancellationMs": [
-    152.08937500000002,
-    152.27324999999996,
-    152.46399999999994,
-    152.52579100000003,
-    151.98649999999998,
-    151.38937499999997
+    151.54775000000006,
+    151.97033299999998,
+    152.3012500000001,
+    152.90824999999995,
+    152.47225000000003,
+    152.56825000000003
   ],
   "deadline": "settled with incomplete notice",
   "workerPortsAfter": 0,

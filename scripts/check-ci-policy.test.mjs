@@ -360,3 +360,14 @@ test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lan
   const registry = readRegistry();
   assert.ok(registry.lanes.some((lane) => lane.preserved.includes("ios-release-policy")));
 });
+
+test("foreground Electron smoke is a required package command in desktop verification", async () => {
+  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const command = "test:foreground-file-tools:electron";
+  assert.ok(scripts[command], "Electron smoke must be runnable from the package manifest");
+  const smoke = jobs.verify.steps.find((step) => step.run === `npm run ${command}`);
+  assert.ok(smoke, "Desktop CI must execute the foreground runtime assertions");
+  assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
+  assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
+});

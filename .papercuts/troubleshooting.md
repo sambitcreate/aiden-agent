@@ -1421,3 +1421,16 @@ listener is removed, even for a live idle worker. The initial lifecycle test fai
 `0 !== 4`; corrected the oracle to await the actual Worker.terminate promises while
 traversal stays deferred, then independently assert held admission and recovery.
 This was a deterministic test-oracle failure, not a passing rerun or timeout change.
+
+
+### Register standalone Electron assertions in CI (2026-09-28, PR #288)
+
+A final audit caught the foreground smoke's manual-only execution: assertion-based
+smoke entries also need a package test command and a CI lane, even without a
+`.test` suffix. Registered it in Desktop build and diagnostics. When moving the
+esbuild CLI invocation into its API, retain explicit `external: ["electron"]`:
+`packages: "external"` alone allowed repository TS path resolution to bundle the
+npm launcher, producing “Dynamic require of child_process is not supported”. The
+runner's hard deadline caught that pre-handler failure and removed fixtures; the
+corrected registered smoke passes. SIGTERM validation also proved nonzero exit,
+reaped Electron, and removal of the temporary bundle/workspace/profile.

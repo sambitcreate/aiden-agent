@@ -138,6 +138,8 @@ jobs:
         run: npm run test:model-catalog
       - name: Build production bundles once
         run: npm run build
+      - name: Verify foreground file tools in pinned Electron
+        run: npm run test:foreground-file-tools:electron
       - name: Verify production-profile diagnostics support workflow
         run: npm run test:e2e:diagnostics:production:run
 

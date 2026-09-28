@@ -80,10 +80,16 @@ npx tsx --test main/services/coding-tools.test.ts main/services/generation-runti
 npm run type-check
 npx eslint main/services/coding-tools.ts main/services/coding-tool-matcher.ts main/services/coding-tool-glob-worker.ts main/services/foreground-read-scope.ts main/services/coding-tools.test.ts scripts/benchmark-foreground-file-tools.ts scripts/smoke-foreground-file-tools.ts
 node node_modules/electron/install.js
-npx esbuild scripts/smoke-foreground-file-tools.ts --bundle --platform=node --format=esm --packages=external --external:electron --outfile=build/main/foreground-file-tools-smoke.mjs
-node_modules/electron/dist/Electron.app/Contents/MacOS/Electron build/main/foreground-file-tools-smoke.mjs
+npm run test:foreground-file-tools:electron
+npm run test:ci-policy
 ```
 
 The existing coding-tools test file is already in the root test chain and CI
-registry. No shared server/native contract or transcript UI changed; no mobile
+registry. The Electron smoke has its own package command and runs as a required
+step in the existing Desktop build and diagnostics CI lane. Its runner bundles
+into an isolated directory, uses the installed pinned Electron, owns the synthetic
+workspace and user-data profile, and waits for process close before cleanup. A
+30-second hard process deadline also catches module-load failures before the
+smoke's own error handler can run; SIGINT/SIGTERM terminate its owned process group.
+The CI policy suite verifies the package command remains a required CI step. No shared server/native contract or transcript UI changed; no mobile
 implementation or plan-status update is needed for these internal tools.

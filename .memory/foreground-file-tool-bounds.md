@@ -57,3 +57,11 @@ though minimatch globParts are slash-normalized. Count normalized slashes so
 Windows drive and UNC roots skip exactly their parsed prefix. Production-worker
 VM fixtures use path.win32 and minimatch platform win32, covering slash/backslash
 drive spelling, UNC, and mixed absolute/relative arms; prior code fails the fixture.
+
+
+The assertion-based Electron smoke is registered as
+`test:foreground-file-tools:electron` and required in the existing Desktop build
+and diagnostics CI lane. Its Node runner bundles an isolated entry (Electron
+explicitly external), owns workspace/profile fixtures, clears ELECTRON_RUN_AS_NODE,
+and waits for child close after success/error/30s deadline/SIGINT/SIGTERM before
+cleanup. CI policy coverage enforces this mandatory package-script invocation.
