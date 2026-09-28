@@ -5048,3 +5048,83 @@ test("GitService retries config and linked common-directory changes during disco
   await linkedService.createBranch(other, "after-routing-race");
   assert.ok((await linkedService.branches(linked)).branches.includes("after-routing-race"));
 });
+
+test("GitService rejects late cache publications from a replaced root across aliases", async (t) => {
+  for (const kind of ["info", "branches"] as const) {
+    const repository = await createRepository(t);
+    const replacement = await createRepository(t);
+    await git(replacement, ["switch", "-c", "after-swap"]);
+    const alias = path.join(path.dirname(repository), "second-reader");
+    await fs.symlink(repository, alias, "dir");
+    const service = new GitService({ cacheTtlMs: 60_000 });
+    const { runner } = observeGitCommands(service);
+    const original = runner.run;
+    const held = gitReadGate();
+    const releaseOldRead = gitReadGate();
+    const oldProofBlocked = gitReadGate();
+    const releaseOldProof = gitReadGate();
+    const oldInfoFinished = gitReadGate();
+    const info = service.info.bind(service);
+    service.info = async (...args) => {
+      const result = await info(...args);
+      oldInfoFinished.resolve();
+      return result;
+    };
+    let readingNewRoot = false;
+    let heldOnce = false;
+    runner.run = async (cwd, args, options) => {
+      const result = await original(cwd, args, options);
+      const hold = kind === "info" ? args[0] === "status" : args[0] === "for-each-ref" && args.includes("refs/heads");
+      if (hold && !heldOnce) {
+        heldOnce = true;
+        if (kind === "branches") await oldInfoFinished.promise;
+        held.resolve();
+        await releaseOldRead.promise;
+      } else if (readingNewRoot && args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+        releaseOldRead.resolve();
+        await oldProofBlocked.promise;
+      }
+      return result;
+    };
+    const internals = service as unknown as {
+      setCached(cache: unknown, key: string, commonDir: string, value: { branch?: string; current?: string }, identity?: string): void;
+      repositorySignature(paths: string[]): Promise<string | undefined>;
+    };
+    const setCached = internals.setCached.bind(service);
+    const signature = internals.repositorySignature.bind(service);
+    let blockNextProof = false;
+    internals.setCached = (cache, key, commonDir, value, identity) => {
+      setCached(cache, key, commonDir, value, identity);
+      if (readingNewRoot && (kind === "info" ? value.branch === "main" : value.current === "main")) blockNextProof = true;
+    };
+    internals.repositorySignature = async paths => {
+      const result = await signature(paths);
+      if (blockNextProof) {
+        blockNextProof = false;
+        oldProofBlocked.resolve();
+        await releaseOldProof.promise;
+      }
+      return result;
+    };
+    const oldRead = service[kind](repository);
+    void oldRead.catch(() => undefined);
+    let newRead: ReturnType<typeof service.info> | ReturnType<typeof service.branches> | undefined;
+    try {
+      await held.promise;
+      await fs.rename(repository, `${repository}-old`);
+      await fs.rename(replacement, repository);
+      readingNewRoot = true;
+      newRead = service[kind](alias);
+      const value = await newRead;
+      assert.equal(value.branch, "after-swap", `${kind} must not reuse the old identity's late result`);
+      if ("branches" in value) assert.ok(value.branches.includes("after-swap"));
+      releaseOldProof.resolve();
+      assert.equal((await oldRead).branch, "after-swap");
+    } finally {
+      releaseOldRead.resolve();
+      oldProofBlocked.resolve();
+      releaseOldProof.resolve();
+      await Promise.allSettled([oldRead, newRead]);
+    }
+  }
+});

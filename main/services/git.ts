@@ -133,6 +133,7 @@ interface GitTrackingRefSnapshot {
 
 interface CacheEntry<T> {
   commonDir: string;
+  identity?: string;
   expiresAt: number;
   value: T;
 }
@@ -1379,10 +1380,10 @@ export class GitService {
     return repo;
   }
 
-  private getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  private getCached<T>(cache: Map<string, CacheEntry<T>>, key: string, identity?: string): T | undefined {
     const entry = cache.get(key);
     if (!entry) return undefined;
-    if (entry.expiresAt <= Date.now()) {
+    if (entry.expiresAt <= Date.now() || (identity !== undefined && entry.identity !== identity)) {
       cache.delete(key);
       return undefined;
     }
@@ -1396,9 +1397,11 @@ export class GitService {
     key: string,
     commonDir: string,
     value: T,
+    identity?: string,
   ): void {
     cache.set(key, {
       commonDir,
+      identity,
       expiresAt: Date.now() + this.cacheTtlMs,
       value,
     });
@@ -1520,7 +1523,7 @@ export class GitService {
       return this.stableRead(
         repo,
         async () => {
-          const cached = this.getCached(this.infoCache, repo.cwd);
+          const cached = repo.readIdentity ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature) : undefined;
           if (cached) return cached;
           const value = await this.status(repo, signal);
           if (signal.aborted)
@@ -1528,7 +1531,7 @@ export class GitService {
               "aborted",
               "Git operation was cancelled.",
             );
-          this.setCached(this.infoCache, repo.cwd, repo.commonDir, value);
+          if (repo.readIdentity) this.setCached(this.infoCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
           return value;
         },
         signal,
@@ -1548,7 +1551,7 @@ export class GitService {
       return this.stableRead(
         repo,
         async () => {
-          const cached = this.getCached(this.branchCache, repo.cwd);
+          const cached = repo.readIdentity ? this.getCached(this.branchCache, repo.cwd, repo.readIdentity.signature) : undefined;
           if (cached) return cached;
           const [info, localResult, remoteRefs] = await Promise.all([
             this.info(cwd, signal),
@@ -1579,7 +1582,7 @@ export class GitService {
               "aborted",
               "Git operation was cancelled.",
             );
-          this.setCached(this.branchCache, repo.cwd, repo.commonDir, value);
+          if (repo.readIdentity) this.setCached(this.branchCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
           return value;
         },
         signal,
