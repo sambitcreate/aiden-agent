@@ -22177,9 +22177,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.44,
-          "output": 1.32,
-          "cache_read": 0.014
+          "input": 0.22,
+          "output": 0.66,
+          "cache_read": 0.007
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-vision-exp"
       },
@@ -76774,8 +76774,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.03,
-          "output": 0.5,
+          "input": 0.02,
+          "output": 0.3,
           "cache_read": 0.01
         }
       },
@@ -76812,11 +76812,11 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.15,
-          "output": 4,
+          "input": 0.2,
+          "output": 3.4,
           "cache_read": 0.15
         }
       },
@@ -77998,7 +77998,7 @@
         },
         "cost": {
           "input": 0.012,
-          "output": 0.5,
+          "output": 0.4,
           "cache_read": 0.01
         }
       },
@@ -113845,8 +113845,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.03,
-          "output": 0.5,
+          "input": 0.02,
+          "output": 0.3,
           "cache_read": 0.01
         }
       },
@@ -113883,11 +113883,11 @@
         "open_weights": false,
         "limit": {
           "context": 1310720,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.15,
-          "output": 4,
+          "input": 0.2,
+          "output": 3.4,
           "cache_read": 0.15
         }
       },
@@ -115244,7 +115244,7 @@
         },
         "cost": {
           "input": 0.012,
-          "output": 0.5,
+          "output": 0.4,
           "cache_read": 0.01
         }
       },
@@ -119948,9 +119948,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0428,
+          "input": 0.0449,
           "output": 4.4,
-          "cache_read": 0.0342
+          "cache_read": 0.0359
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
