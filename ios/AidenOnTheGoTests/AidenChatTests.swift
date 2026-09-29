@@ -722,6 +722,7 @@ final class AidenChatTests: XCTestCase {
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
+        modelPreferenceStore: AidenModelPreferenceStore = .shared,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
@@ -770,7 +771,63 @@ final class AidenChatTests: XCTestCase {
                 """.utf8
             )
         )
-        return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore, onChatUpdated: onChatUpdated)
+        return AidenChatViewModel(
+            coordinator: coordinator,
+            chat: chat,
+            cache: cache,
+            draftStore: draftStore,
+            modelPreferenceStore: modelPreferenceStore,
+            onChatUpdated: onChatUpdated
+        )
+    }
+
+    @MainActor
+    func testWorkspaceChatRestoresLastExplicitModelChoiceAfterRelaunchAndFallsBackWhenGone() async throws {
+        let suiteName = "AidenModelPreferenceRelaunch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-preference-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fullCatalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+        let reducedCatalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+
+        func launch(catalog: String) async throws -> AidenChatViewModel {
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                modelPreferenceStore: AidenModelPreferenceStore(defaults: defaults)
+            )
+            // The host projects its own default pair on a newly created chat.
+            let hostChat = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"google","modelId":"gemini-flash","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/models") {
+                    return (200, "application/json", Data(catalog.utf8))
+                }
+                if path == "/api/aiden/v1/chats/chat-progress-lifecycle" {
+                    return (200, "application/json", Data(hostChat.utf8))
+                }
+                return nil
+            }
+            await model.load(observeProgress: false)
+            return model
+        }
+
+        let first = try await launch(catalog: fullCatalog)
+        XCTAssertEqual(first.selectedProviderId, "google")
+        XCTAssertEqual(first.selectedModelId, "gemini-flash")
+        first.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+
+        let relaunched = try await launch(catalog: fullCatalog)
+        XCTAssertEqual(relaunched.selectedProviderId, "openai")
+        XCTAssertEqual(relaunched.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(relaunched.selectedThinkingLevel, "max")
+
+        let afterRemoval = try await launch(catalog: reducedCatalog)
+        XCTAssertEqual(afterRemoval.selectedProviderId, "google")
+        XCTAssertEqual(afterRemoval.selectedModelId, "gemini-flash")
+        XCTAssertNil(afterRemoval.selectedThinkingLevel)
     }
 
     @MainActor
@@ -3749,6 +3806,175 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(resolved.modelId, "gemini-flash")
         XCTAssertEqual(turn.providerId, "google")
         XCTAssertEqual(turn.modelId, "gemini-flash")
+    }
+
+    func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "google"
+        chat.modelId = "gemini-flash"
+
+        let remembered = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(remembered, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"))
+
+        let staleLevel = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "ultra")
+        )
+        XCTAssertEqual(staleLevel.thinkingLevel, "medium")
+
+        var botChat = chat
+        botChat.botId = "bot-life-manager"
+        let bot = AidenChatModelAuthority.resolvedSelection(
+            chat: botChat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(bot.providerId, "google")
+        XCTAssertEqual(bot.modelId, "gemini-flash")
+    }
+
+    func testMissingOrHiddenRememberedModelFallsBackToChatPairThenHostDefaults() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+
+        let hidden = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil)
+        )
+        XCTAssertEqual(hidden.providerId, "openai")
+        XCTAssertEqual(hidden.modelId, "gpt-5.6")
+
+        let removed = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: "high")
+        )
+        XCTAssertEqual(removed, AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil))
+
+        var chatWithRemovedModel = chat
+        chatWithRemovedModel.providerId = "openai"
+        chatWithRemovedModel.modelId = "removed-model"
+        let providerFallback = AidenChatModelAuthority.resolvedSelection(
+            chat: chatWithRemovedModel,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: nil)
+        )
+        XCTAssertEqual(
+            providerFallback,
+            AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: nil)
+        )
+    }
+
+    func testModelPreferenceStoreKeepsOneChoicePerPairedHostAcrossRelaunch() throws {
+        let suiteName = "AidenModelPreferenceStoreTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        store.remember(AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"), for: "mac-a")
+        store.remember(AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil), for: "mac-b")
+        store.remember(AidenChatModelSelection(providerId: nil, modelId: "orphan", thinkingLevel: nil), for: "mac-c")
+
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(
+            relaunched.selection(for: "mac-a"),
+            AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(relaunched.selection(for: "mac-b")?.modelId, "gemini-flash")
+        XCTAssertNil(relaunched.selection(for: "mac-c"))
+
+        relaunched.purge(instanceID: "mac-a")
+        let afterPurge = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertNil(afterPurge.selection(for: "mac-a"))
+        XCTAssertEqual(afterPurge.selection(for: "mac-b")?.providerId, "google")
+
+        defaults.set(Data("{not json".utf8), forKey: "aiden.model-preference.v1")
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "mac-b"))
+    }
+
+    func testModelPreferenceStoreKeepsEveryPersistedSnapshotWithinItsReadLimit() throws {
+        let suiteName = "AidenModelPreferenceStoreBounds.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let providerId = String(repeating: "p", count: 256)
+        let modelId = String(repeating: "m", count: 256)
+        let hostIds = (0..<400).map { "mac-\($0)-" + String(repeating: "i", count: 240) }
+        for hostId in hostIds {
+            store.remember(
+                AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: nil),
+                for: hostId
+            )
+        }
+
+        let persisted = try XCTUnwrap(defaults.data(forKey: "aiden.model-preference.v1"))
+        XCTAssertLessThanOrEqual(persisted.count, 262_144)
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(relaunched.selection(for: hostIds[0])?.modelId, modelId)
+        XCTAssertNil(relaunched.selection(for: hostIds[hostIds.count - 1]))
+    }
+
+    @MainActor
+    func testStaleWorkspaceSelectionCannotRestorePreferenceAfterPairRemoval() async throws {
+        let suiteName = "AidenModelPreferenceUnpair.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        var coordinator: AidenRemoteCoordinator?
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            modelPreferenceStore: store,
+            onCoordinator: { coordinator = $0 }
+        )
+        model.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        XCTAssertEqual(store.selection(for: "instance-progress-lifecycle")?.modelId, "gpt-5.6")
+
+        let liveCoordinator = try XCTUnwrap(coordinator)
+        try liveCoordinator.installationStore.remove("instance-progress-lifecycle")
+        store.purge(instanceID: "instance-progress-lifecycle")
+
+        // A delayed composer callback can arrive while the async unpair cleanup
+        // is still running. It must not recreate the entry after the purge.
+        model.selectModel(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"))
     }
 
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {

@@ -1412,6 +1412,10 @@ because their native file-mutator test binary had not been built. Run
 - `WebSearchService`'s `adapterFactories` override replaces the whole registry and does not merge into it. A service test that mixes a real adapter (such as Tavily with a fake `fetch`) and stubs has to list the real factory explicitly. Otherwise the route is quietly not ready, and automatic routing falls back.
 - `oxfmt` on `renderer/components/ui.tsx`, `renderer/lib/ipc.ts` and `package.json` reformats code that has nothing to do with the change (main is not oxfmt-clean). Format only new files, and reapply small edits to existing ones by hand.
 
+## 2026-09-27 Mobile remembered model selection
+- The worktree-isolation guard refuses any command whose arguments contain a runtime value (`$HOME`, `$f`, `$(ls ...)`), including `ANDROID_HOME=$HOME/...` before `./gradlew` and `xcresulttool --path "$(ls -t ...)"`. Spell out absolute paths and list first, then pass the literal name.
+- Stable `xcrun simctl` is missing in agent shells ("unable to find utility simctl"); prefix both `simctl` and `xcodebuild test` with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. `xcodebuild test -quiet` prints little, so read pass/fail from `xcresulttool get test-results summary`.
+
 ## 2026-09-27 Mobile transcript polish (Hermex Tier 1)
 - The worktree command guard rejects compound shell commands (`;`, `&&`, variable assignments, `cd` in heredoc pipelines). Multi-file source edits went more smoothly as Python scripts in the scratchpad that assert on exact anchors before replacing.
 - Android Gradle in a fresh worktree fails with "SDK location not found" because there is no `local.properties`. Pass `ANDROID_HOME=$HOME/Library/Android/sdk` (absolute) along with `JAVA_HOME=/opt/homebrew/opt/openjdk@21`.

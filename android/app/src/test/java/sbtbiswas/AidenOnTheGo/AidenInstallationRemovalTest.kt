@@ -14,6 +14,7 @@ import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotFavorites
 import sbtbiswas.AidenOnTheGo.models.AidenBotList
+import sbtbiswas.AidenOnTheGo.models.AidenChatModelSelection
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
 import sbtbiswas.AidenOnTheGo.models.AidenPairingExchange
@@ -24,6 +25,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileIndex
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -88,6 +90,10 @@ class AidenInstallationRemovalTest {
             "workspace-one"
         )
         coordinator.usageCache.store(installation.instanceId, emptyUsageSummary())
+        coordinator.modelPreferenceStore.remember(
+            installation.instanceId,
+            AidenChatModelSelection("openai", "gpt-5.6", "high")
+        )
         coordinator.botCache.activate(installation.instanceId, installation.deviceId)
         coordinator.botCache.putBotList(
             AidenBotList(
@@ -108,6 +114,8 @@ class AidenInstallationRemovalTest {
         assertNull(coordinator.scheduledCache.load(installation.instanceId))
         assertNull(coordinator.workspaceCache.load(installation.instanceId, "workspace-one"))
         assertNull(coordinator.usageCache.load(installation.instanceId))
+        assertNull(coordinator.modelPreferenceStore.selection(installation.instanceId))
+        assertNull(AidenModelPreferenceStore(tempFolder.root).selection(installation.instanceId))
         coordinator.botCache.activate(installation.instanceId, installation.deviceId)
         assertNull(coordinator.botCache.botList.value)
     }
