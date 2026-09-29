@@ -388,7 +388,8 @@ enum AidenChatModelAuthority {
         catalog: AidenModelCatalog?,
         selectedProviderId: String?,
         selectedModelId: String?,
-        selectedThinkingLevel: String?
+        selectedThinkingLevel: String?,
+        remembered: AidenChatModelSelection? = nil
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -407,6 +408,9 @@ enum AidenChatModelAuthority {
                 thinkingLevel: selectedThinkingLevel
             )
         }
+        if let remembered = rememberedSelection(remembered, in: catalog) {
+            return remembered
+        }
         var providerId = selectedProviderId
         if providerId == nil || !catalog.providers.contains(where: { $0.id == providerId }) {
             providerId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
@@ -414,7 +418,9 @@ enum AidenChatModelAuthority {
         let provider = catalog.providers.first { $0.id == providerId }
         var modelId = selectedModelId
         if modelId == nil || provider?.models.contains(where: { $0.id == modelId }) != true {
-            modelId = catalog.defaults["modelId"] ?? provider?.visibleModels.first?.id
+            modelId = catalog.defaults["modelId"].flatMap { candidate in
+                provider?.models.contains(where: { $0.id == candidate }) == true ? candidate : nil
+            } ?? provider?.visibleModels.first?.id
         }
         let model = provider?.models.first { $0.id == modelId }
         return AidenChatModelSelection(
@@ -422,6 +428,25 @@ enum AidenChatModelAuthority {
             modelId: modelId,
             thinkingLevel: selectedThinkingLevel ?? model?.effectiveThinkingLevel
         )
+    }
+
+    /// The per-host remembered choice applies only while the host's current
+    /// inventory still offers it as a visible provider/model pair. A missing
+    /// or hidden pair returns nil so the caller falls back to the chat's pair
+    /// and then the host defaults; a stale thinking level falls back to the
+    /// model's own default rather than sending an unsupported level.
+    static func rememberedSelection(
+        _ remembered: AidenChatModelSelection?,
+        in catalog: AidenModelCatalog
+    ) -> AidenChatModelSelection? {
+        guard let providerId = remembered?.providerId,
+              let modelId = remembered?.modelId,
+              let provider = catalog.visibleProviders.first(where: { $0.id == providerId }),
+              let model = provider.visibleModels.first(where: { $0.id == modelId }) else { return nil }
+        let thinkingLevel = remembered?.thinkingLevel.flatMap { level in
+            model.thinkingLevels?.contains(level) == true ? level : nil
+        } ?? model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: thinkingLevel)
     }
 
     static func turnSelection(
@@ -1054,6 +1079,16 @@ final class AidenChatViewModel {
               last.isReadAloudEligible else { return nil }
         return last.id
     }
+    /// Quotes `selection` into the composer draft for a follow-up question.
+    /// Returns false when the chat is read-only or the selection is blank.
+    @discardableResult
+    func askAbout(_ selection: String) -> Bool {
+        guard !isReadOnlyPresentation,
+              let next = AidenSelectionQuote.draft(quoting: selection, into: draft) else { return false }
+        draft = next
+        return true
+    }
+
     func toggleReadAloud(_ messageID: String) {
         if readAloud.activeMessageID != nil { readAloud.stop(); return }
         guard let context = try? coordinator.requestContext(for: instanceId),
@@ -1068,6 +1103,11 @@ final class AidenChatViewModel {
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
+    private let modelPreferenceStore: AidenModelPreferenceStore
+    @ObservationIgnored private let modelPreferenceContext: AidenRemoteRequestContext?
+    /// Set once the user picks a model in this chat; from then on the
+    /// in-session choice wins over the remembered per-host preference.
+    @ObservationIgnored private var hasExplicitModelSelection = false
     private let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -1207,20 +1247,24 @@ final class AidenChatViewModel {
         hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
+        modelPreferenceStore: AidenModelPreferenceStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
+        let preferenceInstanceId = coordinator.activeInstanceId ?? ""
         runtime = .live(
             coordinator: coordinator,
-            instanceId: coordinator.activeInstanceId ?? "",
+            instanceId: preferenceInstanceId,
             cache: cache,
             liveActivities: liveActivities ?? .shared
         )
+        modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.modelPreferenceStore = modelPreferenceStore
         self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
@@ -1245,9 +1289,11 @@ final class AidenChatViewModel {
 #if DEBUG
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
+        modelPreferenceContext = nil
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        modelPreferenceStore = .shared
         hapticScope = UUID()
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
@@ -1268,6 +1314,9 @@ final class AidenChatViewModel {
     }
 
     private func handleRemoval() {
+        // The shell can remain mounted while removal/revocation awaits cleanup.
+        // Redact published content synchronously with lifetime invalidation.
+        chat.messages = []
         draftPersistenceTask?.cancel()
         draftPersistenceTask = nil
         draftSession = nil
@@ -1464,12 +1513,12 @@ final class AidenChatViewModel {
         }
         let generation = transcriptGeneration
         let writeToken = cache.reserveChatWrite()
+        // Catalog latency/failure must not hold a successfully fetched transcript.
+        // Keep both reads structured under this load and independently fenced.
+        async let catalogRefresh: Void = refreshModelCatalog(context: context)
         do {
-            async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
-            async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
-            let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
+            let remoteChat = try await coordinator.remoteClient(for: context).chat(id: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
-            catalog = remoteCatalog
             if generation == transcriptGeneration, !isStarting {
                 await acceptRemoteChat(remoteChat, context: context, writeToken: writeToken)
             }
@@ -1479,6 +1528,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
+        await catalogRefresh
         await restoration
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         // Refresh current authority on explicit reload without restarting an
@@ -1495,6 +1545,21 @@ final class AidenChatViewModel {
         )
         guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
         startProgressObservation()
+    }
+
+    private func refreshModelCatalog(context: AidenRemoteRequestContext) async {
+        do {
+            let remoteCatalog = try await coordinator.remoteClient(for: context).modelCatalog()
+            guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { return }
+            catalog = remoteCatalog
+            // Resolve against the live selection, never the values captured at load.
+            resolveModelSelection()
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            // An optional catalog failure must not replace a readable transcript
+            // with a load error or discard the last usable model choices.
+        }
     }
 
     var canReadTaskProgress: Bool {
@@ -1874,6 +1939,7 @@ final class AidenChatViewModel {
         selectedProviderId = providerId
         selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     func selectModel(_ modelId: String) {
@@ -1881,6 +1947,24 @@ final class AidenChatViewModel {
         guard selectedModelId != modelId else { return }
         selectedModelId = modelId
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
+    }
+
+    /// An explicit composer choice becomes this paired Mac's remembered
+    /// default for later Workspace chats and launches.
+    private func rememberExplicitModelSelection() {
+        hasExplicitModelSelection = true
+        guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
+              let context = modelPreferenceContext,
+              coordinator.isCurrent(context) else { return }
+        modelPreferenceStore.remember(
+            AidenChatModelSelection(
+                providerId: selectedProviderId,
+                modelId: selectedModelId,
+                thinkingLevel: selectedThinkingLevel
+            ),
+            for: context.instanceId
+        )
     }
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
@@ -1899,12 +1983,14 @@ final class AidenChatViewModel {
     }
 
     func selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
+        guard !chat.isBotChat else { return }
         let next = [providerId, modelId, thinkingLevel ?? ""]
         let current = [selectedProviderId ?? "", selectedModelId ?? "", selectedThinkingLevel ?? ""]
         guard next != current else { return }
         selectedProviderId = providerId
         selectedModelId = modelId
         selectedThinkingLevel = thinkingLevel
+        rememberExplicitModelSelection()
     }
 
     func send() async {
@@ -2884,7 +2970,10 @@ final class AidenChatViewModel {
             catalog: catalog,
             selectedProviderId: selectedProviderId,
             selectedModelId: selectedModelId,
-            selectedThinkingLevel: selectedThinkingLevel
+            selectedThinkingLevel: selectedThinkingLevel,
+            remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
+                ? nil
+                : modelPreferenceStore.selection(for: instanceId)
         )
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId
@@ -4096,7 +4185,10 @@ struct AidenChatDetailView: View {
                 chat: model.chat,
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
-                readAloudActiveID: model.readAloud.activeMessageID
+                readAloudActiveID: model.readAloud.activeMessageID,
+                onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
+                    if model.askAbout(selection) { composerIsFocused = true }
+                }
             )
             .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
@@ -4479,8 +4571,12 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// Quotes a selection into the composer; nil while the chat is read-only.
+    /// Closure identity is excluded from equality like the stable `model`.
+    var onAskAbout: ((String) -> Void)? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
+        (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
         // `model` is a shared reference (same pointer on both sides of every
         // comparison), so equality must cover the value-typed snapshots the
         // body renders — `chat`, the Read Aloud state — and the presentation style.
@@ -4499,6 +4595,10 @@ private struct AidenSettledMessageRows: View, Equatable {
         let previous = index > 0 ? chat.messages[index - 1] : nil
         let isBotMessage = presentationStyle == .botMessages
         let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
+        let next = index + 1 < chat.messages.count ? chat.messages[index + 1] : nil
+        // Bot bubbles join into clusters; only the cluster's last bubble
+        // carries the footer so the Messages rhythm stays compact.
+        let showsFooter = !isBotMessage || next.map { !aidenMessagesJoin(message, $0) } ?? true
 
         return AidenMessageView(
             message: message,
@@ -4507,7 +4607,9 @@ private struct AidenSettledMessageRows: View, Equatable {
                 await model.attachmentImageData(for: attachment)
             },
             readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
-            readAloudActive: readAloudActiveID == message.id
+            readAloudActive: readAloudActiveID == message.id,
+            showsFooter: showsFooter,
+            onAskAbout: onAskAbout
         )
         .equatable()
         .padding(.top, topPadding)
@@ -4521,14 +4623,23 @@ private struct AidenMessageView: View, Equatable {
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
     var readAloudAction: (() -> Void)? = nil
     var readAloudActive = false
+    var showsFooter = true
+    var onAskAbout: ((String) -> Void)? = nil
+    @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         // The loader closure captures the stable view-model; identity churn on
         // it must not force settled rows to re-render on every streamed token.
-        // The Read Aloud action is compared by presence for the same reason.
+        // The Read Aloud and Ask actions are compared by presence for the same reason.
         lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle &&
             (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
-            lhs.readAloudActive == rhs.readAloudActive
+            lhs.readAloudActive == rhs.readAloudActive &&
+            lhs.showsFooter == rhs.showsFooter &&
+            (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil)
+    }
+
+    private var selectableText: String {
+        AidenSelectionQuote.selectableText(for: message, visibleText: visibleText)
     }
 
     private var botReply: AidenBotReplyProjection? {
@@ -4545,6 +4656,23 @@ private struct AidenMessageView: View, Equatable {
     }
 
     var body: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
+            messageBody
+            if showsFooter {
+                AidenMessageFooter(
+                    message: message,
+                    copyText: AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle),
+                    readAloudAction: readAloudAction,
+                    readAloudActive: readAloudActive
+                )
+            }
+        }
+        .sheet(item: $selectTextRequest) { request in
+            AidenSelectTextSheet(text: request.text, onAskAbout: onAskAbout)
+        }
+    }
+
+    private var messageBody: some View {
         HStack(alignment: .bottom, spacing: 0) {
             if message.role == .user {
                 Spacer(minLength: presentationStyle == .botMessages ? 72 : 48)
@@ -4562,21 +4690,6 @@ private struct AidenMessageView: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity)
-        .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 4) {
-            if let readAloudAction {
-                HStack(spacing: 16) {
-                    Button { UIPasteboard.general.string = AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) } label: {
-                        Image(systemName: "doc.on.doc")
-                    }.accessibilityLabel("Copy response")
-                    Button(action: readAloudAction) {
-                        Image(systemName: readAloudActive ? "stop.fill" : "speaker.wave.2")
-                    }.accessibilityLabel(readAloudActive ? "Stop reading aloud" : "Read response aloud")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .frame(minHeight: 44)
-            }
-        }
         .contextMenu {
             if let copyText = AidenMessageActionContent.copyText(
                 for: message,
@@ -4587,6 +4700,18 @@ private struct AidenMessageView: View, Equatable {
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
+                Button {
+                    selectTextRequest = AidenSelectTextRequest(text: selectableText)
+                } label: {
+                    Label("Select Text", systemImage: "selection.pin.in.out")
+                }
+                if let onAskAbout {
+                    Button {
+                        onAskAbout(selectableText)
+                    } label: {
+                        Label("Ask About This", systemImage: "text.bubble")
+                    }
+                }
             }
         }
         .accessibilityActions {
@@ -4594,8 +4719,16 @@ private struct AidenMessageView: View, Equatable {
                 for: message,
                 presentationStyle: presentationStyle
             ) {
-                Button("Copy response") {
+                Button(message.role == .user ? "Copy message" : "Copy response") {
                     UIPasteboard.general.string = copyText
+                }
+                Button("Select text") {
+                    selectTextRequest = AidenSelectTextRequest(text: selectableText)
+                }
+                if let onAskAbout {
+                    Button("Ask about this") {
+                        onAskAbout(selectableText)
+                    }
                 }
             }
         }
@@ -5641,7 +5774,8 @@ enum AidenMessageActionContent {
         for message: AidenChatMessage,
         presentationStyle: AidenChatPresentationStyle = .workspace
     ) -> String? {
-        guard message.role == .assistant, !message.text.isEmpty else { return nil }
+        guard !message.text.isEmpty else { return nil }
+        guard message.role == .assistant else { return message.text }
         let text = presentationStyle == .botMessages
             ? AidenBotReplyProjection.resolve(
                 text: message.text,
@@ -5844,6 +5978,13 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if model.isStreaming,
+               let start = AidenTurnElapsed.liveStart(
+                   timeline: model.activityTimeline,
+                   messages: model.chat.messages
+               ) {
+                AidenLiveElapsedLabel(start: start)
+            }
             if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
