@@ -63,6 +63,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
   "AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift",
+  "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
