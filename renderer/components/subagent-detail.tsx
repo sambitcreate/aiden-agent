@@ -6,10 +6,11 @@ import {
   subagentDetailIsAwayFromLatest,
 } from "../lib/subagent-panel-state";
 import type { SubagentRunPresentation } from "../lib/subagent-view-state";
-import type {
-  SubagentEffectActivityV1,
-  SubagentMilestoneKind,
-  SubagentRunSnapshot,
+import {
+  subagentPendingQuestion,
+  type SubagentEffectActivityV1,
+  type SubagentMilestoneKind,
+  type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
@@ -113,6 +114,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
     const projectionNotices = subagentProjectionNotices(run);
     const active =
@@ -377,7 +379,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 variant="small-strong"
                 color="tertiary"
               >
-                Latest activity
+                {pendingQuestion ? "Waiting on" : "Latest activity"}
               </Text>
               <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
                 {run.activity ?? state}

@@ -3,6 +3,10 @@ import test from "node:test";
 import {
   adaptSubagentRunSnapshotV1ToV2,
   adaptSubagentRunSnapshotV2ToV1,
+  MAX_SUBAGENT_ACTIVITY_CHARS,
+  SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
+  subagentPendingQuestion,
+  subagentPendingQuestionActivity,
   parseSubagentHistoryDetailV1,
   parseSubagentRunSnapshot,
   parseSubagentRunSnapshotV1,
@@ -138,22 +142,80 @@ test("V2 lineage and retry identities are exact and non-self-referential", () =>
   assert.equal(parseSubagentRunSnapshotV2({ ...v2(), retryOfRunId: "run-1" }), undefined);
 });
 
-test("needs-attention activity is exact evidence and never silently normalized", () => {
+test("needs-attention activity carries the pending question and stays bounded", () => {
   const attention = v2("needs_attention");
   assert.ok(parseSubagentRunSnapshotV2(attention));
   const { activity: _activity, ...missing } = attention;
   assert.equal(parseSubagentRunSnapshotV2(missing), undefined);
-  assert.equal(
-    parseSubagentRunSnapshotV2({
-      ...attention,
-      activity: "Waiting for a secret",
-    }),
-    undefined,
-  );
+
+  const question = "Which branch should I rebase onto: main or release/2.4?";
+  const asking = parseSubagentRunSnapshotV2({ ...attention, activity: question });
+  assert.equal(asking?.activity, question);
+  assert.equal(subagentPendingQuestion(asking), question);
+  const asV1 = asking && adaptSubagentRunSnapshotV2ToV1(asking);
+  assert.equal(asV1?.state, "running");
+  assert.equal(asV1?.activity, question);
+
   assert.equal(
     parseSubagentRunSnapshotV2({ ...attention, activity: "x".repeat(10_000) }),
     undefined,
   );
+  assert.equal(
+    parseSubagentRunSnapshotV2({
+      ...attention,
+      activity: "Use key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD?",
+    }),
+    undefined,
+  );
+});
+
+test("pending question falls back to generic copy only when no text exists", () => {
+  assert.equal(subagentPendingQuestion(v2("needs_attention")), undefined);
+  assert.equal(
+    subagentPendingQuestion({ state: "running", activity: "Approve the push?" }),
+    undefined,
+  );
+  assert.equal(subagentPendingQuestion({ state: "needs_attention" }), undefined);
+
+  for (const empty of [undefined, 42, "", "   \n\t  "]) {
+    assert.equal(
+      subagentPendingQuestionActivity(empty),
+      SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
+    );
+  }
+  assert.equal(
+    subagentPendingQuestionActivity("Approve   writing\nto package.json?\r\n"),
+    "Approve writing to package.json?",
+  );
+});
+
+test("pending question activity is truncated at a word boundary and parses", () => {
+  const words = Array.from({ length: 60 }, (_, index) => `word${index}`).join(" ");
+  const activity = subagentPendingQuestionActivity(`Should I ${words}?`);
+  assert.ok(activity.length <= MAX_SUBAGENT_ACTIVITY_CHARS);
+  assert.ok(activity.startsWith("Should I word0 word1"));
+  // The cut lands between whole words and is marked as elided.
+  assert.match(activity, /word\d+\.\.\.$/u);
+  const keptWords = activity.slice(0, -3).split(" ");
+  assert.ok(words.split(" ").includes(keptWords[keptWords.length - 1]!));
+  assert.ok(parseSubagentRunSnapshotV2({ ...v2("needs_attention"), activity }));
+
+  // An unbroken run of emoji never splits a surrogate pair.
+  const emoji = subagentPendingQuestionActivity("😀".repeat(200));
+  assert.ok(emoji.length <= MAX_SUBAGENT_ACTIVITY_CHARS);
+  assert.ok(emoji.endsWith("..."));
+  const kept = emoji.slice(0, -3);
+  assert.ok(kept.length > 0);
+  assert.equal(kept, "😀".repeat(kept.length / 2));
+});
+
+test("pending question activity redacts secrets before it reaches a snapshot", () => {
+  const activity = subagentPendingQuestionActivity(
+    "Can I use sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD for the deploy?",
+  );
+  assert.doesNotMatch(activity, /abcdefghijklmnopqrstuvwxyz0123456789/u);
+  assert.match(activity, /^Can I use .+ for the deploy\?$/u);
+  assert.ok(parseSubagentRunSnapshotV2({ ...v2("needs_attention"), activity }));
 });
 
 test("history detail accepts only bounded sanitized effect activity envelopes", () => {
@@ -186,4 +248,14 @@ test("history detail accepts only bounded sanitized effect activity envelopes", 
     }),
     undefined,
   );
+});
+
+test("pending questions redact control-split credentials before flattening", () => {
+  for (const control of ["\u000b", "\u0000", "\u001b"]) {
+    const activity = subagentPendingQuestionActivity(
+      `Use s${control}k-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCD?`,
+    );
+    assert.doesNotMatch(activity, /abcdefghijklmnopqrstuvwxyz0123456789/u);
+    assert.ok(parseSubagentRunSnapshotV2({ ...v2("needs_attention"), activity }));
+  }
 });

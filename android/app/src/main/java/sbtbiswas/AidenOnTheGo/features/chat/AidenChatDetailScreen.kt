@@ -63,6 +63,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -132,6 +135,8 @@ fun AidenChatDetailScreen(
     val pendingQuestion by viewModel.pendingQuestion.collectAsState()
     val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
+    val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsState()
+    val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val selectedSkill by viewModel.selectedSkill.collectAsState()
     val modelCatalog by viewModel.catalog.collectAsState()
@@ -245,28 +250,22 @@ fun AidenChatDetailScreen(
         val remainingCapacity = (10 - pendingAttachments.size).coerceAtLeast(0)
         val uris = selectedUris.take(remainingCapacity)
         if (uris.isNotEmpty()) {
-            scope.launch {
-                for (uri in uris) {
-                    try {
-                        val displayName = getFileName(context, uri) ?: "Attachment"
-                        val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true ||
-                            isImageExtension(displayName)
-                        val limit = if (isImage) {
-                            AidenAttachmentPreparation.MAXIMUM_SOURCE_IMAGE_BYTES
-                        } else {
-                            AidenAttachmentPreparation.MAXIMUM_TEXT_BYTES
-                        }
-                        val bytes = readContentUriBounded(context, uri, limit) ?: continue
-                        val upload = if (isImage) {
-                            AidenAttachmentPreparation.imageUpload(bytes, displayName)
-                        } else {
-                            val mime = context.contentResolver.getType(uri) ?: "text/plain"
-                            AidenAttachmentPreparation.textUpload(bytes, displayName, mime)
-                        }
-                        viewModel.upload(listOf(upload))
-                    } catch (_: Exception) {
-                        // A provider can return stale or misleading MIME metadata. Keep
-                        // successfully prepared selections and skip only the invalid URI.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                viewModel.prepareAndUpload(uris) { uri ->
+                    val displayName = getFileName(context, uri) ?: "Attachment"
+                    val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+                        isImageExtension(displayName)
+                    val limit = if (isImage) {
+                        AidenAttachmentPreparation.MAXIMUM_SOURCE_IMAGE_BYTES
+                    } else {
+                        AidenAttachmentPreparation.MAXIMUM_TEXT_BYTES
+                    }
+                    val bytes = readContentUriBounded(context, uri, limit) ?: return@prepareAndUpload null
+                    if (isImage) {
+                        AidenAttachmentPreparation.imageUpload(bytes, displayName, coroutineContext::ensureActive)
+                    } else {
+                        val mime = context.contentResolver.getType(uri) ?: "text/plain"
+                        AidenAttachmentPreparation.textUpload(bytes, displayName, mime)
                     }
                 }
             }
@@ -610,7 +609,8 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend && !hasActiveStream,
+                    canSend = viewModel.canSend && !hasActiveStream &&
+                        preparingAttachmentBatches == 0 && !isUploadingAttachment,
                     isStreaming = isStreaming,
                     showsRunInputOptions = viewModel.showsRunInputOptions,
                     canSubmitRunInput = viewModel.canSubmitRunInput,
@@ -1673,6 +1673,7 @@ private suspend fun readContentUriBounded(
         val buffer = ByteArray(16 * 1024)
         var total = 0
         while (true) {
+            coroutineContext.ensureActive()
             val read = input.read(buffer)
             if (read < 0) break
             total += read

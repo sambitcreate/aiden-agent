@@ -517,6 +517,9 @@ object AidenAgentActivityPresentation {
             return if (step.isActive) "Thinking" else "Thought ${duration(step.durationMs)}"
         }
         val label = step.label ?: "Tool"
+        // Matches desktop: a pending call is still being prepared (its
+        // arguments may be streaming), so name the tool instead of claiming work.
+        if (step.status == AidenAgentStepStatus.PENDING) return "Preparing $label"
         val pair = verbs[step.toolName ?: ""]
         val verb = when (step.status) {
             AidenAgentStepStatus.PENDING, AidenAgentStepStatus.RUNNING -> pair?.first ?: label

@@ -16,6 +16,7 @@ import {
   type SubagentRunView,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
+import { subagentPendingQuestion } from "../shared/subagent-runs";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Text } from "./ui";
 
@@ -69,6 +70,10 @@ function RosterNode({
   const selected = run.runId === selectedRunId;
   const presentation = presentationByRunId?.get(run.runId);
   const displayState = presentation?.label ?? subagentStateLabel(run.state);
+  const pendingQuestion = subagentPendingQuestion({
+    state: run.state,
+    activity: run.snapshot?.activity,
+  });
   const hiddenCount = expanded ? 0 : node.descendantCount;
   const activeDescendantLabel = node.activeDescendantCount
     ? `${node.activeDescendantCount} active descendant${node.activeDescendantCount === 1 ? "" : "s"}`
@@ -109,7 +114,7 @@ function RosterNode({
           tabIndex={focusedRunId === run.runId ? 0 : -1}
           aria-selected={selected}
           data-subagent-presentation={presentation?.state}
-          aria-label={`${run.label}, ${run.role}, ${displayState}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
+          aria-label={`${run.label}, ${run.role}, ${displayState}${pendingQuestion ? `: ${pendingQuestion}` : ""}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
           onFocus={() => onFocusRun(run.runId)}
           onKeyDown={(event) => onKeyDown(event, run.runId)}
           onClick={(event) => onSelect(run.runId, event.currentTarget)}
@@ -123,10 +128,24 @@ function RosterNode({
             <Text as="span" variant="small-strong" truncate className="block">
               {run.label}
             </Text>
-            <Text as="span" variant="small" color="secondary" truncate className="mt-0.5 block">
-              {run.snapshot?.taskPreview ??
-                (run.role === "unknown" ? "Saved subagent result" : run.role)}
-            </Text>
+            {pendingQuestion ? (
+              <Text
+                as="span"
+                variant="small"
+                color="secondary"
+                truncate
+                className="mt-0.5 block"
+                title={pendingQuestion}
+                data-subagent-pending-question="true"
+              >
+                {pendingQuestion}
+              </Text>
+            ) : (
+              <Text as="span" variant="small" color="secondary" truncate className="mt-0.5 block">
+                {run.snapshot?.taskPreview ??
+                  (run.role === "unknown" ? "Saved subagent result" : run.role)}
+              </Text>
+            )}
           </span>
           {hiddenCount > 0 ? (
             <Text as="span" variant="small" color="tertiary" className="shrink-0">

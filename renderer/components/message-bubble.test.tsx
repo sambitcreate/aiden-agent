@@ -171,6 +171,66 @@ test("saved reasoning disclosures stay in order around tools and prose", () => {
   assert.ok(thoughtPositions[1]! < markup.indexOf("After."));
 });
 
+test("a settled response carries a turn footer; the live response does not", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[
+        { id: "user-1", role: "user", content: "Summarize", createdAt: 1 },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Here is the summary.",
+          createdAt: 2,
+          model: "claude-sonnet-4-5",
+          turnStats: {
+            version: 1,
+            startedAt: 10_000,
+            finishedAt: 22_400,
+            usage: { input: 1_200, output: 830, cacheRead: 11_200, cacheWrite: 0, total: 13_230, requests: 2 },
+          },
+        },
+      ]}
+      streamingText="Still writing"
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  const footers = [...markup.matchAll(/data-turn-footer="true"/gu)];
+  assert.equal(footers.length, 1);
+  // The footer belongs to the settled answer, ahead of the live one.
+  assert.ok(footers[0]!.index! > markup.indexOf("Here is the summary."));
+  assert.ok(footers[0]!.index! < markup.indexOf("streaming-reveal"));
+  const footer = markup.slice(footers[0]!.index!, markup.indexOf("</p>", footers[0]!.index!));
+  assert.match(footer, /12s/u);
+  assert.match(footer, /claude-sonnet-4-5/u);
+  assert.match(footer, /12\.4k in · 830 out/u);
+  assert.match(footer, /Response details: Took 12s, Model claude-sonnet-4-5, 12,400 input tokens, 11,200 from cache, 830 output tokens across 2 requests\./u);
+});
+
+test("a response with no known facts renders no empty footer", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[{ id: "assistant-1", role: "assistant", content: "Imported answer.", createdAt: 1 }]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.doesNotMatch(markup, /data-turn-footer/u);
+});
+
 test("persisted assistant images render inline with an accessible preview action", () => {
   const markup = renderToStaticMarkup(
     <MessageList
@@ -513,7 +573,7 @@ test("an in-flight render_artifact call stays at its tool row", () => {
       error={null}
     />,
   );
-  assert.match(markup, /aria-label="Render artifact"/u);
+  assert.match(markup, /aria-label="Preparing Render artifact"/u);
   assert.doesNotMatch(markup, /reasoning-surface/u);
   assert.match(markup, /agent-thinking-shimmer/u);
 

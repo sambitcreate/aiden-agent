@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
+import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
 import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
@@ -265,6 +266,7 @@ export async function listWorkspaceFiles(
   root: string,
   signal?: AbortSignal,
 ): Promise<WorkspaceFileIndex> {
+  throwIfAborted(signal);
   const realRoot = await canonicalRoot(root);
   const entries: WorkspaceFileEntry[] = [];
   let truncated = false;
@@ -289,66 +291,78 @@ export async function listWorkspaceFiles(
       return leftDirectory - rightDirectory || left.name.localeCompare(right.name, undefined, { numeric: true });
     });
 
-    for (const child of children) {
+    for (let childIndex = 0; childIndex < children.length;) {
       throwIfAborted(signal);
       if (entries.length >= MAX_INDEX_ENTRIES) {
         truncated = true;
         break;
       }
-      if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
-        skippedDirectories += 1;
-        continue;
-      }
-
-      const relativePath = path.join(relativeDirectory, child.name);
-      const portablePath = toPortablePath(relativePath);
-      const parentPath = toPortablePath(relativeDirectory);
-      const lexicalPath = path.join(realRoot, relativePath);
-
-      if (child.isSymbolicLink()) {
-        try {
-          const target = assertInRoot(realRoot, await fs.realpath(lexicalPath), portablePath);
-          const targetStats = await fs.stat(target);
-          entries.push({
-            path: portablePath,
-            name: child.name,
-            parentPath,
-            depth,
-            kind: targetStats.isFile() ? "file" : "symlink",
-            symbolic: true,
-            size: targetStats.isFile() ? targetStats.size : undefined,
-            modifiedAt: targetStats.mtimeMs,
-          });
-        } catch {
-          entries.push({
-            path: portablePath,
-            name: child.name,
-            parentPath,
-            depth,
-            kind: "symlink",
-            symbolic: true,
-          });
+      // Never inspect beyond the remaining output budget. Commit each small
+      // batch in enumeration order so breadth-first selection stays unchanged.
+      const batch = children.slice(childIndex, childIndex + Math.min(
+        WORKSPACE_METADATA_CONCURRENCY, MAX_INDEX_ENTRIES - entries.length,
+      ));
+      childIndex += batch.length;
+      const inspected = await mapWorkspaceMetadata(batch, async (child): Promise<WorkspaceFileEntry | undefined> => {
+        if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
+          skippedDirectories += 1;
+          return undefined;
         }
-        continue;
-      }
 
-      if (child.isDirectory()) {
-        entries.push({ path: portablePath, name: child.name, parentPath, depth, kind: "directory" });
-        directories.push({ relativeDirectory: relativePath, depth: depth + 1 });
-        continue;
-      }
+        const relativePath = path.join(relativeDirectory, child.name);
+        const portablePath = toPortablePath(relativePath);
+        const parentPath = toPortablePath(relativeDirectory);
+        const lexicalPath = path.join(realRoot, relativePath);
 
-      if (child.isFile()) {
-        const stats = await fs.stat(lexicalPath);
-        entries.push({
-          path: portablePath,
-          name: child.name,
-          parentPath,
-          depth,
-          kind: "file",
-          size: stats.size,
-          modifiedAt: stats.mtimeMs,
-        });
+        if (child.isSymbolicLink()) {
+          try {
+            const target = assertInRoot(realRoot, await fs.realpath(lexicalPath), portablePath);
+            const targetStats = await fs.stat(target);
+            return {
+              path: portablePath,
+              name: child.name,
+              parentPath,
+              depth,
+              kind: targetStats.isFile() ? "file" : "symlink",
+              symbolic: true,
+              size: targetStats.isFile() ? targetStats.size : undefined,
+              modifiedAt: targetStats.mtimeMs,
+            };
+          } catch {
+            return {
+              path: portablePath,
+              name: child.name,
+              parentPath,
+              depth,
+              kind: "symlink",
+              symbolic: true,
+            };
+          }
+        }
+
+        if (child.isDirectory()) {
+          return { path: portablePath, name: child.name, parentPath, depth, kind: "directory" };
+        }
+
+        if (child.isFile()) {
+          const stats = await fs.stat(lexicalPath);
+          return {
+            path: portablePath,
+            name: child.name,
+            parentPath,
+            depth,
+            kind: "file",
+            size: stats.size,
+            modifiedAt: stats.mtimeMs,
+          };
+        }
+      }, signal);
+      for (const entry of inspected) {
+        if (!entry) continue;
+        entries.push(entry);
+        if (entry.kind === "directory") {
+          directories.push({ relativeDirectory: entry.path, depth: depth + 1 });
+        }
       }
     }
     if (truncated) break;

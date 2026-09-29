@@ -62,7 +62,7 @@ import {
   buildBotFileTools,
   type BotFileToolLocation,
 } from "./bot-file-tool-router.js";
-import { gitInfo } from "./git.js";
+import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
 import { botStore } from "./bot-store.js";
@@ -129,8 +129,14 @@ import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admissio
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
+  reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
+import {
+  ASSISTANT_TURN_STATS_VERSION,
+  addTurnUsage,
+  type AssistantTurnUsageV1,
+} from "../../renderer/shared/assistant-turn-stats.js";
 import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
@@ -773,10 +779,12 @@ async function prepareGeneration(
       },
     });
   }
-  const git =
-    folderPath && (!botContext || botContext.admission.authority.files.botHome)
-      ? await gitInfo(folderPath)
-      : { isRepo: false };
+  const git = await generationGitContext(
+    permission !== "none" && (!botContext || botContext.admission.authority.files.botHome)
+      ? folderPath
+      : undefined,
+    signal,
+  );
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
@@ -1964,6 +1972,12 @@ export const llmClient = {
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
                 ? finalTimeline
                 : undefined,
+            turnStats: {
+              version: ASSISTANT_TURN_STATS_VERSION,
+              startedAt: finalTimeline.startedAt,
+              finishedAt: Math.max(finalTimeline.startedAt, finalTimeline.finishedAt ?? Date.now()),
+              ...(turnUsage ? { usage: turnUsage } : {}),
+            },
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
@@ -2018,6 +2032,7 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
+    let turnUsage: AssistantTurnUsageV1 | undefined;
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
@@ -3075,6 +3090,7 @@ export const llmClient = {
             if (event.message.role === "assistant") {
               requestUsage.ended();
               lastAssistantMessage = event.message;
+              turnUsage = addTurnUsage(turnUsage, reportedTokens(event.message.usage));
               try {
                 await usageStore.record(
                   assistantUsageRecord({

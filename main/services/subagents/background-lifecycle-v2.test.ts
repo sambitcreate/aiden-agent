@@ -9,6 +9,7 @@ import {
   BackgroundSubagentLifecycleV2,
   MAX_BACKGROUND_STEERS_V2,
   parseBackgroundSubagentManagementRequestV2,
+  parseBackgroundSubagentRunV2,
   type BackgroundSubagentRunV2,
   type BackgroundSubagentStoreV2,
 } from "./background-lifecycle-v2.js";
@@ -239,8 +240,37 @@ test("state machine permits needs-attention recovery and terminal unknown but re
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "needs_attention",
-    "Needs attention.",
+    "Should I overwrite\nthe existing migration?",
   );
+  assert.equal(run.snapshot.activity, "Should I overwrite the existing migration?");
+  // The persisted record survives the strict durable parser with the question intact.
+  assert.equal(
+    parseBackgroundSubagentRunV2(await store.get(run.snapshot.runId))?.snapshot.activity,
+    "Should I overwrite the existing migration?",
+  );
+  run = await lifecycle.transition(
+    request("status", run.snapshot.revision),
+    "running",
+    "Resumed",
+  );
+  run = await lifecycle.transition(
+    request("status", run.snapshot.revision),
+    "needs_attention",
+    `Approve ${"a very long pending approval request ".repeat(20)}`,
+  );
+  assert.ok(run.snapshot.activity!.length <= 160);
+  assert.match(run.snapshot.activity!, /^Approve a very long pending approval request .+\.\.\.$/u);
+  run = await lifecycle.transition(
+    request("status", run.snapshot.revision),
+    "running",
+    "Resumed",
+  );
+  run = await lifecycle.transition(
+    request("status", run.snapshot.revision),
+    "needs_attention",
+    "   ",
+  );
+  assert.equal(run.snapshot.activity, "Needs attention.");
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "running",
