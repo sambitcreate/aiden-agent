@@ -176,6 +176,7 @@ fun AidenChatDetailScreen(
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
+    var selectTextFor by remember { mutableStateOf<String?>(null) }
     var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
@@ -690,7 +691,9 @@ fun AidenChatDetailScreen(
         val loadAttachmentImage = remember(viewModel) { viewModel::attachmentImageData }
         val onCopyMessage = remember(context) { { text: String -> copyToClipboard(context, text) } }
         val onShareMessage = remember(context) { { text: String -> shareText(context, text) } }
-        val onReplyMessage = remember(viewModel) { { text: String -> viewModel.updateDraft("> $text\n") } }
+        val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
+            remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
+        val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
         val onOpenMessageUrl = remember(uriHandler, isBotChat) {
             { url: String ->
                 if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
@@ -734,7 +737,8 @@ fun AidenChatDetailScreen(
                             tools = tools,
                             activityTimeline = activityTimeline,
                             isBotChat = isBotChat,
-                            palette = palette
+                            palette = palette,
+                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages)
                         )
                     }
                 }
@@ -750,11 +754,13 @@ fun AidenChatDetailScreen(
                         UserMessageRow(
                             message = message,
                             position = pos,
+                            showFooter = isLastInCluster,
                             palette = palette,
                             loadAttachmentImage = loadAttachmentImage,
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
-                            onReply = onReplyMessage
+                            onSelectText = onSelectMessageText,
+                            onAskAbout = onAskAboutMessage
                         )
                     } else {
                         val readAloudEligible = !isStreaming &&
@@ -774,7 +780,8 @@ fun AidenChatDetailScreen(
                             loadAttachmentImage = loadAttachmentImage,
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
-                            onReply = onReplyMessage,
+                            onSelectText = onSelectMessageText,
+                            onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl
@@ -828,6 +835,14 @@ fun AidenChatDetailScreen(
     }
     selectedAgent?.let { agent ->
         AidenAgentDetailSheet(agent = agent, onDismiss = { selectedAgent = null })
+    }
+    selectTextFor?.let { text ->
+        AidenSelectTextDialog(
+            text = text,
+            palette = palette,
+            onAskAbout = if (viewModel.isReadOnlyPresentation) null else { selection -> viewModel.askAbout(selection) },
+            onDismiss = { selectTextFor = null }
+        )
     }
 
     if (showRedirectConfirm) {
@@ -883,11 +898,13 @@ private fun calculateClusterPosition(
 private fun UserMessageRow(
     message: AidenChatMessage,
     position: MessageClusterPosition,
+    showFooter: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
-    onReply: (String) -> Unit
+    onSelectText: (String) -> Unit,
+    onAskAbout: ((String) -> Unit)?
 ) {
     val shape = when (position) {
         MessageClusterPosition.SINGLE -> RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
@@ -911,7 +928,8 @@ private fun UserMessageRow(
                 AidenMessageActionContainer(
                     onCopy = { onCopy(message.text) },
                     onShare = { onShare(message.text) },
-                    onReply = { onReply(message.text) }
+                    onSelectText = { onSelectText(message.text) },
+                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } }
                 ) {
                     Surface(
                         color = palette.accent,
@@ -956,6 +974,13 @@ private fun UserMessageRow(
                 loadData = loadAttachmentImage
             )
         }
+        if (showFooter) {
+            AidenMessageFooter(
+                message = message,
+                palette = palette,
+                onCopy = if (message.text.isNotEmpty()) ({ onCopy(message.text) }) else null
+            )
+        }
     }
 }
 
@@ -969,7 +994,8 @@ private fun AssistantMessageRow(
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
-    onReply: (String) -> Unit,
+    onSelectText: (String) -> Unit,
+    onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit
@@ -992,7 +1018,8 @@ private fun AssistantMessageRow(
             AidenMessageActionContainer(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
-                onReply = { onReply(displayText) }
+                onSelectText = { onSelectText(displayText) },
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
             ) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
@@ -1052,7 +1079,8 @@ private fun AssistantMessageRow(
             AidenMessageActionContainer(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
-                onReply = { onReply(displayText) }
+                onSelectText = { onSelectText(displayText) },
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
             ) {
                 Surface(
                     color = Color.Transparent,
@@ -1126,17 +1154,14 @@ private fun AssistantMessageRow(
                 }
             }
         }
-        if (onReadAloud != null) {
-            Row {
-                IconButton(onClick = { onCopy(displayText) }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = palette.secondary)
-                }
-                IconButton(onClick = onReadAloud) {
-                    Icon(if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
-                        contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
-                        tint = palette.secondary)
-                }
-            }
+        if (isLastInCluster || onReadAloud != null) {
+            AidenMessageFooter(
+                message = message,
+                palette = palette,
+                onCopy = if (displayText.isNotEmpty()) ({ onCopy(displayText) }) else null,
+                onReadAloud = onReadAloud,
+                readAloudActive = readAloudActive
+            )
         }
 
     }
@@ -1149,7 +1174,8 @@ private fun ActiveStreamingCard(
     tools: List<AidenLiveTool>,
     activityTimeline: AidenGenerationTimeline?,
     isBotChat: Boolean,
-    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    liveStart: java.time.Instant? = null
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1166,6 +1192,10 @@ private fun ActiveStreamingCard(
             .fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            if (liveStart != null) {
+                AidenLiveElapsedLabel(start = liveStart, palette = palette)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
             if (chronologicalRows != null) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
