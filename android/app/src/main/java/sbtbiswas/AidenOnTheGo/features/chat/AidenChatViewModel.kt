@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -24,6 +25,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
@@ -60,10 +62,10 @@ class AidenChatViewModel(
     private val _catalog = MutableStateFlow<AidenModelCatalog?>(null)
     val catalog: StateFlow<AidenModelCatalog?> = _catalog.asStateFlow()
 
-    private val _selectedProviderId = MutableStateFlow<String?>(null)
+    private val _selectedProviderId = MutableStateFlow(_chat.value?.providerId)
     val selectedProviderId: StateFlow<String?> = _selectedProviderId.asStateFlow()
 
-    private val _selectedModelId = MutableStateFlow<String?>(null)
+    private val _selectedModelId = MutableStateFlow(_chat.value?.modelId)
     val selectedModelId: StateFlow<String?> = _selectedModelId.asStateFlow()
 
     private val _selectedThinkingLevel = MutableStateFlow<String?>(null)
@@ -108,6 +110,10 @@ class AidenChatViewModel(
 
     private val _pendingAttachments = MutableStateFlow<List<AidenAttachmentReference>>(emptyList())
     val pendingAttachments: StateFlow<List<AidenAttachmentReference>> = _pendingAttachments.asStateFlow()
+
+    private val preparationMutex = Mutex()
+    private val _preparingAttachmentBatches = MutableStateFlow(0)
+    val preparingAttachmentBatches: StateFlow<Int> = _preparingAttachmentBatches.asStateFlow()
 
     private val _isUploadingAttachment = MutableStateFlow(false)
     val isUploadingAttachment: StateFlow<Boolean> = _isUploadingAttachment.asStateFlow()
@@ -171,6 +177,8 @@ class AidenChatViewModel(
     private val boundClient = coordinator.client.value
     private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
     private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    private val modelPreferenceStore = coordinator.modelPreferenceStore
+    private var hasExplicitModelSelection = false
 
     private fun activeClient(): AidenRemoteClient? =
         boundClient?.takeIf { coordinator.client.value === it }
@@ -200,6 +208,7 @@ class AidenChatViewModel(
 
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
+                _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
 
@@ -661,6 +670,17 @@ class AidenChatViewModel(
         )
     }
 
+    /**
+     * Quotes [selection] into the composer draft for a follow-up question.
+     * Returns false when the chat is read-only or the selection is blank.
+     */
+    fun askAbout(selection: String): Boolean {
+        if (isReadOnlyPresentation) return false
+        val next = AidenSelectionQuote.draft(selection, _draft.value) ?: return false
+        updateDraft(next)
+        return true
+    }
+
     fun updateDraft(text: String) {
         _draft.value = text
         draftSession?.let { session ->
@@ -678,6 +698,7 @@ class AidenChatViewModel(
         val firstModel = provider?.visibleModels?.firstOrNull()
         _selectedModelId.value = firstModel?.id
         _selectedThinkingLevel.value = firstModel?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     fun selectModel(modelId: String) {
@@ -688,10 +709,44 @@ class AidenChatViewModel(
         val provider = catalog?.providers?.firstOrNull { it.id == _selectedProviderId.value }
         val model = provider?.models?.firstOrNull { it.id == modelId }
         _selectedThinkingLevel.value = model?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
+    }
+
+    /** Composer picker choice: a null level means the model's own default. */
+    fun selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
+        val currentChat = _chat.value
+        if (currentChat != null && currentChat.isBotChat) return
+        val model = _catalog.value?.providers?.firstOrNull { it.id == providerId }
+            ?.models?.firstOrNull { it.id == modelId }
+        _selectedProviderId.value = providerId
+        _selectedModelId.value = modelId
+        _selectedThinkingLevel.value = thinkingLevel ?: model?.effectiveThinkingLevel
+        rememberExplicitModelSelection()
     }
 
     fun selectThinkingLevel(level: String?) {
+        val currentChat = _chat.value
+        if (currentChat != null && currentChat.isBotChat) return
         _selectedThinkingLevel.value = level
+        rememberExplicitModelSelection()
+    }
+
+    /**
+     * An explicit composer choice becomes this paired Mac's remembered
+     * default for later Workspace chats and launches, and it stops this chat
+     * from being re-seeded by the remembered value on catalog refreshes.
+     */
+    private fun rememberExplicitModelSelection() {
+        hasExplicitModelSelection = true
+        if (instanceId.isEmpty()) return
+        modelPreferenceStore.remember(
+            instanceId,
+            AidenChatModelSelection(
+                providerId = _selectedProviderId.value,
+                modelId = _selectedModelId.value,
+                thinkingLevel = _selectedThinkingLevel.value
+            )
+        )
     }
 
     fun loadChat() {
@@ -733,7 +788,9 @@ class AidenChatViewModel(
             catalog = _catalog.value,
             selectedProviderId = _selectedProviderId.value,
             selectedModelId = _selectedModelId.value,
-            selectedThinkingLevel = _selectedThinkingLevel.value
+            selectedThinkingLevel = _selectedThinkingLevel.value,
+            remembered = if (hasExplicitModelSelection || instanceId.isEmpty()) null
+            else modelPreferenceStore.selection(instanceId)
         )
         _selectedProviderId.value = selection.providerId
         _selectedModelId.value = selection.modelId
@@ -874,6 +931,33 @@ class AidenChatViewModel(
         }
     }
 
+    // Enter from Main before dispatching any selected URI work. The count includes queued
+    // batches, so cancellation of one owner cannot release another owner's Send gate.
+    suspend fun <T> prepareAndUpload(items: List<T>, prepare: suspend (T) -> AidenAttachmentUpload?) {
+        val client = activeClient() ?: return
+        _preparingAttachmentBatches.value++
+        try {
+            preparationMutex.withLock {
+                for (item in items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))) {
+                    coroutineContext.ensureActive()
+                    if (activeClient() !== client) return
+                    try {
+                        val upload = AidenAttachmentPreparation.onWorker { prepare(item) } ?: continue
+                        coroutineContext.ensureActive()
+                        if (activeClient() !== client) return
+                        upload(listOf(upload))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Keep valid earlier selections when a provider returns an invalid URI.
+                    }
+                }
+            }
+        } finally {
+            _preparingAttachmentBatches.value--
+        }
+    }
+
     suspend fun upload(uploads: List<AidenAttachmentUpload>): Int {
         if (isReadOnlyPresentation || !isConnected || _isUploadingAttachment.value ||
             (_streamState.value != null && !_streamState.value!!.isTerminal) ||
@@ -891,7 +975,13 @@ class AidenChatViewModel(
             val availableSlots = 10 - _pendingAttachments.value.size
             for (upload in uploads.take(availableSlots)) {
                 try {
+                    val rawImageBytes = if (upload is AidenAttachmentUpload.Image) {
+                        withContext(kotlinx.coroutines.Dispatchers.IO) { Base64.getDecoder().decode(upload.data) }
+                    } else null
+                    if (activeClient() !== client) return uploads.size
                     val reference = client.uploadAttachment(chatId, upload)
+                    coroutineContext.ensureActive()
+                    if (activeClient() !== client) return uploads.size
                     if (!reference.isValid()) {
                         failedCount++
                         continue
@@ -907,11 +997,14 @@ class AidenChatViewModel(
                             kind = AidenAttachmentKind.IMAGE,
                             size = reference.size
                         )
-                        val rawBytes = Base64.getDecoder().decode(upload.data)
                         try {
-                            chatCache.saveAttachmentImage(rawBytes, instanceId, deviceId, chatId, attachment)
+                            chatCache.saveAttachmentImage(requireNotNull(rawImageBytes), instanceId, deviceId, chatId, attachment)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
                         } catch (_: Exception) {}
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
                     failedCount++
                 }

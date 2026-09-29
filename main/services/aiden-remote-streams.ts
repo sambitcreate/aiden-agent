@@ -430,6 +430,7 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
+  private readonly eventSizes = new WeakMap<AidenRemoteStreamEvent, number>();
   private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
   private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly questions = new Map<string, QuestionRecord>();
@@ -561,7 +562,7 @@ export class AidenRemoteStreamService {
       const base: Omit<StreamRecord, "owner"> = {
         ...saved,
         eventBytes: saved.events.reduce(
-          (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
+          (total, event) => total + this.eventSize(event),
           0,
         ),
         subscribers: new Set(),
@@ -594,7 +595,7 @@ export class AidenRemoteStreamService {
     this.turnIndex.set(streamId, { chatId, turnId });
   }
 
-  snapshot(): AidenRemoteStreamSnapshot {
+  private snapshotEnvelope(): AidenRemoteStreamSnapshot {
     return {
       version: 1,
       streams: [...this.streams.values()].map((stream) => ({
@@ -604,7 +605,7 @@ export class AidenRemoteStreamService {
         deviceId: stream.deviceId,
         state: stream.state,
         updatedAt: stream.updatedAt,
-        events: structuredClone(stream.events),
+        events: [],
       })),
       turnIndex: [...this.turnIndex.entries()].map(([streamId, entry]) => ({
         streamId,
@@ -612,6 +613,35 @@ export class AidenRemoteStreamService {
         turnId: entry.turnId,
       })),
     };
+  }
+
+  snapshot(): AidenRemoteStreamSnapshot {
+    const snapshot = this.snapshotEnvelope();
+    for (const stream of snapshot.streams) {
+      stream.events = structuredClone(this.streams.get(stream.streamId)!.events);
+    }
+    return snapshot;
+  }
+
+  private eventSize(event: AidenRemoteStreamEvent): number {
+    let bytes = this.eventSizes.get(event);
+    if (bytes === undefined) {
+      bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+      this.eventSizes.set(event, bytes);
+    }
+    return bytes;
+  }
+
+  private snapshotBytes(): number {
+    // Serialize only bounded metadata (256 streams / 1,024 turn identities).
+    // The empty arrays already include brackets; add event bytes and commas.
+    // Rebuilding this envelope keeps deletion, expiry and delivery cleanup from
+    // having to maintain a second, fragile aggregate mutation ledger.
+    let bytes = Buffer.byteLength(JSON.stringify(this.snapshotEnvelope()), "utf8");
+    for (const stream of this.streams.values()) {
+      bytes += stream.eventBytes + Math.max(0, stream.events.length - 1);
+    }
+    return bytes;
   }
 
   private persist(): void {
@@ -853,9 +883,11 @@ export class AidenRemoteStreamService {
       timestamp: new Date(this.options.now()).toISOString(),
       type,
       terminal: isTerminal,
-      payload,
+      // Journal events own their payload: callers must not invalidate cached
+      // sizes (or change already-published replay) by mutating nested values.
+      payload: structuredClone(payload),
     };
-    const bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+    const bytes = this.eventSize(event);
     stream.events.push(event);
     stream.eventBytes += bytes;
     while (
@@ -863,11 +895,11 @@ export class AidenRemoteStreamService {
       (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
     ) {
       const removed = stream.events.shift();
-      if (removed) stream.eventBytes -= Buffer.byteLength(JSON.stringify(removed), "utf8");
+      if (removed) stream.eventBytes -= this.eventSize(removed);
     }
-    this.enforceAggregateBudget(stream.streamId);
     stream.state = state ?? stream.state;
     stream.updatedAt = this.options.now();
+    this.enforceAggregateBudget(stream.streamId);
     for (const subscriber of [...stream.subscribers]) subscriber.flush();
     if (isTerminal) {
       stream.owner.invalidate();
@@ -892,8 +924,7 @@ export class AidenRemoteStreamService {
   }
 
   private enforceAggregateBudget(currentStreamId: string): void {
-    const snapshotBytes = () => Buffer.byteLength(JSON.stringify(this.snapshot()), "utf8");
-    if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
+    if (this.snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     const terminalStreams = [...this.streams.values()]
       .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
@@ -909,16 +940,16 @@ export class AidenRemoteStreamService {
       }
       entry.owner.invalidate();
       this.streams.delete(entry.streamId);
-      if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
+      if (this.snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     }
-    while (snapshotBytes() > MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) {
+    while (this.snapshotBytes() > MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) {
       const candidate = [...this.streams.values()]
         .filter((entry) => entry.events.length > 0)
         .sort((left, right) => right.eventBytes - left.eventBytes)[0];
       if (!candidate) break;
       if (candidate.events.length > 1) {
         const removed = candidate.events.shift();
-        if (removed) candidate.eventBytes -= Buffer.byteLength(JSON.stringify(removed), "utf8");
+        if (removed) candidate.eventBytes -= this.eventSize(removed);
         continue;
       }
       const retained = candidate.events[0]!;
@@ -933,7 +964,7 @@ export class AidenRemoteStreamService {
         },
       };
       candidate.events[0] = replacement;
-      candidate.eventBytes = Buffer.byteLength(JSON.stringify(replacement), "utf8");
+      candidate.eventBytes = this.eventSize(replacement);
     }
   }
 
