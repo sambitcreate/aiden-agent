@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { listWorkspaceFiles } from "./workspace-files.js";
 import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -536,4 +539,87 @@ test("stalled Bot file PUT parses its body before device revocation admission", 
   } finally {
     await app.close();
   }
+});
+
+async function budgetBotFixture(t: test.TestContext) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-metadata-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (let i = 0; i < 24; i += 1) await fs.writeFile(path.join(root, `file${i}.txt`), "fixture");
+  const controller = new AbortController();
+  const handles = new AidenOpaqueHandleStore();
+  let releases = 0;
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance", handles,
+    chats: { get: async id => ({ id, botId: "bot", workspaceId: "home", title: "Bot", messages: [], createdAt: 1, updatedAt: 1 }) },
+    authority: { admit: async ({ botId, chatId }) => ({
+      authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
+      signal: controller.signal,
+      revalidateBeforeEffect: async () => {
+        if (controller.signal.aborted) throw new BotRuntimeAuthorityError("capability_changed");
+      },
+      release: () => { releases += 1; },
+    }) },
+  });
+  return { root, service, handles, controller, releases: () => releases };
+}
+
+test("Bot and workspace listings share the aggregate metadata budget with ordered fresh handles", async (t) => {
+  const { service, releases } = await budgetBotFixture(t);
+  const desktopRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-desktop-metadata-"));
+  t.after(() => fs.rm(desktopRoot, { recursive: true, force: true }));
+  for (let i = 0; i < 96; i += 1) await fs.writeFile(path.join(desktopRoot, `file${i}.txt`), "fixture");
+  const original = fsPromises.stat;
+  let active = 0;
+  let peak = 0;
+  let calls = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    if (!String(args[0]).endsWith(".txt")) return original(...args);
+    calls += 1;
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  const [first, second, desktop] = await Promise.all([
+    service.list("device-1", "chat-one"), service.list("device-1", "chat-two"), listWorkspaceFiles(desktopRoot),
+  ]);
+  const paths = Array.from({ length: 24 }, (_, i) => `file${i}.txt`);
+  assert.deepEqual(first.entries.map(entry => entry.displayPath), paths);
+  assert.deepEqual(second.entries.map(entry => entry.displayPath), paths);
+  assert.deepEqual(desktop.entries.map(entry => entry.path), Array.from({ length: 96 }, (_, i) => `file${i}.txt`));
+  assert.equal(calls, 192);
+  assert.ok(peak > 1 && peak <= 4, `aggregate Bot/workspace metadata concurrency: ${peak}`);
+  assert.equal(active, 0);
+  assert.equal(releases(), 2);
+  await assert.rejects(service.read("device-1", "chat-two", first.entries[0]!.id),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "root_policy_changed");
+});
+
+test("Bot revocation during identity inspection drains work before releasing authority and issues no handles", async (t) => {
+  const { service, handles, controller, releases } = await budgetBotFixture(t);
+  const original = fsPromises.stat;
+  const visits = new Map<string, number>();
+  let active = 0;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    const name = String(args[0]);
+    if (!name.endsWith(".txt")) return original(...args);
+    const visit = (visits.get(name) ?? 0) + 1;
+    visits.set(name, visit);
+    active += 1;
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (visit === 2) controller.abort(new BotRuntimeAuthorityError("capability_changed"));
+      return await original(...args);
+    } finally { active -= 1; }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  await assert.rejects(service.list("device-1", "chat-one"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale");
+  assert.equal(active, 0);
+  assert.equal(releases(), 1);
+  assert.equal(handles.storedTokenMaterialForTesting().length, 0);
 });

@@ -11,6 +11,7 @@ import {
   inspectAidenFilesystemIdentity,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
+import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
 import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import type { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import type { WorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
@@ -231,33 +232,46 @@ export class AidenRemoteFileService {
         const revision = projectAidenRemoteWorkspace(workspace).revision;
         const entries: AidenRemoteFileEntry[] = [];
         let omitted = false;
-        for (const entry of index.entries) {
-          if (signal.aborted) throw new Error("The workspace operation was cancelled.");
-          try {
-            const displayPath = safeDisplayPath(entry.path);
-            const claims = await this.claims(
-              deviceId,
-              workspaceId,
-              folderPath,
-              revision,
-              displayPath,
-              snapshotId,
-            );
-            entries.push({
-              id: this.handles.issue("file", claims),
-              displayPath,
-              name: [...entry.name].slice(0, 255).join(""),
-              kind: entry.kind,
-              ...(entry.size !== undefined && entry.size <= MAX_WIRE_FILE_SIZE
-                ? { size: entry.size }
-                : {}),
-              ...(languageFor(entry) ? { language: languageFor(entry)! } : {}),
-            });
-          } catch (error) {
-            if (error instanceof AidenOpaqueHandleError && error.code === "handle_capacity") {
-              mapHandleError(error);
+        for (let offset = 0; offset < index.entries.length; offset += WORKSPACE_METADATA_CONCURRENCY) {
+          // Re-inspect every identity; index metadata is not handle authority.
+          // Only metadata runs concurrently. Issue handles in index order after
+          // the entire batch settles and cancellation has been checked.
+          const inspected = await mapWorkspaceMetadata(
+            index.entries.slice(offset, offset + WORKSPACE_METADATA_CONCURRENCY),
+            async (entry) => {
+              try {
+                const displayPath = safeDisplayPath(entry.path);
+                const claims = await this.claims(
+                  deviceId, workspaceId, folderPath, revision, displayPath, snapshotId,
+                );
+                return { entry, displayPath, claims };
+              } catch {
+                omitted = true;
+                return undefined;
+              }
+            },
+            signal,
+          );
+          for (const result of inspected) {
+            if (!result) continue;
+            const { entry, displayPath, claims } = result;
+            try {
+              entries.push({
+                id: this.handles.issue("file", claims),
+                displayPath,
+                name: [...entry.name].slice(0, 255).join(""),
+                kind: entry.kind,
+                ...(entry.size !== undefined && entry.size <= MAX_WIRE_FILE_SIZE
+                  ? { size: entry.size }
+                  : {}),
+                ...(languageFor(entry) ? { language: languageFor(entry)! } : {}),
+              });
+            } catch (error) {
+              if (error instanceof AidenOpaqueHandleError && error.code === "handle_capacity") {
+                mapHandleError(error);
+              }
+              omitted = true;
             }
-            omitted = true;
           }
         }
         const projection: AidenRemoteFileIndex = {

@@ -1,0 +1,66 @@
+{
+  "electron": "43.1.1",
+  "platform": "darwin",
+  "idlePolicy": true,
+  "idlePolicies": [
+    true,
+    true,
+    true
+  ],
+  "screenshotBytes": 12228,
+  "timerResult": "timer",
+  "recordingBytes": 795,
+  "cancellationRestored": true,
+  "failureRestored": true,
+  "crashRestored": true,
+  "attachedWindow": {
+    "duringRecordingPolicies": [
+      true,
+      true,
+      false
+    ],
+    "afterRecordingPolicies": [
+      true,
+      true,
+      true
+    ],
+    "frameSamples": [
+      {
+        "phase": "minimized idle",
+        "elapsedMs": 503,
+        "host": 0,
+        "sibling": 0,
+        "visibility": [
+          "hidden",
+          "hidden"
+        ]
+      },
+      {
+        "phase": "minimized recording",
+        "elapsedMs": 503,
+        "host": 0,
+        "sibling": 0,
+        "visibility": [
+          "hidden",
+          "hidden"
+        ]
+      },
+      {
+        "phase": "minimized after stop",
+        "elapsedMs": 505,
+        "host": 0,
+        "sibling": 0,
+        "visibility": [
+          "hidden",
+          "hidden"
+        ]
+      }
+    ],
+    "minimizedTimer": "minimized timer",
+    "recordingBytes": 9901,
+    "backgroundMode": "minimized",
+    "stayedBackgrounded": true,
+    "preservedAttachments": true,
+    "automaticStopDelayMs": 300000
+  }
+}

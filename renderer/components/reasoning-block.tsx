@@ -4,8 +4,10 @@ import { cn } from "../lib/ui-utils";
 import {
   REASONING_PREVIEW_MS,
   initialReasoningDisclosure,
+  reasoningDisclosureLayout,
   reduceReasoningDisclosure,
 } from "../lib/reasoning-disclosure";
+import { useStickySectionCollapse } from "../lib/sticky-section";
 
 interface ReasoningBlockProps {
   content: string;
@@ -50,6 +52,10 @@ function ReadableReasoningBlock({
     initialReasoningDisclosure,
   );
   const { expanded } = disclosure;
+  const layout = reasoningDisclosureLayout(disclosure);
+  const regionLabel = label === "Thinking" ? "Model reasoning" : label;
+  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } =
+    useStickySectionCollapse<HTMLElement, HTMLButtonElement>();
   const [atTop, setAtTop] = React.useState(true);
   const [atBottom, setAtBottom] = React.useState(true);
 
@@ -76,24 +82,35 @@ function ReadableReasoningBlock({
   }, [content, expanded, streaming, updateScrollEdges]);
 
   React.useLayoutEffect(() => {
+    if (!expanded) restoreAfterCollapse();
+  }, [expanded, restoreAfterCollapse]);
+
+  React.useLayoutEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
     const observer = new ResizeObserver(() => updateScrollEdges(element));
     observer.observe(element);
     return () => observer.disconnect();
-  }, [expanded, updateScrollEdges]);
+  }, [layout, updateScrollEdges]);
 
   return (
     <section
-      className="reasoning-surface rounded-card bg-well text-small text-secondary outline-none"
+      ref={sectionRef}
+      data-disclosure-layout={layout}
+      className="transcript-sticky-section reasoning-surface rounded-card bg-well text-small text-secondary outline-none"
       data-streaming={active ? "true" : "false"}
     >
       <button
+        ref={headerRef}
         type="button"
         aria-expanded={expanded}
         aria-controls={contentId}
-        onClick={() => dispatchDisclosure({ type: "toggle" })}
-        className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
+        data-surface="well"
+        onClick={() => {
+          if (expanded) noteCollapse();
+          dispatchDisclosure({ type: "toggle" });
+        }}
+        className="transcript-sticky-header flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:text-primary focus-visible:outline-none"
       >
         <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>{label}</span>
         <ChevronRight
@@ -104,7 +121,18 @@ function ReadableReasoningBlock({
           )}
         />
       </button>
-      {expanded ? (
+      {layout === "full" ? (
+        // Deliberately opened: the reasoning flows at full height in the
+        // transcript and the sticky header keeps the disclosure reachable.
+        <div
+          id={contentId}
+          className="px-3.5 pb-3 text-small leading-relaxed"
+          role="region"
+          aria-label={regionLabel}
+        >
+          <p className="whitespace-pre-wrap break-words">{content}</p>
+        </div>
+      ) : layout === "preview" ? (
         <div
           id={contentId}
           ref={viewportRef}
@@ -112,7 +140,7 @@ function ReadableReasoningBlock({
           data-scroll-top={atTop}
           data-scroll-bottom={atBottom}
           role="region"
-          aria-label={label === "Thinking" ? "Model reasoning" : label}
+          aria-label={regionLabel}
           tabIndex={0}
           onScroll={(event) => {
             const element = event.currentTarget;

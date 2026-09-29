@@ -9,6 +9,15 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
+    @Test fun gitReviewPreservesUnavailableLineCounts() {
+        val review = kotlinx.serialization.json.Json.decodeFromString<AidenGitReview>(
+            """{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}""")
+        assertEquals(3, review.files[0].additions)
+        assertEquals(0, review.files[0].deletions)
+        assertNull(review.files[1].additions)
+        assertNull(review.files[1].deletions)
+    }
+
     @Test fun cachedDocumentDoesNotDisableLiveTreePaging() {
         val cachedDocument = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = true, connected = true)
         assertTrue(cachedDocument.canLoadPage)

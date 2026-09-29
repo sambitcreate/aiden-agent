@@ -8,6 +8,7 @@ import {
   nativeImage,
   type Session,
 } from "electron";
+import { BrowserBackgroundThrottling } from "./background-throttling.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -86,6 +87,7 @@ interface LiveTab {
   state: BrowserTab;
   view: WebContentsView;
   queue: BrowserActionQueue;
+  backgroundThrottling: BrowserBackgroundThrottling;
   diagnostics: BrowserDiagnostic[];
   network: Array<Record<string, unknown>>;
   timeline: Array<Record<string, unknown>>;
@@ -596,6 +598,10 @@ export class BrowserService {
       this.cancelCrashRecovery(tab);
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
+      tab.backgroundThrottling.reset();
+      // A crashed renderer cannot keep producing screencast frames. Finalize
+      // the recorder instead of leaving it alive through an unrelated recovery.
+      if (tab.recording) void this.stopRecording(tab).catch(() => {});
       tab.contextId = undefined;
       tab.state.crashed = true;
       tab.state.loading = false;
@@ -809,7 +815,7 @@ export class BrowserService {
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,
         webSecurity: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
       },
     });
     view.webContents.setUserAgent(browserSession.getUserAgent());
@@ -836,6 +842,7 @@ export class BrowserService {
       state,
       view,
       queue: new BrowserActionQueue(),
+      backgroundThrottling: new BrowserBackgroundThrottling(view.webContents),
       diagnostics: [],
       network: [],
       timeline: [],
@@ -941,6 +948,7 @@ export class BrowserService {
     this.finishPreviewNavigation(tab);
     browserFileService.releaseConsumer(tab.state.id);
     tab.queue.interrupt();
+    tab.backgroundThrottling.reset();
     this.detach(tab);
     if (tab.pipTimer) clearInterval(tab.pipTimer);
     this.cancelCrashRecovery(tab);
@@ -1154,6 +1162,19 @@ export class BrowserService {
   private async capture(
     tab: LiveTab,
     fullPage = false,
+    bounds?: BrowserBounds,
+    signal?: AbortSignal,
+  ): Promise<BrowserImage> {
+    const release = tab.backgroundThrottling.acquire(signal);
+    try {
+      return await this.capturePage(tab, fullPage, bounds, signal);
+    } finally {
+      release();
+    }
+  }
+  private async capturePage(
+    tab: LiveTab,
+    fullPage: boolean,
     bounds?: BrowserBounds,
     signal?: AbortSignal,
   ): Promise<BrowserImage> {
@@ -1500,6 +1521,9 @@ export class BrowserService {
         backgroundThrottling: false,
       },
     });
+    // Recording outlives its start command; the recorder owns this lease.
+    const release = tab.backgroundThrottling.acquire();
+    recorder.once("closed", release);
     tab.pendingRecorder = recorder;
     try {
       await browserDeadline(
@@ -2050,6 +2074,9 @@ export class BrowserService {
             (candidate): candidate is AbortSignal => Boolean(candidate),
           );
           const signal = signals.length ? AbortSignal.any(signals) : undefined;
+          // Playwright actionability waits use animation frames, including user
+          // initiated automation. Acquire only after the action leaves the queue.
+          const release = tab.backgroundThrottling.acquire(signal);
           tab.state.agentControlling = context.source === "agent";
           this.emit(workspaceId);
           try {
@@ -2331,6 +2358,7 @@ export class BrowserService {
             actionEvent.error = error instanceof Error ? error.message : "Browser action failed.";
             throw error;
           } finally {
+            release();
             await this.removeAgentCursor(tab);
             actionEvent.completedAt = Date.now();
             tab.state.agentControlling = false;
