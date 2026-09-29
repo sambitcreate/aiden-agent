@@ -72629,9 +72629,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.85825,
-          "output": 11.1062,
-          "cache_read": 0.29
+          "input": 0.6795,
+          "output": 8.7934,
+          "cache_read": 0.3
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -76771,12 +76771,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.04,
+          "input": 0.03,
           "output": 0.5,
-          "cache_read": 0.015
+          "cache_read": 0.01
         }
       },
       "~z-ai/glm-latest": {
@@ -76815,9 +76815,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.195,
+          "input": 0.15,
           "output": 4,
-          "cache_read": 0.195
+          "cache_read": 0.15
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -77915,7 +77915,7 @@
         "cost": {
           "input": 0.02,
           "output": 0.6,
-          "cache_read": 0.01
+          "cache_read": 0.02
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -77997,8 +77997,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.018,
-          "output": 0.32,
+          "input": 0.012,
+          "output": 0.5,
           "cache_read": 0.01
         }
       },
@@ -109600,9 +109600,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.85825,
-          "output": 11.1062,
-          "cache_read": 0.29
+          "input": 0.6795,
+          "output": 8.7934,
+          "cache_read": 0.3
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -110947,7 +110947,7 @@
         "cost": {
           "input": 0.018,
           "output": 0.32,
-          "cache_read": 0.01
+          "cache_read": 0.018
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -112674,7 +112674,7 @@
         },
         "cost": {
           "input": 0.3249,
-          "output": 3.52,
+          "output": 4.4,
           "cache_read": 0.2599
         },
         "canonical_model_id": "zhipuai/glm-5.2"
@@ -113842,12 +113842,12 @@
         "open_weights": false,
         "limit": {
           "context": 1310720,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.04,
+          "input": 0.03,
           "output": 0.5,
-          "cache_read": 0.015
+          "cache_read": 0.01
         }
       },
       "~z-ai/glm-latest": {
@@ -113886,9 +113886,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.195,
+          "input": 0.15,
           "output": 4,
-          "cache_read": 0.195
+          "cache_read": 0.15
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -115157,7 +115157,7 @@
         "cost": {
           "input": 0.02,
           "output": 0.6,
-          "cache_read": 0.01
+          "cache_read": 0.02
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -115243,8 +115243,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.018,
-          "output": 0.32,
+          "input": 0.012,
+          "output": 0.5,
           "cache_read": 0.01
         }
       },
@@ -119948,9 +119948,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0449,
+          "input": 0.0428,
           "output": 4.4,
-          "cache_read": 0.0359
+          "cache_read": 0.0342
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
