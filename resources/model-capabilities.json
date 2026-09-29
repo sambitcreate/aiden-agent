@@ -76644,8 +76644,8 @@
         },
         "cost": {
           "input": 0.19,
-          "output": 2.04,
-          "cache_read": 0.102
+          "output": 4,
+          "cache_read": 0.19
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -110980,9 +110980,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.4721,
+          "input": 0.3999,
           "output": 4.2,
-          "cache_read": 0.3776
+          "cache_read": 0.3199
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -111129,9 +111129,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.936294,
-          "output": 1.872588,
-          "cache_read": 0.078025
+          "input": 0.931074,
+          "output": 1.862148,
+          "cache_read": 0.07759
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro"
       },
@@ -113714,8 +113714,8 @@
         },
         "cost": {
           "input": 0.19,
-          "output": 2.04,
-          "cache_read": 0.102
+          "output": 4,
+          "cache_read": 0.19
         }
       },
       "arcee-ai/trinity-large-thinking": {
