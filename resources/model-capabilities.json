@@ -290,7 +290,7 @@
         "cost": {
           "input": 0.14,
           "output": 0.28,
-          "cache_read": 0.0027
+          "cache_read": 0.0028
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -3788,7 +3788,7 @@
       "BAILING_API_TOKEN"
     ],
     "npm": "@ai-sdk/openai-compatible",
-    "api": "https://api.tbox.cn/api/llm/v1/chat/completions",
+    "api": "https://api.tbox.cn/api/llm/v1",
     "name": "Bailing",
     "doc": "https://alipaytbox.yuque.com/sxs0ba/ling/intro",
     "models": {
@@ -14832,7 +14832,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1310720,
+          "context": 1048576,
           "output": 1048576
         },
         "cost": {
@@ -15064,7 +15064,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1310720,
+          "context": 1048576,
           "output": 1048576
         },
         "cost": {
@@ -15188,7 +15188,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1310720,
+          "context": 1048576,
           "output": 1048576
         },
         "cost": {
@@ -22177,9 +22177,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.22,
-          "output": 0.66,
-          "cache_read": 0.007
+          "input": 0.44,
+          "output": 1.32,
+          "cache_read": 0.014
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-vision-exp"
       },
@@ -52543,75 +52543,6 @@
         },
         "canonical_model_id": "alibaba/qwen3-vl-235b-a22b-instruct"
       },
-      "deepinfra/mimo-v2.5": {
-        "id": "deepinfra/mimo-v2.5",
-        "name": "MiMo V2.5 (DeepInfra)",
-        "description": "Open MiMo model for multimodal coding agents and long-context automation",
-        "family": "mimo",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2024-12",
-        "release_date": "2026-04-22",
-        "last_updated": "2026-04-22",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "audio",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 16384
-        },
-        "cost": {
-          "input": 0.4,
-          "output": 2,
-          "cache_read": 0.08,
-          "tiers": [
-            {
-              "input": 0.8,
-              "output": 4,
-              "cache_read": 0.16,
-              "tier": {
-                "type": "context",
-                "size": 256000
-              }
-            }
-          ],
-          "context_over_200k": {
-            "input": 0.8,
-            "output": 4,
-            "cache_read": 0.16
-          }
-        },
-        "canonical_model_id": "xiaomi/mimo-v2.5"
-      },
       "deepinfra/qwen3.8-2.4t-a95b": {
         "id": "deepinfra/qwen3.8-2.4t-a95b",
         "name": "Qwen3.8 2.4T A95B (DeepInfra)",
@@ -52966,72 +52897,6 @@
           "output": 2.2,
           "cache_read": 0.1
         }
-      },
-      "deepinfra/mimo-v2.5-pro": {
-        "id": "deepinfra/mimo-v2.5-pro",
-        "name": "MiMo V2.5 Pro (DeepInfra)",
-        "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
-        "family": "mimo",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": false,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": false,
-        "temperature": true,
-        "knowledge": "2024-12",
-        "release_date": "2026-04-22",
-        "last_updated": "2026-04-22",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 1048576,
-          "output": 16384
-        },
-        "cost": {
-          "input": 1,
-          "output": 3,
-          "cache_read": 0.2,
-          "tiers": [
-            {
-              "input": 2,
-              "output": 6,
-              "cache_read": 0.4,
-              "tier": {
-                "type": "context",
-                "size": 256000
-              }
-            }
-          ],
-          "context_over_200k": {
-            "input": 2,
-            "output": 6,
-            "cache_read": 0.4
-          }
-        },
-        "canonical_model_id": "xiaomi/mimo-v2.5-pro"
       },
       "deepinfra/qwen3.5-9b": {
         "id": "deepinfra/qwen3.5-9b",
@@ -72764,9 +72629,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.875,
-          "output": 11.2,
-          "cache_read": 0.29
+          "input": 0.85825,
+          "output": 11.1062,
+          "cache_read": 0.288057
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -74169,12 +74034,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 163840,
-          "output": 147456
+          "context": 131072,
+          "output": 65536
         },
         "cost": {
-          "input": 0.27,
-          "output": 1
+          "input": 0.3,
+          "output": 1,
+          "cache_read": 0.135
         }
       },
       "deepseek/deepseek-chat": {
@@ -74740,9 +74606,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.13,
+          "output": 0.53,
+          "cache_read": 0.033
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -75314,7 +75180,7 @@
         "cost": {
           "input": 0.3,
           "output": 0.9,
-          "cache_read": 0.055
+          "cache_read": 0.05
         },
         "canonical_model_id": "zhipuai/glm-4.6v"
       },
@@ -75773,7 +75639,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
           "input": 1.4,
@@ -75938,8 +75804,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 131072
+          "context": 1048575,
+          "output": 943717
         },
         "cost": {
           "input": 1.4,
@@ -76905,12 +76771,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 128000
+          "output": 131072
         },
         "cost": {
-          "input": 0.045,
-          "output": 0.14,
-          "cache_read": 0.01
+          "input": 0.04,
+          "output": 0.5,
+          "cache_read": 0.015
         }
       },
       "~z-ai/glm-latest": {
@@ -76950,8 +76816,8 @@
         },
         "cost": {
           "input": 0.15,
-          "output": 3.3,
-          "cache_read": 0.1
+          "output": 4,
+          "cache_read": 0.15
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -78047,7 +77913,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.05,
+          "input": 0.02,
           "output": 0.6,
           "cache_read": 0.01
         }
@@ -78091,7 +77957,7 @@
         "cost": {
           "input": 0.22592,
           "output": 1.9584,
-          "cache_read": 0.08832
+          "cache_read": 0.07488
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -78131,9 +77997,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.019,
-          "output": 0.3,
-          "cache_read": 0.014
+          "input": 0.018,
+          "output": 0.32,
+          "cache_read": 0.01
         }
       },
       "~x-ai/grok-latest": {
@@ -81769,9 +81635,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.12,
-          "output": 1.28,
-          "cache_read": 0.04
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.0028
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -81966,8 +81832,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 204800,
-          "output": 131072
+          "context": 196608,
+          "output": 176947
         },
         "cost": {
           "input": 0.3,
@@ -83006,8 +82872,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1000000,
-          "output": 131072
+          "context": 262144,
+          "output": 235929
         },
         "cost": {
           "input": 0.425,
@@ -84281,8 +84147,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 40960,
-          "output": 16384
+          "context": 131072,
+          "output": 8192
         },
         "cost": {
           "input": 0.13,
@@ -109734,9 +109600,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.875,
-          "output": 11.2,
-          "cache_read": 0.29
+          "input": 0.85825,
+          "output": 11.1062,
+          "cache_read": 0.288057
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -111079,9 +110945,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.021,
+          "input": 0.018,
           "output": 0.32,
-          "cache_read": 0.016
+          "cache_read": 0.01
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -111207,11 +111073,12 @@
         "open_weights": true,
         "limit": {
           "context": 163840,
-          "output": 147456
+          "output": 65536
         },
         "cost": {
-          "input": 0.27,
-          "output": 1
+          "input": 0.3,
+          "output": 1,
+          "cache_read": 0.135
         }
       },
       "deepseek/deepseek-chat": {
@@ -111285,9 +111152,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.3942,
+          "input": 0.3949,
           "output": 4.2,
-          "cache_read": 0.3153
+          "cache_read": 0.3159
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -111435,9 +111302,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.783,
-          "output": 1.566,
-          "cache_read": 0.06525
+          "input": 0.95526,
+          "output": 1.91052,
+          "cache_read": 0.079605
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro"
       },
@@ -111554,9 +111421,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.04886,
-          "output": 0.09772,
-          "cache_read": 0.009772
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.028
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash"
       },
@@ -111767,9 +111634,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.132,
+          "output": 0.528,
+          "cache_read": 0.033
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -112358,7 +112225,7 @@
         "cost": {
           "input": 0.3,
           "output": 0.9,
-          "cache_read": 0.055
+          "cache_read": 0.05
         },
         "canonical_model_id": "zhipuai/glm-4.6v"
       },
@@ -112803,12 +112670,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.6496,
-          "output": 2.0416,
-          "cache_read": 0.12064
+          "input": 0.3349,
+          "output": 4.4,
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -112846,9 +112713,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.9646,
-          "output": 3.0316,
-          "cache_read": 0.17914
+          "input": 1.4,
+          "output": 4.4,
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.1"
       },
@@ -112963,12 +112830,12 @@
         "open_weights": true,
         "limit": {
           "context": 1310720,
-          "output": 131072
+          "output": 943717
         },
         "cost": {
-          "input": 0.15,
-          "output": 3.3,
-          "cache_read": 0.1
+          "input": 1.4,
+          "output": 4.4,
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.3"
       },
@@ -113975,12 +113842,12 @@
         "open_weights": false,
         "limit": {
           "context": 1310720,
-          "output": 128000
+          "output": 131072
         },
         "cost": {
-          "input": 0.045,
-          "output": 0.14,
-          "cache_read": 0.01
+          "input": 0.04,
+          "output": 0.5,
+          "cache_read": 0.015
         }
       },
       "~z-ai/glm-latest": {
@@ -114020,8 +113887,8 @@
         },
         "cost": {
           "input": 0.15,
-          "output": 3.3,
-          "cache_read": 0.1
+          "output": 4,
+          "cache_read": 0.15
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -115288,7 +115155,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.05,
+          "input": 0.02,
           "output": 0.6,
           "cache_read": 0.01
         }
@@ -115334,7 +115201,7 @@
         "cost": {
           "input": 0.22592,
           "output": 1.9584,
-          "cache_read": 0.08832
+          "cache_read": 0.07488
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -115376,9 +115243,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.019,
-          "output": 0.3,
-          "cache_read": 0.014
+          "input": 0.018,
+          "output": 0.32,
+          "cache_read": 0.01
         }
       },
       "~x-ai/grok-latest": {
@@ -118432,9 +118299,9 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.08,
-          "output": 0.2,
-          "cache_read": 0.04
+          "input": 0.06,
+          "output": 0.16,
+          "cache_read": 0.03
         },
         "canonical_model_id": "nvidia/nemotron-3.5-lightning"
       },
@@ -119127,12 +118994,12 @@
         "open_weights": true,
         "limit": {
           "context": 204800,
-          "output": 131072
+          "output": 176947
         },
         "cost": {
-          "input": 0.3,
-          "output": 1.2,
-          "cache_read": 0.06
+          "input": 0.21,
+          "output": 0.84,
+          "cache_read": 0.042
         },
         "canonical_model_id": "minimax/MiniMax-M2.7"
       },
@@ -120078,12 +119945,12 @@
         "open_weights": true,
         "limit": {
           "context": 1000000,
-          "output": 131072
+          "output": 235929
         },
         "cost": {
-          "input": 0.42,
-          "output": 3,
-          "cache_read": 0.085
+          "input": 0.0549,
+          "output": 4.4,
+          "cache_read": 0.0439
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
@@ -121458,11 +121325,11 @@
         "open_weights": true,
         "limit": {
           "context": 131072,
-          "output": 16384
+          "output": 8192
         },
         "cost": {
-          "input": 0.12,
-          "output": 0.5
+          "input": 0.13,
+          "output": 0.52
         },
         "canonical_model_id": "alibaba/qwen3-30b-a3b"
       },
@@ -168009,7 +167876,7 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1000000,
+          "context": 200000,
           "output": 64000
         },
         "provider": {
@@ -192190,7 +192057,8 @@
         },
         "cost": {
           "input": 0.3,
-          "output": 0.9
+          "output": 0.9,
+          "cache_read": 0.03
         }
       },
       "mistral/ministral-8b": {
@@ -239858,37 +239726,6 @@
           "output": 0
         }
       },
-      "moonshotai/kimi-k2-instruct-0905": {
-        "id": "moonshotai/kimi-k2-instruct-0905",
-        "name": "Kimi K2 0905",
-        "description": "Kimi model for long-context chat, coding, and agentic reasoning",
-        "family": "kimi-k2",
-        "attachment": false,
-        "reasoning": false,
-        "tool_call": true,
-        "temperature": true,
-        "knowledge": "2024-10",
-        "release_date": "2025-09-05",
-        "last_updated": "2025-09-05",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 262144
-        },
-        "status": "deprecated",
-        "cost": {
-          "input": 0,
-          "output": 0
-        }
-      },
       "sarvamai/sarvam-m": {
         "id": "sarvamai/sarvam-m",
         "name": "sarvam-m",
@@ -241444,49 +241281,6 @@
           "output": 0
         }
       },
-      "openai/gpt-oss-120b": {
-        "id": "openai/gpt-oss-120b",
-        "name": "GPT-OSS-120B",
-        "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
-        "family": "gpt-oss",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-08",
-        "release_date": "2025-08-04",
-        "last_updated": "2025-08-14",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 128000,
-          "output": 8192
-        },
-        "status": "deprecated",
-        "cost": {
-          "input": 0,
-          "output": 0
-        },
-        "canonical_model_id": "openai/gpt-oss-120b"
-      },
       "microsoft/phi-4-mini-instruct": {
         "id": "microsoft/phi-4-mini-instruct",
         "name": "Phi-4-Mini",
@@ -241556,7 +241350,7 @@
       "PIONEER_API_KEY"
     ],
     "npm": "@ai-sdk/openai-compatible",
-    "api": "https://api.pioneer.ai/v1",
+    "api": "https://api.fastino.ai/v1",
     "name": "Pioneer",
     "doc": "https://agent.pioneer.ai/llms.txt",
     "models": {
@@ -288229,7 +288023,8 @@
         },
         "cost": {
           "input": 0.3,
-          "output": 0.9
+          "output": 0.9,
+          "cache_read": 0.03
         }
       },
       "mistral-large-2411": {
@@ -288377,7 +288172,8 @@
         },
         "cost": {
           "input": 0.5,
-          "output": 1.5
+          "output": 1.5,
+          "cache_read": 0.05
         }
       },
       "mistral-small-latest": {
@@ -288417,7 +288213,8 @@
         },
         "cost": {
           "input": 0.15,
-          "output": 0.6
+          "output": 0.6,
+          "cache_read": 0.015
         }
       },
       "zai-glm-5-2": {
@@ -288775,7 +288572,8 @@
         },
         "cost": {
           "input": 0.15,
-          "output": 0.6
+          "output": 0.6,
+          "cache_read": 0.015
         }
       },
       "devstral-medium-2507": {
@@ -288807,37 +288605,6 @@
         "cost": {
           "input": 0.4,
           "output": 2
-        }
-      },
-      "magistral-small": {
-        "id": "magistral-small",
-        "name": "Magistral Small",
-        "description": "Mistral reasoning model for transparent analysis, math, and complex decisions",
-        "family": "magistral-small",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "temperature": true,
-        "knowledge": "2025-06",
-        "release_date": "2025-03-17",
-        "last_updated": "2025-03-17",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 128000,
-          "output": 128000
-        },
-        "cost": {
-          "input": 0.5,
-          "output": 1.5
         }
       },
       "voxtral-mini-latest": {
@@ -288925,7 +288692,8 @@
         },
         "cost": {
           "input": 0.5,
-          "output": 1.5
+          "output": 1.5,
+          "cache_read": 0.05
         }
       },
       "devstral-latest": {
@@ -289191,7 +288959,8 @@
         },
         "cost": {
           "input": 1.5,
-          "output": 7.5
+          "output": 7.5,
+          "cache_read": 0.15
         }
       },
       "open-mistral-7b": {
@@ -289291,7 +289060,8 @@
         },
         "cost": {
           "input": 1.5,
-          "output": 7.5
+          "output": 7.5,
+          "cache_read": 0.15
         },
         "canonical_model_id": "mistral/mistral-medium-latest"
       }
@@ -315799,45 +315569,6 @@
         },
         "canonical_model_id": "minimax/MiniMax-M2.7"
       },
-      "moonshotai/Kimi-K2.6": {
-        "id": "moonshotai/Kimi-K2.6",
-        "name": "Kimi K2.6",
-        "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
-        "family": "kimi-k2",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-01",
-        "release_date": "2026-04-21",
-        "last_updated": "2026-04-21",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 131000
-        },
-        "cost": {
-          "input": 1.2,
-          "output": 4.5,
-          "cache_read": 0.2
-        }
-      },
       "moonshotai/Kimi-K3": {
         "id": "moonshotai/Kimi-K3",
         "name": "Kimi K3",
@@ -315884,76 +315615,6 @@
           "cache_read": 0.3
         },
         "canonical_model_id": "moonshotai/kimi-k3"
-      },
-      "moonshotai/Kimi-K2.7-Code": {
-        "id": "moonshotai/Kimi-K2.7-Code",
-        "name": "Kimi K2.7 Code",
-        "description": "Kimi coding model for software agents, refactors, and repository reasoning",
-        "family": "kimi-k2",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-06-14",
-        "last_updated": "2026-06-14",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0.95,
-          "output": 4,
-          "cache_read": 0.19
-        }
-      },
-      "moonshotai/Kimi-K2.5": {
-        "id": "moonshotai/Kimi-K2.5",
-        "name": "Kimi K2.5",
-        "description": "Legacy model retained for compatibility with older integrations",
-        "family": "kimi-k2",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": true,
-        "temperature": true,
-        "knowledge": "2026-01",
-        "release_date": "2026-01-27",
-        "last_updated": "2026-01-27",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 262144
-        },
-        "status": "deprecated",
-        "cost": {
-          "input": 0.5,
-          "output": 2.8
-        }
       },
       "zai-org/GLM-5.1": {
         "id": "zai-org/GLM-5.1",
@@ -333970,6 +333631,52 @@
           "cache_read": 1.5,
           "cache_write": 18.75
         }
+      },
+      "anthropic-claude-sonnet-5.5": {
+        "id": "anthropic-claude-sonnet-5.5",
+        "name": "Anthropic Claude Sonnet 5.5",
+        "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-28",
+        "last_updated": "2026-09-28",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5
+        },
+        "canonical_model_id": "anthropic/claude-sonnet-5-5"
       },
       "wan2-2-t2v-a14b": {
         "id": "wan2-2-t2v-a14b",
