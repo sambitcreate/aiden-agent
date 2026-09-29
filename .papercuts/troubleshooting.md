@@ -1407,6 +1407,11 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
 
+## 2026-09-26 no-Xcode chat fix
+- A new worktree initially resolved the parent checkout's older node_modules, causing unrelated Pi API and bonjour-service type errors. Run `npm ci` in the new worktree before validation; the locked install restores a passing typecheck without changing dependencies.
+- Read-only subagent file tools could not access the nested `.worktrees` path. Independently verified the new-worktree source with foreground tools; the final independent review was explicitly limited to the supplied implementation description, not a source review.
+- PR #261: registering tests in package.json is insufficient for sharded CI. Also assign each new file in `scripts/ci-test-registry.json` and run `npm run test:ci-policy`; a missing assignment fails policy, build diagnostics, and all three desktop unit lanes before tests start.
+
 ## 2026-09-27 subagent pending question
 - Subagent snapshot text must equal `sanitizeSubagentSnapshotText(text)`, and that pass NFKC-normalizes, so a Unicode ellipsis (`…`) becomes `...` and fails the parser. Truncation helpers for snapshot fields have to use ASCII `...`.
 

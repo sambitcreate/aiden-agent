@@ -62,7 +62,7 @@ import {
   buildBotFileTools,
   type BotFileToolLocation,
 } from "./bot-file-tool-router.js";
-import { gitInfo } from "./git.js";
+import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
 import { botStore } from "./bot-store.js";
@@ -779,10 +779,12 @@ async function prepareGeneration(
       },
     });
   }
-  const git =
-    folderPath && (!botContext || botContext.admission.authority.files.botHome)
-      ? await gitInfo(folderPath)
-      : { isRepo: false };
+  const git = await generationGitContext(
+    permission !== "none" && (!botContext || botContext.admission.authority.files.botHome)
+      ? folderPath
+      : undefined,
+    signal,
+  );
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
