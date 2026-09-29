@@ -85,6 +85,7 @@ import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import {
   parseAskUserQuestionPrompt,
+  type AskUserQuestionAnswerStatus,
   type AskUserQuestionPromptV1,
   type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
@@ -1107,7 +1108,11 @@ export const chatsApi = {
     options?: { formFillExcludedOrders?: number[] },
   ) => invoke<void>("chat:approve", approvalId, decision, options),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
-    invoke<void>("chat:answerQuestionnaire", promptId, response),
+    invoke<{ status: AskUserQuestionAnswerStatus } | undefined>(
+      "chat:answerQuestionnaire",
+      promptId,
+      response,
+    ),
 };
 
 export const botsApi = {

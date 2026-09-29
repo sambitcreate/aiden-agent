@@ -1592,6 +1592,49 @@ test("remote questions expire and are dropped on terminal state", async () => {
   );
 });
 
+test("remote questions expire at the agent deadline, never later than the Remote lifetime", () => {
+  let now = Date.parse("2026-09-27T10:00:00.000Z");
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId) => {
+      settled.push(promptId);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    expiresAt: "2026-09-27T10:01:00.000Z",
+  });
+  assert.equal(
+    service.pendingQuestion("device-1", "stream-1")?.expiresAt,
+    "2026-09-27T10:01:00.000Z",
+  );
+  now = Date.parse("2026-09-27T10:01:00.000Z");
+  assert.throws(
+    () => service.questionChatId("device-1", "q-prompt-1"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+  // The host is asked to settle it, which the coordinator records as a timeout.
+  assert.deepEqual(settled, ["q-prompt-1"]);
+
+  const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner2.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    promptId: "q-prompt-2",
+    streamId: "stream-2",
+    expiresAt: "2026-09-27T12:00:00.000Z",
+  });
+  assert.equal(
+    service.pendingQuestion("device-1", "stream-2")?.expiresAt,
+    new Date(now + 5 * 60 * 1_000).toISOString(),
+  );
+  owner2.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
+});
+
 test("questionnaire publishes reject unbound prompts and duplicate stream prompts", () => {
   const service = new AidenRemoteStreamService({
     now: () => 1_000,

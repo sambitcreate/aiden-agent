@@ -10,6 +10,7 @@ import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseChatRunInput } from "../../renderer/shared/chat-run-input.js";
+import type { AskUserQuestionAnswerStatus } from "../../renderer/shared/ask-user-question.js";
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
@@ -162,12 +163,24 @@ export function registerChatGenerationHandlers(): void {
 
   ipcMain.handle(
     "chat:answerQuestionnaire",
-    async (event, promptId: unknown, response: unknown) => {
-      if (typeof promptId !== "string" || !promptId) return;
+    async (
+      event,
+      promptId: unknown,
+      response: unknown,
+    ): Promise<{ status: AskUserQuestionAnswerStatus } | undefined> => {
+      if (typeof promptId !== "string" || !promptId) return undefined;
       const owner = chatGenerationOwner(event);
-      if (!llmClient.answerQuestionnaire(promptId, response, owner.documentId)) {
+      const outcome = llmClient.answerQuestionnaireWithOutcome(
+        promptId,
+        response,
+        owner.documentId,
+      );
+      if (outcome === "rejected") {
         throw new Error("This renderer document does not own that questionnaire.");
       }
+      // "expired" tells the renderer the agent already moved on, so it can
+      // offer the answer as a follow-up message instead of losing it.
+      return { status: outcome };
     },
   );
 }

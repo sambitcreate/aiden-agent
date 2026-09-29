@@ -1407,6 +1407,12 @@ because their native file-mutator test binary had not been built. Run
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
 
+## 2026-09-27 timed ask-user (feature/timed-ask-user)
+- The worktree-isolation guard refuses compound shell commands (python heredoc plus a runner, `cat >> <<EOF` then npx, and `$HOME` inside gradlew env). Write scripts to the scratchpad and run them as a separate plain command, and spell out absolute SDK paths.
+- The Android gradle run printed only "Unable to locate a Java Runtime" to the log, and its background task still reported exit 0. Check the log, not the task status.
+- Pi terminal `select` supports `signal` and `timeout` options. Pass the shrinking remaining timeout on every selection under one questionnaire deadline; otherwise a sequence of questions or multi-select choices can outlive the advertised limit.
+- Pi's multi-select loop has no final `Done` choice once every option is selected. Save accumulated choices on that loop-exhaustion path or a completed selection can disappear from the response.
+
 ## 2026-09-27 Live subagent context window
 - A fresh workflow worktree has no `node_modules`, so `tsc` reports hundreds of misleading pi-ai type errors. Run `npm ci` before the first type-check.
 - The worktree guard refuses a heredoc and a `python3` run in the same Bash command. Write the script to the scratchpad and run it as a separate command.
