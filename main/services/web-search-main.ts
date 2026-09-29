@@ -2,7 +2,7 @@
 
 import { configStore } from "./config-store.js";
 import { configStores } from "./portable-config.js";
-import { webSearchCredentials } from "./web-search-credentials.js";
+import { webSearchCredentials, webSearchKeyPoolTracker } from "./web-search-credentials.js";
 import { webSearchExistingAuthReuse } from "./web-search-auth-reuse-main.js";
 import { webSearchRollout } from "./web-search-rollout.js";
 import { WebSearchService } from "./web-search.js";
@@ -41,6 +41,20 @@ export const webSearchService = new WebSearchService({
       return null;
     }
   },
+  getCredentialPool: async (providerId) => {
+    try {
+      const settings = await configStore.getWebSearchSettings();
+      return await webSearchCredentials.readPool(
+        webSearchCredentials.reference(
+          providerId,
+          settings.providerConfig[providerId as keyof typeof settings.providerConfig],
+        ),
+      );
+    } catch {
+      return null;
+    }
+  },
+  keyPoolTracker: webSearchKeyPoolTracker,
   getExistingAuthStatus: () => webSearchExistingAuthReuse.status(),
   resolveExistingAuth: () => webSearchExistingAuthReuse.resolve(),
   persistSettings: (patch) => configStore.setSettings(patch),

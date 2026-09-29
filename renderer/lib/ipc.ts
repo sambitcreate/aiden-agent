@@ -83,6 +83,11 @@ import type {
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type {
+  WebSearchKeyPoolProviderId,
+  WebSearchKeyPoolRendererState,
+  WebSearchKeyPoolStrategy,
+} from "../shared/web-search-key-pool";
 import {
   parseAskUserQuestionPrompt,
   type AskUserQuestionAnswerStatus,
@@ -505,6 +510,20 @@ export const webSearchApi = {
     invoke<WebSearchRendererSnapshot>("webSearch:setCredential", providerId, key),
   removeCredential: (providerId: WebSearchProviderId) =>
     invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
+  keyPool: {
+    get: (providerId: WebSearchKeyPoolProviderId) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:get", providerId),
+    add: (providerId: WebSearchKeyPoolProviderId, key: string, label?: string) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:add", providerId, key, label),
+    remove: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:remove", providerId, entryId),
+    reorder: (providerId: WebSearchKeyPoolProviderId, entryIds: string[]) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:reorder", providerId, entryIds),
+    setStrategy: (providerId: WebSearchKeyPoolProviderId, strategy: WebSearchKeyPoolStrategy) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:setStrategy", providerId, strategy),
+    resetCooldown: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+      invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:resetCooldown", providerId, entryId),
+  },
 };
 
 // ── Telegram remote control ──────────────────────────────────────────

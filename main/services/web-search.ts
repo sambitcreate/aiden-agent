@@ -46,6 +46,12 @@ import {
   type WebSearchRolloutPolicy,
 } from "./web-search-rollout.js";
 import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
+import {
+  runWithWebSearchKeyPool,
+  webSearchKeyPoolSupported,
+  WebSearchKeyPoolTracker,
+  type WebSearchKeyPool,
+} from "./web-search-key-pool-core.js";
 import type { WebSearchExistingAuthRendererStatus } from "./web-search-auth-reuse-core.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import type { AppSettings } from "./types.js";
@@ -57,6 +63,14 @@ export interface WebSearchServiceDependencies {
   getSettings: () => Promise<AppSettings>;
   /** Reads one main-owned credential; null means absent or unavailable. */
   getCredential?: (providerId: string) => Promise<string | null | undefined>;
+  /**
+   * Reads every pooled key for a pool-capable provider (main-only). When
+   * present, it replaces `getCredential` for those providers and enables
+   * per-key failover with cooldowns.
+   */
+  getCredentialPool?: (providerId: string) => Promise<WebSearchKeyPool | null | undefined>;
+  /** Process-local cooldown/rotation state shared with Settings status. */
+  keyPoolTracker?: WebSearchKeyPoolTracker;
   /** Reads only the redacted status of the explicit existing-auth binding. */
   getExistingAuthStatus?: () => Promise<WebSearchExistingAuthRendererStatus>;
   /** Re-verifies and resolves the explicit binding immediately before I/O. */
@@ -108,6 +122,8 @@ interface PreparedAttempt {
   readonly entry: WebSearchRouteEntry;
   readonly adapter?: WebSearchAdapter;
   readonly credential?: string;
+  /** Pooled keys; when present the attempt fails over across them. */
+  readonly keyPool?: WebSearchKeyPool;
   readonly readiness: WebSearchProviderReadiness;
   readonly ready: boolean;
 }
@@ -171,9 +187,11 @@ export class WebSearchService {
     Partial<Record<WebSearchProviderId, WebSearchAdapterFactory>>
   >;
   private readonly rollout: WebSearchRolloutPolicy;
+  private readonly keyPoolTracker: WebSearchKeyPoolTracker;
 
   constructor(private readonly dependencies: WebSearchServiceDependencies) {
     this.adapterFactories = dependencies.adapterFactories ?? WEB_SEARCH_ADAPTER_FACTORIES;
+    this.keyPoolTracker = dependencies.keyPoolTracker ?? new WebSearchKeyPoolTracker();
     // The default policy is captured when the main service is constructed.
     // It is intentionally not re-read per request or generation.
     this.rollout = pinWebSearchRolloutPolicy(dependencies.rollout ?? webSearchRollout);
@@ -305,6 +323,20 @@ export class WebSearchService {
     }
   }
 
+  private async readCredentialPool(providerId: string): Promise<WebSearchKeyPool | undefined> {
+    if (!this.dependencies.getCredentialPool) return undefined;
+    try {
+      const pool = await this.dependencies.getCredentialPool(providerId);
+      if (!pool) return undefined;
+      const keys = pool.keys.filter(
+        (entry) => typeof entry.key === "string" && entry.key.trim().length > 0,
+      );
+      return keys.length > 0 ? { strategy: pool.strategy, keys } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async readExistingAuthStatus(): Promise<WebSearchExistingAuthRendererStatus | undefined> {
     if (!this.dependencies.getExistingAuthStatus) return undefined;
     try {
@@ -369,6 +401,7 @@ export class WebSearchService {
     const routeForCredential =
       settings.selection.mode === "fixed" ? [settings.selection] : settings.selection.route;
     const credentials = new Map<WebSearchProviderId, string | undefined>();
+    const keyPools = new Map<WebSearchProviderId, WebSearchKeyPool>();
     if (legacyCredentialRead) {
       // The legacy Exa read above is a migration discriminator and remains
       // the credential for a legacy keyed Exa selection. Do not read it twice.
@@ -378,13 +411,21 @@ export class WebSearchService {
       (entry) => entry.credentialMode === "api-key" && !credentials.has(entry.providerId),
     );
     const routedCredentials = await Promise.all(
-      routedApiKeyEntries.map(async (entry) => ({
-        providerId: entry.providerId,
-        credential: await this.readCredential(entry.providerId),
-      })),
+      routedApiKeyEntries.map(async (entry) => {
+        if (this.dependencies.getCredentialPool && webSearchKeyPoolSupported(entry.providerId)) {
+          const keyPool = await this.readCredentialPool(entry.providerId);
+          return { providerId: entry.providerId, credential: keyPool?.keys[0]?.key, keyPool };
+        }
+        return {
+          providerId: entry.providerId,
+          credential: await this.readCredential(entry.providerId),
+          keyPool: undefined,
+        };
+      }),
     );
-    for (const { providerId, credential } of routedCredentials) {
+    for (const { providerId, credential, keyPool } of routedCredentials) {
       credentials.set(providerId, credential);
+      if (keyPool) keyPools.set(providerId, keyPool);
     }
 
     const route = snapshotWebSearchRoute(settings);
@@ -420,7 +461,16 @@ export class WebSearchService {
           settings.enabled &&
           adapter !== undefined &&
           webSearchRouteEntryReady(entry, settings.providerConfig[entry.providerId], readiness);
-        return { entry, adapter, credential, readiness, ready };
+        const keyPool =
+          entry.credentialMode === "api-key" ? keyPools.get(entry.providerId) : undefined;
+        return {
+          entry,
+          adapter,
+          credential,
+          ...(keyPool === undefined ? {} : { keyPool }),
+          readiness,
+          ready,
+        };
       }),
     );
     return { settings, route, attempts };
@@ -495,23 +545,42 @@ export class WebSearchService {
       // the hook is the final per-attempt fence immediately before adapter I/O.
       // A failed binding must therefore consume neither a child budget nor a
       // network attempt.
-      if (options.beforeProviderAttempt) {
-        await options.beforeProviderAttempt(attempt.entry.providerId);
-      }
-      if (callerSignal.aborted) throw webSearchError("cancelled", attempt.entry.providerId);
-      if (controller.signal.aborted) {
-        throw webSearchError(timedOut ? "timeout" : "cancelled", attempt.entry.providerId);
-      }
-      const adapterRequest: WebSearchAdapterRequest = {
-        query: request.query,
-        numResults: request.numResults,
-        credentialMode: attempt.entry.credentialMode,
-        ...(attempt.credential === undefined ? {} : { credential: attempt.credential }),
-        ...(existingAuth === undefined ? {} : { existingAuth }),
-        signal: controller.signal,
-        timedOut: () => timedOut,
+      const adapter = attempt.adapter;
+      const beforeRequest = async () => {
+        if (options.beforeProviderAttempt) {
+          await options.beforeProviderAttempt(attempt.entry.providerId);
+        }
+        if (callerSignal.aborted) throw webSearchError("cancelled", attempt.entry.providerId);
+        if (controller.signal.aborted) {
+          throw webSearchError(timedOut ? "timeout" : "cancelled", attempt.entry.providerId);
+        }
       };
-      const result = await attempt.adapter.search(adapterRequest);
+      const send = (credential: string | undefined) =>
+        adapter.search({
+          query: request.query,
+          numResults: request.numResults,
+          credentialMode: attempt.entry.credentialMode,
+          ...(credential === undefined ? {} : { credential }),
+          ...(existingAuth === undefined ? {} : { existingAuth }),
+          signal: controller.signal,
+          timedOut: () => timedOut,
+        } satisfies WebSearchAdapterRequest);
+      let result: WebSearchResultSet;
+      if (attempt.keyPool) {
+        // Each keyed request is its own provider request, so the per-request
+        // fence (budget, authority, cancellation) runs before every key.
+        result = await runWithWebSearchKeyPool({
+          providerId: attempt.entry.providerId,
+          pool: attempt.keyPool,
+          tracker: this.keyPoolTracker,
+          signal: controller.signal,
+          beforeKeyAttempt: beforeRequest,
+          run: send,
+        });
+      } else {
+        await beforeRequest();
+        result = await send(attempt.credential);
+      }
       if (callerSignal.aborted) throw webSearchError("cancelled", attempt.entry.providerId);
       if (
         existingAuth !== undefined &&
