@@ -22177,9 +22177,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.44,
-          "output": 1.32,
-          "cache_read": 0.014
+          "input": 0.22,
+          "output": 0.66,
+          "cache_read": 0.007
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-vision-exp"
       },
@@ -72629,9 +72629,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6795,
-          "output": 8.7934,
-          "cache_read": 0.3
+          "input": 0.4,
+          "output": 10,
+          "cache_read": 0.4
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -74153,9 +74153,8 @@
           "output": 147456
         },
         "cost": {
-          "input": 0.1344,
-          "output": 0.2016,
-          "cache_read": 0.0672
+          "input": 0.27,
+          "output": 0.41
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
@@ -76774,8 +76773,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.03,
-          "output": 0.5,
+          "input": 0.02,
+          "output": 0.3,
           "cache_read": 0.01
         }
       },
@@ -76812,11 +76811,11 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.15,
-          "output": 4,
+          "input": 0.2,
+          "output": 3.4,
           "cache_read": 0.15
         }
       },
@@ -77955,7 +77954,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.22592,
+          "input": 0.15808,
           "output": 1.9584,
           "cache_read": 0.07488
         }
@@ -81635,9 +81634,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cache_read": 0.0028
+          "input": 0.08,
+          "output": 1.28,
+          "cache_read": 0.08
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -109600,9 +109599,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6795,
-          "output": 8.7934,
-          "cache_read": 0.3
+          "input": 0.4,
+          "output": 10,
+          "cache_read": 0.4
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -111190,9 +111189,8 @@
           "output": 147456
         },
         "cost": {
-          "input": 0.1344,
-          "output": 0.2016,
-          "cache_read": 0.0672
+          "input": 0.27,
+          "output": 0.41
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
@@ -113845,8 +113843,8 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.03,
-          "output": 0.5,
+          "input": 0.02,
+          "output": 0.3,
           "cache_read": 0.01
         }
       },
@@ -113883,11 +113881,11 @@
         "open_weights": false,
         "limit": {
           "context": 1310720,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 0.15,
-          "output": 4,
+          "input": 0.2,
+          "output": 3.4,
           "cache_read": 0.15
         }
       },
@@ -115199,7 +115197,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.22592,
+          "input": 0.15808,
           "output": 1.9584,
           "cache_read": 0.07488
         }
@@ -119948,9 +119946,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0428,
+          "input": 0.0539,
           "output": 4.4,
-          "cache_read": 0.0342
+          "cache_read": 0.0431
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
@@ -246024,6 +246022,49 @@
           "cache_write": 0.15
         }
       },
+      "fastino/gliner2.5-base-v1": {
+        "id": "fastino/gliner2.5-base-v1",
+        "name": "GLiNER 2.5 Base",
+        "description": "English boundary NER and structured extraction with LoRA fine-tuning.",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "temperature": true,
+        "release_date": "2026-08-24",
+        "last_updated": "2026-08-24",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 4096,
+          "output": 4096
+        },
+        "cost": {
+          "input": 0.03,
+          "output": 0,
+          "cache_read": 0.03,
+          "cache_write": 0.03
+        }
+      },
       "fastino/gliner2-privacy-filter-PII-multi": {
         "id": "fastino/gliner2-privacy-filter-PII-multi",
         "name": "GLiNER2 Privacy Filter PII (Multi)",
@@ -246314,6 +246355,35 @@
           ]
         },
         "open_weights": false,
+        "limit": {
+          "context": 8192,
+          "output": 8192
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.15,
+          "cache_read": 0.15,
+          "cache_write": 0.15
+        }
+      },
+      "fastino/GLiNER-2.5-Decide": {
+        "id": "fastino/GLiNER-2.5-Decide",
+        "name": "GLiNER-2.5-Decide",
+        "description": "Classification-tuned GLiNER2 large. Entities, relations, and JSON extraction still work.",
+        "attachment": false,
+        "reasoning": false,
+        "tool_call": true,
+        "release_date": "2026-09-24",
+        "last_updated": "2026-09-24",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
         "limit": {
           "context": 8192,
           "output": 8192
@@ -248188,6 +248258,53 @@
           "cache_write": 6.25
         },
         "canonical_model_id": "anthropic/claude-opus-5"
+      },
+      "claude-sonnet-5.5": {
+        "id": "claude-sonnet-5.5",
+        "name": "Claude Sonnet 5.5",
+        "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-28",
+        "last_updated": "2026-09-28",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5
+        },
+        "canonical_model_id": "anthropic/claude-sonnet-5-5"
       },
       "gemini-3.5-flash": {
         "id": "gemini-3.5-flash",
@@ -253621,8 +253738,8 @@
             ]
           }
         ],
-        "tool_call": false,
-        "structured_output": false,
+        "tool_call": true,
+        "structured_output": true,
         "temperature": true,
         "release_date": "2026-08-28",
         "last_updated": "2026-08-28",
@@ -255706,6 +255823,54 @@
         },
         "canonical_model_id": "anthropic/claude-sonnet-4-6"
       },
+      "anthropic/claude-sonnet-5-5": {
+        "id": "anthropic/claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-28",
+        "last_updated": "2026-09-28",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5
+        },
+        "canonical_model_id": "anthropic/claude-sonnet-5-5"
+      },
       "anthropic/claude-opus-4-7": {
         "id": "anthropic/claude-opus-4-7",
         "name": "Claude Opus 4.7",
@@ -256966,6 +257131,50 @@
         },
         "canonical_model_id": "meta/muse-glimmer-30b"
       },
+      "flexai/DeepSeek-V4.1-Flash": {
+        "id": "flexai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash (FlexAI)",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.42,
+          "cache_read": 0.021
+        },
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
+      },
       "flexai/gpt-oss-20b": {
         "id": "flexai/gpt-oss-20b",
         "name": "GPT OSS 20B (FlexAI)",
@@ -258003,9 +258212,9 @@
           "cache_read": 0.5,
           "tiers": [
             {
-              "input": 3.2,
-              "output": 9.6,
-              "cache_read": 0.8,
+              "input": 4,
+              "output": 12,
+              "cache_read": 1,
               "tier": {
                 "type": "context",
                 "size": 200000
@@ -258013,9 +258222,9 @@
             }
           ],
           "context_over_200k": {
-            "input": 3.2,
-            "output": 9.6,
-            "cache_read": 0.8
+            "input": 4,
+            "output": 12,
+            "cache_read": 1
           }
         },
         "canonical_model_id": "xai/grok-4.7"
@@ -258065,9 +258274,9 @@
           "cache_read": 0.5,
           "tiers": [
             {
-              "input": 3.2,
-              "output": 9.6,
-              "cache_read": 0.8,
+              "input": 4,
+              "output": 12,
+              "cache_read": 1,
               "tier": {
                 "type": "context",
                 "size": 200000
@@ -258075,9 +258284,9 @@
             }
           ],
           "context_over_200k": {
-            "input": 3.2,
-            "output": 9.6,
-            "cache_read": 0.8
+            "input": 4,
+            "output": 12,
+            "cache_read": 1
           }
         },
         "canonical_model_id": "xai/grok-4.7"
@@ -258554,7 +258763,7 @@
             ]
           }
         ],
-        "tool_call": false,
+        "tool_call": true,
         "structured_output": false,
         "temperature": true,
         "knowledge": "2025-05",

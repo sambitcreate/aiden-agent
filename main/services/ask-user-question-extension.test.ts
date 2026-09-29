@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ASK_USER_MAX_TIMEOUT_SECONDS,
+  ASK_USER_MIN_TIMEOUT_SECONDS,
+  ASK_USER_UNATTENDED_TIMEOUT_SECONDS,
+} from "../../renderer/shared/ask-user-question.js";
+import {
   createAskUserQuestionExtension,
+  resolveAskUserQuestionTimeoutMs,
   shouldEnableAskUserQuestionExtension,
 } from "./ask-user-question-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
@@ -69,4 +75,50 @@ test("tool returns selected and skipped answers without replaying an interruptio
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
   assert.match(text, /Answer: Direct/u);
   assert.match(text, /Answer: Skipped/u);
+});
+
+const oneQuestion = [
+  {
+    question: "Which approach?",
+    header: "Approach",
+    options: [
+      { label: "Direct", description: "Implement it now." },
+      { label: "Guided", description: "Explain each step." },
+    ],
+  },
+];
+
+test("a timed-out questionnaire tells the agent to proceed on its own judgement", async () => {
+  const requestedTimeouts: Array<number | undefined> = [];
+  const extension = createAskUserQuestionExtension({
+    request: async (_toolCallId, _questions, _signal, timeoutSeconds) => {
+      requestedTimeouts.push(timeoutSeconds);
+      return { version: 1, promptId: "q-one", cancelled: true, answers: [], timedOut: true };
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const result = await tool.execute("call-timed", { questions: oneQuestion, timeoutSeconds: 5 });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  assert.match(text, /No answer was received/u);
+  assert.match(text, /best judgement/u);
+  assert.doesNotMatch(text, /closed the questionnaire/u);
+  // Out-of-range requests are clamped into the supported window.
+  assert.deepEqual(requestedTimeouts, [ASK_USER_MIN_TIMEOUT_SECONDS]);
+
+  await tool.execute("call-untimed", { questions: oneQuestion });
+  assert.deepEqual(requestedTimeouts, [ASK_USER_MIN_TIMEOUT_SECONDS, undefined]);
+});
+
+test("attended owners wait unless asked; unattended owners always get a capped deadline", () => {
+  const cap = ASK_USER_UNATTENDED_TIMEOUT_SECONDS * 1_000;
+  assert.equal(resolveAskUserQuestionTimeoutMs(undefined, { unattended: false }), undefined);
+  assert.equal(resolveAskUserQuestionTimeoutMs(120, { unattended: false }), 120_000);
+  assert.equal(
+    resolveAskUserQuestionTimeoutMs(ASK_USER_MAX_TIMEOUT_SECONDS * 10, { unattended: false }),
+    ASK_USER_MAX_TIMEOUT_SECONDS * 1_000,
+  );
+  assert.equal(resolveAskUserQuestionTimeoutMs(undefined, { unattended: true }), cap);
+  assert.equal(resolveAskUserQuestionTimeoutMs(60, { unattended: true }), 60_000);
+  assert.equal(resolveAskUserQuestionTimeoutMs(3_600, { unattended: true }), cap);
 });

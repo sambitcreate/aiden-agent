@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, CircleGauge } from "lucide-react";
 import {
   buildSubagentTree,
   subagentTreeIsExpanded,
@@ -10,6 +10,11 @@ import {
   type SubagentTreeNode,
 } from "../lib/subagent-tree";
 import { cn } from "../lib/ui-utils";
+import type { SubagentContextUsageByRunId } from "../lib/subagent-context-usage-store";
+import {
+  subagentContextIsApproachingLimit,
+  subagentContextUsageLabels,
+} from "../shared/subagent-context-usage";
 import {
   splitSubagentRunViews,
   type SubagentRunPresentation,
@@ -54,6 +59,7 @@ function RosterNode({
   onSelect,
   onKeyDown,
   presentationByRunId,
+  contextUsageByRunId,
 }: {
   node: SubagentTreeNode;
   expansion: Readonly<Record<string, boolean>>;
@@ -64,12 +70,15 @@ function RosterNode({
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, runId: string) => void;
   presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
+  contextUsageByRunId?: SubagentContextUsageByRunId;
 }) {
   const run = node.run;
   const expanded = subagentTreeIsExpanded(node, expansion);
   const selected = run.runId === selectedRunId;
   const presentation = presentationByRunId?.get(run.runId);
   const displayState = presentation?.label ?? subagentStateLabel(run.state);
+  const contextUsage = contextUsageByRunId?.get(run.runId);
+  const contextLabels = contextUsage ? subagentContextUsageLabels(contextUsage) : undefined;
   const pendingQuestion = subagentPendingQuestion({
     state: run.state,
     activity: run.snapshot?.activity,
@@ -114,7 +123,7 @@ function RosterNode({
           tabIndex={focusedRunId === run.runId ? 0 : -1}
           aria-selected={selected}
           data-subagent-presentation={presentation?.state}
-          aria-label={`${run.label}, ${run.role}, ${displayState}${pendingQuestion ? `: ${pendingQuestion}` : ""}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
+          aria-label={`${run.label}, ${run.role}, ${displayState}${pendingQuestion ? `: ${pendingQuestion}` : ""}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${contextLabels ? `, ${contextLabels.spoken}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
           onFocus={() => onFocusRun(run.runId)}
           onKeyDown={(event) => onKeyDown(event, run.runId)}
           onClick={(event) => onSelect(run.runId, event.currentTarget)}
@@ -147,6 +156,22 @@ function RosterNode({
               </Text>
             )}
           </span>
+          {contextUsage && contextLabels ? (
+            <Text
+              as="span"
+              variant="small"
+              color="tertiary"
+              data-subagent-context-usage={run.runId}
+              title={`Context window: ${contextLabels.amount} (${contextLabels.percent})`}
+              className={cn(
+                "flex shrink-0 items-center gap-1 tabular-nums",
+                subagentContextIsApproachingLimit(contextUsage) && "text-support-warning",
+              )}
+            >
+              <CircleGauge aria-hidden="true" className="size-3.5" />
+              {contextLabels.percent}
+            </Text>
+          ) : null}
           {hiddenCount > 0 ? (
             <Text as="span" variant="small" color="tertiary" className="shrink-0">
               +{hiddenCount}
@@ -181,6 +206,7 @@ function RosterNode({
               onSelect={onSelect}
               onKeyDown={onKeyDown}
               presentationByRunId={presentationByRunId}
+              contextUsageByRunId={contextUsageByRunId}
             />
           ))}
         </div>
@@ -204,6 +230,7 @@ function RosterGroup({
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, runId: string) => void;
   presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
+  contextUsageByRunId?: SubagentContextUsageByRunId;
 }) {
   if (nodes.length === 0) return null;
   return (
@@ -223,6 +250,8 @@ export interface SubagentRosterProps {
   selectedRunId: string | null;
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
   presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
+  /** Live context readings; supply only for runs that are still active. */
+  contextUsageByRunId?: SubagentContextUsageByRunId;
   className?: string;
 }
 
@@ -231,6 +260,7 @@ export function SubagentRoster({
   selectedRunId,
   onSelect,
   presentationByRunId,
+  contextUsageByRunId,
   className,
 }: SubagentRosterProps) {
   const treeRef = React.useRef<HTMLDivElement | null>(null);
@@ -289,6 +319,7 @@ export function SubagentRoster({
     onSelect,
     onKeyDown: handleKeyDown,
     presentationByRunId,
+    contextUsageByRunId,
   };
   return (
     <nav aria-label="Subagents" className={cn("min-h-0 overflow-y-auto pb-3", className)}>

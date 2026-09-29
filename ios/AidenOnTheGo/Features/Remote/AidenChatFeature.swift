@@ -2927,6 +2927,9 @@ final class AidenChatViewModel {
               let question = pendingQuestion, question.id == promptID, question.canRespond else { return }
         guard question.expiresAt > Date() else {
             pendingQuestion = nil
+            // The Mac stopped waiting at expiresAt and the agent continued on
+            // its own judgement; say so instead of silently dropping the answer.
+            presentedError = String(localized: "This question expired, so Aiden continued with its best judgement. Send your answer as a message if it should change course.")
             return
         }
         guard let streamID = activeStreamID,
