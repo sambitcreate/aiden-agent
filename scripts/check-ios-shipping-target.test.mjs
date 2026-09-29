@@ -101,6 +101,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Persistence/AidenBotCache.swift",
   "AidenOnTheGo/Persistence/AidenChatCache.swift",
   "AidenOnTheGo/Persistence/AidenChatDraftStore.swift",
+  "AidenOnTheGo/Persistence/AidenModelPreferenceStore.swift",
 ];
 
 const testSources = [
