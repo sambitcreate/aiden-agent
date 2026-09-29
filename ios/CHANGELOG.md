@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tool calls whose arguments are still streaming now read "Preparing <tool>" in activity rows, matching Aiden Agent, instead of claiming the work already started.
+
 - Converted the imported SwiftUI foundation into the Aiden On The Go product identity and signed application shell.
 - Added canonical Aiden Remote pairing, pinned transport, multiple installations, Keychain credential isolation, workspace CRUD, and approved-root browsing foundations.
 - Removed the imported Hermes WebUI product surface and compatibility configuration from the build.

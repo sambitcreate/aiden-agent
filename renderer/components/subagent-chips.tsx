@@ -27,6 +27,8 @@ export function subagentOrbState(
   activity?: string,
 ): OrbState {
   if (state === "queued" || state === "starting") return "shaping";
+  // A waiting child's activity is its free-form pending question, not a tool milestone.
+  if (state === "needs_attention") return fallbackOrbStateForRole(role);
   if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
     return "searching";
   if (activity === "Reviewing workspace context") return "solving";
@@ -145,6 +147,7 @@ export function SubagentChips({
                 state === "timed_out" && "text-support-warning",
                 state === "needs_attention" && "text-support-warning",
               )}
+              title={status}
             >
               {status}
             </span>

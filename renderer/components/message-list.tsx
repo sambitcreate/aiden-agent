@@ -10,6 +10,8 @@ import type { ReadAloudActionProps } from "./read-aloud-button";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
+import { TurnFooter } from "./turn-footer";
+import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
@@ -76,6 +78,8 @@ interface AssistantResponseProps {
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
   richLinks?: boolean;
+  /** Settled turn facts; joins the tail action row, or stands alone without prose. */
+  footer?: React.ReactNode;
 }
 
 function AssistantResponse({
@@ -89,6 +93,7 @@ function AssistantResponse({
   onStreamHandoffComplete,
   readAloud,
   richLinks = true,
+  footer,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
@@ -121,11 +126,13 @@ function AssistantResponse({
             onStreamHandoffComplete={onStreamHandoffComplete}
             readAloud={readAloud}
             richLinks={richLinks}
+            footer={footer}
           />
         ) : null}
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
+        {!content && footer ? footer : null}
       </>
     );
   }
@@ -180,14 +187,21 @@ function AssistantResponse({
             copyText={content}
             readAloud={isLastText ? readAloud : undefined}
             richLinks={richLinks}
+            footer={isLastText ? footer : undefined}
           />
         );
       })}
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
+      {lastTextIndex < 0 && footer ? footer : null}
     </>
   );
+}
+
+function settledTurnFooter(message: ChatMessage): React.ReactNode {
+  const items = turnFooterItems(message);
+  return items.length > 0 ? <TurnFooter items={items} /> : undefined;
 }
 
 export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1 }) {
@@ -362,6 +376,7 @@ export function MessageList({
               attachments={message.attachments}
               readAloud={readAloudMessageId === message.id ? readAloud : undefined}
               richLinks={message.id !== richLinkHandoffDuplicateId}
+              footer={settledTurnFooter(message)}
               subagentChips={
                 subagentsEnabled && message.subagents ? (
                   <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />

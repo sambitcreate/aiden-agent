@@ -509,6 +509,61 @@ test("streaming chips render ordered live snapshots before a message reference e
   assert.equal(renderToStaticMarkup(<SubagentChips runs={[]} onOpen={() => undefined} />), "");
 });
 
+test("a waiting child shows its pending question in chips, roster, detail, and live summary", () => {
+  const question = "Should I delete the generated fixtures in tests/tmp?";
+  const asking = v2Run({
+    runId: "asking",
+    label: "Fixture cleaner",
+    state: "needs_attention",
+    activity: question,
+  });
+  const generic = v2Run({
+    runId: "generic",
+    label: "Silent scout",
+    state: "needs_attention",
+    activity: "Needs attention.",
+  });
+
+  const chips = renderToStaticMarkup(
+    <SubagentChips runs={[asking, generic]} onOpen={() => undefined} />,
+  );
+  assert.match(
+    chips,
+    /aria-label="Open Fixture cleaner\. Status: Needs attention: Should I delete the generated fixtures in tests\/tmp\?\."/u,
+  );
+  assert.match(chips, />Needs attention: Should I delete the generated fixtures in tests\/tmp\?</u);
+  assert.match(chips, /aria-label="Open Silent scout\. Status: Needs attention\."/u);
+  assert.doesNotMatch(chips, /Needs attention\.</u);
+
+  const roster = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[view(asking), view(generic)]}
+      selectedRunId="asking"
+      onSelect={() => undefined}
+    />,
+  );
+  assert.match(
+    roster,
+    /aria-label="Fixture cleaner, scout, Needs attention: Should I delete the generated fixtures in tests\/tmp\?"/u,
+  );
+  assert.match(roster, /data-subagent-pending-question="true"[^>]*>Should I delete the generated fixtures/u);
+  assert.equal((roster.match(/data-subagent-pending-question/gu) ?? []).length, 1);
+  // Without a question the row keeps its task preview instead of generic copy.
+  assert.match(roster, /aria-label="Silent scout, scout, Needs attention"/u);
+  assert.match(roster, />Review the renderer integration</u);
+
+  const detail = renderToStaticMarkup(<SubagentDetail run={asking} />);
+  assert.match(detail, />Waiting on</u);
+  assert.match(detail, /Should I delete the generated fixtures in tests\/tmp\?/u);
+  const genericDetail = renderToStaticMarkup(<SubagentDetail run={generic} />);
+  assert.match(genericDetail, />Latest activity</u);
+
+  assert.match(
+    subagentSnapshotLiveSummary([{ ...asking, updatedAt: 9_000 }, generic]),
+    /^2 active subagents: 2 needs attention; 0 finished\. Latest active update: Fixture cleaner, Needs attention: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
+  );
+});
+
 test("V2 detail exposes context but gates controls on production callbacks", () => {
   const fresh = v2Run();
   const unavailable = renderToStaticMarkup(<SubagentDetail run={fresh} />);

@@ -26,3 +26,18 @@ export function reduceReasoningDisclosure(
   if (state.userControlled || !state.expanded) return state;
   return { expanded: false, userControlled: false };
 }
+
+export type ReasoningDisclosureLayout = "collapsed" | "preview" | "full";
+
+/**
+ * The automatic streaming preview is a short, tail-following window. Once the
+ * reader deliberately opens a disclosure it flows at full height inside the
+ * transcript, with a sticky header, so long reasoning reads like prose instead
+ * of a cramped nested scroller.
+ */
+export function reasoningDisclosureLayout(
+  state: ReasoningDisclosureState,
+): ReasoningDisclosureLayout {
+  if (!state.expanded) return "collapsed";
+  return state.userControlled ? "full" : "preview";
+}

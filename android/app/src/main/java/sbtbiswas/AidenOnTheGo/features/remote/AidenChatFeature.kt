@@ -1,7 +1,13 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.graphics.BitmapFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentUpload
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -17,7 +23,19 @@ object AidenAttachmentPreparation {
     const val MAXIMUM_TEXT_BYTES = 400_000
     const val MAXIMUM_TEXT_SCALARS = 100_000
 
-    fun imageUpload(data: ByteArray, name: String): AidenAttachmentUpload.Image {
+    private val workerMutex = Mutex()
+
+    // Only one selected image conversion runs at a time across chats.
+    suspend fun <T> onWorker(block: suspend () -> T): T = workerMutex.withLock {
+        withContext(Dispatchers.IO) { block() }
+    }
+
+    fun imageUpload(
+        data: ByteArray,
+        name: String,
+        checkCancellation: () -> Unit = {}
+    ): AidenAttachmentUpload.Image {
+        checkCancellation()
         if (data.isEmpty() || data.size > MAXIMUM_SOURCE_IMAGE_BYTES) {
             throw AidenRemoteContractException.UnsafePayloadField("image exceeds size limit")
         }
@@ -51,39 +69,73 @@ object AidenAttachmentPreparation {
             }
         }
 
-        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        checkCancellation()
+        val decodeOptions = BitmapFactory.Options().apply {
+            // Largest conversion candidate is 3072 px. Keep enough pixels for that
+            // candidate, then scale exactly; original PNG/JPEG passthrough stays intact.
+            var sample = 1
+            while (maxOf(pixelWidth, pixelHeight) / (sample * 2) >= 3072) sample *= 2
+            inSampleSize = sample
+        }
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size, decodeOptions)
             ?: throw AidenRemoteContractException.UnsafePayloadField("invalid image")
-        val preserveAlpha = bitmap.hasAlpha()
-        val edges = listOf(3072.0f, 2048.0f, 1536.0f, 1024.0f)
-        for (edge in edges) {
-            val scaledBitmap = scaleBitmap(bitmap, edge)
-            if (preserveAlpha) {
-                val stream = ByteArrayOutputStream()
-                scaledBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-                val encoded = stream.toByteArray()
-                if (encoded.size <= MAXIMUM_IMAGE_BYTES) {
-                    return AidenAttachmentUpload.Image(
-                        name = safeImageName(name, "png"),
-                        mimeType = "image/png",
-                        data = Base64.getEncoder().encodeToString(encoded)
-                    )
+        try {
+            val preserveAlpha = bitmap.hasAlpha()
+            val orientation = runCatching {
+                data.inputStream().use {
+                    ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
                 }
-            } else {
-                for (quality in listOf(86, 72, 58)) {
-                    val stream = ByteArrayOutputStream()
-                    scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-                    val encoded = stream.toByteArray()
-                    if (encoded.size <= MAXIMUM_IMAGE_BYTES) {
-                        return AidenAttachmentUpload.Image(
-                            name = safeImageName(name, "jpg"),
-                            mimeType = "image/jpeg",
-                            data = Base64.getEncoder().encodeToString(encoded)
-                        )
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+            val edges = listOf(3072.0f, 2048.0f, 1536.0f, 1024.0f)
+            for (edge in edges) {
+                checkCancellation()
+                val scaledBitmap = scaleBitmap(bitmap, edge)
+                try {
+                    val orientedBitmap = orientBitmap(scaledBitmap, orientation)
+                    try {
+                        val qualities = if (preserveAlpha) listOf(100) else listOf(86, 72, 58)
+                        val format = if (preserveAlpha) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                        for (quality in qualities) {
+                            checkCancellation()
+                            val stream = ByteArrayOutputStream()
+                            if (!orientedBitmap.compress(format, quality, stream)) continue
+                            checkCancellation()
+                            val encoded = stream.toByteArray()
+                            if (encoded.size <= MAXIMUM_IMAGE_BYTES) {
+                                val ext = if (preserveAlpha) "png" else "jpg"
+                                return AidenAttachmentUpload.Image(
+                                    name = safeImageName(name, ext),
+                                    mimeType = if (preserveAlpha) "image/png" else "image/jpeg",
+                                    data = Base64.getEncoder().encodeToString(encoded)
+                                )
+                            }
+                        }
+                    } finally {
+                        if (orientedBitmap !== scaledBitmap) orientedBitmap.recycle()
                     }
+                } finally {
+                    if (scaledBitmap !== bitmap) scaledBitmap.recycle()
                 }
             }
+            throw AidenRemoteContractException.UnsafePayloadField("image too large to attach")
+        } finally {
+            bitmap.recycle()
         }
-        throw AidenRemoteContractException.UnsafePayloadField("image too large to attach")
+    }
+
+    private fun orientBitmap(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(-90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+            else -> return bitmap
+        }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     fun textUpload(data: ByteArray, name: String, mimeType: String): AidenAttachmentUpload.Text {
