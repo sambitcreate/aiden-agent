@@ -76815,9 +76815,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.15,
+          "input": 0.195,
           "output": 4,
-          "cache_read": 0.15
+          "cache_read": 0.195
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -112673,9 +112673,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.3349,
-          "output": 4.4,
-          "cache_read": 0.26
+          "input": 0.3249,
+          "output": 3.52,
+          "cache_read": 0.2599
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -113886,9 +113886,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.15,
+          "input": 0.195,
           "output": 4,
-          "cache_read": 0.15
+          "cache_read": 0.195
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -119948,9 +119948,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0528,
+          "input": 0.0449,
           "output": 4.4,
-          "cache_read": 0.0422
+          "cache_read": 0.0359
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
