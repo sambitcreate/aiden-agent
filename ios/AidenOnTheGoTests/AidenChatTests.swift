@@ -774,6 +774,171 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testTranscriptPublishesWhileCatalogIsHeldIncludingCatalogFailure() async throws {
+        for fails in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-delay-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let cache = AidenChatCache(root: root)
+            let published = expectation(description: "fresh transcript admitted before catalog release")
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache) { _ in published.fulfill() }
+            var remote = model.chat
+            remote.messages = [AidenChatMessage(id: "fresh", role: .assistant, text: "Fresh transcript", createdAt: Date())]
+            let fixture = AidenStreamRecoveryFixture(chat: remote)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                if request.url?.path.hasSuffix("/models") == true {
+                    if fails {
+                        return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Catalog unavailable","requestId":"catalog","retryable":true}}"#.utf8))
+                    }
+                    return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"Default"},{"id":"user-choice","label":"User choice"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+                }
+                return fixture.response(request)
+            }
+            let held = expectation(description: "catalog held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+            let loading = Task { await model.load(observeProgress: false) }
+            await fulfillment(of: [held, published], timeout: 3)
+            XCTAssertEqual(model.chat.messages.map(\.text), ["Fresh transcript"])
+            XCTAssertNil(model.catalog)
+            let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            XCTAssertEqual(persisted?.messages.map(\.text), ["Fresh transcript"])
+            // A choice made while the optional request is suspended owns the composer.
+            model.selectModel(providerId: "openai", modelId: "user-choice", thinkingLevel: "high")
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            XCTAssertEqual(model.selectedModelId, "user-choice")
+            XCTAssertEqual(model.selectedThinkingLevel, "high")
+            XCTAssertEqual(model.catalog == nil, fails)
+            XCTAssertEqual(model.chat.messages.map(\.text), ["Fresh transcript"])
+            XCTAssertNil(model.presentedError)
+            XCTAssertFalse(model.isLoading)
+        }
+    }
+
+    @MainActor
+    func testChatFailureDoesNotDiscardSuccessfulCatalog() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-failure-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root))
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.contains("/chats/") == true {
+                return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Transcript unavailable","requestId":"chat","retryable":true}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(model.selectedModelId, "gpt-5.6")
+        XCTAssertNotNil(model.catalog)
+    }
+
+    @MainActor
+    func testHeldCatalogCannotPublishAfterRemovalOrUnpair() async throws {
+        for unpair in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-invalidation-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let cache = AidenChatCache(root: root)
+            var coordinator: AidenRemoteCoordinator!
+            let published = expectation(description: "transcript published")
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+                onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in published.fulfill() })
+            let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+            let held = expectation(description: "catalog held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+            let loading = Task { await model.load(observeProgress: false) }
+            await fulfillment(of: [held, published], timeout: 3)
+            if unpair {
+                let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+                await coordinator.removeInstallation(installation.id)
+            } else {
+                await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            XCTAssertNil(model.catalog)
+            XCTAssertFalse(model.canSend)
+            let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            XCTAssertNil(persisted)
+        }
+    }
+
+    @MainActor
+    func testCatalogRevocationRedactsPublishedTranscriptBeforePurgeCompletes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-published-revocation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let cleanup = AidenChatWriteTestGate()
+        var coordinator: AidenRemoteCoordinator!
+        let published = expectation(description: "fresh transcript published")
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+            onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in published.fulfill() })
+        var remote = model.chat
+        remote.messages = [AidenChatMessage(id: "private", role: .assistant, text: "Published private transcript", createdAt: Date())]
+        let fixture = AidenStreamRecoveryFixture(chat: remote)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/models") == true {
+                return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again","requestId":"catalog","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.beforeRemovalAttachmentCleanup = { await cleanup.waitIfArmed() }
+        await cleanup.arm()
+        let held = expectation(description: "catalog revocation held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { held.fulfill() }
+        let loading = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [held, published], timeout: 3)
+        XCTAssertEqual(model.chat.messages.map(\.text), ["Published private transcript"])
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await waitForChatWrite(cleanup)
+        // The shell has not switched to pairing and disk cleanup is suspended.
+        // The still-mounted model must already have redacted its transcript.
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let beforePurge = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(beforePurge?.messages.map(\.text), ["Published private transcript"])
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertFalse(model.canSend)
+        await cleanup.release()
+        await loading.value
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        let afterPurge = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(afterPurge)
+    }
+
+    @MainActor
+    func testCatalogRevocationFencesHeldTranscript() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-revocation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        var publications = 0
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache,
+            onCoordinator: { coordinator = $0 }, onChatUpdated: { _ in publications += 1 })
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/models") == true {
+                return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again","requestId":"catalog","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let held = expectation(description: "transcript held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        let loading = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [held], timeout: 3)
+        for _ in 0..<300 where coordinator.installationStore.activeInstallation != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(coordinator.installationStore.activeInstallation)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+        XCTAssertEqual(publications, 0)
+        XCTAssertNil(model.catalog)
+        XCTAssertFalse(model.canSend)
+    }
+
+    @MainActor
     func testRejectedDetailLoadDoesNotMutateOrPublish() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rejected-load-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3365,6 +3530,23 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Recalled chat history")
     }
 
+    func testPendingToolCallReadsAsPreparingUntilItRuns() throws {
+        var step = AidenAgentStep(
+            id: "read-pending", order: 0, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .pending, startedAt: 1_000,
+            updatedAt: 1_000, finishedAt: nil, contentOffset: 0,
+            durationMs: nil, target: "src/app.ts", detail: nil, lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Preparing Read file")
+        step = AidenAgentStep(
+            id: "read-pending", order: 0, kind: .tool, toolName: "read_file",
+            label: "Read file", status: .running, startedAt: 1_000,
+            updatedAt: 1_200, finishedAt: nil, contentOffset: 0,
+            durationMs: nil, target: "src/app.ts", detail: nil, lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Reading src/app.ts")
+    }
+
     func testCompactionMetricsUseExistingActivityDetail() throws {
         let step = AidenAgentStep(
             id: "compact-1", order: 0, kind: .tool, toolName: "compact_context",
@@ -3642,7 +3824,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
     }
 
-    func testAgentReplyCopyKeepsOriginalMarkdownAndRejectsNonReplies() {
+    func testMessageCopyKeepsOriginalMarkdownAndSkipsEmptyMessages() {
         let assistant = AidenChatMessage(
             id: "assistant-1",
             role: .assistant,
@@ -3666,8 +3848,133 @@ final class AidenChatTests: XCTestCase {
             AidenMessageActionContent.copyText(for: assistant),
             "## Result\n\nUse `xcodebuild test`."
         )
-        XCTAssertNil(AidenMessageActionContent.copyText(for: user))
+        XCTAssertEqual(AidenMessageActionContent.copyText(for: user), "Please test it")
         XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
+    }
+
+    private func polishTimeline(
+        status: AidenGenerationTimelineStatus,
+        startedAt: Double,
+        finishedAt: Double?
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-polish",
+            status: status,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            steps: []
+        )
+    }
+
+    func testWorkedForUsesTheMacTimelineOnlyForCompletedAssistantTurns() {
+        let start = 1_787_079_660_000.0
+        func assistant(_ timeline: AidenGenerationTimeline?) -> AidenChatMessage {
+            AidenChatMessage(id: "a", role: .assistant, text: "Done", timeline: timeline, createdAt: Date(timeIntervalSince1970: 1))
+        }
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 65_400))),
+            "Worked for 1m 5s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 42_900))),
+            "Worked for 42s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 3_780_000))),
+            "Worked for 1h 3m"
+        )
+        // Running, failed, cancelled, legacy (no timeline), inverted clocks and
+        // user turns never claim a completed duration.
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .running, startedAt: start, finishedAt: nil))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .failed, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .cancelled, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(nil)))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start - 1))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: AidenChatMessage(
+            id: "u", role: .user, text: "Hi",
+            timeline: polishTimeline(status: .completed, startedAt: start, finishedAt: start + 5_000),
+            createdAt: Date(timeIntervalSince1970: 1)
+        )))
+    }
+
+    func testLiveWorkingTimerStartsAtTheTimelineOrTheTurnsUserMessage() {
+        let userSent = Date(timeIntervalSince1970: 1_000)
+        let messages = [
+            AidenChatMessage(id: "u0", role: .user, text: "Earlier", createdAt: Date(timeIntervalSince1970: 10)),
+            AidenChatMessage(id: "a0", role: .assistant, text: "Reply", createdAt: Date(timeIntervalSince1970: 20)),
+            AidenChatMessage(id: "u1", role: .user, text: "Now", createdAt: userSent),
+        ]
+        XCTAssertEqual(AidenTurnElapsed.liveStart(timeline: nil, messages: messages), userSent)
+        let timeline = polishTimeline(status: .running, startedAt: 1_002_000, finishedAt: nil)
+        let timelineStart = AidenTurnElapsed.liveStart(timeline: timeline, messages: messages)
+        XCTAssertEqual(timelineStart, Date(timeIntervalSince1970: 1_002))
+        XCTAssertNil(AidenTurnElapsed.liveStart(timeline: nil, messages: []))
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(125.7)),
+            "Working for 2m 5s"
+        )
+        // A Mac clock ahead of the phone clamps instead of counting negative time.
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(-4)),
+            "Working for 0s"
+        )
+    }
+
+    func testMessageTimestampShowsTimeTodayThenYesterdayThenDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 18, minute: 30)))
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 15, minute: 4)))
+        let yesterday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 9, minute: 5)))
+        let earlier = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9, minute: 5)))
+        let lastYear = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 9, minute: 5)))
+
+        let todayLabel = AidenMessageTimestamp.label(for: today, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(todayLabel.contains("3:04"), todayLabel)
+        XCTAssertFalse(todayLabel.contains("Sep"), todayLabel)
+
+        let yesterdayLabel = AidenMessageTimestamp.label(for: yesterday, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(yesterdayLabel.hasPrefix("Yesterday "), yesterdayLabel)
+        XCTAssertTrue(yesterdayLabel.contains("9:05"), yesterdayLabel)
+
+        let earlierLabel = AidenMessageTimestamp.label(for: earlier, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(earlierLabel.contains("Sep 3"), earlierLabel)
+        XCTAssertFalse(earlierLabel.contains("2026"), earlierLabel)
+
+        let lastYearLabel = AidenMessageTimestamp.label(for: lastYear, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(lastYearLabel.contains("2025"), lastYearLabel)
+    }
+
+    func testAskAboutQuotesSelectionAfterTheExistingDraft() {
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "  Use the cache.\n\nThen retry.  \n", into: ""),
+            "> Use the cache.\n>\n> Then retry.\n\n"
+        )
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "retry budget", into: "Question one\n\n"),
+            "Question one\n\n> retry budget\n\n"
+        )
+        XCTAssertNil(AidenSelectionQuote.draft(quoting: " \n\t", into: "Keep me"))
+
+        let long = String(repeating: "a", count: AidenSelectionQuote.maximumQuotedCharacters + 50)
+        let bounded = AidenSelectionQuote.draft(quoting: long, into: "")
+        XCTAssertEqual(bounded?.count, 2 + AidenSelectionQuote.maximumQuotedCharacters + 1 + 2)
+        XCTAssertEqual(bounded?.hasSuffix("…\n\n"), true)
+    }
+
+    func testSelectableTextFlattensAssistantMarkdownButKeepsUserText() {
+        let assistant = AidenChatMessage(id: "a", role: .assistant, text: "## Plan\n\nUse **bold** words.", createdAt: Date(timeIntervalSince1970: 1))
+        let flattened = AidenSelectionQuote.selectableText(for: assistant, visibleText: assistant.text)
+        XCTAssertFalse(flattened.contains("**"), flattened)
+        XCTAssertFalse(flattened.contains("##"), flattened)
+        XCTAssertTrue(flattened.contains("Use bold words."), flattened)
+
+        let user = AidenChatMessage(id: "u", role: .user, text: "**literal**", createdAt: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(AidenSelectionQuote.selectableText(for: user, visibleText: user.text), "**literal**")
     }
 
     func testBotReplyKeepsOnlyPostToolFinalTextVisible() {

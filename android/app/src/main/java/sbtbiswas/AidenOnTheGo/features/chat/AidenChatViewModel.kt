@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -24,6 +25,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
@@ -108,6 +110,10 @@ class AidenChatViewModel(
 
     private val _pendingAttachments = MutableStateFlow<List<AidenAttachmentReference>>(emptyList())
     val pendingAttachments: StateFlow<List<AidenAttachmentReference>> = _pendingAttachments.asStateFlow()
+
+    private val preparationMutex = Mutex()
+    private val _preparingAttachmentBatches = MutableStateFlow(0)
+    val preparingAttachmentBatches: StateFlow<Int> = _preparingAttachmentBatches.asStateFlow()
 
     private val _isUploadingAttachment = MutableStateFlow(false)
     val isUploadingAttachment: StateFlow<Boolean> = _isUploadingAttachment.asStateFlow()
@@ -200,6 +206,7 @@ class AidenChatViewModel(
 
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
+                _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
 
@@ -661,6 +668,17 @@ class AidenChatViewModel(
         )
     }
 
+    /**
+     * Quotes [selection] into the composer draft for a follow-up question.
+     * Returns false when the chat is read-only or the selection is blank.
+     */
+    fun askAbout(selection: String): Boolean {
+        if (isReadOnlyPresentation) return false
+        val next = AidenSelectionQuote.draft(selection, _draft.value) ?: return false
+        updateDraft(next)
+        return true
+    }
+
     fun updateDraft(text: String) {
         _draft.value = text
         draftSession?.let { session ->
@@ -874,6 +892,33 @@ class AidenChatViewModel(
         }
     }
 
+    // Enter from Main before dispatching any selected URI work. The count includes queued
+    // batches, so cancellation of one owner cannot release another owner's Send gate.
+    suspend fun <T> prepareAndUpload(items: List<T>, prepare: suspend (T) -> AidenAttachmentUpload?) {
+        val client = activeClient() ?: return
+        _preparingAttachmentBatches.value++
+        try {
+            preparationMutex.withLock {
+                for (item in items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))) {
+                    coroutineContext.ensureActive()
+                    if (activeClient() !== client) return
+                    try {
+                        val upload = AidenAttachmentPreparation.onWorker { prepare(item) } ?: continue
+                        coroutineContext.ensureActive()
+                        if (activeClient() !== client) return
+                        upload(listOf(upload))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Keep valid earlier selections when a provider returns an invalid URI.
+                    }
+                }
+            }
+        } finally {
+            _preparingAttachmentBatches.value--
+        }
+    }
+
     suspend fun upload(uploads: List<AidenAttachmentUpload>): Int {
         if (isReadOnlyPresentation || !isConnected || _isUploadingAttachment.value ||
             (_streamState.value != null && !_streamState.value!!.isTerminal) ||
@@ -891,7 +936,13 @@ class AidenChatViewModel(
             val availableSlots = 10 - _pendingAttachments.value.size
             for (upload in uploads.take(availableSlots)) {
                 try {
+                    val rawImageBytes = if (upload is AidenAttachmentUpload.Image) {
+                        withContext(kotlinx.coroutines.Dispatchers.IO) { Base64.getDecoder().decode(upload.data) }
+                    } else null
+                    if (activeClient() !== client) return uploads.size
                     val reference = client.uploadAttachment(chatId, upload)
+                    coroutineContext.ensureActive()
+                    if (activeClient() !== client) return uploads.size
                     if (!reference.isValid()) {
                         failedCount++
                         continue
@@ -907,11 +958,14 @@ class AidenChatViewModel(
                             kind = AidenAttachmentKind.IMAGE,
                             size = reference.size
                         )
-                        val rawBytes = Base64.getDecoder().decode(upload.data)
                         try {
-                            chatCache.saveAttachmentImage(rawBytes, instanceId, deviceId, chatId, attachment)
+                            chatCache.saveAttachmentImage(requireNotNull(rawImageBytes), instanceId, deviceId, chatId, attachment)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
                         } catch (_: Exception) {}
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
                     failedCount++
                 }
