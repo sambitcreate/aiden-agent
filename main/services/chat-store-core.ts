@@ -20,6 +20,7 @@ import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts } from "../../renderer/shared/chat-artifacts.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
+import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
 import {
   projectVisibleChatMessage,
   projectVisibleChatMetadata,
@@ -540,6 +541,9 @@ export function createChatStore(
         providerFailure,
         timeline: assistant
           ? parseGenerationTimeline(message.timeline, message.content.length)
+          : undefined,
+        turnStats: assistant
+          ? parseAssistantTurnStatsV1(message.turnStats)
           : undefined,
         subagents: assistant
           ? parseSubagentMessageReferenceV1(message.subagents)
@@ -1166,6 +1170,10 @@ export function createChatStore(
           timeline:
             message.role === "assistant"
               ? parseGenerationTimeline(message.timeline, message.content.length)
+              : undefined,
+          turnStats:
+            message.role === "assistant"
+              ? parseAssistantTurnStatsV1(message.turnStats)
               : undefined,
           subagents:
             message.role === "assistant"

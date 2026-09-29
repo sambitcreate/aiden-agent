@@ -1278,6 +1278,9 @@ final class AidenChatViewModel {
     }
 
     private func handleRemoval() {
+        // The shell can remain mounted while removal/revocation awaits cleanup.
+        // Redact published content synchronously with lifetime invalidation.
+        chat.messages = []
         draftPersistenceTask?.cancel()
         draftPersistenceTask = nil
         draftSession = nil
@@ -1474,12 +1477,12 @@ final class AidenChatViewModel {
         }
         let generation = transcriptGeneration
         let writeToken = cache.reserveChatWrite()
+        // Catalog latency/failure must not hold a successfully fetched transcript.
+        // Keep both reads structured under this load and independently fenced.
+        async let catalogRefresh: Void = refreshModelCatalog(context: context)
         do {
-            async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
-            async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
-            let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
+            let remoteChat = try await coordinator.remoteClient(for: context).chat(id: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
-            catalog = remoteCatalog
             if generation == transcriptGeneration, !isStarting {
                 await acceptRemoteChat(remoteChat, context: context, writeToken: writeToken)
             }
@@ -1489,6 +1492,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
+        await catalogRefresh
         await restoration
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         // Refresh current authority on explicit reload without restarting an
@@ -1505,6 +1509,21 @@ final class AidenChatViewModel {
         )
         guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
         startProgressObservation()
+    }
+
+    private func refreshModelCatalog(context: AidenRemoteRequestContext) async {
+        do {
+            let remoteCatalog = try await coordinator.remoteClient(for: context).modelCatalog()
+            guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { return }
+            catalog = remoteCatalog
+            // Resolve against the live selection, never the values captured at load.
+            resolveModelSelection()
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            // An optional catalog failure must not replace a readable transcript
+            // with a load error or discard the last usable model choices.
+        }
     }
 
     var canReadTaskProgress: Bool {

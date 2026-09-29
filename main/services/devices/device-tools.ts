@@ -29,7 +29,8 @@ export const isDeviceToolName = (name: string): boolean => deviceToolNames.has(n
 export const DEVICE_AGENT_GUIDANCE = [
   "For iOS Simulator work use the device tools: device_list, then device_open, which shows the device in the Simulator tab and returns the agent-device command to drive it.",
   "Verify results with device_screenshot. Close devices you opened with device_close when the task is done.",
-  "Do not call simctl, xcrun, or serve-sim directly while a device is attached; use agent-device.",
+  "Prefer the device tools and agent-device for anything on the device the user is watching. Shell tools such as xcrun simctl, xcodebuild, or adb are fine for builds, installs, logs, port forwarding, and diagnostics the device tools don't cover.",
+  "Never shut down or erase a simulator the user is watching or stop serve-sim unless the user asks; the Simulator tab needs them.",
 ].join("\n");
 
 export const DEVICE_ACCESS_OFF =
@@ -99,7 +100,7 @@ export function agentDeviceQuickStart(
     `  ${executable} screenshot /tmp/shot.png ${target}   # or call device_screenshot`,
     `  ${executable} install <app> <path-to-.app> ${target}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
-    "Do not call simctl, xcrun, or serve-sim directly while these tools are attached; use agent-device.",
+    `Prefer ${executable} for taps, typing, and screenshots on this device. xcrun simctl is fine for builds, installs, logs, and diagnostics it does not cover; target the same UDID, and do not shut down or erase this device or stop serve-sim, which the Simulator tab needs.`,
     "Keep the returned --config and --session flags on every command.",
     "First use builds an XCTest runner and can take a couple of minutes; later commands are fast.",
   ].join("\n");
