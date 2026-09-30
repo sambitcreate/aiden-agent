@@ -8404,7 +8404,8 @@
         },
         "cost": {
           "input": 0.99,
-          "output": 1.49
+          "output": 1.49,
+          "cache_read": 0.99
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
@@ -22012,9 +22013,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.44,
-          "output": 1.32,
-          "cache_read": 0.014
+          "input": 0.22,
+          "output": 0.66,
+          "cache_read": 0.007
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-vision-exp"
       },
@@ -23501,9 +23502,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.25,
-          "cache_read": 0.015
+          "input": 0.1,
+          "output": 0.3,
+          "cache_read": 0.025
         },
         "canonical_model_id": "zhipuai/glm-5.3-flash"
       },
@@ -30185,6 +30186,49 @@
           "output": 0.22,
           "cache_read": 0.015
         }
+      },
+      "inclusionai/ling-3.1-flash": {
+        "id": "inclusionai/ling-3.1-flash",
+        "name": "Ling 3.1 Flash",
+        "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+        "family": "ling",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-09-29",
+        "last_updated": "2026-09-29",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.075,
+          "output": 0.22,
+          "cache_read": 0.015
+        },
+        "canonical_model_id": "inclusionai/ling-3.1-flash"
       },
       "inclusionai/ling-3.0-flash-vl": {
         "id": "inclusionai/ling-3.0-flash-vl",
@@ -71922,7 +71966,7 @@
       },
       "stealth/space-bunny-alpha": {
         "id": "stealth/space-bunny-alpha",
-        "name": "Space Bunny Alpha (new)",
+        "name": "Space Bunny Alpha",
         "description": "Space Bunny Alpha is an anonymous large model with blazing-fast inference, strong coding capabilities and native multimodal input support. It delivers adjustable reasoning effort, and a 1M-token context window. Space...",
         "family": "alpha",
         "attachment": true,
@@ -72354,9 +72398,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.4,
+          "input": 0.29,
           "output": 9,
-          "cache_read": 0.4
+          "cache_read": 0.28
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -74110,8 +74154,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 131072
+          "context": 1024000,
+          "output": 384000
         },
         "cost": {
           "input": 0.14,
@@ -74330,9 +74374,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.13,
-          "output": 0.53,
-          "cache_read": 0.033
+          "input": 0.0825,
+          "output": 0.33,
+          "cache_read": 0.020625
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -74402,9 +74446,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.834,
-          "output": 2.501,
-          "cache_read": 0.042
+          "input": 0.7506,
+          "output": 2.2509,
+          "cache_read": 0.0378
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -76499,7 +76543,7 @@
         },
         "cost": {
           "input": 0.02,
-          "output": 0.3,
+          "output": 0.2475,
           "cache_read": 0.01
         }
       },
@@ -76539,9 +76583,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.12,
-          "output": 1.5,
-          "cache_read": 0.12
+          "input": 0.13,
+          "output": 4,
+          "cache_read": 0.13
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -77636,9 +77680,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.02,
-          "output": 0.6,
-          "cache_read": 0.02
+          "input": 0.0198,
+          "output": 0.396,
+          "cache_read": 0.00291
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -77678,9 +77722,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 0.15,
+          "input": 0.123,
           "output": 3.5,
-          "cache_read": 0.15
+          "cache_read": 0.123
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -77720,9 +77764,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.012,
-          "output": 1.25,
-          "cache_read": 0.01
+          "input": 0.0099,
+          "output": 0.13068,
+          "cache_read": 0.001386
         }
       },
       "~x-ai/grok-latest": {
@@ -77875,8 +77919,8 @@
           "output": 16384
         },
         "cost": {
-          "input": 0.08,
-          "output": 0.3,
+          "input": 0.09,
+          "output": 0.34,
           "cache_read": 0.05
         },
         "canonical_model_id": "google/gemma-4-31b-it"
@@ -80445,8 +80489,8 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.6562,
-          "output": 3.3,
+          "input": 0.6712,
+          "output": 3.35,
           "cache_read": 0.18
         },
         "canonical_model_id": "moonshotai/kimi-k2.7-code"
@@ -81358,9 +81402,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.04,
-          "output": 1.28,
-          "cache_read": 0.04
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.0028
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -82595,8 +82639,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1000000,
-          "output": 131072
+          "context": 262144,
+          "output": 235929
         },
         "cost": {
           "input": 0.425,
@@ -83870,8 +83914,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 131072,
-          "output": 8192
+          "context": 40960,
+          "output": 16384
         },
         "cost": {
           "input": 0.13,
@@ -109484,9 +109528,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.4,
+          "input": 0.29,
           "output": 9,
-          "cache_read": 0.4
+          "cache_read": 0.28
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -110829,9 +110873,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.018,
-          "output": 0.32,
-          "cache_read": 0.018
+          "input": 0.01,
+          "output": 1.28,
+          "cache_read": 0.01
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -110876,9 +110920,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.3,
-          "output": 1.2,
-          "cache_read": 0.006
+          "input": 0.0198,
+          "output": 0.396,
+          "cache_read": 0.00291
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -111036,9 +111080,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 1.32,
-          "output": 3.96,
-          "cache_read": 0.044
+          "input": 0.66,
+          "output": 1.98,
+          "cache_read": 0.022
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -111185,9 +111229,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.95526,
-          "output": 1.91052,
-          "cache_read": 0.079605
+          "input": 0.783,
+          "output": 1.566,
+          "cache_read": 0.06525
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro"
       },
@@ -111301,12 +111345,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 384000
         },
         "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cache_read": 0.028
+          "input": 0.07854,
+          "output": 0.15708,
+          "cache_read": 0.015708
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash"
       },
@@ -111517,9 +111561,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.132,
-          "output": 0.528,
-          "cache_read": 0.033
+          "input": 0.0825,
+          "output": 0.33,
+          "cache_read": 0.020625
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -111589,9 +111633,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.834,
-          "output": 2.501,
-          "cache_read": 0.042
+          "input": 0.7506,
+          "output": 2.2509,
+          "cache_read": 0.0378
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -112556,9 +112600,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.1739,
+          "input": 0.36,
           "output": 3.99,
-          "cache_read": 0.1391
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -112596,9 +112640,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 1.4,
-          "output": 4.4,
-          "cache_read": 0.26
+          "input": 0.9646,
+          "output": 3.0316,
+          "cache_read": 0.17914
         },
         "canonical_model_id": "zhipuai/glm-5.1"
       },
@@ -113729,7 +113773,7 @@
         },
         "cost": {
           "input": 0.02,
-          "output": 0.3,
+          "output": 0.2475,
           "cache_read": 0.01
         }
       },
@@ -113769,9 +113813,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.12,
-          "output": 1.5,
-          "cache_read": 0.12
+          "input": 0.13,
+          "output": 4,
+          "cache_read": 0.13
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -115037,9 +115081,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.02,
-          "output": 0.6,
-          "cache_read": 0.02
+          "input": 0.0198,
+          "output": 0.396,
+          "cache_read": 0.00291
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -115081,9 +115125,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 0.15,
+          "input": 0.123,
           "output": 3.5,
-          "cache_read": 0.15
+          "cache_read": 0.123
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -115125,9 +115169,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.012,
-          "output": 1.25,
-          "cache_read": 0.01
+          "input": 0.0099,
+          "output": 0.13068,
+          "cache_read": 0.001386
         }
       },
       "~x-ai/grok-latest": {
@@ -115631,9 +115675,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0765,
-          "output": 0.255,
-          "cache_read": 0.0425
+          "input": 0.09,
+          "output": 0.3,
+          "cache_read": 0.05
         },
         "canonical_model_id": "google/gemma-4-26b-a4b-it"
       },
@@ -118006,8 +118050,8 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.6562,
-          "output": 3.3,
+          "input": 0.6712,
+          "output": 3.35,
           "cache_read": 0.18
         },
         "canonical_model_id": "moonshotai/kimi-k2.7-code"
@@ -118682,7 +118726,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
+          "context": 1050000,
           "output": 131072
         },
         "cost": {
@@ -119827,12 +119871,12 @@
         "open_weights": true,
         "limit": {
           "context": 1000000,
-          "output": 131072
+          "output": 235929
         },
         "cost": {
-          "input": 0.42,
-          "output": 3,
-          "cache_read": 0.085
+          "input": 0.0249,
+          "output": 4.35,
+          "cache_read": 0.0199
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
@@ -121207,11 +121251,11 @@
         "open_weights": true,
         "limit": {
           "context": 131072,
-          "output": 8192
+          "output": 16384
         },
         "cost": {
-          "input": 0.13,
-          "output": 0.52
+          "input": 0.12,
+          "output": 0.5
         },
         "canonical_model_id": "alibaba/qwen3-30b-a3b"
       },
@@ -256017,8 +256061,8 @@
       },
       "anthropic/claude-sonnet-latest": {
         "id": "anthropic/claude-sonnet-latest",
-        "name": "Claude Sonnet Latest (Claude Sonnet 5)",
-        "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+        "name": "Claude Sonnet Latest (Claude Sonnet 5.5)",
+        "description": "Fast Claude model for everyday coding, agents, and knowledge work",
         "family": "claude-sonnet",
         "attachment": true,
         "reasoning": true,
@@ -256026,7 +256070,6 @@
           {
             "type": "effort",
             "values": [
-              "none",
               "low",
               "medium",
               "high",
@@ -256038,9 +256081,9 @@
         "tool_call": true,
         "structured_output": true,
         "temperature": false,
-        "knowledge": "2026-01-31",
-        "release_date": "2026-06-30",
-        "last_updated": "2026-06-30",
+        "knowledge": "2026-06",
+        "release_date": "2026-09-28",
+        "last_updated": "2026-09-28",
         "modalities": {
           "input": [
             "text",
@@ -256062,7 +256105,7 @@
           "cache_read": 0.2,
           "cache_write": 2.5
         },
-        "canonical_model_id": "anthropic/claude-sonnet-5"
+        "canonical_model_id": "anthropic/claude-sonnet-5-5"
       },
       "anthropic/claude-opus-4-5-20251101": {
         "id": "anthropic/claude-opus-4-5-20251101",
@@ -291722,6 +291765,54 @@
         },
         "canonical_model_id": "anthropic/claude-opus-5-5"
       },
+      "anthropic.claude-sonnet-5-5": {
+        "id": "anthropic.claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-28",
+        "last_updated": "2026-09-28",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5
+        },
+        "canonical_model_id": "anthropic/claude-sonnet-5-5"
+      },
       "global.anthropic.claude-sonnet-5-5": {
         "id": "global.anthropic.claude-sonnet-5-5",
         "name": "Claude Sonnet 5.5 (Global)",
@@ -323287,10 +323378,10 @@
           "output": 65000
         },
         "cost": {
-          "input": 2.898,
-          "output": 14.493,
-          "cache_read": 0.29,
-          "cache_write": 3.624
+          "input": 2.989,
+          "output": 14.945,
+          "cache_read": 0.296,
+          "cache_write": 3.707
         },
         "canonical_model_id": "anthropic/claude-sonnet-4-0"
       },
@@ -330372,10 +330463,10 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.27,
-          "output": 1.08,
-          "cache_read": 0.0054,
-          "cache_write": 0.27
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006,
+          "cache_write": 0.3
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -330421,10 +330512,10 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.27,
-          "output": 1.08,
-          "cache_read": 0.0054,
-          "cache_write": 0.27
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006,
+          "cache_write": 0.3
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-vision-exp"
       },
@@ -330470,10 +330561,10 @@
           "output": 384000
         },
         "cost": {
-          "input": 1.215,
-          "output": 3.645,
-          "cache_read": 0.0405,
-          "cache_write": 1.215
+          "input": 1.35,
+          "output": 4.05,
+          "cache_read": 0.045,
+          "cache_write": 1.35
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro"
       },
@@ -330519,10 +330610,10 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.27,
-          "output": 1.08,
-          "cache_read": 0.0054,
-          "cache_write": 0.27
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006,
+          "cache_write": 0.3
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash"
       },
