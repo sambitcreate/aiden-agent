@@ -102,6 +102,7 @@
         "main/services/mcp-resources.test.ts",
         "main/services/mcp-server-instructions.test.ts",
         "main/services/mcp-status.test.ts",
+        "main/services/mcp-tool-schema.test.ts",
         "main/services/memory-context.test.ts",
         "main/services/memory-shared.test.ts",
         "main/services/memory-store.test.ts",
