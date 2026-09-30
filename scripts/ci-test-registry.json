@@ -575,6 +575,7 @@
         "renderer/lib/workspace-path-display.test.ts",
         "renderer/main/bots-view.test.tsx",
         "renderer/main/chat-transition.test.tsx",
+        "renderer/pill/pill-copied-notice.test.tsx",
         "renderer/shared/advisor.test.ts",
         "renderer/shared/appearance.test.ts",
         "renderer/shared/ask-user-question.test.ts",

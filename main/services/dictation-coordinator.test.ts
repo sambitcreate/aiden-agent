@@ -282,6 +282,40 @@ test("cleanup failures still paste the original transcript", async () => {
   );
 });
 
+test("a Secure Input copy result reaches the pill and lingers longer than a paste", async () => {
+  async function deliver(result: Awaited<ReturnType<DictationCoordinatorDeps["paste"]>>) {
+    const delays: number[] = [];
+    const subject = harness({
+      paste: async () => result,
+      setTimer: (_callback, delayMs) => {
+        delays.push(delayMs);
+        return dormantTimer();
+      },
+    });
+    await subject.coordinator.ready();
+    await subject.coordinator.press();
+    await subject.coordinator.press();
+    const before = delays.length;
+    await subject.coordinator.result("hello there", subject.coordinator.currentOperationId!);
+    assert.ok(delays.length > before, "delivery schedules the pill hide");
+    return { events: subject.events, hideDelay: delays[delays.length - 1]! };
+  }
+
+  const secure = await deliver({
+    outcome: "copied",
+    reason: "secure-input",
+    message: "Transcript copied — press ⌘V to paste.",
+  });
+  const pasted = await deliver({ outcome: "pasted" });
+  assert.deepEqual(secure.events[secure.events.length - 1], {
+    state: "copied",
+    operationId: secure.events[0]!.operationId,
+    reason: "secure-input",
+    message: "Transcript copied — press ⌘V to paste.",
+  });
+  assert.ok(secure.hideDelay > pasted.hideDelay);
+});
+
 test("hold release during cold startup is latched and stops after ready", async () => {
   const shown = deferred<boolean>();
   const subject = harness({
