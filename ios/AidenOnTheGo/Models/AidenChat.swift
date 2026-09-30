@@ -647,6 +647,9 @@ enum AidenAgentActivityPresentation {
             return step.isActive ? "Thinking" : "Thought \(duration(step.durationMs))"
         }
         let label = step.label ?? "Tool"
+        // Matches desktop: a pending call is still being prepared (its
+        // arguments may be streaming), so name the tool instead of claiming work.
+        if step.status == .pending { return "Preparing \(label)" }
         let pair = verbs[step.toolName ?? ""]
         let verb: String
         switch step.status {

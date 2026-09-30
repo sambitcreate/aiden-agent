@@ -26,7 +26,7 @@ Phases 0–3 and 3.5 are implemented and uncommitted on `worktree-main-20260925`
 - The hub binds `127.0.0.1` only. The renderer never receives the hub origin. Every renderer request goes through the proxy, which requires the per-launch 256-bit token. Allowlisted routes are exactly T3's iOS set (see Task 2.4). Non-GET is allowed only for `/vendor/serve-sim/api/screenshot`.
 - Never proxy serve-sim's shell-exec route or its Tools panel commands. Device settings run through typed `simctl` actions in main.
 - Agent tools are admitted only when `canUseDeviceTools(...)` holds. That requires `devices` capability, `agentAccess` consent, `permission` of `"full"` or `"ask"`, a renderer owner, and a context that is neither assistant-mode nor a bot. `device_open` and `device_close` require approval under `"ask"`, the same way `BROWSER_MUTATION_TOOL_NAMES` do.
-- The always-on prompt block stays at 5 lines or fewer: it points at the tools and forbids raw `simctl`, `xcrun`, and `serve-sim` while a device is attached. Driving guidance lives only in the `device_open` result.
+- The always-on prompt block stays at 5 lines or fewer: it points at the tools and asks the agent to prefer them for the device the user is watching, while allowing shell `xcrun simctl`, `xcodebuild`, or `adb` for builds, installs, logs, port forwarding, and diagnostics the tools do not cover. (This softened the original outright ban on raw `simctl`/`xcrun`/`serve-sim`, following T3 Code #13908.) Driving guidance lives only in the `device_open` result.
 - Provenance: any file ported from T3 keeps an origin comment (`Adapted from t3code <path> @ 1c127066 (MIT)`), and `THIRD_PARTY_NOTICES.md` gains T3 Code, expo-device-hub, and agent-device entries. Apple's GLB models in the snapshot state **"No open-source or redistribution license"**, so they must **never** be copied into Aiden (see Phase 6).
 - UI: review `docs/chatgpt-desktop-ui-inspiration.md`, `docs/chatgpt-ui-element-specimen.html`, and `docs/design-guide.md` before the Phase 1 and Phase 3 UI tasks. Use only the tokens in `renderer/styles.css` and `renderer/shared/appearance.ts` and the shared squircle `Button`, with no decorative colored borders. Keep `focus-visible` rings.
 - Every new test file is registered in a new `test:devices` script, and `test:devices` is appended to `npm run test`.
@@ -731,7 +731,7 @@ export function deviceToolApprovalSummary(name: string): string;
 
 Test cases:
 - `canUseDeviceTools` is false when any gate is false, including `permission: "read"`, bots, and assistant mode.
-- `agentDeviceQuickStart` single-quotes a command path containing spaces or `'`. It includes `snapshot -i`, `click @e3`, and `fill @e5` lines, the "do not call simctl, xcrun, or serve-sim" line, and the XCTest first-use note, and it contains no Android lines.
+- `agentDeviceQuickStart` single-quotes a command path containing spaces or `'`. It includes `snapshot -i`, `click @e3`, and `fill @e5` lines, the "prefer agent-device; xcrun simctl is fine for builds, installs, logs, and diagnostics; do not shut down or erase this device or stop serve-sim" line, and the XCTest first-use note, and it contains no Android lines.
 - The target args quote a UDID that has shell metacharacters.
 
 Port the wording from T3 `handlers.ts:14-60`, replacing "T3" with "Aiden" and "Device panel" with "Simulator tab".
