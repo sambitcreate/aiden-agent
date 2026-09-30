@@ -108,6 +108,13 @@ authority is always the positive intersection:
 - A detached run never waits invisibly for approval. Privileged background work
   is approved before detachment or transitions visibly to `needs_attention`
   without executing the effect.
+- A `needs_attention` snapshot's `activity` carries the child's own pending
+  question or approval text, normalized by `subagentPendingQuestionActivity`
+  (single line, snapshot-redacted, cut at a word boundary to 160 characters
+  with `...`). The generic `Needs attention.` remains only as the fallback when
+  no usable text exists. Desktop chips, roster, detail and live summaries show
+  the question; Aiden Remote keeps projecting only closed milestone activity,
+  so child text does not reach paired phones (see pi-subagents #2461).
 - Execution success, effect completion, cancellation, and unknown-after-crash
   remain distinct states.
 

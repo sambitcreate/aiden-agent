@@ -722,6 +722,7 @@ final class AidenChatTests: XCTestCase {
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
+        modelPreferenceStore: AidenModelPreferenceStore = .shared,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
@@ -770,7 +771,63 @@ final class AidenChatTests: XCTestCase {
                 """.utf8
             )
         )
-        return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore, onChatUpdated: onChatUpdated)
+        return AidenChatViewModel(
+            coordinator: coordinator,
+            chat: chat,
+            cache: cache,
+            draftStore: draftStore,
+            modelPreferenceStore: modelPreferenceStore,
+            onChatUpdated: onChatUpdated
+        )
+    }
+
+    @MainActor
+    func testWorkspaceChatRestoresLastExplicitModelChoiceAfterRelaunchAndFallsBackWhenGone() async throws {
+        let suiteName = "AidenModelPreferenceRelaunch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-preference-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fullCatalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+        let reducedCatalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+
+        func launch(catalog: String) async throws -> AidenChatViewModel {
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                modelPreferenceStore: AidenModelPreferenceStore(defaults: defaults)
+            )
+            // The host projects its own default pair on a newly created chat.
+            let hostChat = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"google","modelId":"gemini-flash","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/models") {
+                    return (200, "application/json", Data(catalog.utf8))
+                }
+                if path == "/api/aiden/v1/chats/chat-progress-lifecycle" {
+                    return (200, "application/json", Data(hostChat.utf8))
+                }
+                return nil
+            }
+            await model.load(observeProgress: false)
+            return model
+        }
+
+        let first = try await launch(catalog: fullCatalog)
+        XCTAssertEqual(first.selectedProviderId, "google")
+        XCTAssertEqual(first.selectedModelId, "gemini-flash")
+        first.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+
+        let relaunched = try await launch(catalog: fullCatalog)
+        XCTAssertEqual(relaunched.selectedProviderId, "openai")
+        XCTAssertEqual(relaunched.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(relaunched.selectedThinkingLevel, "max")
+
+        let afterRemoval = try await launch(catalog: reducedCatalog)
+        XCTAssertEqual(afterRemoval.selectedProviderId, "google")
+        XCTAssertEqual(afterRemoval.selectedModelId, "gemini-flash")
+        XCTAssertNil(afterRemoval.selectedThinkingLevel)
     }
 
     @MainActor
@@ -3751,6 +3808,175 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(turn.modelId, "gemini-flash")
     }
 
+    func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "google"
+        chat.modelId = "gemini-flash"
+
+        let remembered = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(remembered, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"))
+
+        let staleLevel = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "ultra")
+        )
+        XCTAssertEqual(staleLevel.thinkingLevel, "medium")
+
+        var botChat = chat
+        botChat.botId = "bot-life-manager"
+        let bot = AidenChatModelAuthority.resolvedSelection(
+            chat: botChat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(bot.providerId, "google")
+        XCTAssertEqual(bot.modelId, "gemini-flash")
+    }
+
+    func testMissingOrHiddenRememberedModelFallsBackToChatPairThenHostDefaults() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+
+        let hidden = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil)
+        )
+        XCTAssertEqual(hidden.providerId, "openai")
+        XCTAssertEqual(hidden.modelId, "gpt-5.6")
+
+        let removed = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: "high")
+        )
+        XCTAssertEqual(removed, AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil))
+
+        var chatWithRemovedModel = chat
+        chatWithRemovedModel.providerId = "openai"
+        chatWithRemovedModel.modelId = "removed-model"
+        let providerFallback = AidenChatModelAuthority.resolvedSelection(
+            chat: chatWithRemovedModel,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "anthropic", modelId: "claude", thinkingLevel: nil)
+        )
+        XCTAssertEqual(
+            providerFallback,
+            AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: nil)
+        )
+    }
+
+    func testModelPreferenceStoreKeepsOneChoicePerPairedHostAcrossRelaunch() throws {
+        let suiteName = "AidenModelPreferenceStoreTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        store.remember(AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"), for: "mac-a")
+        store.remember(AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil), for: "mac-b")
+        store.remember(AidenChatModelSelection(providerId: nil, modelId: "orphan", thinkingLevel: nil), for: "mac-c")
+
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(
+            relaunched.selection(for: "mac-a"),
+            AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        )
+        XCTAssertEqual(relaunched.selection(for: "mac-b")?.modelId, "gemini-flash")
+        XCTAssertNil(relaunched.selection(for: "mac-c"))
+
+        relaunched.purge(instanceID: "mac-a")
+        let afterPurge = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertNil(afterPurge.selection(for: "mac-a"))
+        XCTAssertEqual(afterPurge.selection(for: "mac-b")?.providerId, "google")
+
+        defaults.set(Data("{not json".utf8), forKey: "aiden.model-preference.v1")
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "mac-b"))
+    }
+
+    func testModelPreferenceStoreKeepsEveryPersistedSnapshotWithinItsReadLimit() throws {
+        let suiteName = "AidenModelPreferenceStoreBounds.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let providerId = String(repeating: "p", count: 256)
+        let modelId = String(repeating: "m", count: 256)
+        let hostIds = (0..<400).map { "mac-\($0)-" + String(repeating: "i", count: 240) }
+        for hostId in hostIds {
+            store.remember(
+                AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: nil),
+                for: hostId
+            )
+        }
+
+        let persisted = try XCTUnwrap(defaults.data(forKey: "aiden.model-preference.v1"))
+        XCTAssertLessThanOrEqual(persisted.count, 262_144)
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(relaunched.selection(for: hostIds[0])?.modelId, modelId)
+        XCTAssertNil(relaunched.selection(for: hostIds[hostIds.count - 1]))
+    }
+
+    @MainActor
+    func testStaleWorkspaceSelectionCannotRestorePreferenceAfterPairRemoval() async throws {
+        let suiteName = "AidenModelPreferenceUnpair.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        var coordinator: AidenRemoteCoordinator?
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            modelPreferenceStore: store,
+            onCoordinator: { coordinator = $0 }
+        )
+        model.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        XCTAssertEqual(store.selection(for: "instance-progress-lifecycle")?.modelId, "gpt-5.6")
+
+        let liveCoordinator = try XCTUnwrap(coordinator)
+        try liveCoordinator.installationStore.remove("instance-progress-lifecycle")
+        store.purge(instanceID: "instance-progress-lifecycle")
+
+        // A delayed composer callback can arrive while the async unpair cleanup
+        // is still running. It must not recreate the entry after the purge.
+        model.selectModel(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"))
+    }
+
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
@@ -3824,7 +4050,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
     }
 
-    func testAgentReplyCopyKeepsOriginalMarkdownAndRejectsNonReplies() {
+    func testMessageCopyKeepsOriginalMarkdownAndSkipsEmptyMessages() {
         let assistant = AidenChatMessage(
             id: "assistant-1",
             role: .assistant,
@@ -3848,8 +4074,133 @@ final class AidenChatTests: XCTestCase {
             AidenMessageActionContent.copyText(for: assistant),
             "## Result\n\nUse `xcodebuild test`."
         )
-        XCTAssertNil(AidenMessageActionContent.copyText(for: user))
+        XCTAssertEqual(AidenMessageActionContent.copyText(for: user), "Please test it")
         XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
+    }
+
+    private func polishTimeline(
+        status: AidenGenerationTimelineStatus,
+        startedAt: Double,
+        finishedAt: Double?
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-polish",
+            status: status,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            steps: []
+        )
+    }
+
+    func testWorkedForUsesTheMacTimelineOnlyForCompletedAssistantTurns() {
+        let start = 1_787_079_660_000.0
+        func assistant(_ timeline: AidenGenerationTimeline?) -> AidenChatMessage {
+            AidenChatMessage(id: "a", role: .assistant, text: "Done", timeline: timeline, createdAt: Date(timeIntervalSince1970: 1))
+        }
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 65_400))),
+            "Worked for 1m 5s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 42_900))),
+            "Worked for 42s"
+        )
+        XCTAssertEqual(
+            AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start + 3_780_000))),
+            "Worked for 1h 3m"
+        )
+        // Running, failed, cancelled, legacy (no timeline), inverted clocks and
+        // user turns never claim a completed duration.
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .running, startedAt: start, finishedAt: nil))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .failed, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .cancelled, startedAt: start, finishedAt: start + 5_000))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(nil)))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: assistant(polishTimeline(status: .completed, startedAt: start, finishedAt: start - 1))))
+        XCTAssertNil(AidenTurnElapsed.workedForLabel(for: AidenChatMessage(
+            id: "u", role: .user, text: "Hi",
+            timeline: polishTimeline(status: .completed, startedAt: start, finishedAt: start + 5_000),
+            createdAt: Date(timeIntervalSince1970: 1)
+        )))
+    }
+
+    func testLiveWorkingTimerStartsAtTheTimelineOrTheTurnsUserMessage() {
+        let userSent = Date(timeIntervalSince1970: 1_000)
+        let messages = [
+            AidenChatMessage(id: "u0", role: .user, text: "Earlier", createdAt: Date(timeIntervalSince1970: 10)),
+            AidenChatMessage(id: "a0", role: .assistant, text: "Reply", createdAt: Date(timeIntervalSince1970: 20)),
+            AidenChatMessage(id: "u1", role: .user, text: "Now", createdAt: userSent),
+        ]
+        XCTAssertEqual(AidenTurnElapsed.liveStart(timeline: nil, messages: messages), userSent)
+        let timeline = polishTimeline(status: .running, startedAt: 1_002_000, finishedAt: nil)
+        let timelineStart = AidenTurnElapsed.liveStart(timeline: timeline, messages: messages)
+        XCTAssertEqual(timelineStart, Date(timeIntervalSince1970: 1_002))
+        XCTAssertNil(AidenTurnElapsed.liveStart(timeline: nil, messages: []))
+
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(125.7)),
+            "Working for 2m 5s"
+        )
+        // A Mac clock ahead of the phone clamps instead of counting negative time.
+        XCTAssertEqual(
+            AidenTurnElapsed.workingLabel(since: userSent, now: userSent.addingTimeInterval(-4)),
+            "Working for 0s"
+        )
+    }
+
+    func testMessageTimestampShowsTimeTodayThenYesterdayThenDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 18, minute: 30)))
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 27, hour: 15, minute: 4)))
+        let yesterday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 9, minute: 5)))
+        let earlier = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9, minute: 5)))
+        let lastYear = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 9, minute: 5)))
+
+        let todayLabel = AidenMessageTimestamp.label(for: today, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(todayLabel.contains("3:04"), todayLabel)
+        XCTAssertFalse(todayLabel.contains("Sep"), todayLabel)
+
+        let yesterdayLabel = AidenMessageTimestamp.label(for: yesterday, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(yesterdayLabel.hasPrefix("Yesterday "), yesterdayLabel)
+        XCTAssertTrue(yesterdayLabel.contains("9:05"), yesterdayLabel)
+
+        let earlierLabel = AidenMessageTimestamp.label(for: earlier, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(earlierLabel.contains("Sep 3"), earlierLabel)
+        XCTAssertFalse(earlierLabel.contains("2026"), earlierLabel)
+
+        let lastYearLabel = AidenMessageTimestamp.label(for: lastYear, now: now, calendar: calendar, locale: locale)
+        XCTAssertTrue(lastYearLabel.contains("2025"), lastYearLabel)
+    }
+
+    func testAskAboutQuotesSelectionAfterTheExistingDraft() {
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "  Use the cache.\n\nThen retry.  \n", into: ""),
+            "> Use the cache.\n>\n> Then retry.\n\n"
+        )
+        XCTAssertEqual(
+            AidenSelectionQuote.draft(quoting: "retry budget", into: "Question one\n\n"),
+            "Question one\n\n> retry budget\n\n"
+        )
+        XCTAssertNil(AidenSelectionQuote.draft(quoting: " \n\t", into: "Keep me"))
+
+        let long = String(repeating: "a", count: AidenSelectionQuote.maximumQuotedCharacters + 50)
+        let bounded = AidenSelectionQuote.draft(quoting: long, into: "")
+        XCTAssertEqual(bounded?.count, 2 + AidenSelectionQuote.maximumQuotedCharacters + 1 + 2)
+        XCTAssertEqual(bounded?.hasSuffix("…\n\n"), true)
+    }
+
+    func testSelectableTextFlattensAssistantMarkdownButKeepsUserText() {
+        let assistant = AidenChatMessage(id: "a", role: .assistant, text: "## Plan\n\nUse **bold** words.", createdAt: Date(timeIntervalSince1970: 1))
+        let flattened = AidenSelectionQuote.selectableText(for: assistant, visibleText: assistant.text)
+        XCTAssertFalse(flattened.contains("**"), flattened)
+        XCTAssertFalse(flattened.contains("##"), flattened)
+        XCTAssertTrue(flattened.contains("Use bold words."), flattened)
+
+        let user = AidenChatMessage(id: "u", role: .user, text: "**literal**", createdAt: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(AidenSelectionQuote.selectableText(for: user, visibleText: user.text), "**literal**")
     }
 
     func testBotReplyKeepsOnlyPostToolFinalTextVisible() {

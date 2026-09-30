@@ -8,6 +8,7 @@ import { app, logger } from "../platform.js";
 import { secureStorage } from "./secure-storage.js";
 import {
   bindSecretEntryIfUnbound,
+  deleteSecretKeyFamily,
   deleteSecretKeyEntry,
   moveSecretEntryPairIfVacant,
   moveSecretEntryWithBindingIfVacant,
@@ -402,6 +403,18 @@ export const secrets = {
       const removedBinding = deleteSecretKeyEntry(map, `${PROVIDER_BINDING_PREFIX}${providerId}`);
       const changed = removedKey || removedBinding;
       if (changed) {
+        await writeMap(map, isCurrent);
+      }
+    });
+  },
+
+  /** Remove one namespaced credential and every colon-delimited child in one map write. */
+  async deleteKeyFamily(providerId: string, isCurrent: MutationGuard = () => true): Promise<void> {
+    return serialized(async () => {
+      assertMutationCurrent(isCurrent);
+      const map = await readMap();
+      assertMutationCurrent(isCurrent);
+      if (deleteSecretKeyFamily(map, providerId, PROVIDER_BINDING_PREFIX)) {
         await writeMap(map, isCurrent);
       }
     });
