@@ -26,6 +26,7 @@ import {
   type AppliedAppearance,
 } from "../../lib/appearance-runtime";
 import {
+  CHAT_WIDTH_OPTIONS,
   THEME_PRESETS,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -35,6 +36,7 @@ import {
   type AppearanceConfig,
   type AppearanceMode,
   type AppearanceScheme,
+  type ChatWidthPreference,
   type ThemePresetId,
   type ThemeVariantConfig,
 } from "../../shared/appearance";
@@ -116,6 +118,31 @@ function ThemeModePicker({ value, config, disabled, onChange }: { value: Appeara
             {option.icon}
             {option.label}
           </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ChatWidthPicker({ value, onChange }: { value: ChatWidthPreference; onChange: (width: ChatWidthPreference) => void }) {
+  const options = CHAT_WIDTH_OPTIONS.map((option) => ({ value: option.id, label: option.label }));
+  return (
+    <div className="appearance-width-picker" role="radiogroup" aria-labelledby="appearance-chat-width-title">
+      {options.map((option, index) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          tabIndex={value === option.value ? 0 : -1}
+          className="appearance-width-option"
+          onClick={() => onChange(option.value)}
+          onKeyDown={(event) => handleRadioNavigation(event, index, options, onChange)}
+        >
+          <span className="appearance-width-preview" data-chat-width={option.value} aria-hidden="true">
+            <span className="appearance-width-preview-column"><i /><i /><i /></span>
+          </span>
+          <span className="appearance-width-option-label">{option.label}</span>
         </button>
       ))}
     </div>
@@ -441,6 +468,11 @@ export function AppearanceSettings() {
     }));
   };
 
+  const changeChatWidth = (chatWidth: ChatWidthPreference) => {
+    if (chatWidth === configRef.current.chatWidth) return;
+    update((current) => ({ ...current, chatWidth }));
+  };
+
   const selectedPreset =
     config.light.preset !== "custom" && config.light.preset === config.dark.preset
       ? config.light.preset
@@ -453,7 +485,7 @@ export function AppearanceSettings() {
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
       <div className="settings-page-heading appearance-heading">
         <h1>Appearance</h1>
-        <p>Pick a theme and choose when Aiden uses its light or dark look.</p>
+        <p>Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.</p>
       </div>
 
       {saveError ? (
@@ -479,6 +511,12 @@ export function AppearanceSettings() {
         <ThemeModePicker config={config} value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
         <ThemeTileGrid value={selectedPreset} onChange={changeTheme} />
         <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
+      </section>
+
+      <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">
+        <h2 id="appearance-chat-width-title">Chat width</h2>
+        <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>
+        <ChatWidthPicker value={config.chatWidth} onChange={changeChatWidth} />
       </section>
     </div>
   );

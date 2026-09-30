@@ -2319,6 +2319,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         className="h-full min-h-0"
+        alignFooterToScrollContent
         title={
           bot.data ? (
             <span className="flex min-w-0 items-center gap-2">
