@@ -651,16 +651,24 @@ function endLoadMonitor(
   }
 }
 
-const approvals = new ToolApprovalCoordinator((prompt) => {
-  if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
-    throw new Error("The generation's renderer document is no longer active.");
-  }
-});
-const questionnaires = new AskUserQuestionCoordinator((prompt) => {
-  if (!sendGeneration(prompt.streamId, "chat:questionnaire", prompt)) {
-    throw new Error("The generation's renderer document is no longer active.");
-  }
-});
+const approvals = new ToolApprovalCoordinator(
+  (prompt) => {
+    if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
+      throw new Error("The generation's renderer document is no longer active.");
+    }
+    chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
+  },
+  (approvalId) => chatActivityRegistry.resolveAttention(approvalId),
+);
+const questionnaires = new AskUserQuestionCoordinator(
+  (prompt) => {
+    if (!sendGeneration(prompt.streamId, "chat:questionnaire", prompt)) {
+      throw new Error("The generation's renderer document is no longer active.");
+    }
+    chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
+  },
+  (promptId) => chatActivityRegistry.resolveAttention(promptId),
+);
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.

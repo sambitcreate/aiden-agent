@@ -50,6 +50,79 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun backgroundChatRefreshReportsReadOnlyAfterReturningToChat() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-visible-read-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val reports = java.util.concurrent.LinkedBlockingQueue<String>()
+        val initial = AidenChat(
+            id = "chat-read", workspaceId = "workspace-read", title = "Read boundary",
+            messages = listOf(AidenChatMessage("reply-one", AidenChatRole.ASSISTANT, "First", createdAt = Instant.EPOCH)),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val remote = java.util.concurrent.atomic.AtomicReference(initial)
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-read","name":"Read Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-read-state-v1"],"connectionMode":"lan","serverTime":"2026-09-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-read" -> MockResponse().setBody(wireJson.encodeToString(remote.get()))
+                "/api/aiden/v1/chats/chat-read/read" -> {
+                    reports.add(request.body.readUtf8())
+                    MockResponse().setResponseCode(204)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-read", deviceId = "device-read", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                viewModels.put("read", model)
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
+                model.setChatForegrounded(true)
+                val first = withContext(Dispatchers.IO) { reports.poll(5, TimeUnit.SECONDS) }
+                assertEquals("reply-one", json.parseToJsonElement(first!!).jsonObject["throughMessageId"]!!.jsonPrimitive.content)
+                model.setChatForegrounded(false)
+                remote.set(initial.copy(revision = "r2", messages = initial.messages + AidenChatMessage(
+                    "reply-two", AidenChatRole.ASSISTANT, "Unseen", createdAt = Instant.EPOCH
+                )))
+                model.loadChat()
+                withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }
+                assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
+                model.setChatForegrounded(true)
+                val second = withContext(Dispatchers.IO) { reports.poll(5, TimeUnit.SECONDS) }
+                assertEquals("reply-two", json.parseToJsonElement(second!!).jsonObject["throughMessageId"]!!.jsonPrimitive.content)
+                model.setChatForegrounded(true)
+                assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     // clear() requests cancellation; children can still resume on Main to finish cleanup.
     // A cancelled test caller must finish this barrier before disposing shared resources.
     private suspend fun ViewModelStore.clearAndJoin() = withContext(NonCancellable) {

@@ -28,6 +28,52 @@ struct AidenRelativeTimestampView: View {
     }
 }
 
+/// Trailing chat-row status. Attention states use soft semantic fills with no
+/// borders; Working keeps the compact spinner; the unread dot is independent
+/// because a chat can be both working and holding unseen earlier output.
+struct AidenChatRowStatusView: View {
+    let state: AidenChatRowState
+    let unread: Bool
+    let palette: AidenPalette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            switch state {
+            case .needsApproval:
+                pill("Approve", systemImage: "checkmark.shield", tint: palette.warning, label: state.accessibilityLabel)
+            case .needsInput:
+                pill("Reply", systemImage: "questionmark.bubble", tint: palette.accent, label: state.accessibilityLabel)
+            case .working:
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(palette.accent)
+                    .accessibilityLabel(state.accessibilityLabel)
+            case .idle:
+                EmptyView()
+            }
+            if unread {
+                Circle()
+                    .fill(palette.accent)
+                    .frame(width: 8, height: 8)
+                    .accessibilityElement()
+                    .accessibilityLabel("Unread")
+            }
+        }
+    }
+
+    private func pill(_ title: String, systemImage: String, tint: Color, label: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .labelStyle(.titleAndIcon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.12), in: Capsule())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+    }
+}
+
 private struct AidenLiquidGlassCapsuleModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let tint: Color
@@ -153,11 +199,14 @@ final class AidenHomeModel {
         return message
     }
 
+    /// Accepts a chat the user is viewing, so its row is read by definition.
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
-        let activity = chats.first(where: { $0.id == chat.id })?.activity ?? .idle
+        let existing = chats.first(where: { $0.id == chat.id })
         chats.removeAll { $0.id == chat.id }
-        chats.append(AidenChatSummary(chat: chat, preservingActivity: activity))
+        var summary = AidenChatSummary(chat: chat, preservingActivity: existing?.activity ?? .idle)
+        summary.rowState = existing?.rowState
+        chats.append(summary)
         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
         persistCurrentSummaries(changedID: chat.id)
     }
@@ -167,6 +216,14 @@ final class AidenHomeModel {
               chats[index].activity != activity else { return }
         chats[index].activity = activity
         persistCurrentSummaries(changedID: chatID, activityOnly: true)
+    }
+
+    /// Clear a row's unread marker as soon as the user opens it.
+    func markViewed(chatID: String) {
+        guard let index = chats.firstIndex(where: { $0.id == chatID }),
+              chats[index].unread else { return }
+        chats[index].unread = false
+        persistCurrentSummaries(changedID: chatID)
     }
 
     func removeChat(id: String) {
@@ -805,10 +862,7 @@ struct AidenWorkspaceShellView: View {
                                 coordinator: coordinator,
                                 chat: selectedSidebarChat,
                                 autoStartVoice: selectedSidebarChatStartsVoice,
-                                onChatUpdated: { updated in
-                                    homeModel.accept(updated)
-                                    self.selectedSidebarChat = updated
-                                },
+                                onChatUpdated: acceptSelectedChatUpdate,
                                 onChatActivityChanged: { chatID, activity in
                                     homeModel.setActivity(activity, forChatID: chatID)
                                 }
@@ -837,10 +891,7 @@ struct AidenWorkspaceShellView: View {
                                     coordinator: coordinator,
                                     chat: selectedSidebarChat,
                                     autoStartVoice: selectedSidebarChatStartsVoice,
-                                    onChatUpdated: { updated in
-                                        homeModel.accept(updated)
-                                        self.selectedSidebarChat = updated
-                                    },
+                                    onChatUpdated: acceptSelectedChatUpdate,
                                     onChatActivityChanged: { chatID, activity in
                                         homeModel.setActivity(activity, forChatID: chatID)
                                     }
@@ -1496,12 +1547,11 @@ struct AidenWorkspaceShellView: View {
 
             Spacer(minLength: 8)
 
-            if chat.activity == .active {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(palette.accent)
-                    .accessibilityLabel("Active")
-            }
+            AidenChatRowStatusView(
+                state: chat.displayRowState,
+                unread: chat.unread,
+                palette: palette
+            )
 
             AidenRelativeTimestampView(date: chat.updatedAt)
                 .font(.caption)
@@ -1740,6 +1790,15 @@ struct AidenWorkspaceShellView: View {
         commitOpenChat(chat, startsVoice: startsVoice)
     }
 
+    private func acceptSelectedChatUpdate(_ updated: AidenChat) {
+        homeModel.accept(updated)
+        guard AidenChatReadAdmission.acceptsSelectedChatUpdate(
+            chatID: updated.id,
+            selectedChatID: selectedSidebarChat?.id
+        ) else { return }
+        selectedSidebarChat = updated
+    }
+
     private func commitOpenChat(_ chat: AidenChat, startsVoice: Bool = false) {
         guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
         selectedWorkspaceId = chat.workspaceId
@@ -1750,6 +1809,7 @@ struct AidenWorkspaceShellView: View {
         if !usesSplitNavigation { compactWorkspacePath = [] }
         selectedSidebarChatStartsVoice = startsVoice
         selectedSidebarChat = chat
+        homeModel.markViewed(chatID: chat.id)
     }
 
     private func openChat(_ summary: AidenChatSummary, startsVoice: Bool = false) {

@@ -69,3 +69,38 @@ test("generation ownership wires activity start, settlement, and reload snapshot
     /ipcMain\.handle\(\s*"chats:activitySnapshot",\s*\(\)\s*=>\s*chatActivityRegistry\.snapshot\(\),?\s*\)/u,
   );
 });
+
+test("attention prompts project to chat row signals and clear on answer or settle", () => {
+  const snapshots: ReturnType<ChatActivityRegistry["snapshot"]>[] = [];
+  const registry = new ChatActivityRegistry((snapshot) => snapshots.push(snapshot));
+
+  registry.begin("stream-a", "chat-a");
+  registry.requestAttention("approval-1", "stream-a", "approval");
+  registry.requestAttention("approval-2", "stream-a", "approval");
+  registry.requestAttention("question-1", "stream-a", "input");
+  assert.deepEqual(registry.snapshot().approvalChatIds, ["chat-a"]);
+  assert.deepEqual(registry.snapshot().inputChatIds, ["chat-a"]);
+  // A second approval in an already-flagged chat is not a visible change.
+  assert.equal(snapshots.length, 3);
+
+  registry.resolveAttention("approval-1");
+  assert.deepEqual(registry.snapshot().approvalChatIds, ["chat-a"]);
+  registry.resolveAttention("approval-2");
+  assert.equal(registry.snapshot().approvalChatIds, undefined);
+
+  // Settling withdraws anything the stream still holds.
+  registry.settle("stream-a");
+  assert.deepEqual(registry.snapshot().activeChatIds, []);
+  assert.equal(registry.snapshot().inputChatIds, undefined);
+  const revisions = snapshots.map((snapshot) => snapshot.revision);
+  assert.deepEqual(revisions, [...revisions].sort((a, b) => a - b));
+});
+
+test("prompts from streams the registry does not own are ignored", () => {
+  const snapshots: ReturnType<ChatActivityRegistry["snapshot"]>[] = [];
+  const registry = new ChatActivityRegistry((snapshot) => snapshots.push(snapshot));
+  registry.requestAttention("approval-1", "child-stream", "approval");
+  registry.resolveAttention("unknown");
+  assert.deepEqual(snapshots, []);
+  assert.deepEqual(registry.snapshot(), { revision: 0, activeChatIds: [] });
+});

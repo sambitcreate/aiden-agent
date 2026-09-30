@@ -57,6 +57,18 @@ struct AidenSpeechTranscription: Codable, Equatable, Sendable {
     let modelId: String
 }
 
+/// Encodes to `{}` without a message id so the Mac reads through its newest message.
+private struct ChatReadRequest: Encodable {
+    let throughMessageId: String?
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(throughMessageId, forKey: .throughMessageId)
+    }
+
+    private enum CodingKeys: String, CodingKey { case throughMessageId }
+}
+
 private struct AidenSpeechSelectionRequest: Encodable {
     let modelId: String
 }
@@ -77,6 +89,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
+    static let chatReadStateFeature = "chat-read-state-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -226,6 +239,11 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// stop path. Advertised only alongside chat-agents-v1.
     var supportsChatAgentInterrupt: Bool {
         supportsChatAgents && features.contains(Self.chatAgentInterruptFeature)
+    }
+
+    /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
+    var supportsChatReadState: Bool {
+        features.contains(Self.chatReadStateFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -1007,6 +1025,18 @@ final class AidenRemoteClient: @unchecked Sendable {
             method: "DELETE",
             path: ["chats", id],
             headers: ["If-Match": revision],
+            acceptedStatus: [204]
+        )
+    }
+
+    /// Report that the user viewed a chat, clearing its unread marker on every
+    /// surface. With a message id the marker lands exactly on what was shown.
+    func markChatRead(id: String, throughMessageId: String? = nil) async throws {
+        try await sendWithoutResponse(
+            method: "POST",
+            path: ["chats", id, "read"],
+            body: try JSONEncoder().encode(ChatReadRequest(throughMessageId: throughMessageId)),
+            headers: [:],
             acceptedStatus: [204]
         )
     }
@@ -2122,6 +2152,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     private func sendWithoutResponse(
         method: String,
         path: [String],
+        body: Data? = nil,
         headers: [String: String],
         acceptedStatus: Set<Int>
     ) async throws {
@@ -2129,7 +2160,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             method: method,
             path: path,
             query: [],
-            body: nil,
+            body: body,
             headers: headers,
             authenticated: true
         )

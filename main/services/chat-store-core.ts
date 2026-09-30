@@ -188,7 +188,14 @@ export function createChatStore(
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
           Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
       (meta.summaryRevision === undefined ||
-        isChatSummaryRevision(meta.summaryRevision))
+        isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.lastAssistantSequence === undefined ||
+        (typeof meta.lastAssistantSequence === "number" &&
+          Number.isSafeInteger(meta.lastAssistantSequence) && meta.lastAssistantSequence >= 0)) &&
+      (meta.lastAssistantAt === undefined ||
+        (typeof meta.lastAssistantAt === "number" &&
+          Number.isSafeInteger(meta.lastAssistantAt) &&
+          meta.lastAssistantAt >= 0))
     );
   }
 
@@ -596,6 +603,20 @@ export function createChatStore(
         (message.role === "user" || message.role === "assistant") &&
         message.content.trim().length > 0,
       )?.content;
+    const lastAssistantReverseIndex = [...chat.messages]
+      .reverse()
+      .findIndex((message) =>
+        message.role === "assistant" &&
+        (message.content.trim().length > 0 ||
+          (message.attachments?.length ?? 0) > 0 ||
+          (message.htmlArtifacts?.length ?? 0) > 0) &&
+        Number.isSafeInteger(message.createdAt) &&
+        message.createdAt >= 0,
+      );
+    const lastAssistantSequence = lastAssistantReverseIndex < 0
+      ? -1
+      : chat.messages.length - 1 - lastAssistantReverseIndex;
+    const lastAssistantAt = chat.messages[lastAssistantSequence]?.createdAt;
     const boundedPreview = preview === undefined
       ? undefined
       : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
@@ -608,6 +629,7 @@ export function createChatStore(
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
+      ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };

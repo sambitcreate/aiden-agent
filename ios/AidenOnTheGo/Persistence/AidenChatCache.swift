@@ -105,6 +105,9 @@ actor AidenChatCache {
         let updatedAt: Date
         let revision: String
         let activity: AidenChatSummaryActivity
+        // Optional so caches written before contract revision 18 still load.
+        let rowState: AidenChatRowState?
+        let unread: Bool?
 
         init(_ summary: AidenChatSummary) {
             id = summary.id
@@ -115,6 +118,8 @@ actor AidenChatCache {
             updatedAt = summary.updatedAt
             revision = summary.revision
             activity = summary.activity
+            rowState = summary.rowState
+            unread = summary.unread
         }
 
         var summary: AidenChatSummary {
@@ -126,7 +131,9 @@ actor AidenChatCache {
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 revision: revision,
-                activity: activity
+                activity: activity,
+                rowState: rowState,
+                unread: unread ?? false
             )
         }
     }

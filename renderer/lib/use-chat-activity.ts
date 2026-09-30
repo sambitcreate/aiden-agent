@@ -1,10 +1,16 @@
 import * as React from "react";
 import { chatsApi, onNotification } from "./ipc";
-import { applyChatActivitySnapshot, EMPTY_CHAT_ACTIVITY_STATE } from "./chat-activity";
+import {
+  applyChatActivitySnapshot,
+  EMPTY_CHAT_ACTIVITY_STATE,
+  type ChatActivityState,
+} from "./chat-activity";
+import { applyChatReadMarkersSnapshot } from "./chat-read-markers";
 import { parseChatActivitySnapshot } from "../shared/chat-activity";
+import { parseChatReadMarkersSnapshot, type ChatReadMarkersSnapshot } from "../shared/chat-row-state";
 
 /** Event-driven activity state: no polling and no animation clock. */
-export function useActiveChatIds(): ReadonlySet<string> {
+export function useChatActivityState(): ChatActivityState {
   const [state, setState] = React.useState(EMPTY_CHAT_ACTIVITY_STATE);
 
   React.useEffect(() => {
@@ -32,5 +38,40 @@ export function useActiveChatIds(): ReadonlySet<string> {
     };
   }, []);
 
-  return state.activeChatIds;
+  return state;
+}
+
+export function useActiveChatIds(): ReadonlySet<string> {
+  return useChatActivityState().activeChatIds;
+}
+
+/**
+ * Shared read markers. Null until the first snapshot arrives, and unread dots
+ * stay hidden while null so a slow read never flashes every chat as unread.
+ */
+export function useChatReadMarkers(): ChatReadMarkersSnapshot | null {
+  const [markers, setMarkers] = React.useState<ChatReadMarkersSnapshot | null>(null);
+
+  React.useEffect(() => {
+    let disposed = false;
+    const apply = (payload: unknown) => {
+      const snapshot = parseChatReadMarkersSnapshot(payload);
+      if (snapshot) setMarkers((current) => applyChatReadMarkersSnapshot(current, snapshot));
+    };
+    const unsubscribe = onNotification("chats:read-markers-changed", apply);
+    void chatsApi
+      .readMarkers()
+      .then((payload) => {
+        if (!disposed) apply(payload);
+      })
+      .catch(() => {
+        // Unread dots stay hidden until a change event arrives.
+      });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  return markers;
 }

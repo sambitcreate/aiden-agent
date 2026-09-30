@@ -176,6 +176,77 @@ class AidenChatSummaryTest {
     }
 
     @Test
+    fun rowStateAndUnreadAreAdditiveAndToleratedWhenUnknown() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"summaries":[${summaryJson("chat-1", "\"rowState\":\"needs_input\",\"unread\":true,", "active")}]}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"summaries":[${summaryJson("chat-1", "\"rowState\":\"needs_coffee\",", "active")}]}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(summaryPageJson(nextCursor = null)))
+
+        val attention = client.chatSummaryPage(limit = 100).summaries.single()
+        assertEquals(AidenChatRowState.NEEDS_INPUT, attention.rowState)
+        assertEquals(AidenChatRowState.NEEDS_INPUT, attention.displayRowState)
+        assertTrue(attention.unread)
+        // Once the local stream settles, a stale attention state must not linger.
+        assertEquals(AidenChatRowState.IDLE, attention.copy(activity = AidenChatSummaryActivity.IDLE).displayRowState)
+
+        // A future state from a newer Mac must not reject the page.
+        val future = client.chatSummaryPage(limit = 100).summaries.single()
+        assertNull(future.rowState)
+        assertEquals(AidenChatRowState.WORKING, future.displayRowState)
+        assertFalse(future.unread)
+
+        // Pre-revision-18 Macs omit both fields; activity still drives the row.
+        val legacy = client.chatSummaryPage(limit = 100).summaries.single()
+        assertNull(legacy.rowState)
+        assertFalse(legacy.unread)
+        assertEquals(AidenChatRowState.WORKING, legacy.displayRowState)
+    }
+
+    @Test
+    fun readBoundaryBelongsToOpenedSnapshotWithEqualMessageTimestamps() {
+        val time = Instant.ofEpochSecond(500)
+        val chat = AidenChat(id = "chat-read", workspaceId = "workspace", title = "Read", messages = emptyList(), createdAt = time, updatedAt = time, revision = "r1")
+        assertNull(chat.lastViewedMessageId)
+        chat.messages = listOf(AidenChatMessage(id = "message-1", role = AidenChatRole.USER, text = "Hello", createdAt = time))
+        val opened = chat.copy()
+        chat.messages = chat.messages + AidenChatMessage(id = "message-2", role = AidenChatRole.ASSISTANT, text = "Reply", createdAt = time)
+        assertEquals("message-1", opened.lastViewedMessageId)
+        assertEquals("message-2", chat.lastViewedMessageId)
+    }
+
+    @Test
+    fun markChatReadPostsAnEmptyOrTargetedJsonBody() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        client.markChatRead("chat-1")
+        client.markChatRead("chat-1", throughMessageId = "message-7")
+
+        val first = server.takeRequest()
+        assertEquals("POST", first.method)
+        assertEquals("/api/aiden/v1/chats/chat-1/read", first.path)
+        assertTrue(first.getHeader("Content-Type").orEmpty().startsWith("application/json"))
+        assertEquals("{}", first.body.readUtf8())
+        assertEquals("""{"throughMessageId":"message-7"}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test
+    fun summaryCacheRoundTripsRowStateAndUnread() {
+        val folder = tempFolder.newFolder("row-state-cache")
+        val cache = AidenChatCache(root = folder)
+        val row = summary("chat-1", "workspace-1", "Waiting", AidenChatSummaryActivity.ACTIVE)
+            .copy(rowStateWire = "needs_approval", unread = true)
+        assertTrue(cache.saveSummaries(listOf(row), "instance"))
+
+        val reloaded = AidenChatCache(root = folder).loadSummaries("instance")!!.single()
+        assertEquals(AidenChatRowState.NEEDS_APPROVAL, reloaded.displayRowState)
+        assertTrue(reloaded.unread)
+    }
+
+    @Test
     fun serverFeatureAdvertisementIsBoundedAndForwardCompatible() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200).setBody(
             """

@@ -629,6 +629,9 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /** createdAt of the newest assistant output; drives honest unread markers. */
+  lastAssistantAt?: number;
+  lastAssistantSequence?: number;
   createdAt: number;
   updatedAt: number;
 }

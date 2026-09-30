@@ -390,7 +390,13 @@ class AidenChatCache(
         if (ownsSummary) {
             summaryWriteTokens[instanceId] = summaryWriteToken
             if (chat.isBotChat) visibleSummaries.remove(chat.id)
-            else visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, visibleSummaries[chat.id]?.activity ?: AidenChatSummaryActivity.IDLE)
+            else {
+                // A freshly admitted chat is the one being viewed, so it is read;
+                // the server row state is kept until the next summary refresh.
+                val existing = visibleSummaries[chat.id]
+                visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
+                    .copy(rowStateWire = existing?.rowStateWire)
+            }
             publishSummaries(instanceId, visibleSummaries.values.toList())
         }
         val envelope = ChatEnvelope(instanceId = instanceId, chat = chat)

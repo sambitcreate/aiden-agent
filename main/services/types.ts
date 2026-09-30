@@ -426,6 +426,12 @@ export interface ChatMeta {
    * projections. Legacy records derive a stable token until their next write.
    */
   summaryRevision?: string;
+  /**
+   * createdAt of the newest persisted assistant message with visible output.
+   * Drives honest unread markers; absent on legacy rows until their next write.
+   */
+  lastAssistantAt?: number;
+  lastAssistantSequence?: number;
   createdAt: number;
   updatedAt: number;
 }

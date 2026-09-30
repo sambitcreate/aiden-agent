@@ -312,7 +312,10 @@ class AidenChatViewModel(
 
     fun setChatForegrounded(foregrounded: Boolean) {
         isChatForegrounded = foregrounded
-        if (foregrounded) liveNotificationManager?.dismissNotification(chatId)
+        if (foregrounded) {
+            liveNotificationManager?.dismissNotification(chatId)
+            _chat.value?.let(::reportChatViewed)
+        }
     }
 
     /** Attach the standalone chat progress stream while the detail screen is foregrounded. */
@@ -2002,7 +2005,33 @@ class AidenChatViewModel(
         if (scheduleTitleRefresh && admitted.isTitlePending) {
             schedulePendingTitleRefresh()
         }
+        reportChatViewed(admitted)
         return true
+    }
+
+    /** Last chat revision reported read, so repeated reconciles send one report. */
+    private var reportedReadRevision: String? = null
+
+    /**
+     * Tell the Mac the user viewed this chat so its unread marker clears on
+     * every surface. Best effort: a failed report only leaves a stale dot.
+     */
+    private fun reportChatViewed(chat: AidenChat) {
+        if (!isChatForegrounded || chat.isBotChat || isReadOnlyPresentation ||
+            coordinator.serverInfo.value?.supportsChatReadState != true ||
+            reportedReadRevision == chat.revision
+        ) return
+        val client = activeClient() ?: return
+        val throughMessageId = chat.lastViewedMessageId ?: return
+        reportedReadRevision = chat.revision
+        viewModelScope.launch {
+            try {
+                client.markChatRead(chat.id, throughMessageId)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (reportedReadRevision == chat.revision) reportedReadRevision = null
+            }
+        }
     }
 
     private fun schedulePendingTitleRefresh() {

@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { AidenRemoteChatService } from "./aiden-remote-chats.js";
+import { AidenRemoteChatService, type AidenRemoteChatReadMarkers } from "./aiden-remote-chats.js";
+import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import {
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
@@ -36,6 +37,8 @@ function summaryService(
     active?: Set<string>;
     pending?: Set<string>;
     cursorSecretByte?: number;
+    activity?: () => ChatActivitySnapshot;
+    readMarkers?: AidenRemoteChatReadMarkers;
   } = {},
 ) {
   let rows = structuredClone(initial);
@@ -77,6 +80,8 @@ function summaryService(
     summaryCursorSecret: Buffer.alloc(32, options.cursorSecretByte ?? 7),
     isTitlePending: (id) => options.pending?.has(id) === true,
     activeChatIds: () => [...(options.active ?? [])],
+    ...(options.activity ? { activitySnapshot: options.activity } : {}),
+    ...(options.readMarkers ? { readMarkers: options.readMarkers } : {}),
   });
   return {
     service,
@@ -164,11 +169,83 @@ test("summary pages are transcript-free, deterministic, and exclude reserved cha
     "createdAt",
     "id",
     "revision",
+    "rowState",
     "title",
     "titlePending",
+    "unread",
     "updatedAt",
     "workspaceId",
   ]);
+  assert.deepEqual(page.summaries.map(({ rowState }) => rowState), ["working", "idle"]);
+  // Without a read-marker store no summary can claim unread output.
+  assert.deepEqual(page.summaries.map(({ unread }) => unread), [false, false]);
+});
+
+test("summaries project attention row states and honest unread from shared markers", async () => {
+  const markers = { revision: 1, baselineAt: 1_500, readThrough: { "chat-seen": 2_500 } };
+  const fixture = summaryService([
+    metadata("chat-approve", 6_000, { lastAssistantAt: 1_200 }),
+    metadata("chat-ask", 5_000),
+    metadata("chat-busy", 4_000, { lastAssistantAt: 2_000 }),
+    metadata("chat-seen", 3_000, { lastAssistantAt: 2_500 }),
+    metadata("chat-new", 2_900, { lastAssistantAt: 2_800 }),
+  ], {
+    activity: () => ({
+      revision: 3,
+      activeChatIds: ["chat-approve", "chat-ask", "chat-busy"],
+      approvalChatIds: ["chat-approve"],
+      inputChatIds: ["chat-ask"],
+    }),
+    readMarkers: {
+      snapshot: async () => markers,
+      markRead: async () => true,
+    },
+  });
+  const page = parseAidenRemoteChatSummaryPage(await fixture.service.listSummaries());
+  const byId = Object.fromEntries(page.summaries.map((summary) => [summary.id, summary]));
+  assert.equal(byId["chat-approve"]!.rowState, "needs_approval");
+  assert.equal(byId["chat-approve"]!.activity, "active");
+  assert.equal(byId["chat-ask"]!.rowState, "needs_input");
+  assert.equal(byId["chat-busy"]!.rowState, "working");
+  assert.equal(byId["chat-new"]!.rowState, "idle");
+  // Output before the install baseline, or already viewed, is not unread.
+  assert.equal(byId["chat-approve"]!.unread, false);
+  assert.equal(byId["chat-seen"]!.unread, false);
+  assert.equal(byId["chat-busy"]!.unread, true);
+  assert.equal(byId["chat-new"]!.unread, true);
+  assert.equal(byId["chat-ask"]!.unread, false);
+  // The internal assistant timestamp never reaches the wire.
+  assert.ok(page.summaries.every((summary) => !("lastAssistantAt" in summary)));
+});
+
+test("a failing marker store hides unread dots instead of failing the list", async () => {
+  const fixture = summaryService([metadata("chat-a", 2_000, { lastAssistantAt: 1_900 })], {
+    readMarkers: {
+      snapshot: async () => { throw new Error("disk unavailable"); },
+      markRead: async () => true,
+    },
+  });
+  const page = await fixture.service.listSummaries();
+  assert.equal(page.summaries[0]!.unread, false);
+});
+
+test("summary parser accepts additive row state and rejects unknown values", () => {
+  const summary = {
+    id: "chat-1",
+    workspaceId: "workspace-1",
+    title: "Release planning",
+    titlePending: false,
+    createdAt: "2026-08-30T20:00:00.000Z",
+    updatedAt: "2026-08-30T21:00:00.000Z",
+    revision: `rev_${"a".repeat(43)}`,
+    activity: "active",
+  };
+  assert.equal(parseAidenRemoteChatSummaryProjection(summary).rowState, undefined);
+  const parsed = parseAidenRemoteChatSummaryProjection({ ...summary, rowState: "needs_input", unread: true });
+  assert.equal(parsed.rowState, "needs_input");
+  assert.equal(parsed.unread, true);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, rowState: "blocked" }), /rowState/u);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, unread: "yes" }), /unread/u);
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {
@@ -437,4 +514,75 @@ test("chat store performs bounded legacy summary migration without transcript re
   assert.equal(transcriptReads, 0);
   const migrated = JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf8")) as ChatMeta[];
   assert.equal(migrated[0]?.summaryRevision, summaries[0]?.summaryRevision);
+});
+
+test("read reports require chat:read, validate the body, and advertise only when wired", async (t) => {
+  const reports: Array<[string, string | undefined]> = [];
+  const fixture = summaryService([metadata("chat-a", 2_000)], {
+    readMarkers: {
+      snapshot: async () => ({ revision: 0, baselineAt: 1, readThrough: {} }),
+      markRead: async (chatId, throughMessageId) => {
+        reports.push([chatId, throughMessageId]);
+        return true;
+      },
+    },
+  });
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance-1",
+    displayName: () => "Test Mac",
+    appVersion: "0.1.0",
+    devices: {
+      acquireDeviceAuthorization: () => () => undefined,
+      authenticate: async (credential) => credential === "a".repeat(43)
+        ? {
+            id: "device-1",
+            revoked: false,
+            capabilities: new Set(["chat:read", "server:read"] as const),
+          }
+        : credential === "b".repeat(43)
+          ? { id: "device-2", revoked: false, capabilities: new Set(["server:read"] as const) }
+          : null,
+    },
+    pairing: { exchange: async () => { throw new Error("unused"); } },
+    chats: fixture.service,
+    connectionMode: () => "lan",
+    now: () => 1_000,
+    log: () => undefined,
+  });
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}/api/aiden/v1`;
+  const headers = {
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+    authorization: `Bearer ${"a".repeat(43)}`,
+  };
+  const post = (chatId: string, body: unknown, extra: Record<string, string> = {}) =>
+    fetch(`${base}/chats/${chatId}/read`, {
+      method: "POST",
+      headers: { ...headers, ...extra },
+      body: JSON.stringify(body),
+    });
+
+  assert.equal((await post("chat-a", { throughMessageId: "msg-1" })).status, 204);
+  assert.equal((await post("chat-a", {})).status, 204);
+  assert.deepEqual(reports, [["chat-a", "msg-1"], ["chat-a", undefined]]);
+
+  for (const body of [{ throughMessageId: "../x" }, { throughMessageId: 1 }, { other: true }, []]) {
+    assert.equal((await post("chat-a", body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await post("chat-missing", {})).status, 404);
+  assert.equal(
+    (await post("chat-a", {}, { authorization: `Bearer ${"b".repeat(43)}` })).status,
+    403,
+  );
+  assert.equal(reports.length, 2);
+
+  const serverProjection = await (await fetch(`${base}/server`, { headers })).json() as {
+    features?: string[];
+  };
+  assert.ok(serverProjection.features?.includes("chat-read-state-v1"));
 });

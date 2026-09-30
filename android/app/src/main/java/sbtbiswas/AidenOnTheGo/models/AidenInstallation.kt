@@ -93,6 +93,10 @@ data class AidenServer(
     val supportsChatAgentInterrupt: Boolean
         get() = supportsChatAgents && features.contains(AidenRemoteProtocol.CHAT_AGENT_INTERRUPT_FEATURE)
 
+    /** Row states, unread markers, and `POST /chats/{id}/read` (revision 18). */
+    val supportsChatReadState: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

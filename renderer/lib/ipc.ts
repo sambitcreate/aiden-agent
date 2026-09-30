@@ -966,6 +966,9 @@ async function invokeChatMutation<T>(channel: string, ...args: unknown[]): Promi
 
 export const chatsApi = {
   activitySnapshot: () => invoke<unknown>("chats:activitySnapshot"),
+  readMarkers: () => invoke<unknown>("chats:readMarkers"),
+  markRead: (id: string, throughMessageId?: string) =>
+    invoke<boolean>("chats:markRead", id, throughMessageId),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));

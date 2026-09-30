@@ -464,8 +464,10 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatQuestionPromptsFeature,
             AidenServer.chatSkillsFeature,
             AidenServer.chatAgentInterruptFeature,
+            AidenServer.chatReadStateFeature,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
+        XCTAssertTrue(server.supportsChatReadState)
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [
@@ -474,7 +476,69 @@ final class AidenRemoteClientTests: XCTestCase {
         ])
         XCTAssertEqual(page.summaries.map(\.activity), [.active, .idle])
         XCTAssertEqual(page.summaries.map(\.titlePending), [true, false])
+        XCTAssertEqual(page.summaries.map(\.rowState), [.needsApproval, .idle])
+        XCTAssertEqual(page.summaries.map(\.displayRowState), [.needsApproval, .idle])
+        XCTAssertEqual(page.summaries.map(\.unread), [false, true])
         XCTAssertNotNil(page.nextCursor)
+    }
+
+    func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        // A pre-revision-18 Mac omits both fields; an unknown future state is
+        // tolerated rather than failing the whole page.
+        summaries[0].removeValue(forKey: "rowState")
+        summaries[0].removeValue(forKey: "unread")
+        summaries[1]["rowState"] = "needs_coffee"
+        object["summaries"] = summaries
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data)
+        XCTAssertEqual(page.summaries.map(\.rowState), [nil, nil])
+        XCTAssertEqual(page.summaries.map(\.unread), [false, true])
+        // Old Macs: activity alone still drives Working vs Idle.
+        XCTAssertEqual(page.summaries.map(\.displayRowState), [.working, .idle])
+
+        var waiting = try XCTUnwrap(page.summaries.first)
+        waiting.rowState = .needsInput
+        XCTAssertEqual(waiting.displayRowState, .needsInput)
+        // Once the local stream settles, a stale attention state must not linger.
+        waiting.activity = .idle
+        XCTAssertEqual(waiting.displayRowState, .idle)
+
+        var wrongType = summaries
+        wrongType[0]["unread"] = "yes"
+        object["summaries"] = wrongType
+        let invalid = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: invalid))
+    }
+
+    func testReadBoundaryBelongsToOpenedSnapshotEvenWhenLaterOutputSharesItsTimestamp() throws {
+        let time = Date(timeIntervalSince1970: 500)
+        var chat = AidenChat(id: "chat-read", workspaceId: "workspace", title: "Read", providerId: nil, modelId: nil, messages: [], createdAt: time, updatedAt: time, revision: "r1")
+        XCTAssertNil(chat.lastViewedMessageId)
+        chat.messages = [AidenChatMessage(id: "message-1", role: .user, text: "Hello", createdAt: time)]
+        let opened = chat
+        chat.messages.append(AidenChatMessage(id: "message-2", role: .assistant, text: "Reply", createdAt: time))
+        XCTAssertEqual(opened.lastViewedMessageId, "message-1")
+        XCTAssertEqual(chat.lastViewedMessageId, "message-2")
+    }
+
+    func testMarkChatReadPostsAnEmptyOrTargetedJSONBody() async throws {
+        let client = makeClient()
+        var bodies: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_summary_01/read")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            bodies.append(String(decoding: (try? Self.bodyData(request)) ?? Data(), as: UTF8.self))
+            return Self.response(for: request, status: 204, data: Data())
+        }
+
+        try await client.markChatRead(id: "chat_fixture_summary_01")
+        try await client.markChatRead(id: "chat_fixture_summary_01", throughMessageId: "message-7")
+        XCTAssertEqual(bodies, ["{}", #"{"throughMessageId":"message-7"}"#])
     }
 
     func testChatSummaryDecoderToleratesAdditiveFieldsButRejectsMissingRequiredFields() throws {

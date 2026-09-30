@@ -12,6 +12,7 @@ import {
   type AskUserQuestionAnswerV1,
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
+import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
 import type {
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
@@ -27,6 +28,12 @@ export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
 export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
+/**
+ * Server feature token for shared read markers (`POST /chats/{chatId}/read`).
+ * Advertised only while the host wires a durable read-marker store; without it
+ * every summary reports `unread: false` and clients must not send read reports.
+ */
+export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as const;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
 export const AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION = "bot-full-access-v1" as const;
@@ -2220,6 +2227,21 @@ export function parseAidenRemoteChatSummaryProjection(
       ["idle", "active"] as const,
       `${label} activity`,
     ),
+    // Additive in contract revision 18; absent from older servers.
+    ...(hasOwn(value, "rowState")
+      ? {
+          rowState: enumMember(
+            value.rowState,
+            CHAT_ROW_STATES,
+            `${label} rowState`,
+          ),
+        }
+      : {}),
+    ...(hasOwn(value, "unread")
+      ? typeof value.unread === "boolean"
+        ? { unread: value.unread }
+        : (() => { throw new Error(`${label} unread must be a boolean.`); })()
+      : {}),
   };
 }
 
@@ -4288,6 +4310,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE)) {
     throw new Error("Fixture server must advertise chat agent interrupt.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_READ_STATE_FEATURE)) {
+    throw new Error("Fixture server must advertise chat read state.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {

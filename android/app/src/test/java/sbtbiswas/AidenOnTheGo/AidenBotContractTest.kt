@@ -121,7 +121,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(17, fixture.contractRevision)
+        assertEquals(18, fixture.contractRevision)
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -135,6 +135,12 @@ class AidenBotContractTest {
             chatSummaries.summaries.map { it.id }
         )
         assertEquals(AidenChatSummaryActivity.ACTIVE, chatSummaries.summaries.first().activity)
+        assertTrue(fixture.server.supportsChatReadState)
+        assertEquals(
+            listOf(AidenChatRowState.NEEDS_APPROVAL, AidenChatRowState.IDLE),
+            chatSummaries.summaries.map { it.displayRowState }
+        )
+        assertEquals(listOf(false, true), chatSummaries.summaries.map { it.unread })
         assertTrue(requireNotNull(chatSummaries.nextCursor).length <= AidenRemoteProtocol.MAX_CHAT_SUMMARY_CURSOR_LENGTH)
         assertEquals("bot_fixture_01", fixture.botSummary.id)
         assertEquals(256, fixture.botList.maxBots)

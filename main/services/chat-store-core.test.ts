@@ -1472,3 +1472,24 @@ test("a renderer replaced while a per-chat opt-in is staged cannot commit it", a
   assert.equal(checks, 2);
   assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
 });
+
+test("the summary index records when assistant output was last persisted", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Hello" });
+  const beforeReply = (await store.list()).find((meta) => meta.id === chat.id);
+  assert.equal(beforeReply?.lastAssistantAt, undefined);
+
+  await store.appendMessage(chat.id, { role: "assistant", content: "Hi there" });
+  const replied = await store.get(chat.id);
+  const assistant = replied?.messages.find((message) => message.role === "assistant");
+  const afterReply = (await store.list()).find((meta) => meta.id === chat.id);
+  assert.equal(afterReply?.lastAssistantAt, assistant?.createdAt);
+  assert.equal(afterReply?.lastAssistantSequence, 1);
+
+  // A later user turn does not move the assistant output time.
+  await store.appendMessage(chat.id, { role: "user", content: "Thanks" });
+  const afterUser = (await store.list()).find((meta) => meta.id === chat.id);
+  assert.equal(afterUser?.lastAssistantAt, assistant?.createdAt);
+  assert.equal(afterUser?.lastAssistantSequence, 1);
+});
