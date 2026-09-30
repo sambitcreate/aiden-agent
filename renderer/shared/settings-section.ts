@@ -165,7 +165,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "appearance",
     title: "Appearance",
     group: "App",
-    keywords: ["theme", "light", "dark", "mode", "system"],
+    keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
   },
   {
     id: "about",

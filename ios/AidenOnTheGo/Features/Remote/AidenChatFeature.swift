@@ -1134,6 +1134,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var uploadRevocation: (AidenRemoteClientError, AidenRemoteRequestContext)?
+    @ObservationIgnored private var uploadRevocationTask: Task<Void, Never>?
     @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
     private var attachmentPreparationID: UUID?
     var isPreparingAttachments: Bool { attachmentPreparationID != nil }
@@ -1729,6 +1730,13 @@ final class AidenChatViewModel {
         isAgentRosterStale = agentRoster != nil
     }
 
+    /// Await the current progress observer, if any, without cancelling it or
+    /// starting a new one. A finished observer releases its own handle inside
+    /// its task body, so this returns only after that release has happened.
+    func waitForProgressObservation() async {
+        await progressTask?.value
+    }
+
     private func loadProgressSnapshot(
         context: AidenRemoteRequestContext,
         observationGeneration: UInt64? = nil
@@ -2319,11 +2327,7 @@ final class AidenChatViewModel {
             task.cancel()
         }
         uploadTask = nil
-        let revocation = uploadRevocation
-        uploadRevocation = nil
-        if let (error, context) = revocation {
-            _ = await coordinator.handleCredentialRevocation(error, context: context)
-        }
+        await joinDeferredUploadRevocation()
         return failures
     }
 
@@ -2331,6 +2335,35 @@ final class AidenChatViewModel {
         guard let error = error as? AidenRemoteClientError, error.isCredentialRevoked else { return false }
         uploadRevocation = (error, context)
         return true
+    }
+
+    /// Starts the deferred revocation at most once. Whichever path claims it —
+    /// the upload/removal caller or a lifetime cleanup that purge joins — the
+    /// handling lives in one owned task, so the caller can await it without
+    /// the cleanup ever awaiting the purge that joins it.
+    @discardableResult
+    private func startDeferredUploadRevocation() -> Task<Void, Never>? {
+        if let (error, context) = uploadRevocation {
+            uploadRevocation = nil
+            let coordinator = coordinator
+            // A later revocation may arrive while an earlier purge is running;
+            // its coordinator call returns at once for the stale context, so
+            // the replacement must still finish only after the earlier purge.
+            let previous = uploadRevocationTask
+            uploadRevocationTask = Task {
+                await previous?.value
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+        return uploadRevocationTask
+    }
+
+    /// Callers outside lifetime cleanup finish only after revocation has been
+    /// handled, even when removal cleanup claimed it first.
+    private func joinDeferredUploadRevocation() async {
+        guard let revocation = startDeferredUploadRevocation() else { return }
+        await revocation.value
+        if uploadRevocationTask == revocation { uploadRevocationTask = nil }
     }
 
     private func performUpload(_ uploads: [AidenAttachmentUpload]) async -> Int {
@@ -2445,12 +2478,9 @@ final class AidenChatViewModel {
         for id in Set(ownedUploadReferences.keys).union(attachmentCleanupTasks.keys) {
             await cleanupOwnedAttachment(id)
         }
-        if let (error, context) = uploadRevocation {
-            uploadRevocation = nil
-            // Do not await a purge from the lifetime cleanup that purge joins.
-            let coordinator = coordinator
-            Task { _ = await coordinator.handleCredentialRevocation(error, context: context) }
-        }
+        // Do not await a purge from the lifetime cleanup that purge joins. The
+        // upload caller joins the owned task instead.
+        startDeferredUploadRevocation()
     }
 
     @discardableResult
@@ -2462,10 +2492,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isStarting, !isRemoved,
               pendingAttachments.contains(where: { $0.id == attachment.id }) else { return }
         await cleanupOwnedAttachment(attachment.id)
-        if let (error, context) = uploadRevocation {
-            uploadRevocation = nil
-            _ = await coordinator.handleCredentialRevocation(error, context: context)
-        }
+        await joinDeferredUploadRevocation()
     }
 
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {

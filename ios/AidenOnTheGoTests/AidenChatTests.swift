@@ -300,16 +300,18 @@ final class AidenChatTests: XCTestCase {
             AidenChatProgressLifecycleURLProtocol.reset()
         }
 
+        // Await each observer's own completion instead of polling for a fixed
+        // wall-clock budget: a stalled host can deliver the denial long after
+        // the request was counted.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
 
         // The first observer exited through a completed task body. A later
         // activation must be able to create a fresh observer for the same chat.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(2)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 2)
     }
@@ -1224,8 +1226,8 @@ final class AidenChatTests: XCTestCase {
         // it while the stream-consumer hold is armed to prove it cannot steal
         // the intended gate.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
+        XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
         await model.send()
         await fulfillment(of: [arrived], timeout: 2)
@@ -2775,7 +2777,8 @@ final class AidenChatTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = AidenChatWriteTestGate()
         let cache = AidenChatCache(root: root, beforeAttachmentImageWrite: { await gate.waitIfArmed() })
-        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
         let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2)) }
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
             if request.httpMethod == "DELETE" {
@@ -2818,6 +2821,12 @@ final class AidenChatTests: XCTestCase {
         await completion.value
         let failures = await uploading.value
         XCTAssertEqual(failures, 2)
+        if revokedCleanup {
+            // Whichever of upload or removal cleanup claims the revoked DELETE,
+            // the installation purge must be finished when the upload returns;
+            // the coordinator only reports needsPairing after that purge.
+            XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        }
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
         XCTAssertTrue(model.pendingAttachments.isEmpty)
@@ -3162,15 +3171,6 @@ final class AidenChatTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for progress SSE request (expected).")
-    }
-
-    @MainActor
-    private func waitForProgressObservationToStop(_ model: AidenChatViewModel) async throws {
-        for _ in 0..<100 {
-            if !model.isProgressObservationRunning { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Timed out waiting for the progress observer to finish.")
     }
 
     @MainActor

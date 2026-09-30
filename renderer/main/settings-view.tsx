@@ -129,7 +129,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   voice: "Set up voice input, transcription, and dictation.",
   tts: "Read Aiden’s latest response aloud with Google Gemini.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
-  appearance: "Pick a theme and choose when Aiden uses its light or dark look.",
+  appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
   about: "App information, updates, and diagnostics.",
 };
 
