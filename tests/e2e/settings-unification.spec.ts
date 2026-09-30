@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
@@ -249,6 +249,134 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
   await resizeWindow(390);
   await expect.poll(tileColumns).toBe(2);
   await expect(modeIcon()).toBeHidden();
+});
+
+test("chat width setting resizes the transcript and composer together and persists", async ({
+  aiden,
+}) => {
+  test.setTimeout(120_000);
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1800);
+
+  const prompt = "Chat width geometry probe";
+  await page.locator("textarea").fill(prompt);
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true }).first()).toBeVisible();
+
+  const widths = () =>
+    page.evaluate((text) => {
+      // The transcript column is the shared chat column holding the sent message.
+      const transcript = [...document.querySelectorAll(".chat-content-column")].find(
+        (element) =>
+          !element.matches('[data-browser-composer-inset="true"]') && element.textContent?.includes(text),
+      );
+      const composer = document.querySelector('[data-browser-composer-inset="true"]');
+      const viewport = transcript?.closest<HTMLElement>(".scroll-edge-mask");
+      if (!transcript || !composer || !viewport) return null;
+      const scrollContent = viewport.querySelector<HTMLElement>("[data-scroll-content]");
+      if (!scrollContent) return null;
+      const a = transcript.getBoundingClientRect();
+      const b = composer.getBoundingClientRect();
+      const scrollport = viewport.getBoundingClientRect();
+      const content = scrollContent.getBoundingClientRect();
+      const scrollportLeft = Math.round(scrollport.left + viewport.clientLeft);
+      const scrollportRight = Math.round(scrollportLeft + viewport.clientWidth);
+      return {
+        transcript: Math.round(a.width),
+        composer: Math.round(b.width),
+        centerOffset: Math.abs(Math.round(a.left + a.width / 2 - (b.left + b.width / 2))),
+        scrollbarGutter: viewport.offsetWidth - viewport.clientWidth,
+        horizontalOverflow: Math.max(0, Math.round(content.right) - scrollportRight),
+        transcriptRight: Math.round(a.right),
+        scrollportLeft,
+        scrollportRight,
+        contentLeft: Math.round(content.left),
+      };
+    }, prompt);
+
+  const scrollbarGutter = () => page.evaluate((text) => {
+    const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
+      (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
+    );
+    return viewport ? viewport.offsetWidth - viewport.clientWidth : null;
+  }, prompt);
+  const forceClassicGutter = async () => {
+    await page.evaluate((text) => {
+      const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
+        (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
+      );
+      if (!viewport) throw new Error("Chat transcript scroll viewport was not found");
+      // Measure the final native style, not the app's initial thin scrollbar.
+      // Linux changes the reserved width when switching from thin to auto.
+      Reflect.deleteProperty(viewport, "clientWidth");
+      viewport.style.removeProperty("padding-inline-end");
+      viewport.style.setProperty("overflow-y", "scroll", "important");
+      viewport.style.setProperty("scrollbar-width", "auto", "important");
+      const nativeGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      const gutter = Math.max(16, nativeGutter);
+      viewport.style.paddingInlineEnd = `${gutter - nativeGutter}px`;
+      Object.defineProperty(viewport, "clientWidth", {
+        configurable: true,
+        get: () => viewport.offsetWidth - gutter,
+      });
+    }, prompt);
+    await expect.poll(scrollbarGutter).toBeGreaterThan(0);
+  };
+
+  const chooseWidth = async (label: string) => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
+    const option = page
+      .getByRole("radiogroup", { name: "Chat width", exact: true })
+      .getByRole("radio", { name: label, exact: true });
+    await option.click();
+    await expect(option).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await expect.poll(widths).not.toBeNull();
+  };
+
+  const measured: Record<string, number> = {};
+  for (const label of ["Narrow", "Default", "Wide", "Full"]) {
+    await chooseWidth(label);
+    // Chat-width changes may recreate the viewport; reapply the classic-gutter
+    // fixture so every size, including Full, exercises scrollport compensation.
+    await forceClassicGutter();
+    await expect.poll(async () => {
+      const current = await widths();
+      return current && current.transcript === current.composer && current.centerOffset <= 1
+        ? true
+        : current;
+    }, `${label} transcript and composer geometry`).toBe(true);
+    const geometry = (await widths())!;
+    measured[label] = geometry.transcript;
+    if (label === "Full") {
+      expect(geometry.scrollbarGutter).toBeGreaterThan(0);
+      expect(geometry.horizontalOverflow).toBeLessThanOrEqual(1);
+      expect(geometry.contentLeft).toBeGreaterThanOrEqual(geometry.scrollportLeft - 1);
+      expect(geometry.transcriptRight).toBeLessThanOrEqual(geometry.scrollportRight + 1);
+    }
+  }
+  expect(measured.Narrow).toBeLessThan(measured.Default);
+  expect(measured.Default).toBeLessThan(measured.Wide);
+  expect(measured.Wide).toBeLessThan(measured.Full);
+
+  // The preference is durable: a relaunch restores the same column width.
+  await chooseWidth("Wide");
+  await expect.poll(async () => {
+    const appearance = JSON.parse(
+      await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+    ).settings?.appearance;
+    return appearance?.chatWidth;
+  }).toBe("wide");
+  page = await aiden.relaunch();
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await page.getByText("Chat width geometry probe").first().click();
+  await expect.poll(async () => (await widths())?.transcript).toBe(measured.Wide);
 });
 
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({

@@ -1,4 +1,5 @@
 import {
+  chatContentMaxWidth,
   codeFontStack,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -225,6 +226,8 @@ export function applyAppearanceConfig(
   root.style.setProperty("--font-code-family", codeFontStack(variant.codeFont));
   root.style.setProperty("--ui-font-size", `${config.uiFontSize}px`);
   root.style.setProperty("--code-font-size", `${config.codeFontSize}px`);
+  root.dataset.chatWidth = config.chatWidth;
+  root.style.setProperty("--chat-content-max-width", chatContentMaxWidth(config.chatWidth));
   for (const [name, token] of Object.entries(tokens)) root.style.setProperty(name, token);
 
   const themeColor = tokens["--theme-canvas"];

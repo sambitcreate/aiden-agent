@@ -517,6 +517,9 @@ object AidenAgentActivityPresentation {
             return if (step.isActive) "Thinking" else "Thought ${duration(step.durationMs)}"
         }
         val label = step.label ?: "Tool"
+        // Matches desktop: a pending call is still being prepared (its
+        // arguments may be streaming), so name the tool instead of claiming work.
+        if (step.status == AidenAgentStepStatus.PENDING) return "Preparing $label"
         val pair = verbs[step.toolName ?: ""]
         val verb = when (step.status) {
             AidenAgentStepStatus.PENDING, AidenAgentStepStatus.RUNNING -> pair?.first ?: label
@@ -629,7 +632,7 @@ enum class AidenChatSummaryActivity {
 }
 
 /**
- * List-row state (contract revision 16), in display priority: a chat blocked
+ * List-row state (contract revision 18), in display priority: a chat blocked
  * on the user outranks one that is merely working.
  */
 enum class AidenChatRowState(val wire: String, val accessibilityLabel: String) {
@@ -656,7 +659,7 @@ data class AidenChatSummary(
     /**
      * Raw additive row state. Kept as a string so an older client tolerates a
      * future state instead of rejecting the whole summary page; absent on Macs
-     * older than contract revision 16.
+     * older than contract revision 18.
      */
     @SerialName("rowState") val rowStateWire: String? = null,
     /** True only when assistant output arrived after the chat was last viewed. */
@@ -912,7 +915,10 @@ data class AidenStreamPendingApproval(
     val toolCallId: String,
     val toolName: String,
     @Serializable(with = InstantIso8601Serializer::class) val expiresAt: Instant,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    /** Contract revision 17. Raw names so an unknown future scope never fails
+     * decoding; [AidenApprovalScope.offered] keeps the known ones. */
+    val scopes: List<String>? = null
 )
 
 @Serializable
@@ -1046,10 +1052,47 @@ enum class AidenApprovalDecision {
     @SerialName("deny") DENY
 }
 
+/** Contract revision 17 allow scopes. ONCE authorizes one call; CHAT and
+ * ALWAYS let the Mac remember the exact same tool and target for this chat or,
+ * until revoked in desktop Settings, for the workspace. */
+@Serializable
+enum class AidenApprovalScope(val wireName: String) {
+    @SerialName("once") ONCE("once"),
+    @SerialName("chat") CHAT("chat"),
+    @SerialName("always") ALWAYS("always");
+
+    companion object {
+        /** Known offered scopes in canonical order; anything not broader than
+         * a one-time allow collapses to `[ONCE]`. */
+        fun offered(raw: List<String>?): List<AidenApprovalScope> {
+            val known = raw.orEmpty().toSet()
+            val broader = entries.filter { it != ONCE && known.contains(it.wireName) }
+            return if (broader.isEmpty()) listOf(ONCE) else listOf(ONCE) + broader
+        }
+    }
+}
+
+/** POST /approvals/{id}/respond body. `scope` is dropped for a one-time allow
+ * or any deny so pre-revision-17 hosts see the original body shape. */
+@Serializable
+data class AidenApprovalRequest(
+    val decision: AidenApprovalDecision,
+    val scope: AidenApprovalScope? = null
+) {
+    companion object {
+        fun of(decision: AidenApprovalDecision, scope: AidenApprovalScope?): AidenApprovalRequest =
+            AidenApprovalRequest(
+                decision = decision,
+                scope = scope?.takeIf { decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE }
+            )
+    }
+}
+
 @Serializable
 data class AidenApprovalResponse(
     val approvalId: String,
     val decision: AidenApprovalDecision,
+    val scope: AidenApprovalScope? = null,
     @Serializable(with = InstantIso8601Serializer::class) val resolvedAt: Instant
 )
 
@@ -1061,7 +1104,8 @@ data class AidenPendingApproval(
     val canRespond: Boolean,
     val hasRequiredWriteCapability: Boolean,
     val hostCanAllow: Boolean,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE)
 )
 
 data class AidenApprovalCapabilities(
@@ -1089,6 +1133,12 @@ object AidenApprovalPresentation {
         else -> "Approval Required"
     }
 
+    fun scopeTitle(scope: AidenApprovalScope): String = when (scope) {
+        AidenApprovalScope.ONCE -> "Allow once"
+        AidenApprovalScope.CHAT -> "Allow for this chat"
+        AidenApprovalScope.ALWAYS -> "Always allow"
+    }
+
     fun requiresDesktopConfirmation(approval: AidenPendingApproval): Boolean =
         isAutomation(approval.toolName) && approval.canRespond &&
                 approval.hasRequiredWriteCapability && !approval.hostCanAllow
@@ -1107,6 +1157,7 @@ object AidenPendingApprovalResolution {
         }
         val hasRequiredWriteCapability =
             !AidenApprovalPresentation.isAutomation(approval.toolName) || capabilities.canWriteSchedules
+        val canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         return AidenPendingApproval(
             id = approval.approvalId,
             summary = approval.summary,
@@ -1115,7 +1166,12 @@ object AidenPendingApprovalResolution {
             canRespond = capabilities.canRespond,
             hasRequiredWriteCapability = hasRequiredWriteCapability,
             hostCanAllow = approval.canAllow,
-            canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
+            canAllow = canAllow,
+            scopes = if (canAllow && !AidenApprovalPresentation.isAutomation(approval.toolName)) {
+                AidenApprovalScope.offered(approval.scopes)
+            } else {
+                listOf(AidenApprovalScope.ONCE)
+            }
         )
     }
 }
@@ -1405,7 +1461,8 @@ object AidenChatModelAuthority {
         catalog: AidenModelCatalog?,
         selectedProviderId: String?,
         selectedModelId: String?,
-        selectedThinkingLevel: String?
+        selectedThinkingLevel: String?,
+        remembered: AidenChatModelSelection? = null
     ): AidenChatModelSelection {
         if (chat.isBotChat) {
             val provider = catalog?.providers?.firstOrNull { it.id == chat.providerId }
@@ -1425,21 +1482,49 @@ object AidenChatModelAuthority {
             )
         }
 
-        var providerId = selectedProviderId
-        if (providerId == null || catalog.providers.none { it.id == providerId }) {
-            providerId = catalog.defaults["providerId"] ?: catalog.visibleProviders.firstOrNull()?.id
-        }
+        rememberedSelection(catalog, remembered)?.let { return it }
+
+        val selectedProvider = catalog.providers.firstOrNull { it.id == selectedProviderId }
+        val chatProvider = catalog.providers.firstOrNull { it.id == chat.providerId }
+        val providerId = selectedProvider?.id ?: chatProvider?.id
+            ?: catalog.defaults["providerId"] ?: catalog.visibleProviders.firstOrNull()?.id
         val provider = catalog.providers.firstOrNull { it.id == providerId }
-        var modelId = selectedModelId
-        if (modelId == null || provider?.models?.any { it.id == modelId } != true) {
-            modelId = catalog.defaults["modelId"] ?: provider?.visibleModels?.firstOrNull()?.id
+        val selectedModel = selectedProvider?.let { currentProvider ->
+            selectedModelId?.takeIf { candidate -> currentProvider.models.any { it.id == candidate } }
         }
+        val chatModel = chat.modelId?.takeIf { candidate ->
+            chatProvider?.id == providerId && provider?.models?.any { it.id == candidate } == true
+        }
+        val modelId = selectedModel ?: chatModel
+            ?: catalog.defaults["modelId"]?.takeIf { candidate ->
+                provider?.models?.any { it.id == candidate } == true
+            } ?: provider?.visibleModels?.firstOrNull()?.id
         val model = provider?.models?.firstOrNull { it.id == modelId }
         return AidenChatModelSelection(
             providerId = providerId,
             modelId = modelId,
             thinkingLevel = selectedThinkingLevel ?: model?.effectiveThinkingLevel
         )
+    }
+
+    /**
+     * The per-host remembered choice applies only when the host's current
+     * inventory still offers it as a visible provider/model pair. A missing
+     * or hidden pair returns null so the caller falls back to the chat's pair
+     * and then the host defaults; a stale thinking level falls back to the
+     * model's own default rather than sending an unsupported level.
+     */
+    fun rememberedSelection(
+        catalog: AidenModelCatalog,
+        remembered: AidenChatModelSelection?
+    ): AidenChatModelSelection? {
+        val providerId = remembered?.providerId ?: return null
+        val modelId = remembered.modelId ?: return null
+        val provider = catalog.visibleProviders.firstOrNull { it.id == providerId } ?: return null
+        val model = provider.visibleModels.firstOrNull { it.id == modelId } ?: return null
+        val levels = model.thinkingLevels.orEmpty()
+        val thinkingLevel = remembered.thinkingLevel?.takeIf { it in levels } ?: model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId, modelId, thinkingLevel)
     }
 
     fun turnSelection(

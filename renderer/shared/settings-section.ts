@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS = [
   "websearch",
   "telegram",
   "remoteAccess",
+  "approvals",
   "computerUse",
   "simulator",
   "memory",
@@ -102,6 +103,20 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     ],
   },
   {
+    id: "approvals",
+    title: "Tool approvals",
+    group: "Agent",
+    keywords: [
+      "always allow",
+      "allow for this chat",
+      "remembered",
+      "permissions",
+      "revoke",
+      "commands",
+      "stop asking me",
+    ],
+  },
+  {
     id: "computerUse",
     title: "Computer Use",
     group: "Agent",
@@ -150,7 +165,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "appearance",
     title: "Appearance",
     group: "App",
-    keywords: ["theme", "light", "dark", "mode", "system"],
+    keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
   },
   {
     id: "about",

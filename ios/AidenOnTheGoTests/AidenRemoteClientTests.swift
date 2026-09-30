@@ -463,8 +463,10 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatRunInputFeature,
             AidenServer.chatQuestionPromptsFeature,
             AidenServer.chatSkillsFeature,
+            AidenServer.chatAgentInterruptFeature,
             AidenServer.chatReadStateFeature,
         ])
+        XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
 
         let page = fixture.chatSummaries
@@ -485,7 +487,7 @@ final class AidenRemoteClientTests: XCTestCase {
             JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
         )
         var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
-        // A pre-revision-16 Mac omits both fields; an unknown future state is
+        // A pre-revision-18 Mac omits both fields; an unknown future state is
         // tolerated rather than failing the whole page.
         summaries[0].removeValue(forKey: "rowState")
         summaries[0].removeValue(forKey: "unread")
@@ -2157,6 +2159,35 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 10)
     }
 
+    func testApprovalScopeIsSentOnlyForBroaderAllowsAndEchoedBack() async throws {
+        let client = makeClient()
+        var bodies: [[String: Any]] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = (try? Self.jsonBody(request)) ?? [:]
+            bodies.append(body)
+            let decision = body["decision"] as? String ?? "allow"
+            let scope = (body["scope"] as? String).map { ",\"scope\":\"\($0)\"" } ?? ""
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"approvalId\":\"approval-1\",\"decision\":\"\(decision)\"\(scope),\"resolvedAt\":\"2026-08-19T07:00:00.000Z\"}"
+            )
+        }
+
+        let remembered = try await client.respondToApproval(id: "approval-1", decision: .allow, scope: .always)
+        let once = try await client.respondToApproval(id: "approval-1", decision: .allow, scope: .once)
+        let denied = try await client.respondToApproval(id: "approval-1", decision: .deny, scope: .chat)
+
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertEqual(bodies[0]["scope"] as? String, "always")
+        XCTAssertEqual(remembered.scope, .always)
+        // A one-time allow and any deny keep the pre-revision-17 wire shape.
+        XCTAssertEqual(Set(bodies[1].keys), ["decision"])
+        XCTAssertNil(once.scope)
+        XCTAssertEqual(Set(bodies[2].keys), ["decision"])
+        XCTAssertEqual(denied.decision, .deny)
+    }
+
     func testAttachmentUploadTurnProjectionAndRemovalUseBoundedCanonicalRoutes() async throws {
         let client = makeClient()
         let attachmentID = "att_\(String(repeating: "A", count: 43))"
@@ -2425,6 +2456,38 @@ final class AidenRemoteClientTests: XCTestCase {
                 "GET /api/aiden/v1/chats/chat_fixture_01/progress/events",
             ]
         )
+    }
+
+    func testAgentInterruptPostsToTheAgentRouteAndReturnsTheStoppedRoster() async throws {
+        let client = makeClient()
+        let responseData = try botFixtureData(at: ["agentInterrupt", "response"])
+        var requests: [String] = []
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            requests.append("\(request.httpMethod ?? "?") \(path)")
+            XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.query)
+            XCTAssertNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
+            return Self.response(for: request, status: 200, data: responseData)
+        }
+
+        let roster = try await client.interruptAgent(
+            chatId: "chat_fixture_01",
+            agentId: "agent_fixture_01"
+        )
+        XCTAssertEqual(roster.agents.first { $0.agentId == "agent_fixture_01" }?.state, .stopped)
+        XCTAssertEqual(
+            requests,
+            ["POST /api/aiden/v1/chats/chat_fixture_01/agents/agent_fixture_01/interrupt"]
+        )
+
+        await assertInvalidResponse {
+            try await client.interruptAgent(chatId: "chat_fixture_01", agentId: "agent/../escape")
+        }
+        await assertInvalidResponse {
+            try await client.interruptAgent(chatId: "chat_other", agentId: "agent_fixture_01")
+        }
+        XCTAssertEqual(requests.count, 2, "Only the mismatched-chat call reaches the network")
     }
 
     func testSkillCatalogEndpointAndProgressVocabularyNegotiation() async throws {

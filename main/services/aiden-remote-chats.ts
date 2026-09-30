@@ -163,9 +163,9 @@ export interface AidenRemoteChatSummaryProjection {
   updatedAt: string;
   revision: string;
   activity: "idle" | "active";
-  /** Additive (protocol revision 16): richer list-row state. */
+  /** Additive (protocol revision 18): richer list-row state. */
   rowState?: ChatRowState;
-  /** Additive (protocol revision 16): assistant output arrived after the last view. */
+  /** Additive (protocol revision 18): assistant output arrived after the last view. */
   unread?: boolean;
 }
 

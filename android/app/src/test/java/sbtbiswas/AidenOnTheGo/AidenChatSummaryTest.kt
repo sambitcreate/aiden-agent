@@ -198,7 +198,7 @@ class AidenChatSummaryTest {
         assertEquals(AidenChatRowState.WORKING, future.displayRowState)
         assertFalse(future.unread)
 
-        // Pre-revision-16 Macs omit both fields; activity still drives the row.
+        // Pre-revision-18 Macs omit both fields; activity still drives the row.
         val legacy = client.chatSummaryPage(limit = 100).summaries.single()
         assertNull(legacy.rowState)
         assertFalse(legacy.unread)

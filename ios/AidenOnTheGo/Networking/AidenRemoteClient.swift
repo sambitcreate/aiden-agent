@@ -88,6 +88,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatRunInputFeature = "chat-run-input-v1"
     static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
     static let chatSkillsFeature = "chat-skills-v1"
+    static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
 
     let protocolVersion: Int
@@ -234,7 +235,13 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatSkillsFeature)
     }
 
-    /// Row states, unread markers, and `POST /chats/{id}/read` (revision 16).
+    /// The Mac can stop one running delegated agent through its own subagent
+    /// stop path. Advertised only alongside chat-agents-v1.
+    var supportsChatAgentInterrupt: Bool {
+        supportsChatAgents && features.contains(Self.chatAgentInterruptFeature)
+    }
+
+    /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
     var supportsChatReadState: Bool {
         features.contains(Self.chatReadStateFeature)
     }
@@ -517,6 +524,16 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ApprovalRequest: Encodable {
         let decision: AidenApprovalDecision
+        /// Omitted (not null) when absent so pre-revision-17 hosts accept it.
+        let scope: AidenApprovalScope?
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(decision, forKey: .decision)
+            try container.encodeIfPresent(scope, forKey: .scope)
+        }
+
+        private enum CodingKeys: String, CodingKey { case decision, scope }
     }
 
     private struct ScheduledTaskList: Decodable { let tasks: [AidenScheduledTask] }
@@ -797,6 +814,24 @@ final class AidenRemoteClient: @unchecked Sendable {
         if let turnId, value.turnId != turnId {
             throw AidenRemoteClientError.invalidResponse
         }
+        return value
+    }
+
+    /// Stops one running delegated agent in the chat's current turn and returns
+    /// the refreshed current-turn roster. Stopping an agent that already
+    /// finished is an idempotent no-op on the Mac, so no idempotency key is sent.
+    func interruptAgent(
+        chatId: String,
+        agentId: String
+    ) async throws -> AidenRemoteChatAgentRoster {
+        guard agentId.wholeMatch(of: /^[A-Za-z0-9._:-]{1,128}$/) != nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let value: AidenRemoteChatAgentRoster = try await send(
+            method: "POST",
+            path: ["chats", chatId, "agents", agentId, "interrupt"]
+        )
+        guard value.chatId == chatId else { throw AidenRemoteClientError.invalidResponse }
         return value
     }
 
@@ -1843,12 +1878,16 @@ final class AidenRemoteClient: @unchecked Sendable {
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = nil,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenApprovalResponse {
         try await send(
             method: "POST",
             path: ["approvals", id, "respond"],
-            body: ApprovalRequest(decision: decision),
+            body: ApprovalRequest(
+                decision: decision,
+                scope: decision == .allow && scope != .once ? scope : nil
+            ),
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }

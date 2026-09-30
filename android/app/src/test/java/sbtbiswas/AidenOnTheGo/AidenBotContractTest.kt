@@ -121,7 +121,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(16, fixture.contractRevision)
+        assertEquals(18, fixture.contractRevision)
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -173,6 +173,13 @@ class AidenBotContractTest {
         assertEquals(3, taskProgress.tasks.size)
         assertEquals(AidenChatAgentRole.IMPLEMENTER, agentRoster.agents.first().role)
         assertEquals(2, agentRoster.previousTurns.size)
+        assertTrue(fixture.server.supportsChatAgentInterrupt)
+        val agentInterrupt = requireNotNull(fixture.agentInterrupt)
+        assertEquals(agentRoster.turnId, agentInterrupt.response.turnId)
+        assertEquals(
+            AidenChatAgentState.STOPPED,
+            agentInterrupt.response.agents.single { it.agentId == agentInterrupt.agentId }.state
+        )
         assertEquals(2, fixture.chatProgressEvents.size)
         assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
         assertEquals(AidenRemoteEventType.AGENTS_UPDATE, fixture.chatProgressEvents[1].type)

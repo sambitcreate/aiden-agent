@@ -89,7 +89,11 @@ data class AidenServer(
     val supportsChatSkills: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_SKILLS_FEATURE)
 
-    /** Row states, unread markers, and `POST /chats/{id}/read` (revision 16). */
+    /** The Mac can stop one running delegated agent; only meaningful with chat-agents-v1. */
+    val supportsChatAgentInterrupt: Boolean
+        get() = supportsChatAgents && features.contains(AidenRemoteProtocol.CHAT_AGENT_INTERRUPT_FEATURE)
+
+    /** Row states, unread markers, and `POST /chats/{id}/read` (revision 18). */
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 

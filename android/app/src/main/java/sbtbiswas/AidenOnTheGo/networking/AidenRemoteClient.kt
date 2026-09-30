@@ -725,6 +725,29 @@ class AidenRemoteClient(
         }
     }
 
+    /**
+     * Stops one running delegated agent in the chat's current turn and returns
+     * the refreshed current-turn roster. Stopping an already-finished agent is
+     * an idempotent no-op on the Mac, so no idempotency key is sent. Control
+     * writes never auto-retry on a dropped connection.
+     */
+    suspend fun interruptAgent(chatId: String, agentId: String): AidenChatAgentRoster {
+        if (!agentId.matches(Regex("^[A-Za-z0-9._:-]{1,128}$"))) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid agent.")
+        }
+        return executeRequest(
+            "/chats/$chatId/agents/$agentId/interrupt",
+            method = "POST",
+            retryConnectionFailure = false,
+            botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val roster = AidenChatProgressCodec.decodeAgentRoster(bytes)
+            if (roster.chatId != chatId) throw AidenRemoteClientException.InvalidResponse("Agent roster belongs to another chat.")
+            roster
+        }
+    }
+
     suspend fun createChat(
         workspaceId: String,
         providerId: String? = null,
@@ -933,12 +956,13 @@ class AidenRemoteClient(
     suspend fun respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = null,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenApprovalResponse = executeRequest(
         "/approvals/$id/respond",
         method = "POST",
         retryConnectionFailure = false,
-        bodyJson = json.encodeToString(ApprovalRequest(decision = decision)),
+        bodyJson = json.encodeToString(AidenApprovalRequest.of(decision, scope)),
         idempotencyKey = idempotencyKey
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
@@ -949,7 +973,7 @@ class AidenRemoteClient(
         approvalId: String,
         decision: AidenApprovalDecision,
         idempotencyKey: UUID = UUID.randomUUID()
-    ): AidenApprovalResponse = respondToApproval(approvalId, decision, idempotencyKey)
+    ): AidenApprovalResponse = respondToApproval(approvalId, decision, idempotencyKey = idempotencyKey)
 
     /** Authoritative pending-question snapshot for one stream. Returns
      * `{question: null}` when no prompt is pending. */
@@ -1918,9 +1942,6 @@ class AidenRemoteClient(
         val workspaceId: String,
         val confirmedForeground: Boolean = true
     )
-
-    @Serializable
-    private data class ApprovalRequest(val decision: AidenApprovalDecision)
 
     @Serializable
     private data class ScheduledTaskListResponse(val tasks: List<AidenScheduledTask>)

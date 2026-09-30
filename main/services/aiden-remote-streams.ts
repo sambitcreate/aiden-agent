@@ -3,6 +3,10 @@ import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
+  parseToolApprovalScope,
+  type ToolApprovalScope,
+} from "../../renderer/shared/tool-approval-scope.js";
+import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
   isAssistantAutomationApprovalDetails,
@@ -83,6 +87,14 @@ export interface AidenRemoteStreamStatus {
   updatedAt: string;
 }
 
+export interface AidenRemoteApprovalResolution {
+  approvalId: string;
+  decision: "allow" | "deny";
+  /** Echoed only when the request chose a scope (contract revision 17). */
+  scope?: ToolApprovalScope;
+  resolvedAt: string;
+}
+
 export interface AidenRemotePendingApproval {
   approvalId: string;
   streamId: string;
@@ -92,6 +104,11 @@ export interface AidenRemotePendingApproval {
   toolName: string;
   expiresAt: string;
   canAllow: boolean;
+  /**
+   * Allow scopes this approval offers (contract revision 17). Present only
+   * when a broader-than-once scope is available; "once" is always implied.
+   */
+  scopes?: ToolApprovalScope[];
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
 }
@@ -161,6 +178,7 @@ interface ApprovalRecord {
   toolCallId: string;
   toolName: string;
   canAllow: boolean;
+  scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
@@ -214,6 +232,16 @@ function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
     || isSubagentShellApprovalDetails(value)
     || isSubagentRunGrantApprovalDetails(value)
     ? structuredClone(value)
+    : undefined;
+}
+
+/** Keep only known scopes, in canonical order, and only when broader than once. */
+function offeredScopes(value: unknown): ToolApprovalScope[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parsed = new Set(value.map(parseToolApprovalScope));
+  const scopes = (["once", "chat", "always"] as const).filter((scope) => parsed.has(scope));
+  return scopes.some((scope) => scope !== "once")
+    ? (["once", ...scopes.filter((scope) => scope !== "once")] as ToolApprovalScope[])
     : undefined;
 }
 
@@ -430,6 +458,7 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
+  private readonly eventSizes = new WeakMap<AidenRemoteStreamEvent, number>();
   private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
   private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly questions = new Map<string, QuestionRecord>();
@@ -443,7 +472,12 @@ export class AidenRemoteStreamService {
     private readonly options: {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
-      approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
+      approve(
+        approvalId: string,
+        decision: "allow" | "deny",
+        ownerDocumentId: string,
+        scope?: ToolApprovalScope,
+      ): boolean;
       /**
        * Host-owned foreground admission (Remote Slice 2). When absent the
        * `/streams/{id}/inputs` route is unadvertised and returns not_found.
@@ -561,7 +595,7 @@ export class AidenRemoteStreamService {
       const base: Omit<StreamRecord, "owner"> = {
         ...saved,
         eventBytes: saved.events.reduce(
-          (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
+          (total, event) => total + this.eventSize(event),
           0,
         ),
         subscribers: new Set(),
@@ -594,7 +628,7 @@ export class AidenRemoteStreamService {
     this.turnIndex.set(streamId, { chatId, turnId });
   }
 
-  snapshot(): AidenRemoteStreamSnapshot {
+  private snapshotEnvelope(): AidenRemoteStreamSnapshot {
     return {
       version: 1,
       streams: [...this.streams.values()].map((stream) => ({
@@ -604,7 +638,7 @@ export class AidenRemoteStreamService {
         deviceId: stream.deviceId,
         state: stream.state,
         updatedAt: stream.updatedAt,
-        events: structuredClone(stream.events),
+        events: [],
       })),
       turnIndex: [...this.turnIndex.entries()].map(([streamId, entry]) => ({
         streamId,
@@ -612,6 +646,35 @@ export class AidenRemoteStreamService {
         turnId: entry.turnId,
       })),
     };
+  }
+
+  snapshot(): AidenRemoteStreamSnapshot {
+    const snapshot = this.snapshotEnvelope();
+    for (const stream of snapshot.streams) {
+      stream.events = structuredClone(this.streams.get(stream.streamId)!.events);
+    }
+    return snapshot;
+  }
+
+  private eventSize(event: AidenRemoteStreamEvent): number {
+    let bytes = this.eventSizes.get(event);
+    if (bytes === undefined) {
+      bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+      this.eventSizes.set(event, bytes);
+    }
+    return bytes;
+  }
+
+  private snapshotBytes(): number {
+    // Serialize only bounded metadata (256 streams / 1,024 turn identities).
+    // The empty arrays already include brackets; add event bytes and commas.
+    // Rebuilding this envelope keeps deletion, expiry and delivery cleanup from
+    // having to maintain a second, fragile aggregate mutation ledger.
+    let bytes = Buffer.byteLength(JSON.stringify(this.snapshotEnvelope()), "utf8");
+    for (const stream of this.streams.values()) {
+      bytes += stream.eventBytes + Math.max(0, stream.events.length - 1);
+    }
+    return bytes;
   }
 
   private persist(): void {
@@ -682,15 +745,26 @@ export class AidenRemoteStreamService {
       toolName: entry.toolName,
       expiresAt: new Date(entry.expiresAt).toISOString(),
       canAllow: entry.canAllow,
+      ...(entry.canAllow && entry.scopes ? { scopes: [...entry.scopes] } : {}),
       ...(entry.details ? { details: structuredClone(entry.details) } : {}),
     };
   }
 
-  private resolveApproval(approvalId: string, decision: "allow" | "deny"): boolean {
+  private resolveApproval(
+    approvalId: string,
+    decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
+  ): boolean {
     const approval = this.approvals.get(approvalId);
     if (!approval) return false;
     clearTimeout(approval.expiry);
-    const resolved = this.options.approve(approvalId, decision, approval.ownerDocumentId);
+    const effectiveScope =
+      decision === "allow" && scope && scope !== "once" && approval.scopes?.includes(scope)
+        ? scope
+        : undefined;
+    const resolved = effectiveScope
+      ? this.options.approve(approvalId, decision, approval.ownerDocumentId, effectiveScope)
+      : this.options.approve(approvalId, decision, approval.ownerDocumentId);
     this.approvals.delete(approvalId);
     const stream = this.streams.get(approval.streamId);
     const nextApproval = stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
@@ -853,9 +927,11 @@ export class AidenRemoteStreamService {
       timestamp: new Date(this.options.now()).toISOString(),
       type,
       terminal: isTerminal,
-      payload,
+      // Journal events own their payload: callers must not invalidate cached
+      // sizes (or change already-published replay) by mutating nested values.
+      payload: structuredClone(payload),
     };
-    const bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+    const bytes = this.eventSize(event);
     stream.events.push(event);
     stream.eventBytes += bytes;
     while (
@@ -863,11 +939,11 @@ export class AidenRemoteStreamService {
       (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
     ) {
       const removed = stream.events.shift();
-      if (removed) stream.eventBytes -= Buffer.byteLength(JSON.stringify(removed), "utf8");
+      if (removed) stream.eventBytes -= this.eventSize(removed);
     }
-    this.enforceAggregateBudget(stream.streamId);
     stream.state = state ?? stream.state;
     stream.updatedAt = this.options.now();
+    this.enforceAggregateBudget(stream.streamId);
     for (const subscriber of [...stream.subscribers]) subscriber.flush();
     if (isTerminal) {
       stream.owner.invalidate();
@@ -892,8 +968,7 @@ export class AidenRemoteStreamService {
   }
 
   private enforceAggregateBudget(currentStreamId: string): void {
-    const snapshotBytes = () => Buffer.byteLength(JSON.stringify(this.snapshot()), "utf8");
-    if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
+    if (this.snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     const terminalStreams = [...this.streams.values()]
       .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
@@ -909,16 +984,16 @@ export class AidenRemoteStreamService {
       }
       entry.owner.invalidate();
       this.streams.delete(entry.streamId);
-      if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
+      if (this.snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     }
-    while (snapshotBytes() > MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) {
+    while (this.snapshotBytes() > MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) {
       const candidate = [...this.streams.values()]
         .filter((entry) => entry.events.length > 0)
         .sort((left, right) => right.eventBytes - left.eventBytes)[0];
       if (!candidate) break;
       if (candidate.events.length > 1) {
         const removed = candidate.events.shift();
-        if (removed) candidate.eventBytes -= Buffer.byteLength(JSON.stringify(removed), "utf8");
+        if (removed) candidate.eventBytes -= this.eventSize(removed);
         continue;
       }
       const retained = candidate.events[0]!;
@@ -933,7 +1008,7 @@ export class AidenRemoteStreamService {
         },
       };
       candidate.events[0] = replacement;
-      candidate.eventBytes = Buffer.byteLength(JSON.stringify(replacement), "utf8");
+      candidate.eventBytes = this.eventSize(replacement);
     }
   }
 
@@ -1001,6 +1076,7 @@ export class AidenRemoteStreamService {
       const toolName = boundedText(payload.toolName, 120) || "Tool";
       const details = approvalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
+      const scopes = offeredScopes(payload.scopes);
       const expiresAt = this.options.now() + APPROVAL_LIFETIME_MS;
       const expiry = setTimeout(() => {
         const current = this.approvals.get(approvalId);
@@ -1017,6 +1093,7 @@ export class AidenRemoteStreamService {
         toolCallId,
         toolName,
         canAllow: !claimsStructuredDetails || details !== undefined,
+        ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
         expiresAt,
         expiry,
@@ -1053,17 +1130,26 @@ export class AidenRemoteStreamService {
       if (this.questions.has(promptId) || this.pendingQuestionForStream(stream.streamId)) {
         throw new Error("A questionnaire is already pending on this stream.");
       }
-      const expiresAt = this.options.now() + QUESTION_LIFETIME_MS;
+      // The coordinator stamps the agent-facing deadline on the prompt. Use it
+      // so the phone card expires at the instant the agent stops waiting, but
+      // never extend past the Remote question lifetime.
+      const now = this.options.now();
+      const agentDeadline =
+        typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : Number.NaN;
+      const expiresAt = Number.isFinite(agentDeadline)
+        ? Math.min(Math.max(agentDeadline, now), now + QUESTION_LIFETIME_MS)
+        : now + QUESTION_LIFETIME_MS;
       const expiry = setTimeout(() => {
         const current = this.questions.get(promptId);
         if (!current || current.expiresAt !== expiresAt) return;
+        // The host settles a past-deadline prompt as timed out, not closed.
         this.resolveQuestion(promptId, {
           version: ASK_USER_QUESTION_VERSION,
           promptId,
           cancelled: true,
           answers: [],
         });
-      }, QUESTION_LIFETIME_MS);
+      }, expiresAt - now);
       expiry.unref?.();
       this.questions.set(promptId, {
         streamId: stream.streamId,
@@ -1264,10 +1350,12 @@ export class AidenRemoteStreamService {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
     if (!approval) return null;
-    const { details: _hostOnly, ...mobile } = approval;
+    const { details: _hostOnly, scopes, ...mobile } = approval;
+    const canAllow = approvalIsHostOnly(approval.details) ? false : approval.canAllow;
     return {
       ...mobile,
-      canAllow: approvalIsHostOnly(approval.details) ? false : approval.canAllow,
+      canAllow,
+      ...(canAllow && scopes ? { scopes } : {}),
     };
   }
 
@@ -1420,13 +1508,14 @@ export class AidenRemoteStreamService {
     chatId: string,
     approvalId: string,
     decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
   ): boolean {
     this.prune();
     const approval = this.approvals.get(approvalId);
     if (!approval || approval.chatId !== chatId || approval.expiresAt <= this.options.now()) {
       return false;
     }
-    return this.resolveApproval(approvalId, decision);
+    return this.resolveApproval(approvalId, decision, scope);
   }
 
   async cancel(deviceId: string, streamId: string, key: string): Promise<AidenRemoteStreamStatus> {
@@ -1628,13 +1717,14 @@ export class AidenRemoteStreamService {
     key: string,
     runAccess: (
       chatId: string,
-      action: () => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
-    ) => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
-  ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
+      action: () => Promise<AidenRemoteApprovalResolution>,
+    ) => Promise<AidenRemoteApprovalResolution>,
+    scope?: ToolApprovalScope,
+  ): Promise<AidenRemoteApprovalResolution> {
     try {
       return await this.executeIdempotent(
         { deviceId, route: "POST /approvals/{id}/respond", resourceId: approvalId, key },
-        { approvalId, decision },
+        scope ? { approvalId, decision, scope } : { approvalId, decision },
         async () => {
           this.prune();
           const approval = this.approvals.get(approvalId);
@@ -1648,11 +1738,23 @@ export class AidenRemoteStreamService {
               403,
             );
           }
+          if (scope && scope !== "once" && !approval.scopes?.includes(scope)) {
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "This approval cannot be remembered with that scope.",
+              400,
+            );
+          }
           return runAccess(approval.chatId, async () => {
-            if (!this.resolveApproval(approvalId, decision)) {
+            if (!this.resolveApproval(approvalId, decision, scope)) {
               throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
             }
-            return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+            return {
+              approvalId,
+              decision,
+              ...(scope ? { scope } : {}),
+              resolvedAt: new Date(this.options.now()).toISOString(),
+            };
           });
         },
       );

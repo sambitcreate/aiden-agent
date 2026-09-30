@@ -28,6 +28,7 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { AskUserQuestionExpiryNotice } from "../components/ask-user-question-expiry-notice";
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
@@ -35,6 +36,11 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  rememberableApprovalScopes,
+  toolApprovalScopeLabel,
+  type ToolApprovalScope,
+} from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ContextMeter } from "../components/context-meter";
@@ -161,9 +167,12 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
-import type {
-  AskUserQuestionPromptV1,
-  AskUserQuestionResponseV1,
+import {
+  askUserQuestionMsUntilExpiry,
+  formatLateAskUserQuestionFollowUp,
+  retainExpiredAskUserQuestionForLateAnswer,
+  type AskUserQuestionPromptV1,
+  type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
@@ -509,6 +518,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [questionnaire, setQuestionnaire] = React.useState<AskUserQuestionPromptV1 | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  // The prompt whose agent deadline passed while its card was still open.
+  const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
+  // An answer submitted after the deadline, offered as a follow-up message.
+  const [lateQuestionnaireAnswer, setLateQuestionnaireAnswer] = React.useState<string | null>(null);
+  const [lateAnswerSending, setLateAnswerSending] = React.useState(false);
   const [btwView, setBtwView] = React.useState<BtwLiveView | null>(null);
   const [todoSnapshot, setTodoSnapshot] = React.useState<TodoSnapshotViewV1 | null>(null);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
@@ -671,6 +685,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setApprovals([]);
     setQuestionnaire(null);
     setQuestionnaireSubmitting(false);
+    setExpiredQuestionnaireId(null);
+    setLateQuestionnaireAnswer(null);
+    setLateAnswerSending(false);
     setBtwView(null);
     setTodoSnapshot(null);
     decidingApprovalRef.current = null;
@@ -1210,7 +1227,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
-              setQuestionnaire(null);
+              // Timed-out prompts remain answerable after the agent continues with its default.
+              setQuestionnaire((current) =>
+                retainExpiredAskUserQuestionForLateAnswer(current),
+              );
               setQuestionnaireSubmitting(false);
             }
           },
@@ -1287,7 +1307,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
-                setQuestionnaire(null);
+                setQuestionnaire((current) =>
+                  retainExpiredAskUserQuestionForLateAnswer(current),
+                );
                 setQuestionnaireSubmitting(false);
                 const persistedFailure =
                   updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
@@ -1647,7 +1669,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (
       prompt: ApprovalPrompt,
       decision: "allow" | "deny",
-      options?: { formFillExcludedOrders?: number[] },
+      options?: { formFillExcludedOrders?: number[]; scope?: ToolApprovalScope },
     ) => {
       if (decidingApprovalRef.current) return;
       const decisionChatId = chatId;
@@ -1655,7 +1677,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setDecidingApprovalId(prompt.approvalId);
       try {
         if (prompt.source === "remote") {
-          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+          await aidenRemoteApi.respondApproval(
+            chatId,
+            prompt.approvalId,
+            decision,
+            decision === "allow" ? options?.scope : undefined,
+          );
         } else {
           await chatsApi.approve(prompt.approvalId, decision, options);
         }
@@ -1685,13 +1712,38 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [chatId],
   );
 
+  React.useEffect(() => {
+    if (!questionnaire) return;
+    const remaining = askUserQuestionMsUntilExpiry(questionnaire, Date.now());
+    if (remaining === undefined) return;
+    const promptId = questionnaire.promptId;
+    const timer = window.setTimeout(() => setExpiredQuestionnaireId(promptId), remaining);
+    return () => window.clearTimeout(timer);
+  }, [questionnaire]);
+  const questionnaireExpired =
+    questionnaire !== null && expiredQuestionnaireId === questionnaire.promptId;
+
   const answerQuestionnaire = React.useCallback(
     async (response: AskUserQuestionResponseV1) => {
       if (!questionnaire || questionnaireSubmitting) return;
+      const prompt = questionnaire;
       setQuestionnaireSubmitting(true);
       try {
-        await chatsApi.answerQuestionnaire(questionnaire.promptId, response);
-        if (chatIdRef.current === chatId) setQuestionnaire(null);
+        // Once the deadline passed the agent has moved on; skip the host round
+        // trip and turn a real answer into a follow-up offer.
+        const status =
+          expiredQuestionnaireId === prompt.promptId
+            ? "expired"
+            : (await chatsApi.answerQuestionnaire(prompt.promptId, response))?.status;
+        if (chatIdRef.current !== chatId) return;
+        setQuestionnaire(null);
+        if (status === "expired") {
+          setLateQuestionnaireAnswer(
+            response.cancelled
+              ? null
+              : (formatLateAskUserQuestionFollowUp(prompt.questions, response.answers) ?? null),
+          );
+        }
       } catch (questionError) {
         if (chatIdRef.current !== chatId) return;
         toast.error(
@@ -1701,8 +1753,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
       }
     },
-    [chatId, questionnaire, questionnaireSubmitting],
+    [chatId, expiredQuestionnaireId, questionnaire, questionnaireSubmitting],
   );
+
+  const sendLateQuestionnaireAnswer = React.useCallback(async () => {
+    const text = lateQuestionnaireAnswer;
+    if (!text || lateAnswerSending) return;
+    setLateAnswerSending(true);
+    try {
+      // A response still streaming gets the answer as the next queued turn,
+      // exactly as if the user had typed it into the composer.
+      if (isGenerating || isStartingGeneration) await queueMessage(text, []);
+      else await handleSend(text, []);
+      if (chatIdRef.current === chatId) setLateQuestionnaireAnswer(null);
+    } catch (sendError) {
+      if (chatIdRef.current !== chatId) return;
+      toast.error(sendError instanceof Error ? sendError.message : "Couldn't send that answer.");
+    } finally {
+      if (chatIdRef.current === chatId) setLateAnswerSending(false);
+    }
+  }, [
+    chatId,
+    handleSend,
+    isGenerating,
+    isStartingGeneration,
+    lateAnswerSending,
+    lateQuestionnaireAnswer,
+    queueMessage,
+  ]);
 
   const openFolder = React.useCallback(() => {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
@@ -2109,6 +2187,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setFormFillExcludedOrders([]);
   }, [pending?.approvalId]);
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  // Only plain workspace writes and shell commands can be remembered; the main
+  // process offers scopes solely for those, and specialized cards keep once.
+  const pendingRememberScopes =
+    pending && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+      ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
+      : [];
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2253,6 +2337,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         className="h-full min-h-0"
+        alignFooterToScrollContent
         title={
           bot.data ? (
             <span className="flex min-w-0 items-center gap-2">
@@ -2432,6 +2517,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       >
                         {pendingFormFill ? "Cancel" : "Deny"}
                       </Button>
+                      {pendingRememberScopes.map((scope) => (
+                        <Button
+                          key={scope}
+                          variant="transparent"
+                          size="small"
+                          disabled={decidingApprovalId === pending.approvalId}
+                          title={
+                            scope === "always"
+                              ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
+                              : "Remember this exact action in this chat until Aiden quits."
+                          }
+                          onClick={() => void decideApproval(pending, "allow", { scope })}
+                        >
+                          {toolApprovalScopeLabel(scope)}
+                        </Button>
+                      ))}
                       {pendingCanAllow ? (
                         <Button
                           variant="accent"
@@ -2486,6 +2587,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }}
               />
             ) : null}
+            {lateQuestionnaireAnswer && !questionnaire ? (
+              <AskUserQuestionExpiryNotice
+                state="late-answer"
+                sending={lateAnswerSending}
+                queued={isGenerating || isStartingGeneration}
+                onDiscard={() => setLateQuestionnaireAnswer(null)}
+                onSend={() => void sendLateQuestionnaireAnswer()}
+              />
+            ) : null}
+            {questionnaireExpired ? <AskUserQuestionExpiryNotice state="expired" /> : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}
@@ -2526,6 +2637,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={draft ? undefined : steerMessage}
                 onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
+                compactionHeld={queuedState.holdReason === "compaction"}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
@@ -2612,9 +2724,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ? undefined
                     : async (engine) => {
                         const compactChatId = chatId;
+                        // Follow-ups typed during compaction queue behind it and
+                        // wait until it settles, even if the user leaves the chat.
+                        const compactQueue = chatMessageQueue(compactChatId);
+                        let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
+                        compactQueue.holdForCompaction();
                         setContextCompactPending(true);
                         try {
                           const result = await chatsApi.compact(compactChatId, engine);
+                          compactOutcome = result;
                           // The pane may now show another chat; its meter
                           // chrome belongs to that chat, not this compaction.
                           if (result.compacted && chatIdRef.current === compactChatId) {
@@ -2630,6 +2748,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                           return result;
                         } finally {
                           if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+                          if (compactQueue.releaseCompactionHold(compactOutcome)) {
+                            const count = compactQueue.getSnapshot().messages.length;
+                            toast.info(
+                              `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
+                            );
+                          }
                         }
                       }
                 }

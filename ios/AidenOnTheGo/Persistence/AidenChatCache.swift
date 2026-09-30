@@ -105,7 +105,7 @@ actor AidenChatCache {
         let updatedAt: Date
         let revision: String
         let activity: AidenChatSummaryActivity
-        // Optional so caches written before contract revision 16 still load.
+        // Optional so caches written before contract revision 18 still load.
         let rowState: AidenChatRowState?
         let unread: Bool?
 

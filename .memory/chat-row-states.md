@@ -1,6 +1,6 @@
 # Chat row states and honest unread markers
 
-Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). Remote contract revision 16.
+Status: implemented for review on `feature/chat-row-states` (Hermex-inspired). Remote contract revision 18.
 
 ## Model
 - Row state, in priority order: `needs_approval` > `needs_input` > `working` > `idle` (`renderer/shared/chat-row-state.ts`, `chatRowState`).

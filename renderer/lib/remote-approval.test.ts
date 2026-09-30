@@ -39,6 +39,17 @@ test("remote approval reconciliation preserves local prompts and replaces stale 
   assert.deepEqual(mergeRemoteApproval([local, staleRemote], null), [local]);
 });
 
+test("remote approval reconciliation keeps offered scopes only while the approval can be allowed", () => {
+  const now = Date.parse("2026-08-22T19:00:00.000Z");
+  const scopes = ["once", "chat", "always"] as const;
+  const [allowable] = mergeRemoteApproval([], { ...remote, scopes: [...scopes] }, now);
+  assert.deepEqual(allowable?.scopes, [...scopes]);
+  const [denyOnly] = mergeRemoteApproval([], { ...remote, canAllow: false, scopes: [...scopes] }, now);
+  assert.equal(denyOnly?.scopes, undefined);
+  const [legacy] = mergeRemoteApproval([], remote, now);
+  assert.equal(legacy?.scopes, undefined);
+});
+
 test("remote approval reconciliation preserves validated privileged details and deny-only state", () => {
   const details = {
     kind: "subagent-shell" as const,

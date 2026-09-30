@@ -57,6 +57,7 @@ import type {
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { MAX_MCP_RESPONSE_BYTES } from "./mcp-fetch-policy.js";
+import { normalizeMcpToolInputSchema } from "./mcp-tool-schema.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -369,9 +370,10 @@ class McpManager {
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,
-      // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
+      // MCP inputSchema is raw JSON Schema; normalize provider-hostile numeric
+      // formats (schemars `uint32`, `int8`, ...) and wrap it as a typebox schema.
       parameters: Type.Unsafe(
-        (t.inputSchema as object) ?? { type: "object", properties: {} },
+        normalizeMcpToolInputSchema((t.inputSchema as object) ?? { type: "object", properties: {} }),
       ),
       execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
         return executeMcpAgentTool(() =>

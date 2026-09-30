@@ -67,6 +67,8 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentControlMainV2 } from "./subagents/subagent-control-main.js";
+import { persistedChatWorkspaceId } from "./chat-workspace-authority.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
@@ -131,6 +133,7 @@ import {
   withBotFavoritesMutation,
 } from "./bot-favorites-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
@@ -253,6 +256,7 @@ export interface AidenRemoteRuntime {
     chatId: string,
     approvalId: string,
     decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
   ): boolean;
 }
 
@@ -452,8 +456,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             now: Date.now,
             cancel: (streamId, ownerDocumentId) =>
               llmClient.cancel(streamId, "user_stop", ownerDocumentId),
-            approve: (approvalId, decision, ownerDocumentId) =>
-              llmClient.approve(approvalId, decision, ownerDocumentId),
+            approve: (approvalId, decision, ownerDocumentId, scope) =>
+              llmClient.approve(
+                approvalId,
+                decision,
+                ownerDocumentId,
+                scope ? { scope } : undefined,
+              ),
             submitInput: (input) => llmClient.admitChatRunInput(input),
             respondQuestion: (promptId, response, ownerDocumentId) =>
               llmClient.answerQuestionnaire(promptId, response, ownerDocumentId),
@@ -600,6 +609,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
             },
             readAgents: (chatId) => subagentRunStore.listByChat(chatId),
+            // Reuses the desktop Subagents panel stop path. The chat's
+            // persisted workspace, not the run snapshot, scopes the binding.
+            stopAgent: async ({ chatId, runId }) => {
+              const chat = await chatStore.get(chatId);
+              if (!chat || chat.id !== chatId) return false;
+              const result = await subagentControlMainV2.stopForChat(
+                { chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId) },
+                runId,
+              );
+              return result !== undefined;
+            },
             // Remote-created turns already have a public turn identity; the
             // roster must echo it so clients can correlate turnStart with agents.
             publicTurnId: (chatId, generationId) => streams.turnIdFor(chatId, generationId),
@@ -873,8 +893,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       return revoked;
     },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
-    respondApprovalFromHost: (chatId, approvalId, decision) =>
-      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision) ?? false,
+    respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
+      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
   };
   activeRuntime = runtime;
   return runtime;

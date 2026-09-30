@@ -45,6 +45,7 @@ async function fixture(options: {
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
+  agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
 } = {}) {
@@ -400,6 +401,22 @@ async function fixture(options: {
               agents: [],
             };
           },
+          ...(options.agentInterruptAvailable === false
+            ? {}
+            : {
+                interruptAgent: async (deviceId: string, chatId: string, agentId: string) => {
+                  calls.push(`agent-interrupt:${deviceId}:${chatId}:${agentId}`);
+                  return {
+                    version: 1 as const,
+                    chatId,
+                    availability: "ready" as const,
+                    epoch: "epoch_fixture_01",
+                    revision: 5,
+                    updatedAt: new Date(4_000).toISOString(),
+                    agents: [],
+                  };
+                },
+              }),
           openEvents: async (_deviceId, chatId, grants, after, response) => {
             calls.push(`progress-events:${chatId}:${after}:${[...grants].join(",")}`);
             response.writeHead(200, { "content-type": "text/event-stream" });
@@ -702,10 +719,16 @@ async function fixture(options: {
           decision: "allow" | "deny";
           resolvedAt: string;
         }>,
+        scope?: "once" | "chat" | "always",
       ) => {
-        const result = { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+        const result = {
+          approvalId,
+          decision,
+          ...(scope ? { scope } : {}),
+          resolvedAt: new Date(5_000).toISOString(),
+        };
         const action = async () => {
-          calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
+          calls.push(`approval:${deviceId}:${approvalId}:${decision}${scope ? `:${scope}` : ""}`);
           return result;
         };
         if (runAccess) {
@@ -1262,6 +1285,108 @@ test("bot chats still require bot authority on progress reads and events", async
     );
   } finally {
     await authorized.close();
+  }
+});
+
+test("agent interrupt requires chat write, the negotiated agents grant, and a wired stop path", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const interruptPath = "/chats/chat-1/agents/agent_public_01/interrupt";
+  const interruptCalls = (calls: string[]) =>
+    calls.filter((call) => call.startsWith("agent-interrupt:"));
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const server = await (await fetch(`${negotiated.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-agent-interrupt-v1"), true);
+
+    const stopped = await fetch(`${negotiated.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(stopped.status, 200);
+    const roster = await stopped.json();
+    assert.equal(roster.chatId, "chat-1");
+    assert.equal(roster.revision, 5);
+    assert.deepEqual(interruptCalls(negotiated.calls), [
+      "agent-interrupt:device-authorized-12345678:chat-1:agent_public_01",
+    ]);
+    // Bot-free chats still go through the chat mutation gate.
+    assert.equal(negotiated.calls.includes("chat-classify:chat-1"), true);
+
+    const wrongMethod = await fetch(`${negotiated.base}${interruptPath}`, { headers });
+    assert.equal(wrongMethod.status, 404);
+    await wrongMethod.text();
+    const withQuery = await fetch(`${negotiated.base}${interruptPath}?force=1`, { method: "POST", headers });
+    assert.equal(withQuery.status, 400);
+    await withQuery.text();
+    assert.equal(interruptCalls(negotiated.calls).length, 1);
+  } finally {
+    await negotiated.close();
+  }
+
+  // A read-only device can watch agents but never stop them.
+  const readOnly = await fixture({
+    capabilities: ["server:read", "chat:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const denied = await fetch(`${readOnly.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "capability_denied");
+    assert.equal(interruptCalls(readOnly.calls).length, 0);
+  } finally {
+    await readOnly.close();
+  }
+
+  // chat:write alone cannot target an agent the device was never allowed to see.
+  const writerWithoutRoster = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "tasks:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const denied = await fetch(`${writerWithoutRoster.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "capability_denied");
+    assert.equal(interruptCalls(writerWithoutRoster.calls).length, 0);
+  } finally {
+    await writerWithoutRoster.close();
+  }
+
+  // A Mac without the stop path neither advertises nor serves the route.
+  const unwired = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "agents:read"],
+    acceptsProgressCapabilities: true,
+    agentInterruptAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+    assert.equal(server.features.includes("chat-agent-interrupt-v1"), false);
+    const missing = await fetch(`${unwired.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
+  } finally {
+    await unwired.close();
+  }
+
+  // Retained bot chats additionally require bot write authority.
+  const botReader = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "agents:read"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const denied = await fetch(`${botReader.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 404);
+    await denied.text();
+    assert.equal(interruptCalls(botReader.calls).length, 0);
+  } finally {
+    await botReader.close();
   }
 });
 
@@ -1986,6 +2111,59 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
     });
     assert.equal(approval.status, 200);
     assert.equal((await approval.json()).decision, "deny");
+  } finally {
+    await app.close();
+  }
+});
+
+test("approval responses accept an allow scope and reject malformed scopes", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  const app = await fixture({
+    capabilities: ["chat:read", "chat:write", "approval:respond"],
+    approvalCanAllow: true,
+  });
+  try {
+    let key = 0;
+    const respond = (body: unknown) =>
+      fetch(`${app.base}/approvals/approval-1/respond`, {
+        method: "POST",
+        headers: { ...headers, "idempotency-key": `approval-scope-key-${String(++key).padStart(4, "0")}` },
+        body: JSON.stringify(body),
+      });
+    for (const invalid of [
+      { decision: "deny", scope: "always" },
+      { decision: "allow", scope: "forever" },
+      { decision: "allow", scope: null },
+      { decision: "allow", scope: "chat", remember: true },
+    ]) {
+      const rejected = await respond(invalid);
+      assert.equal(rejected.status, 400, JSON.stringify(invalid));
+      assert.equal((await rejected.json()).error.code, "invalid_request");
+    }
+    assert.equal(app.calls.some((call) => call.startsWith("approval:")), false);
+
+    const allowed = await respond({ decision: "allow", scope: "always" });
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), {
+      approvalId: "approval-1",
+      decision: "allow",
+      scope: "always",
+      resolvedAt: new Date(5_000).toISOString(),
+    });
+    const plain = await respond({ decision: "allow" });
+    assert.equal(plain.status, 200);
+    assert.equal("scope" in (await plain.json()), false);
+    assert.deepEqual(
+      app.calls.filter((call) => call.startsWith("approval:")),
+      [
+        "approval:device-authorized-12345678:approval-1:allow:always",
+        "approval:device-authorized-12345678:approval-1:allow",
+      ],
+    );
   } finally {
     await app.close();
   }

@@ -200,6 +200,7 @@ export function Badge({
         color === "green" && "bg-status-green-surface text-status-green",
         color === "red" && "bg-status-red-surface text-status-red",
         color === "blue" && "bg-status-accent-surface text-status-accent",
+        color === "warning" && "bg-status-warning-surface text-status-warning",
         className,
       )}
       {...props}
@@ -821,6 +822,7 @@ export function ScrollArea({
   actions,
   toolbar,
   footer,
+  alignFooterToScrollContent = false,
   autoScrollToBottom,
   autoScrollDeps = [],
   autoScrollResetKey,
@@ -835,6 +837,8 @@ export function ScrollArea({
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Keep the fixed footer aligned with the scrollport when classic scrollbars reserve width. */
+  alignFooterToScrollContent?: boolean;
   autoScrollToBottom?: boolean;
   autoScrollDeps?: unknown[];
   /** Changing this identity re-arms follow and pins to the latest content. */
@@ -850,6 +854,7 @@ export function ScrollArea({
   const footerRef = React.useRef<HTMLDivElement>(null);
   const [toolbarHeight, setToolbarHeight] = React.useState(0);
   const [footerHeight, setFooterHeight] = React.useState(0);
+  const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   const footerHeightRef = React.useRef(0);
   const [atBottom, setAtBottom] = React.useState(true);
   const [atScrollEnd, setAtScrollEnd] = React.useState(true);
@@ -927,6 +932,13 @@ export function ScrollArea({
     const measure = () => {
       setToolbarHeight(toolbarRef.current?.getBoundingClientRect().height ?? 0);
       const nextFooterHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
+      if (alignFooterToScrollContent) {
+        const scrollViewport = viewport.current;
+        const nextScrollbarGutter = scrollViewport
+          ? Math.max(0, scrollViewport.offsetWidth - scrollViewport.clientWidth)
+          : 0;
+        setScrollbarGutter((current) => current === nextScrollbarGutter ? current : nextScrollbarGutter);
+      }
       if (nextFooterHeight !== footerHeightRef.current) {
         footerHeightRef.current = nextFooterHeight;
         setFooterHeight(nextFooterHeight);
@@ -935,10 +947,11 @@ export function ScrollArea({
     };
     measure();
     const observer = new ResizeObserver(measure);
+    if (alignFooterToScrollContent && viewport.current) observer.observe(viewport.current);
     if (toolbarRef.current) observer.observe(toolbarRef.current);
     if (footerRef.current) observer.observe(footerRef.current);
     return () => observer.disconnect();
-  }, [toolbar, footer, title, leading, actions, scheduleFollowBottom]);
+  }, [alignFooterToScrollContent, toolbar, footer, title, leading, actions, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     scheduleFollowBottom();
@@ -988,7 +1001,12 @@ export function ScrollArea({
     ) : null);
 
   return (
-    <div className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}>
+    <div
+      className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}
+      // Sticky descendants (transcript section headers) rest just below the
+      // overlaid toolbar instead of sliding underneath it.
+      style={{ "--scroll-area-sticky-top": `${toolbarHeight}px` } as React.CSSProperties}
+    >
       {resolvedToolbar ? (
         <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
           {resolvedToolbar}
@@ -1036,7 +1054,11 @@ export function ScrollArea({
         </Button>
       ) : null}
       {footer ? (
-        <div ref={footerRef} className="absolute inset-x-0 bottom-0 z-10">
+        <div
+          ref={footerRef}
+          className="absolute inset-x-0 bottom-0 z-10"
+          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+        >
           {footer}
         </div>
       ) : null}

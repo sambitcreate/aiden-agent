@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   THEME_PRESETS,
+  chatContentMaxWidth,
   colorContrastRatio,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -331,6 +332,30 @@ test("composer context auto-hide defaults on and preserves explicit saved prefer
   delete legacy.autoHideComposerContext;
   assert.equal(parseAppearanceConfig(legacy).autoHideComposerContext, true);
   assert.throws(() => parseAppearanceConfig({ ...legacy, autoHideComposerContext: "yes" }), /boolean/u);
+});
+
+test("chat width defaults to the original column, migrates legacy settings, and rejects unknown widths", () => {
+  // Existing users keep the 52rem column they had before the preference existed.
+  assert.equal(createDefaultAppearanceConfig().chatWidth, "default");
+  assert.equal(chatContentMaxWidth(createDefaultAppearanceConfig().chatWidth), "52rem");
+
+  const legacy: Record<string, unknown> = { ...createDefaultAppearanceConfig() };
+  delete legacy.chatWidth;
+  assert.equal(parseAppearanceConfig(legacy).chatWidth, "default");
+
+  for (const chatWidth of ["narrow", "wide", "full"] as const) {
+    const stored = { ...createDefaultAppearanceConfig(), chatWidth };
+    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).chatWidth, chatWidth);
+  }
+
+  const rem = (value: string) => Number.parseFloat(value);
+  assert.ok(rem(chatContentMaxWidth("narrow")) < rem(chatContentMaxWidth("default")));
+  assert.ok(rem(chatContentMaxWidth("default")) < rem(chatContentMaxWidth("wide")));
+  assert.equal(chatContentMaxWidth("full"), "none");
+
+  assert.equal(normalizeAppearanceConfig({ chatWidth: "huge" }).chatWidth, "default");
+  assert.throws(() => parseAppearanceConfig({ ...legacy, chatWidth: "huge" }), /chat width/i);
+  assert.throws(() => parseAppearanceConfig({ ...legacy, chatWidth: 900 }), /chat width/i);
 });
 
 test("the shared focus treatment separates text entry from non-text keyboard focus", () => {
