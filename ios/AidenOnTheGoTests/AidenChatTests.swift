@@ -2837,18 +2837,18 @@ final class AidenChatTests: XCTestCase {
             }
             let failed = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
             if mode == "invalid" {
-                XCTAssertEqual(failed, 1)
+                XCTAssertEqual(failed, 1, mode)
                 await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
-                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, mode)
                 continue
             }
-            XCTAssertEqual(failed, 0)
-            XCTAssertFalse(model.isUploadingAttachment)
-            let reference = try XCTUnwrap(model.pendingAttachments.first)
+            XCTAssertEqual(failed, 0, mode)
+            XCTAssertFalse(model.isUploadingAttachment, mode)
+            let reference = try XCTUnwrap(model.pendingAttachments.first, mode)
             if mode == "removal_wins" {
                 await model.load(observeProgress: false)
                 model.draft = "Hello"
-                let turnArrived = expectation(description: "turn receipt held")
+                let turnArrived = expectation(description: "\(mode): turn receipt held")
                 AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { turnArrived.fulfill() }
                 let sending = Task { await model.send() }
                 await fulfillment(of: [turnArrived], timeout: 2)
@@ -2861,22 +2861,22 @@ final class AidenChatTests: XCTestCase {
                 await sending.value
                 await gate.release()
                 await removing.value
-                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1, mode)
                 continue
             }
             if mode == "consumed" || mode == "failed" {
                 await model.load(observeProgress: false)
                 model.draft = "Hello"
-                XCTAssertTrue(model.canSend)
+                XCTAssertTrue(model.canSend, mode)
                 await model.send()
-                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 1)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 1, mode)
             }
             if mode == "consumed" {
                 await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
-                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, mode)
                 continue
             }
-            let arrived = expectation(description: "completed reference DELETE held")
+            let arrived = expectation(description: "\(mode): completed reference DELETE held")
             AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments/" + reference.id) { arrived.fulfill() }
             defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
             var explicit: Task<Void, Never>?
@@ -2884,7 +2884,7 @@ final class AidenChatTests: XCTestCase {
                 explicit = Task { await model.removeAttachment(reference) }
                 await fulfillment(of: [arrived], timeout: 2)
             }
-            let early = expectation(description: "removal waits for completed upload cleanup")
+            let early = expectation(description: "\(mode): removal waits for completed upload cleanup")
             early.isInverted = true
             var held = true
             let removal = Task {
@@ -2899,9 +2899,9 @@ final class AidenChatTests: XCTestCase {
             AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
             await removal.value
             await explicit?.value
-            XCTAssertTrue(model.pendingAttachments.isEmpty)
-            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
-            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
+            XCTAssertTrue(model.pendingAttachments.isEmpty, mode)
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1, mode)
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1, mode)
         }
     }
 
