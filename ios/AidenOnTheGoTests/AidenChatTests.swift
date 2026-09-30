@@ -2733,7 +2733,8 @@ final class AidenChatTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = AidenChatWriteTestGate()
         let cache = AidenChatCache(root: root, beforeAttachmentImageWrite: { await gate.waitIfArmed() })
-        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
         let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2)) }
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
             if request.httpMethod == "DELETE" {
@@ -2776,6 +2777,12 @@ final class AidenChatTests: XCTestCase {
         await completion.value
         let failures = await uploading.value
         XCTAssertEqual(failures, 2)
+        if revokedCleanup {
+            // Whichever of upload or removal cleanup claims the revoked DELETE,
+            // the installation purge must be finished when the upload returns;
+            // the coordinator only reports needsPairing after that purge.
+            XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        }
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
         XCTAssertTrue(model.pendingAttachments.isEmpty)
