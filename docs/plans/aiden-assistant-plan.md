@@ -3500,13 +3500,7 @@ In `.memory/PLANNED.md`, replace the "Status: planned only … No code yet." lin
 what landed, the four resolved decisions (pin-required proactivity, no tray, no file
 watching, no main-window nudge surface), and the five corrections to the original draft.
 
-- [ ] **Step 5: Record any friction**
-
-Append anything that cost real time to `.papercuts/troubleshooting.md` in the main checkout.
-Likely candidates: the deliberately-red `ipc-contract.test.ts` window between Tasks 2 and 19,
-and the vibrancy/transparency interaction with `titleBarStyle: "hidden"`.
-
-- [ ] **Step 6: Final gate and commit**
+- [ ] **Step 5: Final gate and commit**
 
 ```bash
 npm run type-check && npm run lint && npm run test
