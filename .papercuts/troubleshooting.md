@@ -1404,4 +1404,3 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
-- 2026-09-27 Live Activity freshness / Bot deep links: the parity request named `aiden://bot/{id}/chat`, but both native apps register only `aiden-otg`. Implemented `aiden-otg://bot/{id}/chat` so no second scheme was registered. Xcode-beta `DEVELOPER_DIR` and the Android Studio JBR `JAVA_HOME` were again required for native suites.
