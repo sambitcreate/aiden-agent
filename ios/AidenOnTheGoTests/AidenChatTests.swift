@@ -300,16 +300,18 @@ final class AidenChatTests: XCTestCase {
             AidenChatProgressLifecycleURLProtocol.reset()
         }
 
+        // Await each observer's own completion instead of polling for a fixed
+        // wall-clock budget: a stalled host can deliver the denial long after
+        // the request was counted.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
 
         // The first observer exited through a completed task body. A later
         // activation must be able to create a fresh observer for the same chat.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(2)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 2)
     }
@@ -1224,8 +1226,8 @@ final class AidenChatTests: XCTestCase {
         // it while the stream-consumer hold is armed to prove it cannot steal
         // the intended gate.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
+        XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
         await model.send()
         await fulfillment(of: [arrived], timeout: 2)
@@ -3162,15 +3164,6 @@ final class AidenChatTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for progress SSE request (expected).")
-    }
-
-    @MainActor
-    private func waitForProgressObservationToStop(_ model: AidenChatViewModel) async throws {
-        for _ in 0..<100 {
-            if !model.isProgressObservationRunning { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Timed out waiting for the progress observer to finish.")
     }
 
     @MainActor

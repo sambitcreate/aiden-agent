@@ -1729,6 +1729,13 @@ final class AidenChatViewModel {
         isAgentRosterStale = agentRoster != nil
     }
 
+    /// Await the current progress observer, if any, without cancelling it or
+    /// starting a new one. A finished observer releases its own handle inside
+    /// its task body, so this returns only after that release has happened.
+    func waitForProgressObservation() async {
+        await progressTask?.value
+    }
+
     private func loadProgressSnapshot(
         context: AidenRemoteRequestContext,
         observationGeneration: UInt64? = nil
