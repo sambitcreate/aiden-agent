@@ -463,7 +463,9 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatRunInputFeature,
             AidenServer.chatQuestionPromptsFeature,
             AidenServer.chatSkillsFeature,
+            AidenServer.chatAgentInterruptFeature,
         ])
+        XCTAssertTrue(server.supportsChatAgentInterrupt)
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [
@@ -2361,6 +2363,38 @@ final class AidenRemoteClientTests: XCTestCase {
                 "GET /api/aiden/v1/chats/chat_fixture_01/progress/events",
             ]
         )
+    }
+
+    func testAgentInterruptPostsToTheAgentRouteAndReturnsTheStoppedRoster() async throws {
+        let client = makeClient()
+        let responseData = try botFixtureData(at: ["agentInterrupt", "response"])
+        var requests: [String] = []
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            requests.append("\(request.httpMethod ?? "?") \(path)")
+            XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.query)
+            XCTAssertNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
+            return Self.response(for: request, status: 200, data: responseData)
+        }
+
+        let roster = try await client.interruptAgent(
+            chatId: "chat_fixture_01",
+            agentId: "agent_fixture_01"
+        )
+        XCTAssertEqual(roster.agents.first { $0.agentId == "agent_fixture_01" }?.state, .stopped)
+        XCTAssertEqual(
+            requests,
+            ["POST /api/aiden/v1/chats/chat_fixture_01/agents/agent_fixture_01/interrupt"]
+        )
+
+        await assertInvalidResponse {
+            try await client.interruptAgent(chatId: "chat_fixture_01", agentId: "agent/../escape")
+        }
+        await assertInvalidResponse {
+            try await client.interruptAgent(chatId: "chat_other", agentId: "agent_fixture_01")
+        }
+        XCTAssertEqual(requests.count, 2, "Only the mismatched-chat call reaches the network")
     }
 
     func testSkillCatalogEndpointAndProgressVocabularyNegotiation() async throws {

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import test from "node:test";
-import type { SubagentRunSnapshotV1 } from "../../renderer/shared/subagent-runs.js";
+import type {
+  SubagentRunSnapshotV1,
+  SubagentRunSnapshotV2,
+} from "../../renderer/shared/subagent-runs.js";
 import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
@@ -475,4 +478,137 @@ test("chat-scoped subscribers see desktop task changes and do not close on ordin
   assert.equal(taskEvents.length, 2);
   assert.match(taskEvents[1]!, /"status":"completed"/);
   service.close();
+});
+
+function liveV2Run(overrides: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
+  return {
+    version: 2,
+    runId: "private-live-run",
+    groupId: "private-group",
+    generationId: "generation-live",
+    childId: "private-child",
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+    revision: 2,
+    role: "implementer",
+    label: "Implement the change",
+    taskPreview: "Private child instruction",
+    state: "running",
+    startedAt: 10,
+    updatedAt: 20,
+    modelId: "test-model",
+    turns: 1,
+    tools: 1,
+    tokens: 10,
+    warnings: [],
+    depth: 1,
+    execution: "foreground",
+    context: "fresh",
+    authorityRevision: 1,
+    ...overrides,
+  };
+}
+
+function hasCode(code: string, status: number) {
+  return (error: unknown) => {
+    const value = error as { code?: string; status?: number };
+    return value.code === code && value.status === status;
+  };
+}
+
+test("interrupt resolves the public agent to its private run and returns the stopped roster", async () => {
+  let current = liveV2Run();
+  const stops: Array<{ chatId: string; runId: string }> = [];
+  const { service, events } = fixture({
+    readAgents: async () => [structuredClone(current)],
+    stopAgent: async (target) => {
+      stops.push(target);
+      current = liveV2Run({ state: "stopped", revision: 3, updatedAt: 30, finishedAt: 30 });
+      return true;
+    },
+  });
+  events.begin("chat-1", "generation-live");
+  assert.equal(service.supportsAgentInterrupt, true);
+  const before = await service.agentRoster("device-1", "chat-1");
+  const agentId = before.agents[0]!.agentId;
+  assert.equal(before.agents[0]!.state, "running");
+
+  const after = await service.interruptAgent("device-1", "chat-1", agentId);
+  assert.deepEqual(stops, [{ chatId: "chat-1", runId: "private-live-run" }]);
+  assert.equal(after.agents[0]!.agentId, agentId);
+  assert.equal(after.agents[0]!.state, "stopped");
+  assert.ok(after.revision > before.revision);
+  assert.ok(!JSON.stringify(after).includes("private-live-run"));
+
+  // A repeated interrupt of the now-finished agent is a no-op success.
+  const repeated = await service.interruptAgent("device-1", "chat-1", agentId);
+  assert.equal(repeated.agents[0]!.state, "stopped");
+  assert.equal(stops.length, 1);
+});
+
+test("interrupt rejects unknown agents and runs whose control binding is gone", async () => {
+  let calls = 0;
+  const { service, events } = fixture({
+    readAgents: async () => [liveV2Run()],
+    stopAgent: async () => {
+      calls += 1;
+      return false;
+    },
+  });
+  events.begin("chat-1", "generation-live");
+  await assert.rejects(
+    service.interruptAgent("device-1", "chat-1", "agent_not_in_this_chat"),
+    hasCode("not_found", 404),
+  );
+  assert.equal(calls, 0);
+  const agentId = (await service.agentRoster("device-1", "chat-1")).agents[0]!.agentId;
+  await assert.rejects(
+    service.interruptAgent("device-1", "chat-1", agentId),
+    hasCode("operation_stale", 409),
+  );
+  assert.equal(calls, 1);
+});
+
+test("abandoned agents are reported without a stop and legacy runs are not controllable", async () => {
+  let calls = 0;
+  const legacy: SubagentRunSnapshotV1 = {
+    ...run,
+    runId: "legacy-run",
+    generationId: "generation-live",
+    state: "running",
+    finishedAt: undefined,
+    terminalMarkdown: undefined,
+  };
+  const { service, events } = fixture({
+    authorize: async () => ({ id: "chat-1", latestGenerationId: "generation-old" }),
+    readAgents: async () => [liveV2Run({ generationId: "generation-old" }), legacy],
+    stopAgent: async () => {
+      calls += 1;
+      return true;
+    },
+  });
+  // No active generation: the old turn's running child is projected as
+  // interrupted, so interrupting it is an idempotent no-op.
+  const idle = await service.agentRoster("device-1", "chat-1");
+  assert.equal(idle.agents[0]!.state, "interrupted");
+  const unchanged = await service.interruptAgent("device-1", "chat-1", idle.agents[0]!.agentId);
+  assert.equal(unchanged.agents[0]!.state, "interrupted");
+  assert.equal(calls, 0);
+
+  events.begin("chat-1", "generation-live");
+  const legacyId = (await service.agentRoster("device-1", "chat-1")).agents[0]!.agentId;
+  await assert.rejects(
+    service.interruptAgent("device-1", "chat-1", legacyId),
+    hasCode("operation_stale", 409),
+  );
+  assert.equal(calls, 0);
+});
+
+test("interrupt is unavailable when the host does not wire subagent control", async () => {
+  const { service } = fixture();
+  assert.equal(service.supportsAgentInterrupt, false);
+  await assert.rejects(
+    service.interruptAgent("device-1", "chat-1", "agent_any"),
+    hasCode("not_found", 404),
+  );
 });

@@ -627,7 +627,10 @@ test("MCP paginates tools, fences schema drift, and terminates its stdio transpo
   const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
   const inventory = await pool.inspectTools(server, new AbortController().signal);
   assert.deepEqual(inventory.map((tool) => tool.name), ["first", "second"]);
+  assert.equal(inventory[1].inputSchema.properties.count.format, "uint32");
   const tools = await pool.agentTools(server);
+  // Model-facing schemas drop schemars numeric formats but keep the range; drift fencing still uses the raw inventory.
+  assert.deepEqual(tools[1].parameters.properties.count, { type: ["integer", "null"], minimum: 0, maximum: 4_294_967_295 });
   const result = await tools[1].execute("call", { value: "works" });
   assert.match(JSON.stringify(result), /Echo works/);
   writeFileSync(revision, "changed");

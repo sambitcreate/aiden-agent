@@ -29,7 +29,12 @@ export function QueuedMessages({
     <section aria-label="Queued messages" className="mx-3 rounded-t-xl bg-context-bar px-2 py-1.5">
       <div className="flex items-center justify-between gap-2 px-1 text-small text-tertiary">
         <span role="status">
-          {state.messages.length} queued{state.paused ? " · Paused" : ""}
+          {state.messages.length} queued
+          {state.paused
+            ? " · Paused"
+            : state.holdReason === "compaction"
+              ? " · Sends after compaction"
+              : ""}
         </span>
         <Button
           variant="transparent"

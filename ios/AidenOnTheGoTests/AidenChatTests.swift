@@ -300,16 +300,18 @@ final class AidenChatTests: XCTestCase {
             AidenChatProgressLifecycleURLProtocol.reset()
         }
 
+        // Await each observer's own completion instead of polling for a fixed
+        // wall-clock budget: a stalled host can deliver the denial long after
+        // the request was counted.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
 
         // The first observer exited through a completed task body. A later
         // activation must be able to create a fresh observer for the same chat.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(2)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
         XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 2)
     }
@@ -351,6 +353,48 @@ final class AidenChatTests: XCTestCase {
 
         XCTAssertFalse(model.isTaskProgressStale)
         XCTAssertTrue(model.isAgentRosterStale)
+    }
+
+    @MainActor
+    func testStoppingARunningAgentAdoptsTheStoppedRosterAndOffersNoFurtherStop() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .agentInterrupt)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+
+        model.startProgressObservation()
+        for _ in 0..<200 where model.agentRoster?.agents.isEmpty != false {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        model.stopProgressObservation()
+        let roster = try XCTUnwrap(model.agentRoster)
+        let live = try XCTUnwrap(roster.agents.first { $0.agentId == "agent-live" })
+        let done = try XCTUnwrap(roster.agents.first { $0.agentId == "agent-done" })
+
+        XCTAssertTrue(model.canInterruptAgents)
+        XCTAssertTrue(model.canInterrupt(live))
+        XCTAssertFalse(model.canInterrupt(done), "A finished agent has nothing left to stop.")
+        let rejected = await model.interruptAgent(done)
+        XCTAssertFalse(rejected)
+        XCTAssertTrue(AidenChatProgressLifecycleURLProtocol.agentInterruptPaths.isEmpty)
+
+        let stopped = await model.interruptAgent(live)
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(
+            AidenChatProgressLifecycleURLProtocol.agentInterruptPaths,
+            ["POST /api/aiden/v1/chats/chat-progress-lifecycle/agents/agent-live/interrupt"]
+        )
+        let updated = try XCTUnwrap(model.agentRoster?.agents.first { $0.agentId == "agent-live" })
+        XCTAssertEqual(updated.state, .stopped)
+        XCTAssertTrue(model.interruptingAgentIds.isEmpty)
+        XCTAssertFalse(model.canInterrupt(updated))
+        XCTAssertNil(model.presentedError)
+    }
+
+    @MainActor
+    func testAgentStopIsHiddenWhenTheMacDoesNotAdvertiseInterrupt() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .finite)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        XCTAssertTrue(model.canReadAgentRoster)
+        XCTAssertFalse(model.canInterruptAgents)
     }
 
     @MainActor
@@ -1182,8 +1226,8 @@ final class AidenChatTests: XCTestCase {
         // it while the stream-consumer hold is armed to prove it cannot steal
         // the intended gate.
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
-        try await waitForProgressObservationToStop(model)
+        await model.waitForProgressObservation()
+        XCTAssertFalse(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
         await model.send()
         await fulfillment(of: [arrived], timeout: 2)
@@ -2733,7 +2777,8 @@ final class AidenChatTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = AidenChatWriteTestGate()
         let cache = AidenChatCache(root: root, beforeAttachmentImageWrite: { await gate.waitIfArmed() })
-        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
         let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2)) }
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
             if request.httpMethod == "DELETE" {
@@ -2776,6 +2821,12 @@ final class AidenChatTests: XCTestCase {
         await completion.value
         let failures = await uploading.value
         XCTAssertEqual(failures, 2)
+        if revokedCleanup {
+            // Whichever of upload or removal cleanup claims the revoked DELETE,
+            // the installation purge must be finished when the upload returns;
+            // the coordinator only reports needsPairing after that purge.
+            XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        }
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
         XCTAssertTrue(model.pendingAttachments.isEmpty)
@@ -3120,15 +3171,6 @@ final class AidenChatTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for progress SSE request (expected).")
-    }
-
-    @MainActor
-    private func waitForProgressObservationToStop(_ model: AidenChatViewModel) async throws {
-        for _ in 0..<100 {
-            if !model.isProgressObservationRunning { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Timed out waiting for the progress observer to finish.")
     }
 
     @MainActor
@@ -6689,6 +6731,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case cancelledControls
         case revokedControls
         case unsupportedControls
+        case agentInterrupt
     }
 
     typealias Override = @Sendable (URLRequest) -> (Int, String, Data)?
@@ -6709,6 +6752,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
+    nonisolated(unsafe) private static var _agentInterruptPaths: [String] = []
+    static var agentInterruptPaths: [String] { lock.withLock { _agentInterruptPaths } }
     nonisolated(unsafe) private static var _attachmentDeleteCount = 0
     static var attachmentDeleteCount: Int { lock.withLock { _attachmentDeleteCount } }
     nonisolated(unsafe) private static var _uploadRequestCount = 0
@@ -6759,6 +6804,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _approvalReadCount = 0
         _progressRequestCount = 0
         _agentRequestCount = 0
+        _agentInterruptPaths = []
         _turnRequestCount = 0
         _uploadRequestCount = 0
         _attachmentDeleteCount = 0
@@ -6793,6 +6839,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             ]
             if Self.lock.withLock({ Self.mode == .unsupportedControls }) {
                 body["capabilities"] = (body["capabilities"] as! [String]).filter { $0 != "approval:respond" }
+            }
+            if Self.lock.withLock({ Self.mode == .agentInterrupt }) {
+                body["features"] = ["chat-tasks-v1", "chat-agents-v1", "chat-agent-interrupt-v1"]
             }
             if Self.lock.withLock({ Self.mode == .legacyControls }) {
                 body.removeValue(forKey: "serverCapabilities")
@@ -6837,6 +6886,23 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 status: 200,
                 contentType: "application/json",
                 data: Self.taskSnapshot
+            )
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/agents/agent-live/interrupt":
+            Self.lock.withLock { Self._agentInterruptPaths.append("\(request.httpMethod ?? "?") \(path)") }
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Self.interruptibleRoster(stopped: true)
+            )
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/agents"
+            where Self.lock.withLock({ Self.mode == .agentInterrupt }):
+            Self.lock.withLock { Self._agentRequestCount += 1 }
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Self.interruptibleRoster(stopped: false)
             )
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
             let requestedTurn = URLComponents(
@@ -6973,6 +7039,17 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         {"version":1,"chatId":"chat-progress-lifecycle","availability":"ready","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[{"id":1,"subject":"Observe lifecycle","status":"in_progress","activeForm":"Observing lifecycle"}]}
         """.utf8
     )
+
+    /// A ready current-turn roster with one live and one finished agent. The
+    /// stopped variant is what the Mac returns after a confirmed interrupt.
+    static func interruptibleRoster(stopped: Bool) -> Data {
+        let live = stopped
+            ? #""state":"stopped","updatedAt":"2026-09-14T12:00:05Z","finishedAt":"2026-09-14T12:00:05Z","revision":3"#
+            : #""state":"running","activity":"Reading sources","updatedAt":"2026-09-14T12:00:02Z","revision":2"#
+        return Data("""
+            {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-live","availability":"ready","epoch":"epoch-lifecycle","revision":\(stopped ? 3 : 2),"updatedAt":"2026-09-14T12:00:0\(stopped ? 5 : 2)Z","agents":[{"agentId":"agent-live","depth":1,"role":"implementer","label":"Implement","taskPreview":"Make the change","startedAt":"2026-09-14T12:00:01Z","modelId":"model-a","turns":1,"tools":1,"tokens":10,\(live)},{"agentId":"agent-done","depth":1,"revision":2,"role":"reviewer","label":"Review","taskPreview":"Review it","state":"completed","startedAt":"2026-09-14T12:00:01Z","updatedAt":"2026-09-14T12:00:02Z","finishedAt":"2026-09-14T12:00:02Z","modelId":"model-a","turns":1,"tools":0,"tokens":5}]}
+            """.utf8)
+    }
 
     private static let rosterSnapshot = Data(
         """

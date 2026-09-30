@@ -300,6 +300,40 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testAgentInterruptPostsToTheAgentRouteAndReturnsTheStoppedRoster() = runBlocking {
+        val fixtureRoot = Json.parseToJsonElement(
+            javaClass.classLoader!!.getResource("contract.json")!!.readText()
+        ).jsonObject
+        val stoppedRoster = fixtureRoot.getValue("agentInterrupt").jsonObject.getValue("response").toString()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(stoppedRoster))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(stoppedRoster))
+
+        val roster = client.interruptAgent("chat_fixture_01", "agent_fixture_01")
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/chats/chat_fixture_01/agents/agent_fixture_01/interrupt", request.path)
+        assertNull(request.getHeader("Idempotency-Key"))
+        assertEquals(
+            AidenChatAgentState.STOPPED,
+            roster.agents.single { it.agentId == "agent_fixture_01" }.state
+        )
+
+        // A roster for another chat is rejected, and a malformed agent ID never
+        // reaches the network.
+        try {
+            client.interruptAgent("chat_other", "agent_fixture_01")
+            fail("Expected a roster for another chat to be rejected")
+        } catch (_: AidenRemoteClientException.InvalidResponse) {
+        }
+        try {
+            client.interruptAgent("chat_fixture_01", "agent/../escape")
+            fail("Expected a malformed agent ID to be rejected")
+        } catch (_: AidenRemoteClientException.InvalidResponse) {
+        }
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun testProgressCapabilityUpgradePostsOnlyKnownGrantsAndRequiresCompleteResponse() = runBlocking {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(

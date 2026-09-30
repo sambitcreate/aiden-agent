@@ -188,6 +188,32 @@ test("projector updates reuse private registration authority", () => {
   );
 });
 
+test("trusted chat-scoped stop reaches the owning run without exposing its document", async () => {
+  let stopped = 0;
+  const controls = new SubagentControlMainV2({ now: () => 200 });
+  controls.register(registration(snapshot({ state: "running" }), { stop: () => void (stopped += 1) }));
+  const chatScope = { chatId: "chat-one", workspaceId: "workspace-one" };
+
+  assert.equal(await controls.stopForChat({ ...chatScope, chatId: "chat-two" }, "run-one"), undefined);
+  assert.equal(
+    await controls.stopForChat({ ...chatScope, workspaceId: "workspace-two" }, "run-one"),
+    undefined,
+  );
+  assert.equal(await controls.stopForChat(chatScope, "run-unknown"), undefined);
+  assert.equal(stopped, 0);
+
+  const first = await controls.stopForChat(chatScope, "run-one");
+  assert.equal(first?.changed, true);
+  assert.equal(first?.snapshot.state, "stopped");
+  assert.equal(stopped, 1);
+
+  // Repeating the stop is idempotent: the terminal run is reported unchanged.
+  const second = await controls.stopForChat(chatScope, "run-one");
+  assert.equal(second?.changed, false);
+  assert.equal(second?.snapshot.state, "stopped");
+  assert.equal(stopped, 1);
+});
+
 test("main unregisters an exact unlaunched preparation and hides its state", () => {
   const controls = new SubagentControlMainV2();
   controls.register(registration());

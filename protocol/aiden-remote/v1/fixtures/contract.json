@@ -1,5 +1,5 @@
 {
-  "contractRevision": 15,
+  "contractRevision": 16,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -50,7 +50,7 @@
     "appVersion": "0.30.0",
     "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
     "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -903,6 +903,59 @@
         "notices": ["display_filtered"]
       }
     ]
+  },
+  "agentInterrupt": {
+    "agentId": "agent_fixture_01",
+    "response": {
+      "version": 1,
+      "chatId": "chat_fixture_01",
+      "turnId": "turn_fixture_01",
+      "previousTurns": [
+        { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" },
+        { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" }
+      ],
+      "availability": "ready",
+      "epoch": "epoch_fixture_01",
+      "revision": 3,
+      "updatedAt": "2026-08-18T19:01:10.000Z",
+      "agents": [
+        {
+          "agentId": "agent_fixture_01",
+          "depth": 1,
+          "revision": 5,
+          "role": "implementer",
+          "label": "Implement the change",
+          "taskPreview": "Make a scoped code change",
+          "state": "stopped",
+          "startedAt": "2026-08-18T19:01:01.000Z",
+          "updatedAt": "2026-08-18T19:01:10.000Z",
+          "finishedAt": "2026-08-18T19:01:10.000Z",
+          "modelId": "model_fixture",
+          "turns": 3,
+          "tools": 5,
+          "tokens": 4200,
+          "milestones": ["reading", "searching"]
+        },
+        {
+          "agentId": "agent_fixture_02",
+          "parentAgentId": "agent_fixture_01",
+          "depth": 2,
+          "revision": 2,
+          "role": "reviewer",
+          "label": "Check the findings",
+          "taskPreview": "Review the surveyed findings",
+          "state": "completed",
+          "startedAt": "2026-08-18T19:01:02.000Z",
+          "updatedAt": "2026-08-18T19:01:07.000Z",
+          "finishedAt": "2026-08-18T19:01:07.000Z",
+          "modelId": "model_fixture",
+          "turns": 2,
+          "tools": 1,
+          "tokens": 1100,
+          "notices": ["display_filtered"]
+        }
+      ]
+    }
   },
   "deviceCapabilitiesUpdate": {
     "request": { "accepts": ["tasks:read", "agents:read", "questions:respond", "skills:invoke"] },

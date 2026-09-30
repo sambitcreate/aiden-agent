@@ -206,6 +206,64 @@ class AidenChatViewModel(
                 installationForProgress()?.deviceCapabilities?.contains(AidenRemoteCapability.AGENTS_READ) == true
         } == true
 
+    private val _interruptingAgentIds = MutableStateFlow<Set<String>>(emptySet())
+    /** Public agent IDs with a Stop request in flight. */
+    val interruptingAgentIds: StateFlow<Set<String>> = _interruptingAgentIds.asStateFlow()
+
+    /**
+     * Stopping one delegated agent needs the Mac's chat-agent-interrupt-v1
+     * feature, the negotiated agents:read grant, chat:write, and (for Bot
+     * chats) the same Bot write access as stopping the whole run.
+     */
+    val canInterruptAgents: Boolean
+        get() {
+            if (isReadOnlyPresentation || !canReadAgentRoster) return false
+            if (coordinator.serverInfo.value?.supportsChatAgentInterrupt != true) return false
+            val installation = installationForProgress() ?: return false
+            val currentChat = _chat.value ?: return false
+            return installation.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) &&
+                (currentChat.botId == null ||
+                    (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+                     installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)))
+        }
+
+    /** Only a still-running agent in the current turn can be stopped. */
+    fun canInterrupt(agent: AidenChatAgent): Boolean =
+        canInterruptAgents && !agent.isTerminal &&
+            agent.agentId !in _interruptingAgentIds.value &&
+            _agentRoster.value?.agents?.any { it.agentId == agent.agentId } == true
+
+    /** Asks the Mac to stop one delegated agent and adopts the refreshed roster it returns. */
+    fun interruptAgent(agent: AidenChatAgent) {
+        if (!canInterrupt(agent)) return
+        val client = activeClient() ?: return
+        val agentId = agent.agentId
+        _interruptingAgentIds.value = _interruptingAgentIds.value + agentId
+        viewModelScope.launch {
+            try {
+                val roster = client.interruptAgent(chatId, agentId)
+                if (activeClient() !== client || coordinator.activeInstanceId != instanceId) return@launch
+                acceptAgentRoster(roster)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (isProgressCredentialRevoked(error)) {
+                    clearProgressState()
+                    if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                        coordinator.removeInstallation(instanceId)
+                    }
+                } else if (activeClient() === client) {
+                    _presentedError.value = if (isProgressCapabilityDenied(error)) {
+                        "This device can no longer stop agents on this Mac."
+                    } else {
+                        "Stop was not confirmed. Check the agent before trying again."
+                    }
+                }
+            } finally {
+                _interruptingAgentIds.value = _interruptingAgentIds.value - agentId
+            }
+        }
+    }
+
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
                 _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&

@@ -134,6 +134,16 @@ export const AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts
  */
 export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
 
+/**
+ * Server feature token for `POST /chats/{chatId}/agents/{agentId}/interrupt`,
+ * the one delegated-agent control exposed to paired devices. The host
+ * advertises it only while the main-owned subagent stop path is wired. The
+ * route additionally requires `chat:write` plus the negotiated `agents:read`
+ * grant (the device must already be able to see the agent it targets); old
+ * servers omit the token and clients must keep the roster read-only.
+ */
+export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1" as const;
+
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
 export const AIDEN_REMOTE_RUN_INPUT_MAX_TEXT = 200_000;
@@ -748,6 +758,12 @@ export interface AidenRemoteBotAvatarUploadFixture {
   response: AidenRemoteBotAvatarAsset;
 }
 
+/** Revision 16: one child stop and the refreshed current-turn roster it returns. */
+export interface AidenRemoteChatAgentInterruptFixture {
+  agentId: string;
+  response: AidenRemoteChatAgentRoster;
+}
+
 export interface AidenRemoteDeviceCapabilitiesUpdateFixture {
   request: AidenRemoteDeviceCapabilitiesUpdateRequest;
   response: AidenRemoteDeviceCapabilitiesUpdateResponse;
@@ -866,6 +882,7 @@ export interface AidenRemoteContractFixture {
   botAvatarMetadata: AidenRemoteBotAvatarAsset;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
+  agentInterrupt: AidenRemoteChatAgentInterruptFixture;
   deviceCapabilitiesUpdate: AidenRemoteDeviceCapabilitiesUpdateFixture;
   chatProgressEvents: AidenRemoteStreamEvent[];
   legacyNonNegotiating: AidenRemoteLegacyNonNegotiatingFixture;
@@ -4269,6 +4286,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SKILLS_FEATURE)) {
     throw new Error("Fixture server must advertise chat skills.");
   }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE)) {
+    throw new Error("Fixture server must advertise chat agent interrupt.");
+  }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
       throw new Error(`Fixture server must advertise ${feature}.`);
@@ -4439,6 +4459,35 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     value.agentRoster,
     "Fixture chat agent roster",
   );
+  if (!isRecord(value.agentInterrupt)) {
+    throw new Error("Agent interrupt fixture must be an object.");
+  }
+  assertExactKeys(value.agentInterrupt, ["agentId", "response"], "Agent interrupt fixture");
+  const agentInterruptResponse = parseAidenRemoteChatAgentRoster(
+    value.agentInterrupt.response,
+    "Fixture chat agent interrupt roster",
+  );
+  const interruptedAgentId = value.agentInterrupt.agentId;
+  const interruptedBefore = agentRoster.agents.find((agent) => agent.agentId === interruptedAgentId);
+  const interruptedAfter = agentInterruptResponse.agents.find(
+    (agent) => agent.agentId === interruptedAgentId,
+  );
+  if (
+    !interruptedBefore ||
+    !interruptedAfter ||
+    agentInterruptResponse.chatId !== agentRoster.chatId ||
+    agentInterruptResponse.turnId !== agentRoster.turnId ||
+    agentInterruptResponse.epoch !== agentRoster.epoch ||
+    agentInterruptResponse.revision <= agentRoster.revision ||
+    interruptedAfter.revision <= interruptedBefore.revision ||
+    interruptedAfter.state !== "stopped"
+  ) {
+    throw new Error("Agent interrupt fixture must stop an agent from the fixture roster.");
+  }
+  const agentInterrupt: AidenRemoteChatAgentInterruptFixture = {
+    agentId: interruptedAgentId as string,
+    response: agentInterruptResponse,
+  };
   const deviceCapabilitiesUpdateRecord = isRecord(value.deviceCapabilitiesUpdate)
     ? value.deviceCapabilitiesUpdate
     : null;
@@ -5031,6 +5080,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botAvatarMetadata,
     taskProgress,
     agentRoster,
+    agentInterrupt,
     deviceCapabilitiesUpdate,
     chatProgressEvents,
     legacyNonNegotiating,

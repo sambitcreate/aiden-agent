@@ -227,3 +227,82 @@ test("deleting a chat while waiting for persistence invalidates its claimed mess
   assert.deepEqual(input.sent, []);
   assert.deepEqual(queue.getSnapshot().messages, []);
 });
+
+async function drain(queue: ChatMessageQueue) {
+  const input = delivery(queue);
+  for (let index = 0; index < 5; index++) await deliverQueuedMessage(input);
+  return input;
+}
+
+test("messages queued during compaction deliver in order only after it completes", async () => {
+  const queue = new ChatMessageQueue();
+  queue.holdForCompaction();
+  ["one", "two", "three"].forEach((id) => queue.add(message(id)));
+  const held = await drain(queue);
+  assert.deepEqual(held.sent, [], "nothing is sent while compaction runs");
+  assert.equal(queue.getSnapshot().messages.length, 3);
+
+  assert.equal(queue.releaseCompactionHold({ compacted: true }), false);
+  const released = await drain(queue);
+  assert.deepEqual(released.sent, ["one", "two", "three"]);
+  assert.equal(queue.getSnapshot().paused, false);
+});
+
+test("a compaction that was unnecessary or never admitted releases the queue unpaused", async () => {
+  for (const reason of ["already_compact", "busy"]) {
+    const queue = new ChatMessageQueue();
+    queue.holdForCompaction();
+    queue.add(message("one"));
+    assert.equal(queue.releaseCompactionHold({ compacted: false, reason }), false);
+    assert.deepEqual((await drain(queue)).sent, ["one"], reason);
+  }
+});
+
+test("failed, cancelled or errored compaction keeps queued messages paused until resumed", async () => {
+  for (const outcome of [
+    { compacted: false as const, reason: "compaction_failed" },
+    { compacted: false as const, reason: "cancelled" },
+    { compacted: false as const, reason: "provider_unavailable" },
+    undefined,
+  ]) {
+    const queue = new ChatMessageQueue();
+    queue.holdForCompaction();
+    queue.add(message("one"));
+    queue.add(message("two"));
+    assert.equal(queue.releaseCompactionHold(outcome), true);
+    assert.deepEqual((await drain(queue)).sent, [], "paused queue does not replay");
+    assert.deepEqual(
+      queue.getSnapshot().messages.map((item) => item.id),
+      ["one", "two"],
+    );
+    queue.resume();
+    assert.deepEqual((await drain(queue)).sent, ["one", "two"]);
+  }
+});
+
+test("releasing a failed compaction with an empty queue does not pause later sends", () => {
+  const queue = new ChatMessageQueue();
+  queue.holdForCompaction();
+  assert.equal(
+    queue.releaseCompactionHold({ compacted: false, reason: "compaction_failed" }),
+    false,
+  );
+  queue.add(message("later"));
+  assert.equal(queue.claim()?.id, "later");
+});
+
+test("a delivery waiting for idle defers when compaction takes the chat", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const idle = deferred<boolean>();
+  const input = { ...delivery(queue), waitUntilIdle: () => idle.promise };
+  const pending = deliverQueuedMessage(input);
+  queue.holdForCompaction();
+  idle.resolve(true);
+  await pending;
+  assert.deepEqual(input.sent, []);
+  assert.equal(queue.getSnapshot().sendingId, undefined);
+  assert.equal(queue.getSnapshot().paused, false);
+  queue.releaseCompactionHold({ compacted: true });
+  assert.deepEqual((await drain(queue)).sent, ["one"]);
+});

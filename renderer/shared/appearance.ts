@@ -16,6 +16,7 @@ export type CodeFontId = "sf-mono" | "menlo" | "monaco";
 export type ReduceMotionPreference = "system" | "on" | "off";
 export type DiffMarkerPreference = "color" | "symbols";
 export type DockIconPreference = "aiden" | "monochrome";
+export type ChatWidthPreference = "narrow" | "default" | "wide" | "full";
 
 export interface ThemeVariantConfig {
   preset: ThemeSelection;
@@ -43,6 +44,8 @@ export interface AppearanceConfig {
   codeFontSize: number;
   diffMarkers: DiffMarkerPreference;
   fontSmoothing: boolean;
+  /** Maximum width of the shared transcript/composer column. */
+  chatWidth: ChatWidthPreference;
 }
 
 export interface AppearancePreviewSnapshot {
@@ -83,6 +86,31 @@ export const CODE_FONT_OPTIONS: ReadonlyArray<{ id: CodeFontId; label: string; p
   { id: "menlo", label: "Menlo", preview: "Menlo, Monaco" },
   { id: "monaco", label: "Monaco", preview: "Monaco, Menlo" },
 ];
+
+/**
+ * Chat column widths. `maxWidth` feeds `--chat-content-max-width`, which the
+ * transcript, pending approvals, and composer all share so they stay aligned.
+ * "Full" removes the cap; the dock inset still keeps the floating Aiden mark
+ * clear on both sides.
+ */
+export const CHAT_WIDTH_OPTIONS: ReadonlyArray<{
+  id: ChatWidthPreference;
+  label: string;
+  maxWidth: string;
+}> = [
+  { id: "narrow", label: "Narrow", maxWidth: "44rem" },
+  { id: "default", label: "Default", maxWidth: "52rem" },
+  { id: "wide", label: "Wide", maxWidth: "64rem" },
+  { id: "full", label: "Full", maxWidth: "none" },
+];
+
+function isChatWidthPreference(value: unknown): value is ChatWidthPreference {
+  return value === "narrow" || value === "default" || value === "wide" || value === "full";
+}
+
+export function chatContentMaxWidth(preference: ChatWidthPreference): string {
+  return CHAT_WIDTH_OPTIONS.find((option) => option.id === preference)?.maxWidth ?? "52rem";
+}
 
 export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
   {
@@ -362,6 +390,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   codeFontSize: 12,
   diffMarkers: "symbols",
   fontSmoothing: true,
+  chatWidth: "default",
 };
 
 export function createDefaultAppearanceConfig(): AppearanceConfig {
@@ -466,6 +495,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     fontSmoothing: typeof value.fontSmoothing === "boolean"
       ? value.fontSmoothing
       : fallback.fontSmoothing,
+    chatWidth: isChatWidthPreference(value.chatWidth) ? value.chatWidth : fallback.chatWidth,
   };
 }
 
@@ -500,6 +530,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older V1 settings did not contain this preference. Keep them loadable.
   if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
     throw new Error("Composer context preference must be a boolean value.");
+  }
+  // Older V1 settings and exports predate the chat width preference.
+  if (value.chatWidth !== undefined && !isChatWidthPreference(value.chatWidth)) {
+    throw new Error("Chat width is unsupported.");
   }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);
