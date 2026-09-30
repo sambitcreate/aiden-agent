@@ -660,6 +660,8 @@ export const voiceApi = {
 /** On-device (sherpa-onnx / Parakeet) engine + model management. */
 export const localVoiceApi = {
   status: () => invoke<EngineStatus>("localVoice:status"),
+  /** Preload the on-device model so the first transcription starts faster. */
+  warm: (modelId: string) => invoke<void>("localVoice:warm", modelId),
   listModels: () => invoke<LocalVoiceModel[]>("localModels:list"),
   downloadModel: (id: string) => invoke<void>("localModels:download", id),
   cancelDownload: (id: string) => invoke<boolean>("localModels:cancel", id),

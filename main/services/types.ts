@@ -667,6 +667,12 @@ export interface AppSettings {
   dictationAccelerator?: string;
   /** Hold the dictation shortcut to record; release to transcribe. */
   dictationHoldToTalk?: boolean;
+  /** Refines a release-capable shortcut: `hold` (push-to-talk) or `hybrid` (tap toggles, hold talks). */
+  dictationActivationMode?: import("../../renderer/shared/dictation-preferences.js").DictationActivationMode;
+  /** Vocabulary and replacement rules applied to finished dictation transcripts. */
+  dictationDictionary?: import("../../renderer/shared/dictation-dictionary.js").DictationDictionaryEntry[];
+  /** Minutes an idle on-device voice model stays loaded; 0 keeps it loaded. */
+  localVoiceIdleUnloadMinutes?: number;
   /** End dictation shortly after silence. */
   dictationSilenceStop?: boolean;
   /** Polish the transcript with the current chat model before paste. */

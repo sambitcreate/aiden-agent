@@ -52,6 +52,7 @@ import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/b
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
+import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -544,6 +545,9 @@ export function Composer({
     !composerInputLocked &&
     !(isGenerating && stoppingGeneration);
   const settings = useSettings();
+  // Read at transcript time so dictionary edits apply to an in-flight recording.
+  const dictationDictionaryRef = React.useRef<unknown>(undefined);
+  dictationDictionaryRef.current = settings.data?.dictationDictionary;
   const skillCatalog = useDiscoveredSkills(workspace?.id);
   const selectedSkillState = React.useMemo(
     () =>
@@ -569,7 +573,11 @@ export function Composer({
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => {
+    (heard) => {
+      const transcript = applyDictationDictionary(
+        heard,
+        parseDictationDictionary(dictationDictionaryRef.current),
+      );
       if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
     },
     {

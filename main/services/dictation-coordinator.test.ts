@@ -7,6 +7,7 @@ import {
   TRANSCRIPTION_WATCHDOG_MS,
   type DictationCoordinatorDeps,
 } from "./dictation-coordinator.js";
+import { HYBRID_TAP_THRESHOLD_MS } from "../../renderer/shared/dictation-preferences.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -414,27 +415,234 @@ test("dictation broadcasts the explicit Gemini retry-consent stage", async () =>
 test("desktop release during cold startup is latched before recorder readiness", async () => {
   const shown = deferred<boolean>();
   let release!: () => void;
-  const subject = harness({ isHoldToTalk: () => true, showPill: () => shown.promise,
-    startReleaseWatch: (up) => { release = up; return () => {}; } });
+  const subject = harness({
+    isHoldToTalk: () => true,
+    showPill: () => shown.promise,
+    startReleaseWatch: (up) => {
+      release = up;
+      return () => {};
+    },
+  });
   const pressed = subject.coordinator.press();
   await new Promise((resolve) => setImmediate(resolve));
-  release(); shown.resolve(true); await pressed;
+  release();
+  shown.resolve(true);
+  await pressed;
   await subject.coordinator.ready();
-  assert.equal(subject.coordinator.currentStage, "transcribing"); subject.coordinator.dispose();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  subject.coordinator.dispose();
 });
 test("desktop release from a prior operation cannot stop a new recording", async () => {
   const releases: Array<() => void> = [];
-  const subject = harness({ isHoldToTalk: () => true,
-    startReleaseWatch: (up) => { releases.push(up); return () => {}; } });
-  await subject.coordinator.ready(); await subject.coordinator.press();
-  await subject.coordinator.cancel(); await subject.coordinator.press();
-  releases[0](); await subject.coordinator.ready();
-  assert.equal(subject.coordinator.currentStage, "recording"); subject.coordinator.dispose();
+  const subject = harness({
+    isHoldToTalk: () => true,
+    startReleaseWatch: (up) => {
+      releases.push(up);
+      return () => {};
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.cancel();
+  await subject.coordinator.press();
+  releases[0]();
+  await subject.coordinator.ready();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  subject.coordinator.dispose();
 });
 test("desktop session failure during startup stops at first recorder readiness", async () => {
   let fail!: () => void;
-  const subject = harness({ isHoldToTalk: () => true,
-    startReleaseWatch: (_up, failed) => { fail = failed; return () => {}; } });
-  await subject.coordinator.press(); fail(); await subject.coordinator.ready();
-  assert.equal(subject.coordinator.currentStage, "transcribing"); subject.coordinator.dispose();
+  const subject = harness({
+    isHoldToTalk: () => true,
+    startReleaseWatch: (_up, failed) => {
+      fail = failed;
+      return () => {};
+    },
+  });
+  await subject.coordinator.press();
+  fail();
+  await subject.coordinator.ready();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  subject.coordinator.dispose();
+});
+
+function hybridHarness(overrides: Partial<DictationCoordinatorDeps> = {}) {
+  let clock = 10_000;
+  let grace: (() => void) | undefined;
+  const watches: Array<{ onRelease: () => void; stopped: boolean }> = [];
+  const subject = harness({
+    now: () => clock,
+    getActivationMode: () => "hybrid",
+    getHoldKeyCode: () => 2,
+    startHoldWatch: (_keyCode, onRelease) => {
+      const watch = { onRelease, stopped: false };
+      watches.push(watch);
+      return () => {
+        watch.stopped = true;
+      };
+    },
+    setTimer: (callback, delayMs) => {
+      if (delayMs === HOLD_RELEASE_GRACE_MS) grace = callback;
+      return dormantTimer();
+    },
+    ...overrides,
+  });
+  return {
+    ...subject,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+    watches,
+    fireGrace: async () => {
+      assert.ok(grace, "release grace was scheduled");
+      grace();
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  };
+}
+
+test("hybrid tap latches recording on until the next press", async () => {
+  const subject = hybridHarness();
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.watches.length, 1, "hybrid watches the key from the first press");
+  subject.advance(HYBRID_TAP_THRESHOLD_MS - 50);
+  await subject.coordinator.release();
+  assert.equal(subject.coordinator.currentStage, "recording", "a tap does not stop capture");
+  assert.equal(subject.watches[0]?.stopped, true);
+  subject.advance(4_000);
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(
+    subject.events.map((event) => event.state),
+    ["recording", "stopping"],
+  );
+});
+
+test("hybrid hold behaves as push-to-talk and ignores repeats while held", async () => {
+  const subject = hybridHarness();
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  subject.advance(100);
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording", "a repeat while held is ignored");
+  subject.advance(HYBRID_TAP_THRESHOLD_MS + 500);
+  await subject.coordinator.release();
+  await subject.fireGrace();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+test("hybrid measures the tap from key-down even when the pill starts slowly", async () => {
+  const shown = deferred<boolean>();
+  const subject = hybridHarness({ showPill: () => shown.promise });
+  const pressed = subject.coordinator.press();
+  await new Promise((resolve) => setImmediate(resolve));
+  subject.advance(120);
+  subject.watches[0]?.onRelease();
+  subject.advance(900);
+  shown.resolve(true);
+  await pressed;
+  await subject.coordinator.ready();
+  assert.equal(subject.coordinator.currentStage, "recording", "the quick tap latched on");
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+test("hybrid long hold released during cold startup stops at recorder readiness", async () => {
+  const shown = deferred<boolean>();
+  const subject = hybridHarness({ showPill: () => shown.promise });
+  const pressed = subject.coordinator.press();
+  await new Promise((resolve) => setImmediate(resolve));
+  subject.advance(HYBRID_TAP_THRESHOLD_MS + 200);
+  subject.watches[0]?.onRelease();
+  shown.resolve(true);
+  await pressed;
+  await subject.coordinator.ready();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+test("hybrid without a key watch degrades to toggle", async () => {
+  const subject = hybridHarness({ startHoldWatch: () => null });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+test("toggle mode ignores key-up events entirely", async () => {
+  const subject = harness({ getActivationMode: () => "toggle", startHoldWatch: () => () => {} });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.release();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.equal(subject.coordinator.currentMode, "toggle");
+});
+
+test("each recording starts a best-effort model warm-up that cannot block capture", async () => {
+  let warmups = 0;
+  const logged: string[] = [];
+  const subject = harness({
+    warmUp: async () => {
+      warmups += 1;
+      throw new Error("model missing");
+    },
+    logError: (message) => logged.push(message),
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  await subject.coordinator.press();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(warmups, 1, "stopping does not warm again");
+  assert.equal(logged.length, 1);
+});
+
+test("the dictionary corrects the delivered transcript after cleanup", async () => {
+  const pasted: string[] = [];
+  const subject = harness({
+    shouldCleanup: () => true,
+    cleanupTranscript: async (text) => `${text}.`,
+    applyDictionary: (text) => text.replace(/\baiden\b/giu, "Aiden"),
+    paste: async (text) => {
+      pasted.push(text);
+      return "pasted";
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  await subject.coordinator.result("ask aiden", subject.coordinator.currentOperationId);
+  assert.deepEqual(pasted, ["ask Aiden."]);
+});
+
+test("a failing dictionary never loses the transcript", async () => {
+  const pasted: string[] = [];
+  const subject = harness({
+    applyDictionary: () => {
+      throw new Error("bad rules");
+    },
+    paste: async (text) => {
+      pasted.push(text);
+      return "pasted";
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  await subject.coordinator.result("hello there", subject.coordinator.currentOperationId);
+  assert.deepEqual(pasted, ["hello there"]);
+});
+
+test("hybrid unmappable shortcut latches toggle and ignores release", async () => {
+  const subject = hybridHarness({ getHoldKeyCode: () => null });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  await subject.coordinator.release();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.ok(subject.events.some((event) => event.message?.toLowerCase().includes("again to stop")));
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
 });

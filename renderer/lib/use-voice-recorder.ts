@@ -22,6 +22,7 @@ import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
+import { localVoiceApi } from "./ipc";
 
 type RecorderOptions = TranscribeOptions;
 
@@ -80,6 +81,10 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     if (token === null) return;
     pendingStopRef.current = false;
     setLastError(null);
+    // Load the on-device model while the microphone opens so the first
+    // transcription does not pay the cold-start cost. Best effort.
+    const warmModel = optionsRef.current.provider === "local" ? optionsRef.current.localModel : undefined;
+    if (warmModel) void localVoiceApi.warm(warmModel).catch(() => {});
     try {
       // Native permission gate before capture.
       const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");

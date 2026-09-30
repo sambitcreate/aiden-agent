@@ -20,6 +20,14 @@ export type ParakeetParentMessage =
       kind: "release";
       requestId: string;
       modelId: string;
+    }
+  | {
+      version: typeof PARAKEET_PROTOCOL_VERSION;
+      /** Load the recognizer ahead of the first transcription. */
+      kind: "warm";
+      requestId: string;
+      modelId: string;
+      modelDirectory: string;
     };
 
 export type ParakeetWorkerMessage =
@@ -47,6 +55,9 @@ export function isParakeetParentMessage(value: unknown): value is ParakeetParent
   if (typeof value.requestId !== "string" || value.requestId.length === 0) return false;
   if (value.kind === "status") return true;
   if (value.kind === "release") return typeof value.modelId === "string";
+  if (value.kind === "warm") {
+    return typeof value.modelId === "string" && typeof value.modelDirectory === "string";
+  }
   return (
     value.kind === "transcribe" &&
     typeof value.modelId === "string" &&

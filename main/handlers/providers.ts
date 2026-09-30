@@ -68,6 +68,8 @@ import {
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
+import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
+import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -518,8 +520,9 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
-    if (typeof p.dictationHoldToTalk === "boolean")
-      next.dictationHoldToTalk = p.dictationHoldToTalk;
+    Object.assign(next, parseDictationPreferencePatch(p));
+    if (p.dictationDictionary !== undefined)
+      next.dictationDictionary = parseDictationDictionary(p.dictationDictionary);
     if (typeof p.dictationSilenceStop === "boolean")
       next.dictationSilenceStop = p.dictationSilenceStop;
     if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;
@@ -548,6 +551,10 @@ export function registerProviderHandlers(): void {
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
+    if (next.localVoiceIdleUnloadMinutes !== undefined) {
+      const { reconfigureParakeetIdleUnload } = await import("../services/parakeet.js");
+      void reconfigureParakeetIdleUnload();
+    }
     if (next.skillsEnabled !== undefined) {
       skillRegistry.invalidate();
       invalidateBotRuntimeInventoryAuthority("skill_configuration");

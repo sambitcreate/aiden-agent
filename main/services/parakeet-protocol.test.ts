@@ -67,3 +67,17 @@ test("parakeet protocol accepts only versioned request and result frames", () =>
     true,
   );
 });
+
+test("parakeet warm requests must name the model directory to preload", () => {
+  const warm = {
+    version: PARAKEET_PROTOCOL_VERSION,
+    kind: "warm",
+    requestId: "w1",
+    modelId: "parakeet-v3",
+    modelDirectory: "/tmp/model",
+  };
+  assert.equal(isParakeetParentMessage(warm), true);
+  const { modelDirectory: _omitted, ...withoutDirectory } = warm;
+  assert.equal(isParakeetParentMessage(withoutDirectory), false);
+  assert.equal(isParakeetParentMessage({ ...warm, version: 2 }), false);
+});

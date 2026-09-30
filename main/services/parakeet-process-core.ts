@@ -49,6 +49,7 @@ export class ParakeetProcessClient {
     message:
       | { kind: "status" }
       | { kind: "release"; modelId: string }
+      | { kind: "warm"; modelId: string; modelDirectory: string }
       | {
           kind: "transcribe";
           modelId: string;
@@ -110,6 +111,11 @@ export class ParakeetProcessClient {
     });
     if (result.kind === "failure") throw new Error(result.message);
     return result.text ?? "";
+  }
+
+  async warm(modelId: string, modelDirectory: string): Promise<void> {
+    const result = await this.request({ kind: "warm", modelId, modelDirectory });
+    if (result.kind === "failure") throw new Error(result.message);
   }
 
   async release(modelId: string): Promise<void> {
