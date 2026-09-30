@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { BotCapabilityRollbackAnchor, BotCapabilityBootstrapMarker } from "./bot-capability-state-checkpoint.js";
 import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 import { ROLLBACK_SERVICE, BOOTSTRAP_SERVICE, TELEGRAM_BINDING_SERVICE, TELEGRAM_BINDING_BOOTSTRAP_SERVICE, validateValue, createAuthorityItem, createAuthorityBootstrapMarker, type BotCapabilityAuthorityItemOptions } from "./bot-capability-authority-item.js";
@@ -7,6 +9,7 @@ const SECURITY = "/usr/bin/security";
 const MAX_PROCESS_OUTPUT_BYTES = 4_096;
 const PROCESS_TIMEOUT_MS = 5_000;
 const SECURITY_INTERACTIVE_TOKEN = /^[A-Za-z0-9._:-]+$/u;
+const DEFAULT_KEYCHAIN_LINE = /^"([^"\n]+)"$/u;
 export interface BotCapabilitySecurityCommandResult {
   exitCode: number | null;
   stdout: string;
@@ -95,9 +98,33 @@ const runSecurity: BotCapabilitySecurityCommand = (args, stdin) =>
 
 interface BotCapabilityKeychainItemOptions extends BotCapabilityAuthorityItemOptions {
   command?: BotCapabilitySecurityCommand;
+  keychainExists?: (file: string) => Promise<boolean>;
+}
+async function keychainFileExists(file: string): Promise<boolean> {
+  try {
+    return (await fs.stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+/**
+ * `add-generic-password` without a usable default keychain makes securityd show
+ * a modal "Keychain Not Found / Reset To Defaults" alert. Isolated HOME roots
+ * (E2E and packaged acceptance launches) hit that on every run, so resolve the
+ * default keychain first and fail closed without ever prompting.
+ */
+async function hasDefaultKeychain(
+  command: BotCapabilitySecurityCommand,
+  keychainExists: (file: string) => Promise<boolean>,
+): Promise<boolean> {
+  const result = await command(["default-keychain", "-d", "user"]);
+  if (result.exitCode !== 0) return false;
+  const file = DEFAULT_KEYCHAIN_LINE.exec(result.stdout.trim())?.[1];
+  return file !== undefined && path.isAbsolute(file) && keychainExists(file);
 }
 function createKeychainItem(options: BotCapabilityKeychainItemOptions, service: string, label: string): BotCapabilityRollbackAnchor {
   const command = options.command ?? runSecurity;
+  const keychainExists = options.keychainExists ?? keychainFileExists;
   return createAuthorityItem(options, {
     async read(account) {
       const result = await command(["find-generic-password", "-a", account, "-s", service, "-w"]);
@@ -106,6 +133,9 @@ function createKeychainItem(options: BotCapabilityKeychainItemOptions, service: 
       return result.stdout.replace(/\r?\n$/u, "");
     },
     async write(account, value) {
+      if (!(await hasDefaultKeychain(command, keychainExists))) {
+        throw new BotCapabilityUnavailableError(`The macOS Keychain ${label} has no default keychain to update.`);
+      }
       const result = await command(["add-generic-password", "-U", "-a", account, "-s", service, "-w"], value);
       if (result.exitCode !== 0) throw new BotCapabilityUnavailableError(`The macOS Keychain ${label} could not be updated.`);
     },

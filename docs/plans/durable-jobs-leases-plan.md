@@ -203,7 +203,7 @@ Design, workflow editor, gateway, daemon, PGlite/Postgres, client-only outbox or
 drive-by refactors. Do not migrate Cron, subagents, chat or memory stores.
 
 Update the plan index to foundation implemented / Bot runtime and native rollout
-pending only after checks pass. Log friction in .papercuts. Prepare one PR with
+pending only after checks pass. Prepare one PR with
 concrete changes and validation; do not merge/release or advertise shipped jobs.
 ```
 

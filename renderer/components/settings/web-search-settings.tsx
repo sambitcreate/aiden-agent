@@ -58,6 +58,8 @@ import type {
   WebSearchSelection,
 } from "../../lib/types";
 import { useAppCapabilities } from "../../lib/app-capabilities";
+import { isWebSearchKeyPoolProviderId } from "../../shared/web-search-key-pool";
+import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
 
 type WebSearchProvider = WebSearchProviderRendererMetadata;
 type CredentialMode = WebSearchRouteEntry["credentialMode"];
@@ -901,7 +903,21 @@ function ProviderSetupDialog({
 
         {providerNeedsApiKey(provider) &&
         (!supportsExistingAuth || routeMode === "api-key") &&
-        (provider.credentialKind !== "optional-api-key" || routeMode === "api-key") ? (
+        (provider.credentialKind !== "optional-api-key" || routeMode === "api-key") &&
+        isWebSearchKeyPoolProviderId(provider.id) ? (
+          <WebSearchKeyPoolEditor
+            providerId={provider.id}
+            providerLabel={provider.label}
+            onChanged={() => {
+              webSearchApi
+                .get()
+                .then(onSnapshot)
+                .catch(() => undefined);
+            }}
+          />
+        ) : providerNeedsApiKey(provider) &&
+          (!supportsExistingAuth || routeMode === "api-key") &&
+          (provider.credentialKind !== "optional-api-key" || routeMode === "api-key") ? (
           <Field
             label={provider.credentialKind === "optional-api-key" ? "Optional API key" : "API key"}
             description={

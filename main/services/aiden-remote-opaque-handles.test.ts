@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { link, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -131,4 +133,30 @@ test("opaque handle storage prunes consumed and expired entries and fails closed
   rejectsCode(() => store.resolve(second, "file", secondClaims, { now }), "handle_expired");
   assert.doesNotThrow(() => store.issue("file", claims({ filesystemInode: "inode-4", expiresAt: 3_000 })));
   assert.equal(store.storedTokenMaterialForTesting().length <= 2, true);
+});
+
+test("failed identity inspection drains its other path lookup before releasing metadata admission", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-identity-drain-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original = fsPromises.realpath;
+  let release!: () => void;
+  let failed!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const failedLookup = new Promise<void>(resolve => { failed = resolve; });
+  fsPromises.realpath = (async (...args: Parameters<typeof fsPromises.realpath>) => {
+    if (args[0] === root) await held;
+    try { return await original(...args); }
+    catch (error) { failed(); throw error; }
+  }) as typeof fsPromises.realpath;
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.realpath = original; syncBuiltinESMExports(); });
+  let settled = false;
+  const inspection = inspectAidenFilesystemIdentity(root, path.join(root, "missing")).finally(() => { settled = true; });
+  const rejection = assert.rejects(inspection, (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT");
+  try {
+    await failedLookup;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(settled, false, "failed candidate must not leave the root lookup detached");
+  } finally { release(); }
+  await rejection;
 });

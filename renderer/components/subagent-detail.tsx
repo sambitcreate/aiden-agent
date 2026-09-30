@@ -6,11 +6,17 @@ import {
   subagentDetailIsAwayFromLatest,
 } from "../lib/subagent-panel-state";
 import type { SubagentRunPresentation } from "../lib/subagent-view-state";
-import type {
-  SubagentEffectActivityV1,
-  SubagentMilestoneKind,
-  SubagentRunSnapshot,
+import {
+  subagentPendingQuestion,
+  type SubagentEffectActivityV1,
+  type SubagentMilestoneKind,
+  type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
+import {
+  subagentContextIsApproachingLimit,
+  subagentContextUsageLabels,
+  type SubagentContextUsageV1,
+} from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
@@ -75,6 +81,11 @@ function UnrenderableSubagentUpdate({ content }: { content: string }) {
   );
 }
 
+function subagentContextSummary(usage: SubagentContextUsageV1): string {
+  const labels = subagentContextUsageLabels(usage);
+  return `Context window: ${labels.amount} (${labels.percent})`;
+}
+
 export interface SubagentDetailProps {
   run: SubagentRunSnapshot;
   effectActivity?: readonly SubagentEffectActivityV1[];
@@ -86,6 +97,8 @@ export interface SubagentDetailProps {
   refreshError?: string | null;
   onRetryRefresh?: () => void;
   now?: number;
+  /** Live context reading; supplied only while the run is active. */
+  contextUsage?: SubagentContextUsageV1;
   className?: string;
 }
 
@@ -102,6 +115,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       refreshError = null,
       onRetryRefresh,
       now = Date.now(),
+      contextUsage,
       className,
     },
     headingRef,
@@ -113,6 +127,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
     const projectionNotices = subagentProjectionNotices(run);
     const active =
@@ -244,6 +259,20 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 >
                   Model: {run.modelId}
                 </Text>
+                {contextUsage ? (
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="tertiary"
+                    className={cn(
+                      "mt-0.5 tabular-nums",
+                      subagentContextIsApproachingLimit(contextUsage) && "text-support-warning",
+                    )}
+                    data-subagent-detail-context-usage="true"
+                  >
+                    {subagentContextSummary(contextUsage)}
+                  </Text>
+                ) : null}
                 {run.version === 2 ? (
                   <Text
                     as="p"
@@ -377,7 +406,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 variant="small-strong"
                 color="tertiary"
               >
-                Latest activity
+                {pendingQuestion ? "Waiting on" : "Latest activity"}
               </Text>
               <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
                 {run.activity ?? state}

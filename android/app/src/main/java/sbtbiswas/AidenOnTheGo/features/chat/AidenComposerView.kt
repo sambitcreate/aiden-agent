@@ -364,6 +364,47 @@ fun AidenComposerView(
                             expanded = showModelMenu,
                             onDismissRequest = { showModelMenu = false }
                         ) {
+                            val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
+                            if (selectedProvider != null && selectedModel != null && thinkingLevels.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "THINKING",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = palette.accent
+                                        )
+                                    },
+                                    onClick = {},
+                                    enabled = false
+                                )
+                                thinkingLevels.forEach { level ->
+                                    val isCurrentLevel = selectedThinkingLevel == level
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = selectedModel.thinkingLabel(level),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = if (isCurrentLevel) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isCurrentLevel) palette.accent else palette.foreground
+                                                )
+                                                if (isCurrentLevel) {
+                                                    Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            onSelectModel(selectedProvider, selectedModel, level)
+                                            showModelMenu = false
+                                        }
+                                    )
+                                }
+                            }
                             availableProviders.forEach { provider ->
                                 DropdownMenuItem(
                                     text = {

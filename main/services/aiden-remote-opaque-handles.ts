@@ -190,7 +190,13 @@ export class AidenOpaqueHandleStore {
 }
 
 export async function inspectAidenFilesystemIdentity(rootPath: string, candidatePath: string): Promise<Pick<AidenOpaqueHandleClaims, "canonicalRootPath" | "canonicalPath" | "filesystemDevice" | "filesystemInode" | "kind">> {
-  const [canonicalRootPath, canonicalPath] = await Promise.all([realpath(rootPath), realpath(candidatePath)]);
+  // Drain both path lookups even when one fails so shared metadata admission
+  // does not release its budget while a sibling lookup is still running.
+  const [root, candidate] = await Promise.allSettled([realpath(rootPath), realpath(candidatePath)]);
+  if (root.status === "rejected") throw root.reason;
+  if (candidate.status === "rejected") throw candidate.reason;
+  const canonicalRootPath = root.value;
+  const canonicalPath = candidate.value;
   const relative = path.relative(canonicalRootPath, canonicalPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new AidenOpaqueHandleError("path_outside_root");
   const identity = await stat(canonicalPath);
