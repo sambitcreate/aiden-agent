@@ -45,6 +45,7 @@ async function fixture(options: {
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
+  agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
 } = {}) {
@@ -400,6 +401,22 @@ async function fixture(options: {
               agents: [],
             };
           },
+          ...(options.agentInterruptAvailable === false
+            ? {}
+            : {
+                interruptAgent: async (deviceId: string, chatId: string, agentId: string) => {
+                  calls.push(`agent-interrupt:${deviceId}:${chatId}:${agentId}`);
+                  return {
+                    version: 1 as const,
+                    chatId,
+                    availability: "ready" as const,
+                    epoch: "epoch_fixture_01",
+                    revision: 5,
+                    updatedAt: new Date(4_000).toISOString(),
+                    agents: [],
+                  };
+                },
+              }),
           openEvents: async (_deviceId, chatId, grants, after, response) => {
             calls.push(`progress-events:${chatId}:${after}:${[...grants].join(",")}`);
             response.writeHead(200, { "content-type": "text/event-stream" });
@@ -1262,6 +1279,108 @@ test("bot chats still require bot authority on progress reads and events", async
     );
   } finally {
     await authorized.close();
+  }
+});
+
+test("agent interrupt requires chat write, the negotiated agents grant, and a wired stop path", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const interruptPath = "/chats/chat-1/agents/agent_public_01/interrupt";
+  const interruptCalls = (calls: string[]) =>
+    calls.filter((call) => call.startsWith("agent-interrupt:"));
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const server = await (await fetch(`${negotiated.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-agent-interrupt-v1"), true);
+
+    const stopped = await fetch(`${negotiated.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(stopped.status, 200);
+    const roster = await stopped.json();
+    assert.equal(roster.chatId, "chat-1");
+    assert.equal(roster.revision, 5);
+    assert.deepEqual(interruptCalls(negotiated.calls), [
+      "agent-interrupt:device-authorized-12345678:chat-1:agent_public_01",
+    ]);
+    // Bot-free chats still go through the chat mutation gate.
+    assert.equal(negotiated.calls.includes("chat-classify:chat-1"), true);
+
+    const wrongMethod = await fetch(`${negotiated.base}${interruptPath}`, { headers });
+    assert.equal(wrongMethod.status, 404);
+    await wrongMethod.text();
+    const withQuery = await fetch(`${negotiated.base}${interruptPath}?force=1`, { method: "POST", headers });
+    assert.equal(withQuery.status, 400);
+    await withQuery.text();
+    assert.equal(interruptCalls(negotiated.calls).length, 1);
+  } finally {
+    await negotiated.close();
+  }
+
+  // A read-only device can watch agents but never stop them.
+  const readOnly = await fixture({
+    capabilities: ["server:read", "chat:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const denied = await fetch(`${readOnly.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "capability_denied");
+    assert.equal(interruptCalls(readOnly.calls).length, 0);
+  } finally {
+    await readOnly.close();
+  }
+
+  // chat:write alone cannot target an agent the device was never allowed to see.
+  const writerWithoutRoster = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "tasks:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const denied = await fetch(`${writerWithoutRoster.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "capability_denied");
+    assert.equal(interruptCalls(writerWithoutRoster.calls).length, 0);
+  } finally {
+    await writerWithoutRoster.close();
+  }
+
+  // A Mac without the stop path neither advertises nor serves the route.
+  const unwired = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "agents:read"],
+    acceptsProgressCapabilities: true,
+    agentInterruptAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+    assert.equal(server.features.includes("chat-agent-interrupt-v1"), false);
+    const missing = await fetch(`${unwired.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
+  } finally {
+    await unwired.close();
+  }
+
+  // Retained bot chats additionally require bot write authority.
+  const botReader = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "agents:read"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const denied = await fetch(`${botReader.base}${interruptPath}`, { method: "POST", headers });
+    assert.equal(denied.status, 404);
+    await denied.text();
+    assert.equal(interruptCalls(botReader.calls).length, 0);
+  } finally {
+    await botReader.close();
   }
 });
 

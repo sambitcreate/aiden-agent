@@ -2758,6 +2758,22 @@ struct AidenRemoteContractFixture: Decodable {
         private enum CodingKeys: String, CodingKey { case request, response }
     }
 
+    /// Revision 16: one child stop and the refreshed current-turn roster.
+    struct AgentInterruptFixture: Decodable {
+        let agentId: String
+        let response: AidenRemoteChatAgentRoster
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["agentId", "response"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            agentId = try values.decode(String.self, forKey: .agentId)
+            response = try values.decode(AidenRemoteChatAgentRoster.self, forKey: .response)
+        }
+
+        private enum CodingKeys: String, CodingKey { case agentId, response }
+    }
+
     struct StreamInputFixture: Decodable {
         let request: AidenStreamInputRequest
         let response: AidenStreamInputResult
@@ -2828,6 +2844,7 @@ struct AidenRemoteContractFixture: Decodable {
     let legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
+    let agentInterrupt: AgentInterruptFixture?
     let deviceCapabilitiesUpdate: DeviceCapabilitiesUpdateFixture?
     let chatProgressEvents: [AidenRemoteStreamEvent]
     let streamStatus: AidenStreamStatus
@@ -2897,6 +2914,7 @@ struct AidenRemoteContractFixture: Decodable {
         )
         taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
         agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
+        agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
         deviceCapabilitiesUpdate = try values.decodeIfPresent(
             DeviceCapabilitiesUpdateFixture.self,
             forKey: .deviceCapabilitiesUpdate
@@ -3120,7 +3138,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botChatSubset, botChatSubsetUpdate, botFavorites, botFavoritesUpdate
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
-        case taskProgress, agentRoster, deviceCapabilitiesUpdate, chatProgressEvents
+        case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
         case scheduleRunNotification, error
     }

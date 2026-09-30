@@ -1177,6 +1177,9 @@ final class AidenChatViewModel {
     private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
     private(set) var isTaskProgressStale = false
     private(set) var isAgentRosterStale = false
+    /// Public agent IDs with a Stop request in flight, so repeated taps cannot
+    /// dispatch twice and the control can show progress.
+    private(set) var interruptingAgentIds: Set<String> = []
     var isProgressStale: Bool { isTaskProgressStale || isAgentRosterStale }
     var isProgressObservationRunning: Bool { progressTask != nil }
     var draft = "" {
@@ -1574,6 +1577,64 @@ final class AidenChatViewModel {
               server.supportsChatAgents,
               let installation = coordinator.installationStore.activeInstallation else { return false }
         return installation.hasNegotiatedAccess(to: .agentsRead)
+    }
+
+    /// Stopping one delegated agent needs the Mac's chat-agent-interrupt-v1
+    /// feature, the negotiated agents:read grant, chat:write, and (for Bot
+    /// chats) the same Bot write access as stopping the whole run.
+    var canInterruptAgents: Bool {
+        guard !isReadOnlyPresentation, canReadAgentRoster,
+              coordinator.server?.supportsChatAgentInterrupt == true,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId,
+              installation.deviceCapabilities.contains(.chatWrite) else { return false }
+        return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+            && installation.hasNegotiatedAccess(to: .botWrite))
+    }
+
+    /// Only a still-running agent in the current turn can be stopped. Earlier
+    /// turns are history, and terminal agents have nothing left to stop.
+    func canInterrupt(_ agent: AidenRemoteChatAgent) -> Bool {
+        guard canInterruptAgents, !agent.state.isTerminal,
+              !interruptingAgentIds.contains(agent.agentId),
+              let current = agentRoster,
+              current.agents.contains(where: { $0.agentId == agent.agentId }) else { return false }
+        return true
+    }
+
+    /// Asks the Mac to stop one delegated agent and adopts the refreshed
+    /// roster it returns. Returns whether the Mac confirmed the request.
+    @discardableResult
+    func interruptAgent(_ agent: AidenRemoteChatAgent) async -> Bool {
+        guard canInterrupt(agent), !isRemoved,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return false }
+        let agentId = agent.agentId
+        interruptingAgentIds.insert(agentId)
+        defer { interruptingAgentIds.remove(agentId) }
+        do {
+            let roster = try await coordinator.remoteClient(for: context).interruptAgent(
+                chatId: chat.id,
+                agentId: agentId
+            )
+            guard !isRemoved, coordinator.isCurrent(context) else { return false }
+            acceptAgentRoster(roster)
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "agent-stop:\(agentId)")
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            guard !isRemoved, coordinator.isCurrent(context) else { return false }
+            if isProgressAccessDenied(error) {
+                presentedError = String(localized: "This device can no longer stop agents on this Mac.")
+            } else {
+                presentedError = String(localized: "Stop was not confirmed. Check the agent before trying again.")
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return false
+        }
     }
 
     /// Progress projections are independently negotiated read-only data. A

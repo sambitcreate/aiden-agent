@@ -40,6 +40,14 @@ interface ProgressPorts {
    * turns). Other generations get a stable minted identity instead.
    */
   publicTurnId?(chatId: string, generationId: string): string | undefined;
+  /**
+   * Main-owned stop for one live foreground subagent run (the same control
+   * path the desktop Subagents panel uses). The host resolves the chat's
+   * persisted workspace itself. Resolves `false` when no live control
+   * binding exists for that chat and run. Absent when the host
+   * does not wire subagent control; the interrupt route is then unavailable.
+   */
+  stopAgent?(run: { chatId: string; runId: string }): Promise<boolean>;
   now?: () => number;
 }
 
@@ -309,6 +317,74 @@ export class AidenRemoteChatProgressService {
       ...value,
       ...this.version(`agents:${chatId}:${turnId ?? "current"}`, value),
     });
+  }
+
+  get supportsAgentInterrupt(): boolean {
+    return typeof this.ports.stopAgent === "function";
+  }
+
+  /**
+   * Stop one running delegated agent in the chat's active turn. The caller
+   * addresses the agent only by its projection-minted public `agentId`; the
+   * private run ID is resolved here from the chat's own durable roster.
+   * Already-finished (or abandoned) agents are an idempotent no-op. The
+   * response is the refreshed current-turn roster.
+   */
+  async interruptAgent(
+    deviceId: string,
+    chatId: string,
+    agentId: string,
+  ): Promise<AidenRemoteChatAgentRoster> {
+    const stopAgent = this.ports.stopAgent;
+    if (!stopAgent) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    await this.ports.authorize(deviceId, chatId, "agents:read");
+    const runs = (await this.ports.readAgents(chatId)).map((value) =>
+      parseSubagentRunSnapshot(value),
+    );
+    const target = runs.find(
+      (run): run is SubagentRunSnapshot =>
+        run !== undefined &&
+        run.chatId === chatId &&
+        this.publicId("agent", chatId, run.runId) === agentId,
+    );
+    if (!target) {
+      throw new AidenRemoteServiceError("not_found", "This agent is unavailable.", 404);
+    }
+    const active = this.ports.events.current(chatId);
+    const live =
+      !AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES.has(target.state) &&
+      active?.generationId === target.generationId;
+    if (live) {
+      if (target.version !== 2) {
+        throw new AidenRemoteServiceError(
+          "operation_stale",
+          "This agent cannot be stopped from this device.",
+          409,
+        );
+      }
+      // Revalidate immediately before the side effect: the durable read above
+      // is asynchronous and the device grant or chat ownership may have moved.
+      await this.ports.authorize(deviceId, chatId, "agents:read");
+      let handled = false;
+      try {
+        handled = await stopAgent({
+          chatId,
+          runId: target.runId,
+        });
+      } catch {
+        handled = false;
+      }
+      if (!handled) {
+        throw new AidenRemoteServiceError(
+          "operation_stale",
+          "This agent is no longer controllable. Refresh and try again.",
+          409,
+        );
+      }
+    }
+    return this.agentRoster(deviceId, chatId);
   }
 
   async openEvents(
