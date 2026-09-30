@@ -1,0 +1,49 @@
+{
+  "modulePath": "main/services/.foreground-baseline.ts",
+  "node": "v22.22.3",
+  "platform": "darwin",
+  "arch": "arm64",
+  "piVersion": "0.87.1",
+  "read": {
+    "inputBytes": 16777216,
+    "bytesRead": 16777216,
+    "outputChars": 200014
+  },
+  "abortedGrep": {
+    "rejected": false,
+    "bytesRead": 7
+  },
+  "smallGrepMs": [
+    0.3235419999999749,
+    0.2934579999999869,
+    0.29383300000000645,
+    0.3069160000000011,
+    0.5061660000000074,
+    0.239750000000015,
+    0.26924999999999955,
+    0.3658750000000168,
+    0.192875000000015,
+    0.17037499999997863
+  ],
+  "wideFixtureEntries": 10100,
+  "scans": [
+    {
+      "name": "list_dir",
+      "enumeratedEntries": 10100,
+      "outputChars": 200989,
+      "incompleteNotice": false
+    },
+    {
+      "name": "glob",
+      "enumeratedEntries": 10100,
+      "outputChars": 12,
+      "incompleteNotice": false
+    },
+    {
+      "name": "grep",
+      "enumeratedEntries": 10100,
+      "outputChars": 12,
+      "incompleteNotice": false
+    }
+  ]
+}

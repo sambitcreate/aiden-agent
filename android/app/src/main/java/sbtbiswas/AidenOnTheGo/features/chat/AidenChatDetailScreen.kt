@@ -63,6 +63,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -132,8 +135,14 @@ fun AidenChatDetailScreen(
     val pendingQuestion by viewModel.pendingQuestion.collectAsState()
     val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
+    val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsState()
+    val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val selectedSkill by viewModel.selectedSkill.collectAsState()
+    val modelCatalog by viewModel.catalog.collectAsState()
+    val selectedProviderId by viewModel.selectedProviderId.collectAsState()
+    val selectedModelId by viewModel.selectedModelId.collectAsState()
+    val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsState()
     val composerSuggestions by viewModel.composerSuggestions.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
@@ -172,6 +181,7 @@ fun AidenChatDetailScreen(
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
+    var selectTextFor by remember { mutableStateOf<String?>(null) }
     var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
@@ -242,28 +252,22 @@ fun AidenChatDetailScreen(
         val remainingCapacity = (10 - pendingAttachments.size).coerceAtLeast(0)
         val uris = selectedUris.take(remainingCapacity)
         if (uris.isNotEmpty()) {
-            scope.launch {
-                for (uri in uris) {
-                    try {
-                        val displayName = getFileName(context, uri) ?: "Attachment"
-                        val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true ||
-                            isImageExtension(displayName)
-                        val limit = if (isImage) {
-                            AidenAttachmentPreparation.MAXIMUM_SOURCE_IMAGE_BYTES
-                        } else {
-                            AidenAttachmentPreparation.MAXIMUM_TEXT_BYTES
-                        }
-                        val bytes = readContentUriBounded(context, uri, limit) ?: continue
-                        val upload = if (isImage) {
-                            AidenAttachmentPreparation.imageUpload(bytes, displayName)
-                        } else {
-                            val mime = context.contentResolver.getType(uri) ?: "text/plain"
-                            AidenAttachmentPreparation.textUpload(bytes, displayName, mime)
-                        }
-                        viewModel.upload(listOf(upload))
-                    } catch (_: Exception) {
-                        // A provider can return stale or misleading MIME metadata. Keep
-                        // successfully prepared selections and skip only the invalid URI.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                viewModel.prepareAndUpload(uris) { uri ->
+                    val displayName = getFileName(context, uri) ?: "Attachment"
+                    val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+                        isImageExtension(displayName)
+                    val limit = if (isImage) {
+                        AidenAttachmentPreparation.MAXIMUM_SOURCE_IMAGE_BYTES
+                    } else {
+                        AidenAttachmentPreparation.MAXIMUM_TEXT_BYTES
+                    }
+                    val bytes = readContentUriBounded(context, uri, limit) ?: return@prepareAndUpload null
+                    if (isImage) {
+                        AidenAttachmentPreparation.imageUpload(bytes, displayName, coroutineContext::ensureActive)
+                    } else {
+                        val mime = context.contentResolver.getType(uri) ?: "text/plain"
+                        AidenAttachmentPreparation.textUpload(bytes, displayName, mime)
                     }
                 }
             }
@@ -607,7 +611,8 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend && !hasActiveStream,
+                    canSend = viewModel.canSend && !hasActiveStream &&
+                        preparingAttachmentBatches == 0 && !isUploadingAttachment,
                     isStreaming = isStreaming,
                     showsRunInputOptions = viewModel.showsRunInputOptions,
                     canSubmitRunInput = viewModel.canSubmitRunInput,
@@ -668,11 +673,19 @@ fun AidenChatDetailScreen(
                             )
                         )
                     },
-                    selectedProvider = null,
-                    selectedModel = null,
-                    selectedThinkingLevel = null,
-                    availableProviders = emptyList(),
-                    onSelectModel = null,
+                    // Bot chats keep their Bot-owned model; only Workspace
+                    // chats expose the composer picker.
+                    selectedProvider = if (chat?.isBotChat == true) null
+                        else modelCatalog?.providers?.firstOrNull { it.id == selectedProviderId },
+                    selectedModel = if (chat?.isBotChat == true) null
+                        else modelCatalog?.providers?.firstOrNull { it.id == selectedProviderId }
+                            ?.models?.firstOrNull { it.id == selectedModelId },
+                    selectedThinkingLevel = if (chat?.isBotChat == true) null else selectedThinkingLevel,
+                    availableProviders = if (chat == null || chat?.isBotChat == true) emptyList()
+                        else modelCatalog?.visibleProviders.orEmpty(),
+                    onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
+                        viewModel.selectModel(provider.id, model.id, level)
+                    },
                     placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
@@ -691,7 +704,9 @@ fun AidenChatDetailScreen(
         val loadAttachmentImage = remember(viewModel) { viewModel::attachmentImageData }
         val onCopyMessage = remember(context) { { text: String -> copyToClipboard(context, text) } }
         val onShareMessage = remember(context) { { text: String -> shareText(context, text) } }
-        val onReplyMessage = remember(viewModel) { { text: String -> viewModel.updateDraft("> $text\n") } }
+        val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
+            remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
+        val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
         val onOpenMessageUrl = remember(uriHandler, isBotChat) {
             { url: String ->
                 if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
@@ -735,7 +750,8 @@ fun AidenChatDetailScreen(
                             tools = tools,
                             activityTimeline = activityTimeline,
                             isBotChat = isBotChat,
-                            palette = palette
+                            palette = palette,
+                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages)
                         )
                     }
                 }
@@ -751,11 +767,13 @@ fun AidenChatDetailScreen(
                         UserMessageRow(
                             message = message,
                             position = pos,
+                            showFooter = isLastInCluster,
                             palette = palette,
                             loadAttachmentImage = loadAttachmentImage,
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
-                            onReply = onReplyMessage
+                            onSelectText = onSelectMessageText,
+                            onAskAbout = onAskAboutMessage
                         )
                     } else {
                         val readAloudEligible = !isStreaming &&
@@ -775,7 +793,8 @@ fun AidenChatDetailScreen(
                             loadAttachmentImage = loadAttachmentImage,
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
-                            onReply = onReplyMessage,
+                            onSelectText = onSelectMessageText,
+                            onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl
@@ -843,6 +862,14 @@ fun AidenChatDetailScreen(
             onDismiss = { selectedAgent = null }
         )
     }
+    selectTextFor?.let { text ->
+        AidenSelectTextDialog(
+            text = text,
+            palette = palette,
+            onAskAbout = if (viewModel.isReadOnlyPresentation) null else { selection -> viewModel.askAbout(selection) },
+            onDismiss = { selectTextFor = null }
+        )
+    }
 
     if (showRedirectConfirm) {
         AlertDialog(
@@ -897,11 +924,13 @@ private fun calculateClusterPosition(
 private fun UserMessageRow(
     message: AidenChatMessage,
     position: MessageClusterPosition,
+    showFooter: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
-    onReply: (String) -> Unit
+    onSelectText: (String) -> Unit,
+    onAskAbout: ((String) -> Unit)?
 ) {
     val shape = when (position) {
         MessageClusterPosition.SINGLE -> RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
@@ -925,7 +954,8 @@ private fun UserMessageRow(
                 AidenMessageActionContainer(
                     onCopy = { onCopy(message.text) },
                     onShare = { onShare(message.text) },
-                    onReply = { onReply(message.text) }
+                    onSelectText = { onSelectText(message.text) },
+                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } }
                 ) {
                     Surface(
                         color = palette.accent,
@@ -970,6 +1000,13 @@ private fun UserMessageRow(
                 loadData = loadAttachmentImage
             )
         }
+        if (showFooter) {
+            AidenMessageFooter(
+                message = message,
+                palette = palette,
+                onCopy = if (message.text.isNotEmpty()) ({ onCopy(message.text) }) else null
+            )
+        }
     }
 }
 
@@ -983,7 +1020,8 @@ private fun AssistantMessageRow(
     loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
-    onReply: (String) -> Unit,
+    onSelectText: (String) -> Unit,
+    onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit
@@ -1006,7 +1044,8 @@ private fun AssistantMessageRow(
             AidenMessageActionContainer(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
-                onReply = { onReply(displayText) }
+                onSelectText = { onSelectText(displayText) },
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
             ) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
@@ -1066,7 +1105,8 @@ private fun AssistantMessageRow(
             AidenMessageActionContainer(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
-                onReply = { onReply(displayText) }
+                onSelectText = { onSelectText(displayText) },
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
             ) {
                 Surface(
                     color = Color.Transparent,
@@ -1140,17 +1180,14 @@ private fun AssistantMessageRow(
                 }
             }
         }
-        if (onReadAloud != null) {
-            Row {
-                IconButton(onClick = { onCopy(displayText) }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = palette.secondary)
-                }
-                IconButton(onClick = onReadAloud) {
-                    Icon(if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
-                        contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
-                        tint = palette.secondary)
-                }
-            }
+        if (isLastInCluster || onReadAloud != null) {
+            AidenMessageFooter(
+                message = message,
+                palette = palette,
+                onCopy = if (displayText.isNotEmpty()) ({ onCopy(displayText) }) else null,
+                onReadAloud = onReadAloud,
+                readAloudActive = readAloudActive
+            )
         }
 
     }
@@ -1163,7 +1200,8 @@ private fun ActiveStreamingCard(
     tools: List<AidenLiveTool>,
     activityTimeline: AidenGenerationTimeline?,
     isBotChat: Boolean,
-    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    liveStart: java.time.Instant? = null
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1180,6 +1218,10 @@ private fun ActiveStreamingCard(
             .fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            if (liveStart != null) {
+                AidenLiveElapsedLabel(start = liveStart, palette = palette)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
             if (chronologicalRows != null) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
@@ -1675,6 +1717,7 @@ private suspend fun readContentUriBounded(
         val buffer = ByteArray(16 * 1024)
         var total = 0
         while (true) {
+            coroutineContext.ensureActive()
             val read = input.read(buffer)
             if (read < 0) break
             total += read

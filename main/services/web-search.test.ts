@@ -15,6 +15,8 @@ import {
 } from "./web-search-auth-reuse-core.js";
 import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 import type { AppSettings } from "./types.js";
+import { WebSearchKeyPoolTracker } from "./web-search-key-pool-core.js";
+import { createTavilyWebSearchAdapter } from "./web-search-tavily-adapter.js";
 
 const PRIVATE_KEY = "exa-key-private-7dbfe9";
 const QUERY = "current Exa documentation";
@@ -620,4 +622,69 @@ test("revocation during deferred existing-auth I/O fences evidence before public
       error instanceof WebSearchError && error.kind === "auth" && error.providerId === "openai",
   );
   assert.equal(adapterCalls, 1);
+});
+
+test("a pooled Tavily route fails over between keys, charges each keyed request, and then falls back", async () => {
+  const sentKeys: string[] = [];
+  const statusByKey: Record<string, number> = { "tvly-first": 429, "tvly-second": 200 };
+  const tavilyBody = JSON.stringify({
+    results: [{ title: "Pooled", url: "https://example.test/pooled", content: "Evidence" }],
+  });
+  const tracker = new WebSearchKeyPoolTracker({ now: () => 1_000 });
+  const settings = baseSettings({
+    mode: "automatic",
+    route: [
+      { providerId: "tavily", credentialMode: "api-key" },
+      { providerId: "parallel-mcp", credentialMode: "anonymous" },
+    ],
+    fallbackOn: ["quota"],
+  });
+  const service = new WebSearchService({
+    getSettings: async () => settings,
+    getCredential: async () => "tvly-first",
+    getCredentialPool: async (providerId) =>
+      providerId === "tavily"
+        ? {
+            strategy: "ordered",
+            keys: [
+              { id: "primary", key: "tvly-first" },
+              { id: "second", key: "tvly-second" },
+            ],
+          }
+        : null,
+    keyPoolTracker: tracker,
+    fetch: async (_input, init) => {
+      const key = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /u, "") ?? "";
+      sentKeys.push(key);
+      const status = statusByKey[key] ?? 500;
+      return response(status === 200 ? tavilyBody : "{}", status);
+    },
+    adapterFactories: {
+      tavily: createTavilyWebSearchAdapter,
+      "parallel-mcp": adapter("parallel-mcp", async () => evidence("parallel-mcp")),
+    },
+  });
+
+  const charged: string[] = [];
+  const charge = { beforeProviderAttempt: (providerId: string) => void charged.push(providerId) };
+  const first = await service.search({ query: QUERY }, charge);
+  assert.equal(first.providerId, "tavily");
+  assert.equal(first.results[0]?.url, "https://example.test/pooled");
+  assert.deepEqual(sentKeys, ["tvly-first", "tvly-second"]);
+  assert.deepEqual(charged, ["tavily", "tavily"]);
+  assert.equal(tracker.cooldown("tavily", "primary")?.reason, "quota");
+
+  // Once every pooled key is limited, the route falls back to the next provider.
+  statusByKey["tvly-second"] = 432;
+  sentKeys.length = 0;
+  charged.length = 0;
+  const second = await service.search({ query: QUERY }, charge);
+  assert.deepEqual(sentKeys, ["tvly-second"]);
+  assert.equal(second.providerId, "parallel-mcp");
+  assert.deepEqual(charged, ["tavily", "parallel-mcp"]);
+
+  sentKeys.length = 0;
+  const third = await service.search({ query: QUERY });
+  assert.equal(third.providerId, "parallel-mcp");
+  assert.deepEqual(sentKeys, [], "a fully cooling pool sends no Tavily request");
 });

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { mapWorkspaceMetadata } from "./workspace-metadata.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type {
   AidenRemoteFileDocument,
@@ -334,15 +335,26 @@ export class AidenRemoteBotFileService {
         const entries: AidenRemoteFileEntry[] = [];
         let omitted = false;
         for (const entry of index.entries) {
-          if (authority.signal.aborted) {
-            throw authority.signal.reason instanceof Error
-              ? authority.signal.reason
-              : new Error("Bot access changed while files were loading.");
+          // Bot policy revalidation stays serial and runs only after admission.
+          // Share the same budget as workspace/Gemini/legacy file listings.
+          const [inspected] = await mapWorkspaceMetadata([entry], async () => {
+            try {
+              const displayPath = safeDisplayPath(entry.path);
+              await authority.revalidateBeforeEffect();
+              const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
+              return { displayPath, claims };
+            } catch (error) {
+              if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
+              if (error instanceof BotArchivedFileReadAuthorityError) mapArchivedAuthorityError(error);
+              return undefined;
+            }
+          }, authority.signal);
+          if (!inspected) {
+            omitted = true;
+            continue;
           }
+          const { displayPath, claims } = inspected;
           try {
-            const displayPath = safeDisplayPath(entry.path);
-            await authority.revalidateBeforeEffect();
-            const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
             entries.push({
               id: this.handles.issue("file", claims),
               displayPath,
@@ -371,7 +383,9 @@ export class AidenRemoteBotFileService {
           maxEntries: 4_000,
           maxDepth: 20,
         };
-      } catch (error) {
+      } catch (caught) {
+        const error = authority.signal.aborted && authority.signal.reason instanceof Error
+          ? authority.signal.reason : caught;
         if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
         if (error instanceof BotArchivedFileReadAuthorityError) mapArchivedAuthorityError(error);

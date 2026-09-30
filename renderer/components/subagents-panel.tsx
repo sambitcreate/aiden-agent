@@ -2,6 +2,11 @@ import * as React from "react";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
+  activeSubagentContextUsage,
+  useSubagentContextUsage,
+  type SubagentContextUsageByRunId,
+} from "../lib/subagent-context-usage-store";
+import {
   deriveSubagentRunPresentation,
   resolveSubagentSelection as resolveRunViewSelection,
   splitSubagentRunViews,
@@ -59,6 +64,11 @@ export interface SubagentsPanelProps {
   detailRequestVersion?: number;
   active?: boolean;
   compact?: boolean;
+  /**
+   * Live child context readings keyed by run id. When omitted, the panel reads
+   * the shared `chat:subagent-context` store for `chatId`.
+   */
+  contextUsageByRunId?: SubagentContextUsageByRunId;
   ownerReplacementFallbackFocusTarget?: () => HTMLElement | null;
   className?: string;
 }
@@ -159,9 +169,16 @@ function OwnedSubagentsPanel({
   detailRequestVersion = 0,
   active = true,
   compact = false,
+  contextUsageByRunId,
   className,
 }: SubagentsPanelProps) {
   const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
+  const liveContextUsage = useSubagentContextUsage(chatId);
+  const readings = contextUsageByRunId ?? liveContextUsage;
+  const activeContextUsage = React.useMemo(
+    () => activeSubagentContextUsage(runs, readings),
+    [readings, runs],
+  );
   const controlled = selectedRunId !== undefined;
   const [internalSelection, setInternalSelection] = React.useState<string | null>(
     resolveSubagentSelection(runs, defaultSelectedRunId),
@@ -381,6 +398,7 @@ function OwnedSubagentsPanel({
           refreshError={savedDetailRefreshError}
           onRetryRefresh={onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined}
           now={now}
+          contextUsage={activeContextUsage.get(detailSnapshot.runId)}
         />
       ) : (
         <SubagentDetailPending
@@ -456,6 +474,7 @@ function OwnedSubagentsPanel({
             selectedRunId={selection}
             onSelect={selectRun}
             presentationByRunId={presentationByRunId}
+            contextUsageByRunId={activeContextUsage}
             className="flex-1"
           />
         )
@@ -466,6 +485,7 @@ function OwnedSubagentsPanel({
             selectedRunId={selection}
             onSelect={selectRun}
             presentationByRunId={presentationByRunId}
+            contextUsageByRunId={activeContextUsage}
             className="max-h-44 shrink-0 border-b border-separator"
           />
           {detailRegion}

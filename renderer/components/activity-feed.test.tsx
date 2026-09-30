@@ -78,6 +78,21 @@ test("a live turn shows a three-row ticker with the newest line last", () => {
   assert.match(ticker, /agent-thinking-shimmer/u);
 });
 
+test("a call whose arguments are still streaming announces a preparing stage", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("running", [
+        step(0, "read_file", "completed", { target: "package.json" }),
+        step(1, "edit_file", "pending", { label: "Edit file", target: "src/app.ts" }),
+      ])}
+    />,
+  );
+  assert.match(markup, /aria-label="Preparing Edit file"/u);
+  // The path is not claimed as edited (or being edited) before the call runs.
+  assert.doesNotMatch(markup, /Editing/u);
+  assert.match(markup, /data-activity-stage="preparing"[^>]*>\s*<span[^>]*agent-thinking-shimmer/u);
+});
+
 test("a short run leaves the mask off so the first line is fully legible", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed timeline={timeline("running", [step(0, "read_file", "running")])} />,

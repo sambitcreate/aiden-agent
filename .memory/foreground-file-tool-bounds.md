@@ -1,0 +1,117 @@
+# Foreground file-tool bounds — 2026-09-28
+
+Scope: audit X03/X04/X05, based on a9baa4aa3027893e5455043083465c34b4c8b4ac.
+All 36 then-open PRs rechecked with paginated file inventories (#85: 295 files,
+#37: 209); none touched coding-tools.ts or its suite. Workspace/Git lanes are separate.
+
+Parent read_file now opens/validates a regular descriptor, reads at most 200,001
+bytes (including overflow probe), closes in finally, observes cancellation, and
+omits an incomplete UTF-8 trailing sequence. Parent policy intentionally remains
+broader than child policy: hidden metadata and credential names remain readable
+except .env secrets; in-root links resolve, outside-root links fail. No subagent
+credential/RE2 rules were transplanted into parent tools.
+
+Parent list/glob/grep enumerate with opendir(bufferSize: 1), at most 10,000 entries
+and 5 seconds per invocation. Over-budget directories are omitted rather than
+allowing OS enumeration order to select a subset; prior complete-directory
+results survive. List retains at most 500 results, glob 500, grep 200; collection
+and output bounds have explicit notices (20,000 output chars). Grep skips hidden,
+linked, dependency/build directories as before, reads at most 512,001 bytes per
+file and 10 MiB total (including probes), and skips a growing oversized file.
+
+JavaScript RegExp remains native JS, including lookbehind and backreferences,
+inside a fixed-source owned worker. Model patterns are workerData, never code.
+Glob parses bounded patterns with pinned minimatch 9.0.9 using Node fs.glob
+options, then tracks glob segment positions and linked traversal states in the
+worker. Host-side filesystem access remains bounded and confined. Traversal
+rules are adapted from Node.js (MIT notice included). Native-glob differential fixtures cover ordinary patterns,
+braces, extglobs, hidden paths, absolute paths, directory roots and symlinks.
+Patterns have a new explicit 1,000-character ceiling. At most four matchers can
+run concurrently; excess searches report busy. Cancellation, errors and deadlines
+terminate and await the worker before releasing capacity; no persistent worker.
+The small-search cost of worker startup is intentional and measured.
+
+No Remote DTO, transcript/activity UI, native implementation or onboarding
+capability changed. iOS/Android consumers were inspected: they use unchanged tool
+names/labels, not filesystem scanning/matching internals. No plan status changed.
+Evidence and repeatable commands: docs/performance/foreground-file-tools-2026-09-28/.
+First independent Astra review found safe-link/brace and glob-dependent ..
+compatibility gaps in the initial flattened-path matcher. Replaced that approach
+with segment-state traversal and added differential fixtures before publication.
+Re-review and hosted exact-head CI/bot review remain delivery gates.
+
+
+PR #288 Pullfrog follow-up: derive each brace-expanded glob arm's root independently;
+native differential tests cover mixed absolute/relative alternatives and reject an
+outside-root arm before opening its directory. Foreground read/list/glob/grep now
+share four operation owners. Caller abort and search deadline settle independently
+of pending filesystem I/O; the original operation retains its slot through late
+I/O and cleanup. An issued syscall itself is not cancellable. Late handles close
+without further reads; failed cleanup quarantines admission. Root verification
+awaits both started metadata requests even if one fails. Worker termination starts
+on lifetime abort/deadline while its traversal callback may still be pending.
+The stalled-I/O deadline result is an explicit notice without partial output.
+
+Completion audit also caught the expanded-root offset using host separators even
+though minimatch globParts are slash-normalized. Count normalized slashes so
+Windows drive and UNC roots skip exactly their parsed prefix. Production-worker
+VM fixtures use path.win32 and minimatch platform win32, covering slash/backslash
+drive spelling, UNC, and mixed absolute/relative arms; prior code fails the fixture.
+
+
+The assertion-based Electron smoke is registered as
+`test:foreground-file-tools:electron` and required in the existing Desktop build
+and diagnostics CI lane. Its Node runner bundles an isolated entry (Electron
+explicitly external), owns workspace/profile fixtures, clears ELECTRON_RUN_AS_NODE,
+and waits for child close after success/error/30s deadline/SIGINT/SIGTERM before
+cleanup. CI policy coverage enforces this mandatory package-script invocation.
+
+A later Pullfrog run found bare UNC share roots without a terminal slash. Consume
+the complete platform root, and use an empty terminal segment for directory-self
+matching when that consumes the whole pattern. Existing Windows worker fixtures
+now cover drive roots, bare UNC shares with/without slash, and mixed relative arms.
+
+Published Electron smoke receipts normalize the synthetic workspace prefix to
+`<workspace>` while assertions retain real absolute paths. The counter receipts
+already use repository-relative module paths and contain no author-local root.
+
+Hosted CI follow-up reused the narrowly scoped consumer-gate correction already
+present in PRs #278/#280: hold the exact recovery stream endpoint, then deliberately
+run unrelated progress before sending. Reverting only the exact endpoint to
+`/events` reproduces a progress-observer timeout in the simulator. The separate
+completed-upload failure remains unreproduced (unchanged full chat suite passed
+208/208 locally); per-mode assertion labels and failed-CI xcresult preservation
+provide diagnostic evidence without relaxing assertions or timeouts. Parent audit
+papercuts retain both original failing run attempts and the unresolved upload flake.
+
+Integrated origin/main 137ce6bd1 by ordinary merge after the parent verified the
+PR's pre-integration head 30b042b4 green. Only papercut append sections conflicted;
+kept both. Root script names/test chains retain both parents' entries, and the
+reused exact iOS stream gate remains alongside main's catalog/publication tests.
+The Remote revision is unchanged by this branch. Advisor drift coverage passes;
+a broader direct CLI extension invocation lacked its required built dist/app,
+so its process-launch failure is not runtime validation.
+
+Integration smoke revealed that sequential caller cancellations can fill retained
+cleanup slots under host load. The smoke now observes and joins original operation
+promises before each next sample and after the deadline sample; the production
+owner contract, caller timing, and process hard deadline are unchanged. Merged iOS
+chat XCTest passed 214/214 on the selected iOS 27 simulator.
+The observer retains late cleanup errors and asserts none; fault injection after
+real worker termination confirms cleanup quarantine fails the smoke even after
+caller cancellation has already settled.
+
+A later actual papercut conflict required merging main ea65d03c3 (workspace
+metadata PR #286 plus catalog refresh). Preserved both records and consolidated
+this lane's notes in an interior section to avoid repeated EOF append conflicts.
+Workspace recursive metadata/legacy identity batching keeps its separate FIFO
+four-inspection budget; foreground coding tools retain their independent four
+operation owners. Neither budget is a cap on all process filesystem syscalls.
+No Remote revision, native source, or foreground production code changed here.
+Independent Astra integration review confirmed no nested admission or shared release
+path between the budgets. Combined foreground/generation tests passed 56/56;
+workspace/Remote suites passed 43 with one existing platform skip after building
+the required native worktree-file-io test helper (initial ENOENT was a missing
+fixture prerequisite). Type-check, 47 CI-policy tests, and the joined Electron
+smoke with zero worker ports passed. Prior 214 iOS tests still cover unchanged
+native source; exact new-head hosted gates remain required.
