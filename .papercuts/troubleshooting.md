@@ -1,6 +1,5 @@
 # Troubleshooting
 
-- 2026-09-27 PR #280 Linux x64 E2E run: the workspace-bar persistence and Stop-after-revisiting specs flaked after relaunch / New Agent navigation. Sidebar clicks can overlap startup/index routing; gate the next action on a usable composer, the selected row, and the expected transcript or Stop control. The retry does not make the original failure acceptable; keep `--fail-on-flaky-tests` and avoid sleeps or repeat-click workarounds. [Run 36352666294](https://github.com/sambitcreate/aiden-agent/actions/runs/36352666294/job/108714196407).
 - 2026-09-25 transcript open-at-bottom: Hermex's `defaultScrollAnchor(.bottom, for: .initialOffset)` plus a size-change bottom anchor is the first-paint solution; `ScrollViewProxy.scrollTo` in `onAppear` is only a fallback after the destination is visible. Desktop long-chat follow should observe one content wrapper, not a subtree MutationObserver.
 - 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
 - 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
@@ -1405,11 +1404,3 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
-
-## 2026-09-27 Chat row states (feature/chat-row-states)
-- The worktree guard refuses `cat > file <<EOF` heredocs and some compound commands (a `$VAR` in an argument position, multi-statement pipelines). Use the Write/Edit tools or `python3 - <<'EOF'` scripts, and spell paths out literally.
-- A fresh workflow worktree has no `node_modules`; module resolution then climbs to a parent checkout on a different pi version and `tsc` reports dozens of unrelated errors. Run `npm ci --ignore-scripts --no-audit --no-fund` in the worktree first.
-- `xcrun simctl` fails when `xcode-select` points at CommandLineTools; prefix iOS runs with `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. Homebrew `openjdk@21` works as `JAVA_HOME` for `./gradlew` too.
-- Remote contract revision 16 was claimed while other wave PRs may also claim it; whichever merges second renumbers (see the revision-14 note above for the seven files).
-
-- 2026-09-27 PR recovery: a separate cleanup task removed clean worktrees during active repair. Lock recovery checkouts before editing; all remote branches survived. Tracked diffs were backed up under /tmp/aiden-recovery-*.patch and cleanup was stopped through task coordination.
