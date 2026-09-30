@@ -1404,9 +1404,3 @@ because their native file-mutator test binary had not been built. Run
 
 ## 2026-09-26 PR #121 merge of #251 (Remote contract revision 14)
 - A PR that adds to the Remote contract has to renumber when main bumps `contractRevision`. The conflicts show up in 7 files: both fixtures, the TS/iOS/Android fixture assertions and the iOS fixture CodingKeys. After resolving, `cmp` the Android copy against the shared fixture. Plan docs that name the revision also go stale.
-
-## 2026-09-27 queue while compacting
-- `renderer/components/composer.test.tsx` pins the exact `readOnly={sessionCommandBusy || firstSendPending}` and submission expressions with `assert.match`. Renaming the lock predicate breaks three unrelated tests. I updated the names in place without adding asserts, and put the behavioral coverage in the e2e specs. These greps should be replaced with a rendered-composer test.
-- The async `/compact` result can outlive the slash session, so consume the command token immediately and let only its completion handler report errors. Keep the queue hold as the authority and read it on each composer mount; component-local busy state resets when navigating between chats.
-- Render the compaction status and Cancel control from the queue-owned hold too. Restoring only the disabled/send state makes the remounted composer editable but leaves the user without progress feedback or a way to stop the operation.
-- Guard `/compact` admission with both a synchronous ref and the queue-owned active hold. Render state is still false during same-tick re-entry, while the ref is recreated false after chat navigation; without both checks, a second `busy` result can release the first operation's hold.
