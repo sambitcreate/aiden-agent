@@ -23,3 +23,11 @@ Existing test files extended (already registered in package scripts): remote upl
 Hosted verify caught the existing subagent deletion source-contract test matching the old one-line `if (releaseAdmission) finishDeletion()` literally. Updated it to assert the conditional block releases attachment admission followed by generation admission after the pending-tombstone check. No production behavior change was needed.
 
 Pullfrog found that the extra revoked-device Set would outlive the registry's 128-entry pruning. Removed that unnecessary set and its direct-call-after-revoke test. Production uploads are tracked by router authorization through completion; state revocation blocks acquisitions and drains mutations before cleanup. Sol re-review confirmed this resolution. Active service leases remain invalidated, bounded, and released on settlement.
+
+## iOS deferred upload revocation (2026-09-30)
+
+`AidenChatViewModel` keeps the credential revocation found by an attachment cleanup DELETE in one owned `uploadRevocationTask`.
+- Lifetime removal cleanup, which `AidenChatCache.purge` and `removeChat` join, may start that task but never awaits it. Awaiting it there would make the purge wait on itself.
+- `upload()` and `removeAttachment` join the task. When they return, the installation purge has finished and the coordinator reads `needsPairing`.
+- Previously the cleanup path detached an unobserved `Task`. Its purge leaked into later tests and made the upload revocation tests flaky in hosted CI (run 36295088605).
+- This is iOS client logic only. It changes no protocol, and Android needs no change.
