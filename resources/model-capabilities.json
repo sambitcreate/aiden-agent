@@ -72398,9 +72398,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.1941,
-          "output": 7.3625,
-          "cache_read": 0.4
+          "input": 0.19,
+          "output": 11,
+          "cache_read": 0.18
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -81402,9 +81402,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.14,
+          "input": 0.07,
           "output": 0.28,
-          "cache_read": 0.003
+          "cache_read": 0.002
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -109575,9 +109575,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.1941,
-          "output": 7.3625,
-          "cache_read": 0.4
+          "input": 0.19,
+          "output": 11,
+          "cache_read": 0.18
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -201417,8 +201417,7 @@
         "modalities": {
           "input": [
             "text",
-            "image",
-            "audio"
+            "image"
           ],
           "output": [
             "text"
@@ -201428,6 +201427,22 @@
         "limit": {
           "context": 1048576,
           "output": 1048576
+        },
+        "experimental": {
+          "modes": {
+            "priority": {
+              "cost": {
+                "input": 1,
+                "output": 4.05,
+                "cache_read": 0.17
+              },
+              "provider": {
+                "body": {
+                  "service_tier": "priority"
+                }
+              }
+            }
+          }
         },
         "cost": {
           "input": 1,
@@ -230335,8 +230350,8 @@
           "output": 81920
         },
         "cost": {
-          "input": 0.58,
-          "output": 1.68
+          "input": 0.27,
+          "output": 1.1
         },
         "canonical_model_id": "deepseek/deepseek-v3"
       },
@@ -230550,8 +230565,8 @@
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [],
-        "tool_call": false,
-        "structured_output": false,
+        "tool_call": true,
+        "structured_output": true,
         "temperature": true,
         "knowledge": "2024-07",
         "release_date": "2025-12-01",
@@ -230566,13 +230581,13 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 163840,
-          "output": 40960
+          "context": 128000,
+          "output": 32768
         },
         "cost": {
           "input": 0.28,
-          "output": 0.45,
-          "cache_read": 0.14
+          "output": 0.4,
+          "cache_read": 0.13
         },
         "canonical_model_id": "deepseek/deepseek-v3.2"
       },
@@ -233628,7 +233643,7 @@
         "attachment": false,
         "reasoning": false,
         "tool_call": true,
-        "structured_output": false,
+        "structured_output": true,
         "temperature": true,
         "release_date": "2025-07-21",
         "last_updated": "2025-07-21",
@@ -233648,7 +233663,7 @@
         "cost": {
           "input": 0.1,
           "output": 0.6,
-          "cache_read": 0.05
+          "cache_read": 0.0574
         },
         "canonical_model_id": "alibaba/qwen3-235b-a22b-instruct-2507"
       },
