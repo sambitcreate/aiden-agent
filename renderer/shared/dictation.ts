@@ -31,8 +31,15 @@ export interface DictationStatePayload {
   /** Human-readable detail for the "error" state. */
   message?: string;
   /** Why a completed transcript could not be pasted automatically. */
-  reason?: "accessibility-required" | "paste-unavailable";
+  reason?: DictationCopiedReason;
 }
+
+/**
+ * Why a finished transcript was left on the clipboard. "secure-input" means
+ * macOS Secure Event Input (a password field, a terminal's Secure Keyboard
+ * Entry) would have swallowed the synthetic paste keystroke.
+ */
+export type DictationCopiedReason = "accessibility-required" | "paste-unavailable" | "secure-input";
 
 export type DictationProgress = "finalizing" | "fallback-consent" | "fallback";
 

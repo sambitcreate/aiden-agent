@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An attachment upload whose cleanup finds the device revoked now finishes only after the installation data has been purged, even when chat removal started the revocation.
 - Tool calls whose arguments are still streaming now read "Preparing <tool>" in activity rows, matching Aiden Agent, instead of claiming the work already started.
 
 - Converted the imported SwiftUI foundation into the Aiden On The Go product identity and signed application shell.

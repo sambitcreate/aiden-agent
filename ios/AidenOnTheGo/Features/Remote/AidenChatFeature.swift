@@ -1134,6 +1134,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var uploadRevocation: (AidenRemoteClientError, AidenRemoteRequestContext)?
+    @ObservationIgnored private var uploadRevocationTask: Task<Void, Never>?
     @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
     private var attachmentPreparationID: UUID?
     var isPreparingAttachments: Bool { attachmentPreparationID != nil }
@@ -1177,6 +1178,9 @@ final class AidenChatViewModel {
     private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
     private(set) var isTaskProgressStale = false
     private(set) var isAgentRosterStale = false
+    /// Public agent IDs with a Stop request in flight, so repeated taps cannot
+    /// dispatch twice and the control can show progress.
+    private(set) var interruptingAgentIds: Set<String> = []
     var isProgressStale: Bool { isTaskProgressStale || isAgentRosterStale }
     var isProgressObservationRunning: Bool { progressTask != nil }
     var draft = "" {
@@ -1576,6 +1580,64 @@ final class AidenChatViewModel {
         return installation.hasNegotiatedAccess(to: .agentsRead)
     }
 
+    /// Stopping one delegated agent needs the Mac's chat-agent-interrupt-v1
+    /// feature, the negotiated agents:read grant, chat:write, and (for Bot
+    /// chats) the same Bot write access as stopping the whole run.
+    var canInterruptAgents: Bool {
+        guard !isReadOnlyPresentation, canReadAgentRoster,
+              coordinator.server?.supportsChatAgentInterrupt == true,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId,
+              installation.deviceCapabilities.contains(.chatWrite) else { return false }
+        return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+            && installation.hasNegotiatedAccess(to: .botWrite))
+    }
+
+    /// Only a still-running agent in the current turn can be stopped. Earlier
+    /// turns are history, and terminal agents have nothing left to stop.
+    func canInterrupt(_ agent: AidenRemoteChatAgent) -> Bool {
+        guard canInterruptAgents, !agent.state.isTerminal,
+              !interruptingAgentIds.contains(agent.agentId),
+              let current = agentRoster,
+              current.agents.contains(where: { $0.agentId == agent.agentId }) else { return false }
+        return true
+    }
+
+    /// Asks the Mac to stop one delegated agent and adopts the refreshed
+    /// roster it returns. Returns whether the Mac confirmed the request.
+    @discardableResult
+    func interruptAgent(_ agent: AidenRemoteChatAgent) async -> Bool {
+        guard canInterrupt(agent), !isRemoved,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return false }
+        let agentId = agent.agentId
+        interruptingAgentIds.insert(agentId)
+        defer { interruptingAgentIds.remove(agentId) }
+        do {
+            let roster = try await coordinator.remoteClient(for: context).interruptAgent(
+                chatId: chat.id,
+                agentId: agentId
+            )
+            guard !isRemoved, coordinator.isCurrent(context) else { return false }
+            acceptAgentRoster(roster)
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "agent-stop:\(agentId)")
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            guard !isRemoved, coordinator.isCurrent(context) else { return false }
+            if isProgressAccessDenied(error) {
+                presentedError = String(localized: "This device can no longer stop agents on this Mac.")
+            } else {
+                presentedError = String(localized: "Stop was not confirmed. Check the agent before trying again.")
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return false
+        }
+    }
+
     /// Progress projections are independently negotiated read-only data. A
     /// revoked or switched installation must never leave child state visible
     /// while the parent transcript is being purged or reloaded.
@@ -1666,6 +1728,13 @@ final class AidenChatViewModel {
         clearProgressStateForLostAccess()
         isTaskProgressStale = taskProgress != nil
         isAgentRosterStale = agentRoster != nil
+    }
+
+    /// Await the current progress observer, if any, without cancelling it or
+    /// starting a new one. A finished observer releases its own handle inside
+    /// its task body, so this returns only after that release has happened.
+    func waitForProgressObservation() async {
+        await progressTask?.value
     }
 
     private func loadProgressSnapshot(
@@ -2258,11 +2327,7 @@ final class AidenChatViewModel {
             task.cancel()
         }
         uploadTask = nil
-        let revocation = uploadRevocation
-        uploadRevocation = nil
-        if let (error, context) = revocation {
-            _ = await coordinator.handleCredentialRevocation(error, context: context)
-        }
+        await joinDeferredUploadRevocation()
         return failures
     }
 
@@ -2270,6 +2335,35 @@ final class AidenChatViewModel {
         guard let error = error as? AidenRemoteClientError, error.isCredentialRevoked else { return false }
         uploadRevocation = (error, context)
         return true
+    }
+
+    /// Starts the deferred revocation at most once. Whichever path claims it —
+    /// the upload/removal caller or a lifetime cleanup that purge joins — the
+    /// handling lives in one owned task, so the caller can await it without
+    /// the cleanup ever awaiting the purge that joins it.
+    @discardableResult
+    private func startDeferredUploadRevocation() -> Task<Void, Never>? {
+        if let (error, context) = uploadRevocation {
+            uploadRevocation = nil
+            let coordinator = coordinator
+            // A later revocation may arrive while an earlier purge is running;
+            // its coordinator call returns at once for the stale context, so
+            // the replacement must still finish only after the earlier purge.
+            let previous = uploadRevocationTask
+            uploadRevocationTask = Task {
+                await previous?.value
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+        return uploadRevocationTask
+    }
+
+    /// Callers outside lifetime cleanup finish only after revocation has been
+    /// handled, even when removal cleanup claimed it first.
+    private func joinDeferredUploadRevocation() async {
+        guard let revocation = startDeferredUploadRevocation() else { return }
+        await revocation.value
+        if uploadRevocationTask == revocation { uploadRevocationTask = nil }
     }
 
     private func performUpload(_ uploads: [AidenAttachmentUpload]) async -> Int {
@@ -2384,12 +2478,9 @@ final class AidenChatViewModel {
         for id in Set(ownedUploadReferences.keys).union(attachmentCleanupTasks.keys) {
             await cleanupOwnedAttachment(id)
         }
-        if let (error, context) = uploadRevocation {
-            uploadRevocation = nil
-            // Do not await a purge from the lifetime cleanup that purge joins.
-            let coordinator = coordinator
-            Task { _ = await coordinator.handleCredentialRevocation(error, context: context) }
-        }
+        // Do not await a purge from the lifetime cleanup that purge joins. The
+        // upload caller joins the owned task instead.
+        startDeferredUploadRevocation()
     }
 
     @discardableResult
@@ -2401,10 +2492,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isStarting, !isRemoved,
               pendingAttachments.contains(where: { $0.id == attachment.id }) else { return }
         await cleanupOwnedAttachment(attachment.id)
-        if let (error, context) = uploadRevocation {
-            uploadRevocation = nil
-            _ = await coordinator.handleCredentialRevocation(error, context: context)
-        }
+        await joinDeferredUploadRevocation()
     }
 
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
@@ -2850,7 +2938,11 @@ final class AidenChatViewModel {
         }
     }
 
-    func respondToApproval(_ decision: AidenApprovalDecision, approvalID: String) async {
+    func respondToApproval(
+        _ decision: AidenApprovalDecision,
+        approvalID: String,
+        scope: AidenApprovalScope = .once
+    ) async {
         guard !isReadOnlyPresentation, isConnected, !isRespondingToApproval, !isStopping,
               let approval = pendingApproval, approval.id == approvalID else { return }
         guard approval.expiresAt > Date() else {
@@ -2881,10 +2973,17 @@ final class AidenChatViewModel {
             await restorePendingApproval(streamID: streamID, context: context)
             return
         }
+        // Only a scope the Mac offered for this exact approval is ever sent.
+        let requestedScope: AidenApprovalScope? = decision == .allow && scope != .once
+            && approval.scopes.contains(scope) ? scope : nil
         pendingApproval = nil
         streamState = .running
         do {
-            let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
+            let response = try await coordinator.remoteClient(for: context).respondToApproval(
+                id: approval.id,
+                decision: decision,
+                scope: requestedScope
+            )
             guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
             guard response.approvalId == approval.id, response.decision == decision else {
@@ -6059,8 +6158,11 @@ private struct AidenLiveResponseView: View {
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
+                    scopes: approval.scopes,
                     onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
-                    onAllow: { Task { await model.respondToApproval(.allow, approvalID: approval.id) } }
+                    onAllow: { scope in
+                        Task { await model.respondToApproval(.allow, approvalID: approval.id, scope: scope) }
+                    }
                 )
                 .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
@@ -6125,8 +6227,11 @@ private struct AidenApprovalCard: View {
     let canRespond: Bool
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
+    let scopes: [AidenApprovalScope]
     let onDeny: () -> Void
-    let onAllow: () -> Void
+    let onAllow: (AidenApprovalScope) -> Void
+
+    private var broaderScopes: [AidenApprovalScope] { scopes.filter { $0 != .once } }
 
     private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
 
@@ -6234,8 +6339,26 @@ private struct AidenApprovalCard: View {
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
 
+                    if canAllow && !broaderScopes.isEmpty {
+                        Menu {
+                            ForEach(broaderScopes, id: \.self) { scope in
+                                Button(AidenApprovalPresentation.scopeTitle(scope)) { onAllow(scope) }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.foreground)
+                                .frame(width: 34, height: 34)
+                                .aidenApprovalActionGlass()
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 5)
+                        .accessibilityLabel("More allow options")
+                        .accessibilityHint("Remember this exact action for this chat or always")
+                    }
+
                     if canAllow {
-                        Button(action: onAllow) {
+                        Button { onAllow(.once) } label: {
                             Text(AidenApprovalPresentation.allowTitle(for: kind))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(palette.canvas)

@@ -3,6 +3,7 @@ import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js"
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
 import { AidenRemoteTlsEndpointError } from "../services/aiden-remote-tls-identity.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import {
   parseAidenRemoteConnectionMode,
   parseAidenRemoteScopedIdentifier,
@@ -58,7 +59,7 @@ export function registerAidenRemoteHandlers(): void {
 
   ipcMain.handle(
     "remote:respondApprovalFromHost",
-    async (event, chatId: unknown, approvalId: unknown, decision: unknown) => {
+    async (event, chatId: unknown, approvalId: unknown, decision: unknown, scope?: unknown) => {
       const owner = rendererDocumentOwner(
         event,
         () => new Error("Remote approvals require the active application document."),
@@ -66,12 +67,17 @@ export function registerAidenRemoteHandlers(): void {
       if (decision !== "allow" && decision !== "deny") {
         throw new Error("Invalid Aiden Remote approval decision.");
       }
+      const parsedScope = scope === undefined ? undefined : parseToolApprovalScope(scope);
+      if (scope !== undefined && (!parsedScope || decision !== "allow")) {
+        throw new Error("Invalid Aiden Remote approval scope.");
+      }
       const runtime = await getAidenRemoteRuntime();
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       const resolved = runtime.respondApprovalFromHost(
         parseAidenRemoteScopedIdentifier(chatId),
         parseAidenRemoteScopedIdentifier(approvalId),
         decision,
+        parsedScope,
       );
       if (!resolved) throw new Error("This approval is no longer available.");
       return { resolved: true };

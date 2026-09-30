@@ -461,7 +461,8 @@ test("compaction commands keep cancellation available for every engine", async (
     await composer.press("Enter");
     await expect(page.getByRole("status").filter({ hasText: status })).toBeVisible();
     await expect(cancel).toBeVisible();
-    await expect(composer).toHaveAttribute("readonly", "");
+    // Typing stays open during compaction; submissions queue behind it.
+    await expect(composer).toBeEditable();
     await cancel.click();
     await expect(cancel).toBeHidden();
     await expect(composer).toBeEditable();

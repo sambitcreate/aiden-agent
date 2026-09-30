@@ -35,6 +35,11 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  rememberableApprovalScopes,
+  toolApprovalScopeLabel,
+  type ToolApprovalScope,
+} from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ContextMeter } from "../components/context-meter";
@@ -1662,7 +1667,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (
       prompt: ApprovalPrompt,
       decision: "allow" | "deny",
-      options?: { formFillExcludedOrders?: number[] },
+      options?: { formFillExcludedOrders?: number[]; scope?: ToolApprovalScope },
     ) => {
       if (decidingApprovalRef.current) return;
       const decisionChatId = chatId;
@@ -1670,7 +1675,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setDecidingApprovalId(prompt.approvalId);
       try {
         if (prompt.source === "remote") {
-          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+          await aidenRemoteApi.respondApproval(
+            chatId,
+            prompt.approvalId,
+            decision,
+            decision === "allow" ? options?.scope : undefined,
+          );
         } else {
           await chatsApi.approve(prompt.approvalId, decision, options);
         }
@@ -2175,6 +2185,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setFormFillExcludedOrders([]);
   }, [pending?.approvalId]);
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  // Only plain workspace writes and shell commands can be remembered; the main
+  // process offers scopes solely for those, and specialized cards keep once.
+  const pendingRememberScopes =
+    pending && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+      ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
+      : [];
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2319,6 +2335,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         className="h-full min-h-0"
+        alignFooterToScrollContent
         title={
           bot.data ? (
             <span className="flex min-w-0 items-center gap-2">
@@ -2498,6 +2515,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       >
                         {pendingFormFill ? "Cancel" : "Deny"}
                       </Button>
+                      {pendingRememberScopes.map((scope) => (
+                        <Button
+                          key={scope}
+                          variant="transparent"
+                          size="small"
+                          disabled={decidingApprovalId === pending.approvalId}
+                          title={
+                            scope === "always"
+                              ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
+                              : "Remember this exact action in this chat until Aiden quits."
+                          }
+                          onClick={() => void decideApproval(pending, "allow", { scope })}
+                        >
+                          {toolApprovalScopeLabel(scope)}
+                        </Button>
+                      ))}
                       {pendingCanAllow ? (
                         <Button
                           variant="accent"
@@ -2602,6 +2635,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={draft ? undefined : steerMessage}
                 onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
+                compactionHeld={queuedState.holdReason === "compaction"}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
@@ -2688,9 +2722,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ? undefined
                     : async (engine) => {
                         const compactChatId = chatId;
+                        // Follow-ups typed during compaction queue behind it and
+                        // wait until it settles, even if the user leaves the chat.
+                        const compactQueue = chatMessageQueue(compactChatId);
+                        let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
+                        compactQueue.holdForCompaction();
                         setContextCompactPending(true);
                         try {
                           const result = await chatsApi.compact(compactChatId, engine);
+                          compactOutcome = result;
                           // The pane may now show another chat; its meter
                           // chrome belongs to that chat, not this compaction.
                           if (result.compacted && chatIdRef.current === compactChatId) {
@@ -2706,6 +2746,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                           return result;
                         } finally {
                           if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+                          if (compactQueue.releaseCompactionHold(compactOutcome)) {
+                            const count = compactQueue.getSnapshot().messages.length;
+                            toast.info(
+                              `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
+                            );
+                          }
                         }
                       }
                 }

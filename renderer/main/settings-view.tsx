@@ -23,6 +23,7 @@ import {
   TabletSmartphone,
   AudioWaveform,
   Volume2,
+  ShieldCheck,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -40,6 +41,7 @@ import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-s
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { SimulatorSettings } from "../components/settings/simulator-settings";
+import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import {
   availableSettingsDestinations,
   SETTINGS_DESTINATIONS,
@@ -70,6 +72,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   geminiLive: <AudioWaveform className="size-5" />,
+  approvals: <ShieldCheck className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
@@ -96,6 +99,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   remoteAccess: RemoteAccessSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
+  approvals: ToolApprovalSettings,
   computerUse: ComputerUseSettings,
   simulator: SimulatorSettings,
   memory: MemorySettings,
@@ -116,6 +120,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: "Pair your devices to use Aiden on the go.",
   websearch: "Choose how Aiden searches and reads the web.",
+  approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers and how long chats stay manageable.",
@@ -124,7 +129,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   voice: "Set up voice input, transcription, and dictation.",
   tts: "Read Aiden’s latest response aloud with Google Gemini.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
-  appearance: "Pick a theme and choose when Aiden uses its light or dark look.",
+  appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
   about: "App information, updates, and diagnostics.",
 };
 

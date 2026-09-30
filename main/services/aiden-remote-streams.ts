@@ -3,6 +3,10 @@ import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
+  parseToolApprovalScope,
+  type ToolApprovalScope,
+} from "../../renderer/shared/tool-approval-scope.js";
+import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
   isAssistantAutomationApprovalDetails,
@@ -83,6 +87,14 @@ export interface AidenRemoteStreamStatus {
   updatedAt: string;
 }
 
+export interface AidenRemoteApprovalResolution {
+  approvalId: string;
+  decision: "allow" | "deny";
+  /** Echoed only when the request chose a scope (contract revision 17). */
+  scope?: ToolApprovalScope;
+  resolvedAt: string;
+}
+
 export interface AidenRemotePendingApproval {
   approvalId: string;
   streamId: string;
@@ -92,6 +104,11 @@ export interface AidenRemotePendingApproval {
   toolName: string;
   expiresAt: string;
   canAllow: boolean;
+  /**
+   * Allow scopes this approval offers (contract revision 17). Present only
+   * when a broader-than-once scope is available; "once" is always implied.
+   */
+  scopes?: ToolApprovalScope[];
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
 }
@@ -161,6 +178,7 @@ interface ApprovalRecord {
   toolCallId: string;
   toolName: string;
   canAllow: boolean;
+  scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
@@ -214,6 +232,16 @@ function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
     || isSubagentShellApprovalDetails(value)
     || isSubagentRunGrantApprovalDetails(value)
     ? structuredClone(value)
+    : undefined;
+}
+
+/** Keep only known scopes, in canonical order, and only when broader than once. */
+function offeredScopes(value: unknown): ToolApprovalScope[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parsed = new Set(value.map(parseToolApprovalScope));
+  const scopes = (["once", "chat", "always"] as const).filter((scope) => parsed.has(scope));
+  return scopes.some((scope) => scope !== "once")
+    ? (["once", ...scopes.filter((scope) => scope !== "once")] as ToolApprovalScope[])
     : undefined;
 }
 
@@ -444,7 +472,12 @@ export class AidenRemoteStreamService {
     private readonly options: {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
-      approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
+      approve(
+        approvalId: string,
+        decision: "allow" | "deny",
+        ownerDocumentId: string,
+        scope?: ToolApprovalScope,
+      ): boolean;
       /**
        * Host-owned foreground admission (Remote Slice 2). When absent the
        * `/streams/{id}/inputs` route is unadvertised and returns not_found.
@@ -712,15 +745,26 @@ export class AidenRemoteStreamService {
       toolName: entry.toolName,
       expiresAt: new Date(entry.expiresAt).toISOString(),
       canAllow: entry.canAllow,
+      ...(entry.canAllow && entry.scopes ? { scopes: [...entry.scopes] } : {}),
       ...(entry.details ? { details: structuredClone(entry.details) } : {}),
     };
   }
 
-  private resolveApproval(approvalId: string, decision: "allow" | "deny"): boolean {
+  private resolveApproval(
+    approvalId: string,
+    decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
+  ): boolean {
     const approval = this.approvals.get(approvalId);
     if (!approval) return false;
     clearTimeout(approval.expiry);
-    const resolved = this.options.approve(approvalId, decision, approval.ownerDocumentId);
+    const effectiveScope =
+      decision === "allow" && scope && scope !== "once" && approval.scopes?.includes(scope)
+        ? scope
+        : undefined;
+    const resolved = effectiveScope
+      ? this.options.approve(approvalId, decision, approval.ownerDocumentId, effectiveScope)
+      : this.options.approve(approvalId, decision, approval.ownerDocumentId);
     this.approvals.delete(approvalId);
     const stream = this.streams.get(approval.streamId);
     const nextApproval = stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
@@ -1032,6 +1076,7 @@ export class AidenRemoteStreamService {
       const toolName = boundedText(payload.toolName, 120) || "Tool";
       const details = approvalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
+      const scopes = offeredScopes(payload.scopes);
       const expiresAt = this.options.now() + APPROVAL_LIFETIME_MS;
       const expiry = setTimeout(() => {
         const current = this.approvals.get(approvalId);
@@ -1048,6 +1093,7 @@ export class AidenRemoteStreamService {
         toolCallId,
         toolName,
         canAllow: !claimsStructuredDetails || details !== undefined,
+        ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
         expiresAt,
         expiry,
@@ -1304,10 +1350,12 @@ export class AidenRemoteStreamService {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
     if (!approval) return null;
-    const { details: _hostOnly, ...mobile } = approval;
+    const { details: _hostOnly, scopes, ...mobile } = approval;
+    const canAllow = approvalIsHostOnly(approval.details) ? false : approval.canAllow;
     return {
       ...mobile,
-      canAllow: approvalIsHostOnly(approval.details) ? false : approval.canAllow,
+      canAllow,
+      ...(canAllow && scopes ? { scopes } : {}),
     };
   }
 
@@ -1460,13 +1508,14 @@ export class AidenRemoteStreamService {
     chatId: string,
     approvalId: string,
     decision: "allow" | "deny",
+    scope?: ToolApprovalScope,
   ): boolean {
     this.prune();
     const approval = this.approvals.get(approvalId);
     if (!approval || approval.chatId !== chatId || approval.expiresAt <= this.options.now()) {
       return false;
     }
-    return this.resolveApproval(approvalId, decision);
+    return this.resolveApproval(approvalId, decision, scope);
   }
 
   async cancel(deviceId: string, streamId: string, key: string): Promise<AidenRemoteStreamStatus> {
@@ -1668,13 +1717,14 @@ export class AidenRemoteStreamService {
     key: string,
     runAccess: (
       chatId: string,
-      action: () => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
-    ) => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
-  ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
+      action: () => Promise<AidenRemoteApprovalResolution>,
+    ) => Promise<AidenRemoteApprovalResolution>,
+    scope?: ToolApprovalScope,
+  ): Promise<AidenRemoteApprovalResolution> {
     try {
       return await this.executeIdempotent(
         { deviceId, route: "POST /approvals/{id}/respond", resourceId: approvalId, key },
-        { approvalId, decision },
+        scope ? { approvalId, decision, scope } : { approvalId, decision },
         async () => {
           this.prune();
           const approval = this.approvals.get(approvalId);
@@ -1688,11 +1738,23 @@ export class AidenRemoteStreamService {
               403,
             );
           }
+          if (scope && scope !== "once" && !approval.scopes?.includes(scope)) {
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "This approval cannot be remembered with that scope.",
+              400,
+            );
+          }
           return runAccess(approval.chatId, async () => {
-            if (!this.resolveApproval(approvalId, decision)) {
+            if (!this.resolveApproval(approvalId, decision, scope)) {
               throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
             }
-            return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+            return {
+              approvalId,
+              decision,
+              ...(scope ? { scope } : {}),
+              resolvedAt: new Date(this.options.now()).toISOString(),
+            };
           });
         },
       );

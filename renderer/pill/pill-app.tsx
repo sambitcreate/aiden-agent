@@ -5,7 +5,8 @@
 // it on the clipboard.
 
 import * as React from "react";
-import { Check, ClipboardCopy, Loader2, X } from "lucide-react";
+import { Check, Loader2, X } from "lucide-react";
+import { PillCopiedNotice, type PillCopiedNoticeProps } from "./pill-copied-notice";
 import { dictationApi, onNotification, settingsApi } from "../lib/ipc";
 import type { DictationStatePayload } from "../shared/dictation";
 import {
@@ -70,7 +71,7 @@ export function PillApp() {
   const [phase, setPhase] = React.useState<Phase>("idle");
   const [errorMessage, setErrorMessage] = React.useState("");
   const [recordingHint, setRecordingHint] = React.useState("");
-  const [copiedMessage, setCopiedMessage] = React.useState("Copied to clipboard");
+  const [copiedNotice, setCopiedNotice] = React.useState<PillCopiedNoticeProps>({});
   const [elapsed, setElapsed] = React.useState(0);
   const [liveTranscript, setLiveTranscript] = React.useState<LiveTranscriptSnapshot>({
     committed: "",
@@ -419,12 +420,7 @@ export function PillApp() {
           break;
         case "copied":
           if (soundsEnabledRef.current) void playDictationCue("success");
-          setCopiedMessage(
-            payload.message ??
-              (payload.reason === "accessibility-required"
-                ? "Copied — allow Accessibility to paste"
-                : "Copied to clipboard"),
-          );
+          setCopiedNotice({ reason: payload.reason, message: payload.message });
           setPhase("copied");
           break;
         case "error":
@@ -573,10 +569,7 @@ export function PillApp() {
               <span className="text-small-strong">Pasted</span>
             </>
           ) : phase === "copied" ? (
-            <>
-              <ClipboardCopy className="size-4 text-secondary" />
-              <span className="max-w-52 text-small-strong leading-tight">{copiedMessage}</span>
-            </>
+            <PillCopiedNotice {...copiedNotice} />
           ) : (
             <span className="max-w-60 text-mini leading-tight text-support-red">
               {errorMessage}

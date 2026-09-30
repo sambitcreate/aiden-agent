@@ -321,11 +321,17 @@ private fun AidenAttachmentImage(
     var failed by remember(attachment.id, maximumPixelSize) { mutableStateOf(false) }
 
     LaunchedEffect(attachment.id, maximumPixelSize, attempt) {
-        bitmap = null
-        failed = false
-        val bytes = loadData(attachment)
-        val decoded = bytes?.let { AidenAttachmentBitmapCache.decode(it, maximumPixelSize) }
-        if (decoded == null) failed = true else bitmap = decoded
+        // Pin the state writes to the UI thread. Loading and decoding hop to background
+        // dispatchers, and an effect dispatcher that does not dispatch (the Compose test
+        // rule's unconfined dispatcher) would otherwise resume here on a decode worker and
+        // drive recomposition and layout off the main thread, racing the UI thread's draw.
+        withContext(Dispatchers.Main.immediate) {
+            bitmap = null
+            failed = false
+            val bytes = loadData(attachment)
+            val decoded = bytes?.let { AidenAttachmentBitmapCache.decode(it, maximumPixelSize) }
+            if (decoded == null) failed = true else bitmap = decoded
+        }
     }
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -385,7 +391,9 @@ private fun AidenAttachmentGallery(
     fun performSave(requested: List<AidenMessageAttachment>) {
         if (saving || requested.isEmpty()) return
         saving = true
-        scope.launch {
+        // Resume on the UI thread after the IO hop: `saving` and the Toast must not be
+        // touched from an IO worker whatever the host coroutine dispatcher is.
+        scope.launch(Dispatchers.Main.immediate) {
             val loaded = requested.map { attachment ->
                 val bytes = loadData(attachment) ?: return@map null
                 attachment to bytes

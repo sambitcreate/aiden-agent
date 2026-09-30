@@ -90,6 +90,7 @@ import {
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
+import { claimCompactionCommand } from "../lib/compaction-command-admission";
 import {
   loadComposerDraft,
   markComposerSubmission,
@@ -149,6 +150,8 @@ interface ComposerProps {
   onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
+  /** Queue-owned compaction hold, retained across Composer remounts. */
+  compactionHeld?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -309,6 +312,7 @@ export function Composer({
   onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
+  compactionHeld = false,
   isGenerating,
   canStopGeneration = isGenerating,
   stoppingGeneration = false,
@@ -497,6 +501,11 @@ export function Composer({
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
   const [compactionBusy, setCompactionBusy] = React.useState(false);
+  const compactionActive = compactionBusy || compactionHeld;
+  // Manual compaction keeps the draft editable when the chat can queue:
+  // submissions wait behind compaction instead of locking the composer.
+  const queueDuringCompaction = compactionActive && Boolean(onQueue);
+  const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
   const [composing, setComposing] = React.useState(false);
@@ -533,7 +542,7 @@ export function Composer({
     }) &&
     !configurationBusy &&
     !firstMessageSaving &&
-    !sessionCommandBusy &&
+    !composerInputLocked &&
     !(isGenerating && stoppingGeneration);
   const settings = useSettings();
   // Read at transcript time so dictionary edits apply to an in-flight recording.
@@ -784,8 +793,12 @@ export function Composer({
 
   const compactChat = React.useCallback(
     async (engine?: CompactionEngine) => {
-      if (!onCompactChat || sessionCommandBusy) return;
-      sessionCommandBusyRef.current = true;
+      if (
+        !onCompactChat ||
+        !claimCompactionCommand(sessionCommandBusyRef, sessionCommandBusy, compactionActive)
+      ) {
+        return;
+      }
       setCompactionBusy(true);
       setSessionCommandStatus(
         engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
@@ -821,7 +834,7 @@ export function Composer({
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
-    [inputRef, onCompactChat, sessionCommandBusy],
+    [compactionActive, inputRef, onCompactChat, sessionCommandBusy],
   );
 
   const createWorktreeFromSlash = React.useCallback(
@@ -901,6 +914,7 @@ export function Composer({
       visualize?: boolean;
       btw?: boolean;
       mode?: "steer" | "queue" | "redirect";
+      afterCompaction?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -940,7 +954,10 @@ export function Composer({
           if (!onQueue) throw new Error("Queue is unavailable for this response.");
           submit = onQueue;
         } else {
-          submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+          submit =
+            onQueue && (isGenerating || hasQueuedMessages || payload.afterCompaction) && !payload.btw
+              ? onQueue
+              : onSend;
         }
         await submit(
           payload.sendText,
@@ -951,7 +968,13 @@ export function Composer({
             : undefined,
         );
         if (payload.mode === "steer") toast.info("Guidance queued. Aiden will read it at the next step.");
-        if (payload.mode === "queue") toast.info("Follow-up queued. It will run after the current response.");
+        if (payload.mode === "queue") {
+          toast.info(
+            payload.afterCompaction
+              ? "Follow-up queued. It will send after compaction finishes."
+              : "Follow-up queued. It will run after the current response.",
+          );
+        }
         if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
         settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
@@ -1116,6 +1139,35 @@ export function Composer({
         },
       });
       const asyncAction = attempted.kind === "async";
+      const compactAction =
+        result.command.action.kind === "session" && result.command.action.action === "compact";
+      if (asyncAction && compactAction) {
+        // Start the compaction under the queue hold, then consume the command
+        // token immediately so the editable composer can accept follow-ups.
+        // The async result only owns its completion feedback, not this draft.
+        setText(nextText);
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(nextCaret, nextCaret);
+          setSelection({ start: nextCaret, end: nextCaret });
+        });
+        void attempted.completion.then((attempt) => {
+          if (attempt.error) {
+            toast.error(
+              attempt.error instanceof Error
+                ? attempt.error.message
+                : "That command could not be completed.",
+            );
+          } else if (!attempt.handled) {
+            toast.info("That app action is unavailable right now.");
+          }
+        });
+        return;
+      }
       if (asyncAction) slashActionPendingRef.current = true;
       const attempt = asyncAction ? await attempted.completion : attempted;
       if (asyncAction) slashActionPendingRef.current = false;
@@ -1470,7 +1522,11 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
-    const mode = isGenerating ? busyMode : hasQueuedMessages ? "queue" : undefined;
+    const mode = isGenerating
+      ? busyMode
+      : hasQueuedMessages || queueDuringCompaction
+        ? "queue"
+        : undefined;
     if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
       toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
       return;
@@ -1503,6 +1559,7 @@ export function Composer({
         selectedSkill,
         skillRevision: skillSelection.revision,
         mode,
+        afterCompaction: !isGenerating && queueDuringCompaction,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -1831,7 +1888,7 @@ export function Composer({
                   </span>
                   <button
                     type="button"
-                    disabled={sessionCommandBusy}
+                    disabled={composerInputLocked}
                     onClick={() => {
                       dispatchSkillSelection({ type: "remove" });
                       requestAnimationFrame(() =>
@@ -1870,7 +1927,7 @@ export function Composer({
                     <span className="max-w-[10rem] truncate text-small">{a.name}</span>
                     <button
                       type="button"
-                      disabled={sessionCommandBusy}
+                      disabled={composerInputLocked}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
                       className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
@@ -1884,8 +1941,8 @@ export function Composer({
             <Textarea
               ref={inputRef}
               value={text}
-              readOnly={sessionCommandBusy || firstSendPending}
-              aria-busy={sessionCommandBusy || firstSendPending || undefined}
+              readOnly={composerInputLocked || firstSendPending}
+              aria-busy={composerInputLocked || firstSendPending || undefined}
               onChange={(event) => {
                 if (firstSendPendingRef.current) return;
                 setText(event.target.value);
@@ -1931,12 +1988,13 @@ export function Composer({
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
-            {sessionCommandStatus ? (
+            {sessionCommandStatus || compactionActive ? (
               <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
                 <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
-                  {sessionCommandStatus}
+                  {sessionCommandStatus ?? "Compacting chat…"}
+                  {queueDuringCompaction ? " Messages you send now wait until it finishes." : null}
                 </Text>
-                {compactionBusy && onCancelCompact ? (
+                {compactionActive && onCancelCompact ? (
                   <Button
                     type="button"
                     variant="transparent"
@@ -1970,7 +2028,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -2179,7 +2237,7 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || composerInputLocked}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -2234,9 +2292,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
+                    aria-label={hasQueuedMessages || queueDuringCompaction ? "Queue message" : "Send message"}
                   >
-                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
+                    {hasQueuedMessages || queueDuringCompaction ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>

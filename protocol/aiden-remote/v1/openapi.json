@@ -959,6 +959,43 @@
         }
       }
     },
+    "/chats/{chatId}/agents/{agentId}/interrupt": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "interruptChatAgent",
+        "description": "Stop one running delegated agent in the chat's active turn through the Mac's own subagent stop path, then return the refreshed current-turn roster. Available only when /server.features advertises chat-agent-interrupt-v1. Requires chat:write plus the negotiated agents:read grant; retained Bot chats additionally require bot:write. The agent is addressed only by its public agentId. An already-finished or abandoned agent is an idempotent no-op that returns the roster; an unknown agentId returns not_found; a running agent whose Mac-side control is no longer available (for example a legacy run) returns operation_stale. The request has no body.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-capabilities": ["chat:write", "agents:read"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/AgentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed current-turn chat agent roster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAgentRoster"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/skills": {
       "parameters": [
         {
@@ -2064,6 +2101,22 @@
                       "allow",
                       "deny"
                     ]
+                  },
+                  "scope": {
+                    "$ref": "#/components/schemas/ToolApprovalScope",
+                    "description": "Contract revision 17. Optional and valid only with decision allow. once (the default) authorizes this call only; chat and always remember the exact same tool and normalized target for this chat or, until revoked on the desktop, for this workspace. The scope must be one listed in PendingApproval.scopes, otherwise the request is invalid_request."
+                  }
+                },
+                "if": {
+                  "required": [
+                    "scope"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "decision": {
+                      "const": "allow"
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -2092,6 +2145,10 @@
                         "allow",
                         "deny"
                       ]
+                    },
+                    "scope": {
+                      "$ref": "#/components/schemas/ToolApprovalScope",
+                      "description": "Echoed only when the request carried a scope."
                     },
                     "resolvedAt": {
                       "type": "string",
@@ -4147,6 +4204,18 @@
         "in": "query",
         "required": false,
         "description": "Opaque public turn identity. Omit to read the active or most recent public turn.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      },
+      "AgentId": {
+        "name": "agentId",
+        "in": "path",
+        "required": true,
+        "description": "Projection-minted public agent identity from a ChatAgentRoster.",
         "schema": {
           "type": "string",
           "minLength": 1,
@@ -7447,6 +7516,14 @@
         },
         "additionalProperties": false
       },
+      "ToolApprovalScope": {
+        "type": "string",
+        "enum": [
+          "once",
+          "chat",
+          "always"
+        ]
+      },
       "PendingApproval": {
         "type": "object",
         "required": [
@@ -7485,6 +7562,14 @@
           "canAllow": {
             "type": "boolean",
             "description": "False when exact privileged details are intentionally host-only or the device lacks a capability required to allow this mutation; mobile clients must offer Deny only."
+          },
+          "scopes": {
+            "type": "array",
+            "description": "Contract revision 17. Allow scopes this approval offers, always starting with once. Omitted when only a one-time allow is possible or canAllow is false; older clients that ignore it keep allowing once.",
+            "minItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/ToolApprovalScope"
+            }
           }
         },
         "additionalProperties": false

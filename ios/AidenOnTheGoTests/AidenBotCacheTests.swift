@@ -224,6 +224,26 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertEqual(canonical.first?.botId, "bot_fixture_01")
     }
 
+    func testBotChatDeepLinkOpensTheSameCanonicalChatAsBotsHome() throws {
+        let conversations = try duplicateConversationPageForFixtureBot().conversations
+
+        XCTAssertEqual(
+            aidenResolvedBotDeepLink(botID: "bot_fixture_01", conversations: conversations),
+            .openChat("chat_bot_fixture_02")
+        )
+        XCTAssertEqual(
+            aidenResolvedBotDeepLink(botID: "bot_fixture_01", conversations: conversations.reversed()),
+            .openChat("chat_bot_fixture_02")
+        )
+        // Another Bot's chat never satisfies the link, and an empty result
+        // lands on the Bot instead of creating a conversation.
+        XCTAssertEqual(
+            aidenResolvedBotDeepLink(botID: "bot_other", conversations: conversations),
+            .showBot
+        )
+        XCTAssertEqual(aidenResolvedBotDeepLink(botID: "bot_fixture_01", conversations: []), .showBot)
+    }
+
     func testBotCachePurgesOnlySelectedInstallationAndInvalidatesItsActivation() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-cache-purge-\(UUID().uuidString)", directoryHint: .isDirectory)

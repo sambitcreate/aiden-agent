@@ -840,6 +840,26 @@ fun aidenBotFavoriteOrder(
     return result
 }
 
+sealed class AidenBotDeepLinkResolution {
+    /** Open this Bot's canonical conversation. */
+    data class OpenChat(val chatId: String) : AidenBotDeepLinkResolution()
+    /** The Bot has no conversation yet; land on the Bot without creating one. */
+    object ShowBot : AidenBotDeepLinkResolution()
+}
+
+/**
+ * Chooses the chat an `aiden-otg://bot/{id}/chat` link opens. Items owned by another Bot are
+ * ignored, and duplicates use the same canonical rule as Bots Home so a link and a tap agree.
+ */
+fun aidenResolvedBotDeepLink(
+    botId: String,
+    conversations: List<AidenBotConversationItem>
+): AidenBotDeepLinkResolution {
+    val chat = aidenCanonicalBotConversations(conversations.filter { it.botId == botId }).firstOrNull()
+        ?: return AidenBotDeepLinkResolution.ShowBot
+    return AidenBotDeepLinkResolution.OpenChat(chat.chatId)
+}
+
 fun aidenCanonicalBotConversations(
     conversations: List<AidenBotConversationItem>
 ): List<AidenBotConversationItem> {

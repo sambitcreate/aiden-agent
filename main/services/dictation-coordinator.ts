@@ -40,6 +40,7 @@ export interface DictationCoordinatorDeps {
 
 const RESULT_HIDE_DELAY_MS = 1_200;
 const ERROR_HIDE_DELAY_MS = 2_000;
+export const WARNING_HIDE_DELAY_MS = 4_000;
 const MAX_TRANSCRIPT_LENGTH = 100_000;
 export const HOLD_RELEASE_GRACE_MS = 50;
 // Cloud renderers fail within 45 seconds. Parakeet owns a 120-second process
@@ -465,15 +466,19 @@ export class DictationCoordinator {
         }
         const pasteResult = await this.deps.paste(transcript);
         const outcome = typeof pasteResult === "string" ? pasteResult : pasteResult.outcome;
+        const reason = typeof pasteResult === "string" ? undefined : pasteResult.reason;
         this.stage = "idle";
         this.operationId = null;
         this.deps.broadcast({
           state: outcome,
           operationId,
-          reason: typeof pasteResult === "string" ? undefined : pasteResult.reason,
+          reason,
           message: typeof pasteResult === "string" ? undefined : pasteResult.message,
         });
-        this.scheduleHide(RESULT_HIDE_DELAY_MS);
+        // A Secure Input warning explains a manual next step; keep it readable.
+        this.scheduleHide(
+          reason === "secure-input" ? WARNING_HIDE_DELAY_MS : RESULT_HIDE_DELAY_MS,
+        );
       } catch (error) {
         this.stage = "idle";
         this.operationId = null;

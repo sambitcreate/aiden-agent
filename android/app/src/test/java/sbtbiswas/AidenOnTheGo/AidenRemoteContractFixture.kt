@@ -211,6 +211,13 @@ data class AidenQuestionFixture(
     val respondResponse: JsonObject
 )
 
+/** Revision 16: one child stop and the refreshed current-turn roster. */
+@Serializable
+data class AidenAgentInterruptFixture(
+    val agentId: String,
+    val response: AidenChatAgentRoster
+)
+
 @Serializable
 data class AidenRemoteContractFixture(
     val contractRevision: Int,
@@ -251,6 +258,7 @@ data class AidenRemoteContractFixture(
     val botAvatarMetadata: AidenBotAvatarAsset,
     val taskProgress: AidenChatTaskProgress? = null,
     val agentRoster: AidenChatAgentRoster? = null,
+    val agentInterrupt: AidenAgentInterruptFixture? = null,
     val deviceCapabilitiesUpdate: AidenDeviceCapabilitiesUpdateFixture? = null,
     val chatProgressEvents: List<AidenRemoteStreamEvent> = emptyList(),
     val streamInput: AidenStreamInputFixture? = null,

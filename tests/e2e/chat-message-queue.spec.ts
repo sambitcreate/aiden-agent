@@ -569,3 +569,122 @@ test("Stop clears queued image and text follow-ups without sending them", async 
   );
   expect(queued).toHaveLength(0);
 });
+
+test("messages sent during compaction queue behind it and survive a failed compaction", async ({
+  aiden,
+}) => {
+  const { app, page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  await composer.fill("Create a chat before compaction queue testing.");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
+  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+
+  // Hold compaction open so the queue can be driven while it runs.
+  await app.evaluate(({ ipcMain }) => {
+    const state = { finish: (_result: unknown) => {}, starts: 0, active: false };
+    Object.assign(globalThis, { compactionQueueTest: state });
+    ipcMain.removeHandler("chats:compact");
+    ipcMain.handle(
+      "chats:compact",
+      () => {
+        state.starts += 1;
+        if (state.active) return { compacted: false, reason: "busy" };
+        state.active = true;
+        return new Promise((resolve) => {
+          state.finish = (result) => {
+            state.active = false;
+            resolve(result);
+          };
+        });
+      },
+    );
+  });
+  const finishCompaction = (result: unknown) =>
+    app.evaluate((_electron, value) => {
+      (
+        globalThis as unknown as { compactionQueueTest: { finish: (result: unknown) => void } }
+      ).compactionQueueTest.finish(value);
+    }, result);
+  const compactionStarts = () =>
+    app.evaluate(() => (globalThis as unknown as { compactionQueueTest: { starts: number } }).compactionQueueTest.starts);
+  const startCompaction = async () => {
+    await composer.fill("/compact");
+    await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
+    await composer.press("Enter");
+    await expect(page.getByRole("status").filter({ hasText: "Compacting chat…" })).toBeVisible();
+    await expect(composer).toHaveValue("");
+  };
+  const sentTexts = () =>
+    lmStudio.requests
+      .map((request) => lastUserText(request))
+      .filter((text) => text?.startsWith("During compaction"));
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+
+  // A failed compaction keeps the queued message and pauses delivery.
+  await startCompaction();
+  await expect.poll(compactionStarts).toBe(1);
+  // Draft editing includes removing attachments while the local compaction
+  // command is still pending, before a remount clears its local busy state.
+  const image = (
+    await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
+  ).toString("base64");
+  await composer.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  }, image);
+  const removeAttachment = page.getByRole("button", { name: "Remove Pasted image.png", exact: true });
+  await expect(removeAttachment).toBeEnabled();
+  await removeAttachment.click();
+  await expect(removeAttachment).toBeHidden();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await page
+    .locator("[data-sidebar]")
+    .getByRole("button", { name: /^Deterministic E2E response/u })
+    .click();
+  await expect(page.getByRole("status").filter({ hasText: "Compacting chat…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+  await expect(composer).toBeEditable();
+  await composer.fill("During compaction retry");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await expect(queue.getByRole("status")).toHaveText("1 queued · Sends after compaction");
+  // The new Composer has no local busy ref; its queue-owned hold must still
+  // block another `/compact`, which could otherwise return `busy` and release
+  // the first operation's hold.
+  await composer.fill("/compact");
+  await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await expect.poll(compactionStarts).toBe(1);
+  await expect(queue.getByRole("status")).toHaveText("1 queued · Sends after compaction");
+  expect(sentTexts()).toEqual([]);
+  await finishCompaction({ compacted: false, reason: "compaction_failed" });
+  await expect(queue.getByRole("status")).toHaveText("1 queued · Paused");
+  await expect(queue.getByRole("listitem")).toContainText("During compaction retry");
+  expect(sentTexts()).toEqual([]);
+  await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
+  await expect.poll(sentTexts).toEqual(["During compaction retry"]);
+  await expect(queue).toBeHidden();
+  await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(4);
+  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+
+  // A completed compaction releases every queued message in order.
+  await startCompaction();
+  await expect.poll(compactionStarts).toBe(2);
+  await composer.fill("During compaction first");
+  await composer.press("Enter");
+  await composer.fill("During compaction second");
+  await page.getByRole("button", { name: "Queue message", exact: true }).click();
+  await expect(queue.getByRole("listitem")).toHaveCount(2);
+  expect(sentTexts()).toEqual(["During compaction retry"]);
+  await finishCompaction({ compacted: true, engine: "llm" });
+  await expect
+    .poll(sentTexts)
+    .toEqual(["During compaction retry", "During compaction first", "During compaction second"]);
+  await expect(queue).toBeHidden();
+});

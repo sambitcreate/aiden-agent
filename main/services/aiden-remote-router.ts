@@ -3,6 +3,10 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import {
+  parseToolApprovalScope,
+  type ToolApprovalScope,
+} from "../../renderer/shared/tool-approval-scope.js";
+import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
@@ -16,6 +20,7 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
+  AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE,
   AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
@@ -144,6 +149,19 @@ export interface AidenRemoteRouterDependencies {
       turnId?: string,
     ): Promise<AidenRemoteChatAgentRoster>;
     /**
+     * Stop one running delegated agent addressed by its public `agentId`
+     * through the main-owned subagent control path and return the refreshed
+     * current-turn roster. Absent (or `supportsAgentInterrupt === false`)
+     * when the host does not wire subagent control; the route then returns
+     * `not_found` and `/server` omits `chat-agent-interrupt-v1`.
+     */
+    interruptAgent?(
+      deviceId: string,
+      chatId: string,
+      agentId: string,
+    ): Promise<AidenRemoteChatAgentRoster>;
+    readonly supportsAgentInterrupt?: boolean;
+    /**
      * Opens the resumable chat-scoped progress journal whose `streamId` is
      * the chat ID. The implementation must emit `task_update` events only
      * when `grants` contains `tasks:read` and `agents_update` events only
@@ -268,6 +286,7 @@ export type AidenRemoteRouteLabel =
   | "chatMove"
   | "chatTasks"
   | "chatAgents"
+  | "chatAgentInterrupt"
   | "chatSkills"
   | "chatProgressEvents"
   | "chatAttachment"
@@ -331,6 +350,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatMove: ["/chats/:id/move"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
+  chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
   chatSkills: ["/chats/:id/skills"],
   chatProgressEvents: ["/chats/:id/progress/events"],
   chatAttachment: [
@@ -956,18 +976,25 @@ function streamAfter(request: IncomingMessage, query: string): number {
   return parsed;
 }
 
-function approvalDecision(value: unknown): "allow" | "deny" {
+function approvalDecision(value: unknown): {
+  decision: "allow" | "deny";
+  scope?: ToolApprovalScope;
+} {
   const record = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+  const keys = record ? Object.keys(record) : [];
+  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
-    Object.keys(record).length !== 1 ||
-    (record.decision !== "allow" && record.decision !== "deny")
+    keys.some((key) => key !== "decision" && key !== "scope") ||
+    (record.decision !== "allow" && record.decision !== "deny") ||
+    // A scope is optional, must be known, and only widens an allow.
+    ("scope" in record && (!scope || record.decision !== "allow"))
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The approval response is invalid.", 400);
   }
-  return record.decision;
+  return scope ? { decision: record.decision, scope } : { decision: record.decision };
 }
 
 function requiredHeader(
@@ -1075,6 +1102,14 @@ function progressCapabilitySupported(
   return capability === "tasks:read"
     ? Boolean(dependencies.chatProgress.taskSnapshot)
     : Boolean(dependencies.chatProgress.agentRoster);
+}
+
+function agentInterruptSupported(dependencies: AidenRemoteRouterDependencies): boolean {
+  return (
+    progressCapabilitySupported(dependencies, "agents:read") &&
+    typeof dependencies.chatProgress?.interruptAgent === "function" &&
+    dependencies.chatProgress.supportsAgentInterrupt !== false
+  );
 }
 
 function advertisedServerCapabilities(
@@ -1302,6 +1337,9 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(progressCapabilitySupported(dependencies, "agents:read")
               ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE]
+              : []),
+            ...(agentInterruptSupported(dependencies)
+              ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE]
               : []),
             ...(dependencies.streams?.supportsRunInput?.() === true
               ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE]
@@ -2485,6 +2523,29 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const chatAgentInterruptMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/agents\/([A-Za-z0-9._:-]{1,128})\/interrupt$/u.exec(path);
+      if (chatAgentInterruptMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatAgentInterrupt";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chatProgress = dependencies.chatProgress;
+        if (!dependencies.chats || !chatProgress?.interruptAgent || !agentInterruptSupported(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // Targeting an agent requires being able to see it: the stop is
+        // gated on the same negotiated read grant as the roster.
+        requireNegotiatedProgressCapability(device, "agents:read");
+        const [, chatId, agentId] = chatAgentInterruptMatch;
+        writeJson(
+          response,
+          200,
+          await runChatMutation(dependencies.chats, device, chatId!, "chat", () =>
+            chatProgress.interruptAgent!(device.id, chatId!, agentId!)),
+        );
+        return;
+      }
       const chatSkillsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/skills$/u.exec(path);
       if (chatSkillsMatch && request.method === "GET") {
         requireNoQuery(query);
@@ -2786,7 +2847,7 @@ export function createAidenRemoteRequestHandler(
         requireNoQuery(query);
         route = "approvalRespond";
         const body = await readJsonBody(request);
-        const decision = approvalDecision(body);
+        const { decision, scope } = approvalDecision(body);
         const device = await authenticate(request, dependencies.devices, "approval:respond");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
@@ -2811,6 +2872,7 @@ export function createAidenRemoteRequestHandler(
                 }
                 return action();
               }),
+            scope,
           ),
         );
         return;
