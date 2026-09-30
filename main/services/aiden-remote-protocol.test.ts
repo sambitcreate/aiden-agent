@@ -99,7 +99,7 @@ const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 16);
+  assert.equal(fixture.contractRevision, 17);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -1637,6 +1637,32 @@ test("produced-file OpenAPI constraints agree with runtime path and provenance v
   assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
   assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
   assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
+});
+
+test("approval scope schemas accept the shared fixture and only allow-with-scope requests", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as {
+    components: { schemas: Record<string, object> };
+    paths: Record<string, { post: { requestBody: { content: Record<string, { schema: object }> } } }>;
+  };
+  const fixture = await json("fixtures/contract.json") as { streamApproval: { approval: Record<string, unknown> } };
+  const ajv = new Ajv2020({ strict: false });
+  const pending = ajv.compile({ $ref: "#/components/schemas/PendingApproval", components: spec.components });
+  const request = ajv.compile({
+    ...spec.paths["/approvals/{approvalId}/respond"]!.post.requestBody.content["application/json"]!.schema,
+    components: spec.components,
+  });
+  const approval = fixture.streamApproval.approval;
+  assert.equal(pending(approval), true);
+  const { scopes: _scopes, ...legacy } = approval;
+  assert.equal(pending(legacy), true, "revision 16 servers omit scopes");
+  assert.equal(pending({ ...approval, scopes: ["once"] }), false, "a once-only offer is omitted, not listed");
+  assert.equal(pending({ ...approval, scopes: ["once", "forever"] }), false);
+
+  assert.equal(request({ decision: "allow" }), true);
+  assert.equal(request({ decision: "allow", scope: "always" }), true);
+  assert.equal(request({ decision: "deny", scope: "chat" }), false);
+  assert.equal(request({ decision: "allow", scope: "workspace" }), false);
 });
 
 test("stream input contracts reject unknown modes, oversized text, and unknown reasons", () => {

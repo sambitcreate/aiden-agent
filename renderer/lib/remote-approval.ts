@@ -13,6 +13,7 @@ export function mergeRemoteApproval(
     toolName: remote.toolName,
     summary: remote.summary,
     canAllow: remote.canAllow,
+    ...(remote.canAllow && remote.scopes ? { scopes: remote.scopes } : {}),
     ...(remote.details ? { details: remote.details } : {}),
     source: "remote",
   }];

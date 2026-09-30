@@ -1812,7 +1812,11 @@ class AidenChatViewModel(
         cancelTurn()
     }
 
-    fun respondToApproval(decision: AidenApprovalDecision, approvalId: String) {
+    fun respondToApproval(
+        decision: AidenApprovalDecision,
+        approvalId: String,
+        scope: AidenApprovalScope = AidenApprovalScope.ONCE
+    ) {
         if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
             _isRespondingToApproval.value || _isStopping.value) return
         val approval = _pendingApproval.value ?: return
@@ -1850,7 +1854,12 @@ class AidenChatViewModel(
 
         viewModelScope.launch {
             try {
-                val response = client.respondToApproval(approval.id, decision)
+                // Only a scope the Mac offered for this exact approval is sent.
+                val requestedScope = scope.takeIf {
+                    decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
+                        approval.scopes.contains(it)
+                }
+                val response = client.respondToApproval(approval.id, decision, scope = requestedScope)
                 if (activeClient() !== client || activeStreamId != streamId ||
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.approvalId != approval.id || response.decision != decision) {

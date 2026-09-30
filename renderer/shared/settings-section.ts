@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS = [
   "websearch",
   "telegram",
   "remoteAccess",
+  "approvals",
   "computerUse",
   "simulator",
   "memory",
@@ -99,6 +100,20 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "access",
       "proactive",
       "beta",
+    ],
+  },
+  {
+    id: "approvals",
+    title: "Tool approvals",
+    group: "Agent",
+    keywords: [
+      "always allow",
+      "allow for this chat",
+      "remembered",
+      "permissions",
+      "revoke",
+      "commands",
+      "stop asking me",
     ],
   },
   {

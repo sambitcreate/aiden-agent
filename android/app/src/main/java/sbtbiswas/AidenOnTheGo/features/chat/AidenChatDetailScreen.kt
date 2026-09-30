@@ -523,6 +523,33 @@ fun AidenChatDetailScreen(
                                         ) {
                                             Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
                                         }
+                                        val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
+                                        if (approval.canAllow && broaderScopes.isNotEmpty()) {
+                                            var scopeMenuOpen by remember(approval.id) { mutableStateOf(false) }
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box {
+                                                IconButton(
+                                                    onClick = { scopeMenuOpen = true },
+                                                    enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping
+                                                ) {
+                                                    Icon(Icons.Default.MoreVert, contentDescription = "More allow options")
+                                                }
+                                                DropdownMenu(
+                                                    expanded = scopeMenuOpen,
+                                                    onDismissRequest = { scopeMenuOpen = false }
+                                                ) {
+                                                    broaderScopes.forEach { scope ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(AidenApprovalPresentation.scopeTitle(scope)) },
+                                                            onClick = {
+                                                                scopeMenuOpen = false
+                                                                viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id, scope)
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                         if (approval.canAllow) {
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Button(

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
+import {
+  parseToolApprovalScope,
+  type ToolApprovalScope,
+} from "../../renderer/shared/tool-approval-scope.js";
 
 export interface ToolApprovalPrompt {
   streamId: string;
@@ -8,12 +12,18 @@ export interface ToolApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /**
+   * Scopes the approval surface may offer. Absent means "once" only. A scope
+   * broader than once is honored only when it was offered here.
+   */
+  scopes?: readonly ToolApprovalScope[];
 }
 
 interface PendingApproval {
   streamId: string;
   toolCallId: string;
   ownerDocumentId?: string;
+  scopes: readonly ToolApprovalScope[];
   settle(outcome: ToolApprovalOutcome): void;
 }
 
@@ -21,6 +31,8 @@ interface PendingApproval {
 export interface ToolApprovalDecisionPayload {
   /** Form Fill Specialist: orders the user deselected on the review card. */
   formFillExcludedOrders?: number[];
+  /** How far an allow decision reaches. Defaults to, and falls back to, "once". */
+  scope?: ToolApprovalScope;
 }
 
 export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached" | "unavailable";
@@ -81,6 +93,7 @@ export class ToolApprovalCoordinator {
         streamId: descriptor.streamId,
         toolCallId: descriptor.toolCallId,
         ownerDocumentId,
+        scopes: descriptor.scopes ?? ["once"],
         settle: finish,
       });
       signal?.addEventListener("abort", aborted, { once: true });
@@ -111,7 +124,16 @@ export class ToolApprovalCoordinator {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
     if (payload) {
-      this.decisionPayloads.set(this.payloadKey(entry.streamId, entry.toolCallId), payload);
+      const { scope: requestedScope, ...rest } = payload;
+      const scope = parseToolApprovalScope(requestedScope);
+      // Never widen past what the card offered; an unoffered scope is "once".
+      const effective: ToolApprovalDecisionPayload =
+        allowed && scope && scope !== "once" && entry.scopes.includes(scope)
+          ? { ...rest, scope }
+          : rest;
+      if (Object.keys(effective).length > 0) {
+        this.decisionPayloads.set(this.payloadKey(entry.streamId, entry.toolCallId), effective);
+      }
     }
     entry.settle(allowed ? "allowed" : "denied");
     return true;

@@ -3,6 +3,10 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import {
+  parseToolApprovalScope,
+  type ToolApprovalScope,
+} from "../../renderer/shared/tool-approval-scope.js";
+import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
@@ -972,18 +976,25 @@ function streamAfter(request: IncomingMessage, query: string): number {
   return parsed;
 }
 
-function approvalDecision(value: unknown): "allow" | "deny" {
+function approvalDecision(value: unknown): {
+  decision: "allow" | "deny";
+  scope?: ToolApprovalScope;
+} {
   const record = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+  const keys = record ? Object.keys(record) : [];
+  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
-    Object.keys(record).length !== 1 ||
-    (record.decision !== "allow" && record.decision !== "deny")
+    keys.some((key) => key !== "decision" && key !== "scope") ||
+    (record.decision !== "allow" && record.decision !== "deny") ||
+    // A scope is optional, must be known, and only widens an allow.
+    ("scope" in record && (!scope || record.decision !== "allow"))
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The approval response is invalid.", 400);
   }
-  return record.decision;
+  return scope ? { decision: record.decision, scope } : { decision: record.decision };
 }
 
 function requiredHeader(
@@ -2836,7 +2847,7 @@ export function createAidenRemoteRequestHandler(
         requireNoQuery(query);
         route = "approvalRespond";
         const body = await readJsonBody(request);
-        const decision = approvalDecision(body);
+        const { decision, scope } = approvalDecision(body);
         const device = await authenticate(request, dependencies.devices, "approval:respond");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
@@ -2861,6 +2872,7 @@ export function createAidenRemoteRequestHandler(
                 }
                 return action();
               }),
+            scope,
           ),
         );
         return;

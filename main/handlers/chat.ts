@@ -14,6 +14,8 @@ import type { AskUserQuestionAnswerStatus } from "../../renderer/shared/ask-user
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
+import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
+import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -150,9 +152,13 @@ export function registerChatGenerationHandlers(): void {
             (order): order is number => Number.isSafeInteger(order),
           )
         : undefined;
+      const scope = allowed
+        ? parseToolApprovalScope((options as { scope?: unknown } | null)?.scope)
+        : undefined;
       if (
         !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId, {
           formFillExcludedOrders,
+          ...(scope ? { scope } : {}),
         }) &&
         !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
       ) {
@@ -160,6 +166,20 @@ export function registerChatGenerationHandlers(): void {
       }
     },
   );
+
+  // Remembered "always allow" tool approval rules (Settings → Tool approvals).
+  ipcMain.handle("chat:listApprovalRules", async () => toolApprovalRules.list());
+
+  ipcMain.handle("chat:revokeApprovalRule", async (_event, ruleId: unknown) => {
+    if (typeof ruleId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(ruleId)) {
+      throw new Error("Invalid approval rule.");
+    }
+    return { revoked: await toolApprovalRules.revoke(ruleId) };
+  });
+
+  ipcMain.handle("chat:revokeAllApprovalRules", async () => ({
+    revoked: await toolApprovalRules.revokeAll(),
+  }));
 
   ipcMain.handle(
     "chat:answerQuestionnaire",

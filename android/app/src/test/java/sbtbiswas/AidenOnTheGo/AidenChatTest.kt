@@ -1527,6 +1527,54 @@ class AidenChatTest {
     }
 
     @Test
+    fun testApprovalScopesAreOfferedOnlyWhenThisDeviceCanAllowAnAction() {
+        val now = Instant.ofEpochSecond(10_000)
+        val wire = wireJson.decodeFromString<AidenStreamPendingApproval>(
+            """
+            {"approvalId":"approval-1","streamId":"stream-1","chatId":"chat-1","summary":"npm test",
+            "toolCallId":"tool-1","toolName":"run_command","expiresAt":"1970-01-01T02:47:40.000Z",
+            "canAllow":true,"scopes":["always","future-scope","once","chat"]}
+            """.trimIndent()
+        )
+
+        val allowed = AidenPendingApprovalResolution.resolve(wire, "stream-1", "chat-1", now = now)
+        // Unknown names are ignored and the order is canonical, once first.
+        assertEquals(
+            listOf(AidenApprovalScope.ONCE, AidenApprovalScope.CHAT, AidenApprovalScope.ALWAYS),
+            allowed?.scopes
+        )
+        val reviewOnly = AidenPendingApprovalResolution.resolve(
+            wire, "stream-1", "chat-1",
+            capabilities = AidenApprovalCapabilities(canRespond = false, canWriteSchedules = true),
+            now = now
+        )
+        assertEquals(listOf(AidenApprovalScope.ONCE), reviewOnly?.scopes)
+        assertEquals(
+            listOf(AidenApprovalScope.ONCE),
+            AidenPendingApprovalResolution.resolve(wire.copy(scopes = null), "stream-1", "chat-1", now = now)?.scopes
+        )
+    }
+
+    @Test
+    fun testApprovalRequestSendsScopeOnlyForBroaderAllows() {
+        val remembered = wireJson.encodeToString(
+            AidenApprovalRequest.of(AidenApprovalDecision.ALLOW, AidenApprovalScope.CHAT)
+        )
+        assertEquals("chat", Json.parseToJsonElement(remembered).jsonObject["scope"]?.jsonPrimitive?.content)
+        for (body in listOf(
+            AidenApprovalRequest.of(AidenApprovalDecision.ALLOW, AidenApprovalScope.ONCE),
+            AidenApprovalRequest.of(AidenApprovalDecision.DENY, AidenApprovalScope.ALWAYS),
+            AidenApprovalRequest.of(AidenApprovalDecision.ALLOW, null)
+        )) {
+            assertEquals(setOf("decision"), Json.parseToJsonElement(wireJson.encodeToString(body)).jsonObject.keys)
+        }
+        val echoed = wireJson.decodeFromString<AidenApprovalResponse>(
+            """{"approvalId":"approval-1","decision":"allow","scope":"always","resolvedAt":"2026-08-19T07:00:00.000Z"}"""
+        )
+        assertEquals(AidenApprovalScope.ALWAYS, echoed.scope)
+    }
+
+    @Test
     fun testAutomationApprovalPresentationPreservesHostOnlyConfirmation() {
         val approval = AidenPendingApproval(
             id = "approval-automation",
