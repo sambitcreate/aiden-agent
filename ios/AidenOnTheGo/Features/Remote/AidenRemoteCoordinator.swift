@@ -975,6 +975,7 @@ final class AidenRemoteCoordinator {
         AidenProductNavigationStore.shared.purge(instanceID: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
+        AidenModelPreferenceStore.shared.purge(instanceID: installationId)
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)
         await workspaceEnvironmentCache.purge(

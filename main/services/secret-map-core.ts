@@ -35,6 +35,30 @@ export function deleteSecretKeyEntry(map: SecretKeyMap, providerId: string): boo
   return true;
 }
 
+/** Delete one secret ID and its colon-delimited descendants, including bindings. */
+export function deleteSecretKeyFamily(
+  map: SecretKeyMap,
+  rootId: string,
+  bindingPrefix: string,
+): boolean {
+  if (!rootId) throw new Error("A secret family root is required.");
+  if (!bindingPrefix) throw new Error("A secret binding prefix is required.");
+  const isFamilyId = (id: string) => id === rootId || id.startsWith(`${rootId}:`);
+  const ids = new Set(Object.keys(map).filter(isFamilyId));
+  for (const key of Object.keys(map)) {
+    if (key.startsWith(bindingPrefix)) {
+      const id = key.slice(bindingPrefix.length);
+      if (isFamilyId(id)) ids.add(id);
+    }
+  }
+  let changed = false;
+  for (const id of ids) {
+    changed = deleteSecretKeyEntry(map, id) || changed;
+    changed = deleteSecretKeyEntry(map, `${bindingPrefix}${id}`) || changed;
+  }
+  return changed;
+}
+
 export interface SecretEntryPair {
   valueId: string;
   bindingId: string;
