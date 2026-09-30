@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   REASONING_PREVIEW_MS,
   initialReasoningDisclosure,
+  reasoningDisclosureLayout,
   reduceReasoningDisclosure,
 } from "./reasoning-disclosure.js";
 
@@ -36,5 +37,25 @@ test("stored reasoning starts collapsed and explicit disclosure intent always wi
   assert.equal(
     reduceReasoningDisclosure(explicitlyExpanded, { type: "preview-elapsed" }),
     explicitlyExpanded,
+  );
+});
+
+test("only a deliberately opened disclosure flows at full height", () => {
+  const preview = initialReasoningDisclosure(true);
+  assert.equal(reasoningDisclosureLayout(preview), "preview");
+  assert.equal(
+    reasoningDisclosureLayout(reduceReasoningDisclosure(preview, { type: "preview-elapsed" })),
+    "collapsed",
+  );
+
+  const stored = initialReasoningDisclosure(false);
+  assert.equal(reasoningDisclosureLayout(stored), "collapsed");
+  const opened = reduceReasoningDisclosure(stored, { type: "toggle" });
+  assert.equal(reasoningDisclosureLayout(opened), "full");
+  // Reopening after dismissing the live preview is also explicit intent.
+  const dismissed = reduceReasoningDisclosure(preview, { type: "toggle" });
+  assert.equal(
+    reasoningDisclosureLayout(reduceReasoningDisclosure(dismissed, { type: "toggle" })),
+    "full",
   );
 });

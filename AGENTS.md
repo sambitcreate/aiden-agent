@@ -39,17 +39,13 @@ The headless Aiden Agent lives in `packages/cli` as a self-contained npm package
 - Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
 - The CLI keeps the same manual-only network posture as the desktop for models.dev, Artificial Analysis, and OpenRouter benchmark data.
 
-## Papercuts
-
-For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs.
-
 ## Pull requests, CI, and branches
 
 - Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
 - Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
 - Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.
 - Do not cancel CI runs on `main`. Main CI is the baseline every release is cut from.
-- Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in `.papercuts/troubleshooting.md`. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
+- Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in the PR description. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
 - Known merge-conflict hotspots need a recheck after every `main` merge:
   - the root `package.json` `test` chain. Append new scripts and resolve conflicts by union, keeping every script from both sides.
   - the Aiden Remote protocol revision. Claim the next revision after the one on `main` when the PR merges, not when it was written, and update the iOS, Android, and fixture contracts together.

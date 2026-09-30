@@ -276,4 +276,3 @@ Rendering must not flicker and the creation window must stay narrated:
 
 - Do not register this on `piAgentRuntimeExtensions` global registry.
 - Keep Designer and GenUI iframe helpers separate until both exist; then extract a shared **containment** module only.
-- Papercuts: log iframe/CSP friction in `.papercuts/troubleshooting.md` as it occurs.

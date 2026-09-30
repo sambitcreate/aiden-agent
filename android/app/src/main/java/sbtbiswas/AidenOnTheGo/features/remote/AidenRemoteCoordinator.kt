@@ -17,6 +17,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenScheduledTaskCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
@@ -48,6 +49,7 @@ class AidenRemoteCoordinator(
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
+    val modelPreferenceStore = AidenModelPreferenceStore(storageDir)
 
     private val _connectionState = MutableStateFlow(
         if (installationStore.activeInstallation == null) {
@@ -284,6 +286,7 @@ class AidenRemoteCoordinator(
         botCache.purge(installation.instanceId, installation.deviceId)
         chatCache.purge(installation.instanceId)
         draftStore.purge(installation.instanceId)
+        modelPreferenceStore.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()

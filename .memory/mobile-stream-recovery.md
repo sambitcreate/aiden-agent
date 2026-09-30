@@ -174,3 +174,9 @@ Cache model after the merge: `saveChats` keeps #242's committed-write ordering (
 Dropped as duplicates of #242: 37b5920a's load() stream-before-draft reorder and the create() `!saveChats` fallback (#242's older-list rule admits the create's own committed row); d41ad06c's cancelledControls enum case, URLProtocol branch and restorePendingApproval delivery. The carried cancelled-Stop test now follows #242's silent-cancellation rule.
 
 Verified: iOS build-for-testing after every pick; Android testDebugUnitTest 206/206 and lint; test:ci-policy 45/45. Simulator XCTest pending (Mac authorization prompt).
+
+# PR #278 iOS removal-test synchronization follow-up (2026-09-27)
+
+The CI failure in `testRemovalCancelsAdmittedConsumerBeforeHeldEventsPublish` was not accompanied by an XCTest result bundle. Inspection found a test-harness race: its `/events` suffix gate could hold either the intended `/streams/stream-recovery/events` consumer or the unrelated `/progress/events` observer, depending on request timing. The test now holds the unique stream-consumer path and deliberately runs the denied progress observer while that hold is armed, waiting for it to finish before sending. This verifies that unrelated progress traffic cannot steal the held consumer request; no production behavior changed.
+
+On iPhone 17 Pro Max / iOS 27 simulator, the focused test passed 10 consecutive repetitions. The six neighboring accepted-turn/removal lifecycle tests also passed. Evidence: `/Users/sambitbiswas/Library/Developer/Xcode/DerivedData/AidenOnTheGo-dsoibpylxjwthkgezllxaeiietwn/Logs/Test/Test-AidenOnTheGo-2026.09.27_16-47-08--0400.xcresult` and `/Users/sambitbiswas/Library/Developer/Xcode/DerivedData/AidenOnTheGo-dsoibpylxjwthkgezllxaeiietwn/Logs/Test/Test-AidenOnTheGo-2026.09.27_16-48-31--0400.xcresult`.

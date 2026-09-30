@@ -268,7 +268,6 @@ Tasks:
 2. If Option B: add `scripts/publish-model-catalog.mjs` (Pi’s script is a template) + CI publish; immutable object keys + no-store index.
 3. Chaos tests: timeout, 500, malformed JSON, empty body, provider subset failure (one provider error must not clear others).
 4. Update `AGENTS.md` with the new allowed network path (catalog origin only; still no models.dev at runtime).
-5. Papercuts entry for any Electron `net` / undici / session partition friction.
 
 **Exit gate:** Documented runbook for “model missing in Aiden but live on provider.”
 

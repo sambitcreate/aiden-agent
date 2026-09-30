@@ -39,7 +39,11 @@ import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
 import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
-import { webSearchCredentials } from "../services/web-search-credentials.js";
+import {
+  webSearchCredentials,
+  webSearchKeyPoolTracker,
+} from "../services/web-search-credentials.js";
+import { registerWebSearchKeyPoolHandlers } from "./web-search-key-pool.js";
 import { webSearchExistingAuthReuse } from "../services/web-search-auth-reuse-main.js";
 import {
   DEFAULT_WEB_SEARCH_FALLBACK_ON,
@@ -549,8 +553,19 @@ export function registerPhase2Handlers(): void {
       settings.providerConfig[providerId],
     );
     await webSearchCredentials.remove(reference, () => !owner.isDestroyed());
+    webSearchKeyPoolTracker.clear(providerId);
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return readWebSearchSnapshot();
+  });
+  registerWebSearchKeyPoolHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    credentials: webSearchCredentials,
+    tracker: webSearchKeyPoolTracker,
+    providerConfig: async (providerId) =>
+      (await configStore.getWebSearchSettings()).providerConfig[providerId],
+    owner: webSearchMutationOwner,
+    assertMutationAllowed: (providerId) =>
+      assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout),
   });
 
   // Legacy Exa aliases remain for one rollback window. They use the same
