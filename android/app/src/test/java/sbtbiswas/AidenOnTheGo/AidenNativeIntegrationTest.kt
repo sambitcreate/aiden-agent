@@ -10,6 +10,11 @@ import sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivitySanitizer
 import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
+import sbtbiswas.AidenOnTheGo.models.AidenBotConversationActivityState
+import sbtbiswas.AidenOnTheGo.models.AidenBotConversationItem
+import sbtbiswas.AidenOnTheGo.models.AidenBotDeepLinkResolution
+import sbtbiswas.AidenOnTheGo.models.aidenResolvedBotDeepLink
+import java.time.Instant
 
 class AidenNativeIntegrationTest {
     @Test
@@ -38,6 +43,76 @@ class AidenNativeIntegrationTest {
         // Rejections
         assertNull(AidenDeepLink.parse("https://aiden.test/chat?id=chat_123"))
         assertNull(AidenDeepLink.parse("aiden-otg://unknown-action"))
+    }
+
+    @Test
+    fun testBotChatDeepLinkRoundTripsAndRejectsAmbiguousOrUnsafeShapes() {
+        val link = AidenDeepLink.botChatUrl("bot_fixture_01", instanceId = "instance-1")
+        assertEquals("aiden-otg://bot/bot_fixture_01/chat?instance=instance-1", link)
+        val request = AidenDeepLink.parse(link!!)
+        assertEquals(AidenNavigationDestination.BotChat("bot_fixture_01"), request?.destination)
+        assertEquals("instance-1", request?.instanceId)
+        assertNull(request?.workspaceId)
+        assertFalse(request?.startsVoice == true)
+
+        val bare = AidenDeepLink.parse("aiden-otg://bot/bot:ops.1/chat")
+        assertEquals(AidenNavigationDestination.BotChat("bot:ops.1"), bare?.destination)
+        assertNull(bare?.instanceId)
+        assertEquals(
+            AidenNavigationDestination.BotChat("b1"),
+            AidenDeepLink.parse("AIDEN-OTG://BOT/b1/chat")?.destination
+        )
+
+        listOf(
+            "aiden-otg://bot/b1",
+            "aiden-otg://bot/b1/chat/extra",
+            "aiden-otg://bot//chat",
+            "aiden-otg://bot/b1/settings",
+            "aiden-otg://bot/..%2Fsecret/chat",
+            "aiden-otg://bot/b%31/chat",
+            "aiden-otg://bot/b1/chat?chat=c1",
+            "aiden-otg://bot/b1/chat?workspace=w1",
+            "aiden-otg://bot/b1/chat?instance=a&instance=b",
+            "aiden-otg://bot/b1/chat?instance=..%2Fx",
+            "aiden-otg://bot/b1/chat?prompt=hello",
+            "aiden-otg://bot/b1/chat#frag",
+            "aiden-otg://user@bot/b1/chat",
+            "https://bot/b1/chat"
+        ).forEach { rejected ->
+            assertNull(rejected, AidenDeepLink.parse(rejected))
+        }
+        assertNull(AidenDeepLink.botChatUrl("../secret"))
+        assertNull(AidenDeepLink.botChatUrl("b1", instanceId = "bad id"))
+        assertNull(AidenDeepLink.botChatUrl("b".repeat(161)))
+    }
+
+    @Test
+    fun testBotChatDeepLinkOpensTheSameCanonicalChatAsBotsHome() {
+        fun item(chatId: String, botId: String, updatedAt: String) = AidenBotConversationItem(
+            chatId = chatId,
+            botId = botId,
+            title = "Chat",
+            activityState = AidenBotConversationActivityState.IDLE,
+            canRespondToApproval = false,
+            createdAt = Instant.parse("2026-08-18T18:00:00Z"),
+            updatedAt = Instant.parse(updatedAt),
+            revision = "rev"
+        )
+        val older = item("chat_old", "bot_1", "2026-08-18T19:00:00Z")
+        val newer = item("chat_new", "bot_1", "2026-08-18T20:00:00Z")
+        val otherBot = item("chat_other", "bot_2", "2026-08-18T21:00:00Z")
+
+        assertEquals(
+            AidenBotDeepLinkResolution.OpenChat("chat_new"),
+            aidenResolvedBotDeepLink("bot_1", listOf(older, otherBot, newer))
+        )
+        assertEquals(
+            AidenBotDeepLinkResolution.OpenChat("chat_new"),
+            aidenResolvedBotDeepLink("bot_1", listOf(newer, older))
+        )
+        // Another Bot's chat never satisfies the link; an empty result lands on the Bot.
+        assertEquals(AidenBotDeepLinkResolution.ShowBot, aidenResolvedBotDeepLink("bot_3", listOf(otherBot)))
+        assertEquals(AidenBotDeepLinkResolution.ShowBot, aidenResolvedBotDeepLink("bot_1", emptyList()))
     }
 
     @Test

@@ -1894,6 +1894,11 @@ struct AidenWorkspaceShellView: View {
                     return
                 }
                 navigate(to: chat.workspaceId)
+            case .botChat:
+                // The product shell resolves Bot links before Workspaces sees
+                // them; never reinterpret a Bot ID as a Workspace destination.
+                coordinator.presentedError = String(localized: "This conversation belongs in Bots and cannot be opened from Workspaces yet.")
+                return
             }
             guard coordinator.isCurrent(context) else { return }
             openChat(chat, startsVoice: request.startsVoice)

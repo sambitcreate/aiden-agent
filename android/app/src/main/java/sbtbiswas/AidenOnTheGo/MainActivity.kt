@@ -23,6 +23,8 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenGitScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
+import sbtbiswas.AidenOnTheGo.models.AidenBotDeepLinkResolution
+import sbtbiswas.AidenOnTheGo.models.aidenResolvedBotDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationRequest
@@ -125,6 +127,41 @@ class MainActivity : ComponentActivity() {
                                 currentScreen = AidenScreen.ChatDetail(chat.id, request.startsVoice)
                             } catch (error: Exception) {
                                 coordinator.presentError(error.message ?: "That chat is unavailable.")
+                            }
+                        }
+                    }
+                    is AidenNavigationDestination.BotChat -> {
+                        val client = coordinator.client.value
+                        if (client == null) {
+                            coordinator.presentError("Connect to Aiden Agent before opening this link.")
+                        } else {
+                            try {
+                                val page = client.botConversations(botId = destination.botId)
+                                when (val resolved = aidenResolvedBotDeepLink(destination.botId, page.conversations)) {
+                                    is AidenBotDeepLinkResolution.OpenChat -> {
+                                        val chat = client.chat(resolved.chatId)
+                                        if (chat.botId != destination.botId) {
+                                            coordinator.presentError("That Bot chat is no longer available.")
+                                        } else {
+                                            navigationStore.setSelectedArea(
+                                                coordinator.activeInstanceId.orEmpty(),
+                                                AidenProductArea.BOTS
+                                            )
+                                            currentScreen = AidenScreen.ChatDetail(chat.id)
+                                        }
+                                    }
+                                    AidenBotDeepLinkResolution.ShowBot -> {
+                                        // A link never creates a conversation; the profile offers that.
+                                        val bot = client.bot(destination.botId)
+                                        navigationStore.setSelectedArea(
+                                            coordinator.activeInstanceId.orEmpty(),
+                                            AidenProductArea.BOTS
+                                        )
+                                        currentScreen = AidenScreen.BotProfile(bot.id)
+                                    }
+                                }
+                            } catch (error: Exception) {
+                                coordinator.presentError(error.message ?: "That Bot is unavailable.")
                             }
                         }
                     }
