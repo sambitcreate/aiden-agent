@@ -2278,7 +2278,14 @@ final class AidenChatViewModel {
         if let (error, context) = uploadRevocation {
             uploadRevocation = nil
             let coordinator = coordinator
-            uploadRevocationTask = Task { _ = await coordinator.handleCredentialRevocation(error, context: context) }
+            // A later revocation may arrive while an earlier purge is running;
+            // its coordinator call returns at once for the stale context, so
+            // the replacement must still finish only after the earlier purge.
+            let previous = uploadRevocationTask
+            uploadRevocationTask = Task {
+                await previous?.value
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
         }
         return uploadRevocationTask
     }
