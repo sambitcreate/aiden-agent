@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 16)
+        XCTAssertEqual(fixture.contractRevision, 17)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -148,6 +148,14 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(fixture.agentRoster?.chatId, fixture.chat.id)
         XCTAssertEqual(fixture.agentRoster?.agents.count, 2)
         XCTAssertEqual(fixture.agentRoster?.agents.first?.role, .implementer)
+        XCTAssertTrue(fixture.server.supportsChatAgentInterrupt)
+        let interrupt = try XCTUnwrap(fixture.agentInterrupt)
+        XCTAssertEqual(interrupt.response.chatId, fixture.chat.id)
+        XCTAssertEqual(interrupt.response.turnId, fixture.agentRoster?.turnId)
+        XCTAssertEqual(
+            interrupt.response.agents.first { $0.agentId == interrupt.agentId }?.state,
+            .stopped
+        )
         XCTAssertEqual(fixture.agentRoster?.previousTurns.map(\.turnId), [
             "turn_fixture_previous_02",
             "turn_fixture_previous_01",

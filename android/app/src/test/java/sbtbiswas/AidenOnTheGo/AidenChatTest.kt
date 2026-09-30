@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.ViewModelStore
 import java.io.File
 import java.time.Instant
@@ -8,8 +10,14 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -42,6 +50,77 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    // clear() requests cancellation; children can still resume on Main to finish cleanup.
+    // A cancelled test caller must finish this barrier before disposing shared resources.
+    private suspend fun ViewModelStore.clearAndJoin() = withContext(NonCancellable) {
+        val jobs = keys().mapNotNull { get(it)?.viewModelScope?.coroutineContext?.get(Job) }
+        clear()
+        jobs.forEach { it.join() }
+    }
+
+    @Test
+    fun viewModelCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() = exerciseViewModelCleanup(false)
+
+    @Test
+    fun cancelledCallerCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() = exerciseViewModelCleanup(true)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun exerciseViewModelCleanup(cancelCaller: Boolean) {
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val owners = ViewModelStore()
+        val release = CompletableDeferred<Unit>()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val model = object : ViewModel() {}
+                owners.put("held-finalizer", model)
+                val entered = CompletableDeferred<Unit>()
+                var finalizedOnMain = false
+                val mainThread = Thread.currentThread()
+                val child = model.viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            entered.complete(Unit)
+                            withContext(Dispatchers.IO) { release.await() }
+                            assertSame(mainThread, Thread.currentThread())
+                            finalizedOnMain = true
+                        }
+                    }
+                }
+                var resourcesReleased = false
+                val cleanup = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        if (cancelCaller) awaitCancellation()
+                    } finally {
+                        owners.clearAndJoin()
+                        resourcesReleased = true
+                    }
+                }
+                if (cancelCaller) cleanup.cancel()
+                try {
+                    withTimeout(5_000) { entered.await() }
+                    assertFalse("Cleanup must wait while a cancelled child still needs Main", cleanup.isCompleted)
+                    assertFalse(finalizedOnMain)
+                    assertFalse(resourcesReleased)
+                } finally {
+                    release.complete(Unit)
+                    child.join()
+                    cleanup.join()
+                }
+                assertTrue(finalizedOnMain)
+                assertTrue("Cleanup must finish releasing resources even when its caller was cancelled", resourcesReleased)
+                assertTrue(model.viewModelScope.coroutineContext[Job]!!.isCompleted)
+            }
+        } finally {
+            release.complete(Unit)
+            runBlocking(dispatcher) { owners.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+        }
+    }
+
     @Test fun readAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         val message = AidenChatMessage("a", AidenChatRole.ASSISTANT, "partial answer", createdAt = Instant.now())
         assertTrue(message.isReadAloudEligible)
@@ -273,7 +352,7 @@ class AidenChatTest {
             }
         } finally {
             releaseInitialLoad.countDown()
-            runBlocking(dispatcher) { viewModels.clear() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -422,7 +501,7 @@ class AidenChatTest {
                             assertEquals(if (mode == "remove") "Fresh readmission" else null, reopened.loadChat("turn-instance", initial.id)?.title)
                         }
                         assertEquals(if (mode in listOf("newer_post", "ordered_posts")) 2 else 1, postCount.get())
-                    } finally { release.countDown(); getRelease.countDown(); owners.clear(); server.shutdown(); root.deleteRecursively() }
+                    } finally { release.countDown(); getRelease.countDown(); owners.clearAndJoin(); server.shutdown(); root.deleteRecursively() }
                 }
             }
         } finally { Dispatchers.resetMain(); main.close() }
@@ -467,7 +546,10 @@ class AidenChatTest {
     fun failedSendCannotRestoreDraftAfterInstallationPurge() = assertFailedSendDraft(purgeWhileSending = true)
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false) {
+    @Test fun selectedAttachmentPreparationKeepsMainResponsiveAndSendReservedThroughCancellation() =
+        assertFailedSendDraft(checkPreparation = true)
+
+    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val turnArrived = CountDownLatch(1)
@@ -486,6 +568,13 @@ class AidenChatTest {
                     turnArrived.countDown()
                     check(releaseTurn.await(5, TimeUnit.SECONDS)) { "Send response was not released" }
                     MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-draft","retryable":true}}""")
+                }
+                "/api/aiden/v1/chats/chat-draft/attachments" -> {
+                    val name = json.parseToJsonElement(request.body.readUtf8()).jsonObject["name"]!!.jsonPrimitive.content
+                    MockResponse().setResponseCode(201).setBody(json.encodeToString(AidenAttachmentReference(
+                        id = "att_" + name.padEnd(43, 'x'), name = name, mimeType = "text/plain",
+                        kind = AidenAttachmentKind.TEXT, size = 1, expiresAt = Instant.now().plusSeconds(600)
+                    )))
                 }
                 "/api/aiden/v1/chats/chat-draft" -> MockResponse().setBody(json.encodeToString(initialChat))
                 else -> MockResponse().setResponseCode(404)
@@ -518,6 +607,58 @@ class AidenChatTest {
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 model.updateDraft("Original unsent text")
                 assertTrue(model.canSend)
+                if (checkPreparation) {
+                    val mainThread = Thread.currentThread()
+                    val entered = CountDownLatch(1)
+                    val release = CountDownLatch(1)
+                    val nextEntered = CountDownLatch(1)
+                    val nextRelease = CountDownLatch(1)
+                    val first = launch(start = CoroutineStart.UNDISPATCHED) {
+                        model.prepareAndUpload(listOf(1, 2)) {
+                            assertNotSame("Preparation must not run on Main", mainThread, Thread.currentThread())
+                            entered.countDown()
+                            check(release.await(5, TimeUnit.SECONDS))
+                            null
+                        }
+                    }
+                    val second = launch(start = CoroutineStart.UNDISPATCHED) {
+                        model.prepareAndUpload(listOf(3)) {
+                            nextEntered.countDown()
+                            check(nextRelease.await(5, TimeUnit.SECONDS))
+                            null
+                        }
+                    }
+                    try {
+                        withContext(Dispatchers.IO) { assertTrue(entered.await(5, TimeUnit.SECONDS)) }
+                        assertEquals(2, model.preparingAttachmentBatches.value)
+                        assertEquals(1L, nextEntered.count)
+                        assertFalse(model.canSend)
+                        model.send()
+                        assertFalse(model.isStarting.value)
+                        assertEquals("Original unsent text", model.draft.value)
+                        first.cancel()
+                        release.countDown()
+                        first.join()
+                        withContext(Dispatchers.IO) { assertTrue(nextEntered.await(5, TimeUnit.SECONDS)) }
+                        assertEquals(1, model.preparingAttachmentBatches.value)
+                        assertFalse(model.canSend)
+                    } finally {
+                        release.countDown()
+                        nextRelease.countDown()
+                        first.cancelAndJoin()
+                        second.join()
+                    }
+                    val order = mutableListOf<Int>()
+                    model.prepareAndUpload((1..10).toList()) {
+                        order.add(it)
+                        if (it == 4) error("Invalid provider selection")
+                        AidenAttachmentUpload.Text(name = "selection-$it", mimeType = "text/plain", text = "x")
+                    }
+                    assertEquals((1..10).toList(), order)
+                    assertEquals((1..10).filter { it != 4 }.map { "selection-$it" }, model.pendingAttachments.value.map { it.name })
+                    assertEquals(0, model.preparingAttachmentBatches.value)
+                    assertTrue(model.canSend)
+                }
                 model.send()
                 withContext(Dispatchers.IO) { assertTrue(turnArrived.await(5, TimeUnit.SECONDS)) }
                 assertTrue(model.isStarting.value)
@@ -537,7 +678,7 @@ class AidenChatTest {
                 assertEquals(expected, model.draft.value)
                 assertEquals("Try again", model.presentedError.value)
                 assertTrue(model.chat.value!!.messages.isEmpty())
-                viewModels.clear()
+                viewModels.clearAndJoin()
                 // A fresh store is the process-restart read path, not the ViewModel's memory.
                 val reopened = AidenChatDraftStore(directory)
                 assertEquals(
@@ -547,7 +688,7 @@ class AidenChatTest {
             }
         } finally {
             releaseTurn.countDown()
-            runBlocking(dispatcher) { viewModels.clear() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -813,7 +954,7 @@ class AidenChatTest {
             releaseNew.countDown()
             release.countDown()
             finishRead.countDown()
-            runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }
+            runBlocking(dispatcher) { viewModels.clearAndJoin(); scopeJob.cancelAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
             server.shutdown()
@@ -1583,7 +1724,7 @@ class AidenChatTest {
                         cache.saveChat(initial.copy(title = "New owner"), "instance-a")
                         assertEquals("New owner", reopened.loadChat("instance-a", initial.id)?.title)
                         assertNotNull(reopened.loadChat("instance-b", initial.id))
-                    } finally { viewModels.clear(); root.deleteRecursively() }
+                    } finally { viewModels.clearAndJoin(); root.deleteRecursively() }
                 }
             }
         } finally { Dispatchers.resetMain(); dispatcher.close() }
@@ -1738,6 +1879,19 @@ class AidenChatTest {
             durationMs = 1000.0
         )
         assertEquals("Recalled chat history", AidenAgentActivityPresentation.line(step))
+    }
+
+    @Test
+    fun pendingToolCallReadsAsPreparingUntilItRuns() {
+        val pending = AidenAgentStep(
+            id = "read-pending", order = 0, kind = AidenAgentStep.Kind.TOOL,
+            toolName = "read_file", label = "Read file",
+            status = AidenAgentStepStatus.PENDING, startedAt = 1000.0,
+            updatedAt = 1000.0, contentOffset = 0, target = "src/app.ts"
+        )
+        assertEquals("Preparing Read file", AidenAgentActivityPresentation.line(pending))
+        val running = pending.copy(status = AidenAgentStepStatus.RUNNING, updatedAt = 1200.0)
+        assertEquals("Reading src/app.ts", AidenAgentActivityPresentation.line(running))
     }
 
     @Test

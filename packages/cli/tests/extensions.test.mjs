@@ -87,6 +87,7 @@ function evalModule(expression) {
 const bridgeUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "pi-bridge", "adapt-aiden-extension.ts")).href);
 const widgetUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "todo-widget.ts")).href);
 const settingsUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "aiden-settings.ts")).href);
+const askUserCoreUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "ask-user-question-core.ts")).href);
 
 test("bridge registers tools and chains system prompts onto before_agent_start", () => {
 	const out = evalModule(`
@@ -162,6 +163,61 @@ try {
 }
 `);
 	assert.match(out, /normalize-ok/);
+});
+
+test("CLI ask-user applies one absolute timeout across every terminal selection", () => {
+	const out = evalModule(`
+import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
+const originalNow = Date.now;
+let now = 1_000;
+Date.now = () => now;
+try {
+	const controller = new AbortController();
+	const timeouts = [];
+	let selectionCount = 0;
+	const request = createTerminalAskUserQuestionRequest(() => ({
+		select: async (_title, _options, options) => {
+			selectionCount++;
+			if (options?.signal !== controller.signal) throw new Error("AbortSignal was not forwarded");
+			timeouts.push(options?.timeout);
+			if (selectionCount <= 2) {
+				now += 10_000;
+				return selectionCount === 1 ? "Direct" : "Guided";
+			}
+			now += options.timeout;
+			return undefined;
+		},
+	}));
+	const question = {
+		question: "Which approach?",
+		header: "Approach",
+		multiSelect: true,
+		options: [
+			{ label: "Direct", description: "Take action." },
+			{ label: "Guided", description: "Explain each step." },
+		],
+	};
+	const result = await request("call-one", [question, { ...question, multiSelect: false }], controller.signal, 30);
+	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000])) {
+		throw new Error("per-question timeouts reset the deadline: " + JSON.stringify(timeouts));
+	}
+	if (
+		!result.cancelled ||
+		!result.timedOut ||
+		JSON.stringify(result.answers[0]) !== JSON.stringify({
+			questionIndex: 0,
+			kind: "multi",
+			selected: ["Direct", "Guided"],
+		})
+	) {
+		throw new Error("timeout response lost its result or prior answer: " + JSON.stringify(result));
+	}
+	console.log("ask-user-timeout-ok");
+} finally {
+	Date.now = originalNow;
+}
+`);
+	assert.match(out, /ask-user-timeout-ok/);
 });
 
 test("memory scope id matches the desktop SAFE_ID charset and is stable per folder", () => {

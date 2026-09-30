@@ -725,6 +725,29 @@ class AidenRemoteClient(
         }
     }
 
+    /**
+     * Stops one running delegated agent in the chat's current turn and returns
+     * the refreshed current-turn roster. Stopping an already-finished agent is
+     * an idempotent no-op on the Mac, so no idempotency key is sent. Control
+     * writes never auto-retry on a dropped connection.
+     */
+    suspend fun interruptAgent(chatId: String, agentId: String): AidenChatAgentRoster {
+        if (!agentId.matches(Regex("^[A-Za-z0-9._:-]{1,128}$"))) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid agent.")
+        }
+        return executeRequest(
+            "/chats/$chatId/agents/$agentId/interrupt",
+            method = "POST",
+            retryConnectionFailure = false,
+            botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val roster = AidenChatProgressCodec.decodeAgentRoster(bytes)
+            if (roster.chatId != chatId) throw AidenRemoteClientException.InvalidResponse("Agent roster belongs to another chat.")
+            roster
+        }
+    }
+
     suspend fun createChat(
         workspaceId: String,
         providerId: String? = null,

@@ -13,6 +13,12 @@ import {
 const TEST_ACCOUNT = botCapabilityKeychainAccountForCanonicalRoot(
   "/private/aiden-test-profile",
 );
+const DEFAULT_KEYCHAIN = {
+  exitCode: 0,
+  stdout: '    "/Users/test/Library/Keychains/login.keychain-db"\n',
+  stderr: "",
+};
+const keychainExists = async () => true;
 
 test("production Keychain writes use bounded interactive hex without argv secrets", () => {
   const value = '{"signed":"authority-value"}';
@@ -48,6 +54,7 @@ test("Keychain authority sends its value only through bounded stdin", async () =
   const calls: Array<{ args: readonly string[]; stdin?: string }> = [];
   const command: BotCapabilitySecurityCommand = async (args, stdin) => {
     calls.push({ args, ...(stdin === undefined ? {} : { stdin }) });
+    if (args[0] === "default-keychain") return DEFAULT_KEYCHAIN;
     if (args[0] === "find-generic-password") {
       return stored === null
         ? { exitCode: 44, stdout: "", stderr: "item could not be found" }
@@ -61,6 +68,7 @@ test("Keychain authority sends its value only through bounded stdin", async () =
   const anchor = createBotCapabilityKeychainAnchor({
     account: TEST_ACCOUNT,
     command,
+    keychainExists,
   });
   const value = '{"signed":"authority-value"}';
   await anchor.store(value, null);
@@ -103,6 +111,7 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
     assert.ok(account);
     assert.ok(service);
     const item = `${service}/${account}`;
+    if (args[0] === "default-keychain") return DEFAULT_KEYCHAIN;
     if (args[0] === "find-generic-password") {
       const stored = values.get(item);
       return stored === undefined
@@ -130,26 +139,32 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
   const production = createBotCapabilityKeychainAnchor({
     account: productionAccount,
     command,
+    keychainExists,
   });
   const development = createBotCapabilityKeychainAnchor({
     account: developmentAccount,
     command,
+    keychainExists,
   });
   const productionMarker = createBotCapabilityKeychainBootstrapMarker({
     account: productionAccount,
     command,
+    keychainExists,
   });
   const developmentMarker = createBotCapabilityKeychainBootstrapMarker({
     account: developmentAccount,
     command,
+    keychainExists,
   });
   const telegramBindings = createTelegramBotBindingKeychainAnchor({
     account: productionAccount,
     command,
+    keychainExists,
   });
   const telegramBootstrap = createTelegramBotBindingKeychainBootstrapMarker({
     account: productionAccount,
     command,
+    keychainExists,
   });
   const productionProof = "a".repeat(64);
   const developmentProof = "b".repeat(64);
@@ -217,6 +232,7 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
 test("bootstrap marker rejects corrupt values and non-monotonic transitions", async () => {
   let stored: string | null = null;
   const command: BotCapabilitySecurityCommand = async (args, stdin) => {
+    if (args[0] === "default-keychain") return DEFAULT_KEYCHAIN;
     if (args[0] === "find-generic-password") {
       return stored === null
         ? { exitCode: 44, stdout: "", stderr: "item could not be found" }
@@ -229,6 +245,7 @@ test("bootstrap marker rejects corrupt values and non-monotonic transitions", as
   const marker = createBotCapabilityKeychainBootstrapMarker({
     account: TEST_ACCOUNT,
     command,
+    keychainExists,
   });
   const proof = "c".repeat(64);
   await assert.rejects(
@@ -237,4 +254,66 @@ test("bootstrap marker rejects corrupt values and non-monotonic transitions", as
   );
   stored = "pending:not-a-proof";
   await assert.rejects(marker.load(), /marker is invalid/u);
+});
+
+test("Keychain writes fail closed without prompting when no default keychain exists", async () => {
+  const scenarios: Array<{
+    name: string;
+    defaultKeychain: { exitCode: number; stdout: string; stderr: string };
+    exists: boolean;
+  }> = [
+    {
+      name: "isolated HOME without a keychain search domain",
+      defaultKeychain: {
+        exitCode: 1,
+        stdout: "",
+        stderr: "security: SecKeychainCopyDomainDefault user: A default keychain could not be found.",
+      },
+      exists: true,
+    },
+    {
+      name: "default keychain file missing on disk",
+      defaultKeychain: DEFAULT_KEYCHAIN,
+      exists: false,
+    },
+    {
+      name: "unparseable default keychain output",
+      defaultKeychain: { exitCode: 0, stdout: "login.keychain-db\n", stderr: "" },
+      exists: true,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const calls: string[][] = [];
+    const checked: string[] = [];
+    const command: BotCapabilitySecurityCommand = async (args) => {
+      calls.push([...args]);
+      if (args[0] === "default-keychain") return scenario.defaultKeychain;
+      if (args[0] === "find-generic-password") {
+        return { exitCode: 44, stdout: "", stderr: "item could not be found" };
+      }
+      assert.fail(`${scenario.name}: unexpected ${args[0]}`);
+    };
+    const anchor = createBotCapabilityKeychainAnchor({
+      account: TEST_ACCOUNT,
+      command,
+      keychainExists: async (file) => {
+        checked.push(file);
+        return scenario.exists;
+      },
+    });
+    await assert.rejects(anchor.store("next", null), /could not be updated/u, scenario.name);
+    assert.deepEqual(
+      calls.find(([verb]) => verb === "default-keychain"),
+      ["default-keychain", "-d", "user"],
+      scenario.name,
+    );
+    assert.equal(
+      calls.some(([verb]) => verb === "add-generic-password"),
+      false,
+      scenario.name,
+    );
+    if (scenario.name === "default keychain file missing on disk") {
+      assert.deepEqual(checked, ["/Users/test/Library/Keychains/login.keychain-db"]);
+    }
+  }
 });

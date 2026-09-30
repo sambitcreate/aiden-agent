@@ -38,7 +38,7 @@ Stop asking again for the exact same workspace action the user already approved,
 
 - **Desktop approval card:** transparent **Allow for this chat** and **Always allow** buttons sit between **Deny** and the accent **Allow once**.
 - **Settings → Tool approvals:** listed in the Agent group. It lists persisted rules newest first, each with an exact description and a per-row **Revoke**, plus a destructive **Revoke all** row. The layout follows `docs/settings-design-system.md`.
-- **Aiden Remote contract revision 16:**
+- **Aiden Remote contract revision 17:**
   - `PendingApproval.scopes` is optional, has at least 2 entries and starts with `once`.
   - `POST /approvals/{id}/respond` accepts an optional `scope`, valid only with `allow` and only when it was offered. The response echoes it.
   - The idempotency fingerprint includes the scope.

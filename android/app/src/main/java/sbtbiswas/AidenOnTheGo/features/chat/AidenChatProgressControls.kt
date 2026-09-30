@@ -33,7 +33,9 @@ import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -540,11 +542,17 @@ private fun AidenAgentRow(agent: AidenChatAgent, onClick: (AidenChatAgent) -> Un
     }
 }
 
+/** Whether the agent detail sheet offers Stop, and whether a stop is in flight. */
+enum class AidenAgentStopControl { HIDDEN, AVAILABLE, STOPPING }
+
 @Composable
 fun AidenAgentDetailSheet(
     agent: AidenChatAgent,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    stopControl: AidenAgentStopControl = AidenAgentStopControl.HIDDEN,
+    onStop: () -> Unit = {}
 ) {
+    var confirmsStop by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -568,7 +576,53 @@ fun AidenAgentDetailSheet(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text("Some details are hidden for privacy.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
             }
+            if (stopControl != AidenAgentStopControl.HIDDEN) {
+                Spacer(modifier = Modifier.height(20.dp))
+                TextButton(
+                    onClick = { confirmsStop = true },
+                    enabled = stopControl == AidenAgentStopControl.AVAILABLE
+                ) {
+                    Text(
+                        if (stopControl == AidenAgentStopControl.STOPPING) "Stopping…" else "Stop agent",
+                        color = if (stopControl == AidenAgentStopControl.AVAILABLE) palette.danger else palette.secondary
+                    )
+                }
+                Text(
+                    "The Mac stops only this agent. The main run and other agents keep going.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.secondary
+                )
+            }
         }
+    }
+    if (confirmsStop) {
+        val palette = AidenTheme.palette
+        AlertDialog(
+            onDismissRequest = { confirmsStop = false },
+            title = { Text("Stop ${agent.label}?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "The Mac stops this delegated agent. You cannot resume it from here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.secondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmsStop = false
+                        onStop()
+                    }
+                ) {
+                    Text("Stop agent", color = palette.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmsStop = false }) {
+                    Text("Keep running")
+                }
+            }
+        )
     }
 }
 

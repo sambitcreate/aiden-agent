@@ -647,6 +647,9 @@ enum AidenAgentActivityPresentation {
             return step.isActive ? "Thinking" : "Thought \(duration(step.durationMs))"
         }
         let label = step.label ?? "Tool"
+        // Matches desktop: a pending call is still being prepared (its
+        // arguments may be streaming), so name the tool instead of claiming work.
+        if step.status == .pending { return "Preparing \(label)" }
         let pair = verbs[step.toolName ?? ""]
         let verb: String
         switch step.status {
@@ -1646,7 +1649,7 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     let toolName: String
     let expiresAt: Date
     let canAllow: Bool
-    /// Contract revision 16. Raw scope names so an unknown future scope never
+    /// Contract revision 17. Raw scope names so an unknown future scope never
     /// fails decoding; `AidenApprovalScope.offered(_:)` keeps the known ones.
     var scopes: [String]? = nil
 }
@@ -1787,7 +1790,7 @@ enum AidenApprovalDecision: String, Codable, Sendable {
     case deny
 }
 
-/// Contract revision 16 allow scopes. `once` authorizes one call; `chat` and
+/// Contract revision 17 allow scopes. `once` authorizes one call; `chat` and
 /// `always` let the Mac remember the exact same tool and target for this chat
 /// or, until revoked in desktop Settings, for the workspace.
 enum AidenApprovalScope: String, Codable, Sendable, CaseIterable {

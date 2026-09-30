@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import * as fs from "node:fs/promises";
+import fsPromises, * as fs from "node:fs/promises";
+import { runInNewContext } from "node:vm";
+import { createRequire } from "node:module";
+import { CODING_GLOB_WORKER_SOURCE, type CodingGlobTask, type CodingGlobReply } from "./coding-tool-glob-worker.js";
+import { Worker } from "node:worker_threads";
+import { syncBuiltinESMExports } from "node:module";
+import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +18,7 @@ import {
   runCommandEnv,
   summarizeToolCall,
 } from "./coding-tools.js";
+import { withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { createShareImageTool } from "./share-image-tool.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 
@@ -2152,4 +2159,418 @@ test("POSIX colon filenames retain actual write and edit provenance", { skip: pr
     const edited = await tools.find((tool) => tool.name === "edit_file")!.execute("edit", { path: "foo:bar.txt", old_string: "alpha", new_string: "beta" });
     assert.deepEqual((edited.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "edited", bytes: 4 });
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+async function foregroundText(root: string, name: string, params: Record<string, string>, signal?: AbortSignal, observer?: Parameters<typeof buildCodingTools>[1]): Promise<string> {
+  const result = await buildCodingTools(root, observer).find((tool) => tool.name === name)!.execute("bounded-parent", params, signal);
+  return result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+}
+
+test("foreground read bounds actual bytes for sparse files and growth after stat, preserving UTF-8", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-read-"));
+  try {
+    const full = path.join(root, "large.txt");
+    await fs.writeFile(full, "a".repeat(199_999) + "😀end");
+    let bytes = 0;
+    const text = await foregroundText(root, "read_file", { path: "large.txt" }, undefined, {
+      afterFileStat: async () => { const h = await fs.open(full, "r+"); try { await h.truncate(32 * 1024 * 1024); } finally { await h.close(); } },
+      onFileRead: (count) => { bytes += count; },
+    });
+    assert.equal(bytes, 200_001);
+    assert.equal(text, "a".repeat(199_999) + "\n… [truncated]");
+    await fs.writeFile(full, "é😀\n");
+    assert.equal(await foregroundText(root, "read_file", { path: "large.txt" }), "é😀\n");
+    await fs.writeFile(full, "");
+    assert.equal(await foregroundText(root, "read_file", { path: "large.txt" }), "[empty file]");
+    await fs.symlink("large.txt", path.join(root, "alias"));
+    assert.equal(await foregroundText(root, "read_file", { path: "alias" }), "[empty file]");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground tools reject cancellation before I/O and during reads or enumeration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-cancel-"));
+  try {
+    await fs.writeFile(path.join(root, "a.txt"), "needle".repeat(40_000));
+    for (const [name, params] of [["read_file", { path: "a.txt" }], ["list_dir", {}], ["glob", { pattern: "**/*" }], ["grep", { pattern: "needle" }]] as const) {
+      const pre = new AbortController(); pre.abort(new Error("test cancelled"));
+      let entries = 0; let bytes = 0;
+      await assert.rejects(foregroundText(root, name, params, pre.signal, { onFileRead: () => { bytes++; }, onDirectoryEntry: () => { entries++; } }), /test cancelled/);
+      assert.equal(bytes + entries, 0);
+      const during = new AbortController();
+      await assert.rejects(foregroundText(root, name, params, during.signal, {
+        onFileRead: () => during.abort(new Error("mid-read cancelled")),
+        onDirectoryEntry: () => during.abort(new Error("mid-scan cancelled")),
+      }), /mid-(read|scan) cancelled/);
+    }
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground grep retains JS patterns and stays cancellable during catastrophic backtracking", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-regex-"));
+  try {
+    await fs.writeFile(path.join(root, "a.txt"), "foobar foofoo\nnope\n");
+    assert.equal(await foregroundText(root, "grep", { pattern: "(?<=foo)bar|\\b(foo)\\1\\b" }), "a.txt:1: foobar foofoo");
+    await assert.rejects(foregroundText(root, "grep", { pattern: "[" }), /Invalid regular expression/);
+    await fs.writeFile(path.join(root, "a.txt"), "a".repeat(100_000) + "!");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("regex cancelled")), 150);
+    try {
+      await assert.rejects(foregroundText(root, "grep", { pattern: "^(a+)+$" }, controller.signal), /regex cancelled/);
+    } finally { clearTimeout(timer); }
+    // A subsequent call must have both a live worker and released capacity.
+    assert.equal(await foregroundText(root, "grep", { pattern: "not-present" }), "[no matches]");
+    assert.match(await foregroundText(root, "grep", { pattern: "^(a+)+$" }), /search stopped after 5000 ms/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground glob agrees with native glob on normal patterns, hidden paths and safe links", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-glob-"));
+  try {
+    await fs.mkdir(path.join(root, "src/sub"), { recursive: true }); await fs.mkdir(path.join(root, ".meta"));
+    for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
+    await fs.symlink("src", path.join(root, "link"));
+    await fs.symlink("sub", path.join(root, "src/alias"));
+    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
+      const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
+      assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
+    }
+    await fs.writeFile(path.join(root, ".env"), "SECRET");
+    assert.equal(await foregroundText(root, "glob", { pattern: ".env" }), "[no matches]");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-glob-outside-"));
+    try {
+      await fs.writeFile(path.join(outside, "outside.txt"), "PRIVATE");
+      const opened: string[] = [];
+      assert.equal(await foregroundText(root, "glob", { pattern: `{${path.join(outside, "*.txt")},src/*.js}` }, undefined, {
+        beforeDirectoryOpen: (directory) => { opened.push(directory); },
+      }), "src/b.js");
+      assert.ok(opened.every((directory) => !directory.includes(path.basename(outside))));
+    } finally { await fs.rm(outside, { recursive: true, force: true }); }
+
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground scans cap work on wide no-match directories and bound output", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-wide-"));
+  try {
+    for (let offset = 0; offset < 10_020; offset += 100) {
+      await Promise.all(Array.from({ length: 100 }, (_, index) => fs.writeFile(path.join(root, `file-${offset + index}.txt`), "")));
+    }
+    for (const [name, params] of [["list_dir", {}], ["glob", { pattern: "**/*.absent" }], ["grep", { pattern: "absent" }]] as const) {
+      let entries = 0;
+      const text = await foregroundText(root, name, params, undefined, { onDirectoryEntry: () => { entries++; } });
+      assert.equal(entries, 10_000, name);
+      assert.match(text, /scan stopped after 10000 entries/, name);
+      assert.ok(text.length <= 20_000, name);
+    }
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground grep caps bytes even when files grow, and skips ignored directories", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-grep-bytes-"));
+  try {
+    await fs.mkdir(path.join(root, "node_modules"));
+    await fs.writeFile(path.join(root, "node_modules", "ignored.txt"), "needle");
+    await fs.mkdir(path.join(root, ".hidden"));
+    await fs.writeFile(path.join(root, ".hidden", "ignored.txt"), "needle");
+    for (let index = 0; index < 24; index++) await fs.writeFile(path.join(root, `${index}.txt`), "x".repeat(500_000));
+    let bytes = 0;
+    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, { onFileRead: (count) => { bytes += count; } });
+    assert.equal(bytes, 10 * 1024 * 1024);
+    assert.match(result, /scan stopped after 10485760 bytes/);
+    assert.doesNotMatch(result, /ignored.txt/);
+    const growing = await fs.realpath(path.join(root, "0.txt"));
+    let growthBytes = 0;
+    const text = await foregroundText(root, "grep", { pattern: "x" }, undefined, {
+      afterFileStat: async (full) => { if (full === growing) { const h = await fs.open(full, "r+"); try { await h.truncate(32 * 1024 * 1024); } finally { await h.close(); } } },
+      onFileRead: (count) => { growthBytes += count; },
+    });
+    assert.match(text, /oversized files skipped/);
+    assert.doesNotMatch(text, /^0.txt:/m);
+    assert.ok(growthBytes <= 10 * 1024 * 1024);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground deep scans preserve normal results and ignore dependency and hidden subtrees", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-deep-"));
+  try {
+    const relative = Array.from({ length: 48 }, () => "nested").join(path.sep);
+    await fs.mkdir(path.join(root, relative), { recursive: true });
+    await fs.writeFile(path.join(root, relative, "leaf.txt"), "needle\n");
+    await fs.mkdir(path.join(root, "node_modules"));
+    await fs.writeFile(path.join(root, "node_modules/ignored.txt"), "needle\n");
+    await fs.mkdir(path.join(root, ".hidden"));
+    await fs.writeFile(path.join(root, ".hidden/ignored.txt"), "needle\n");
+    const opened: string[] = [];
+    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, { beforeDirectoryOpen: (directory) => { opened.push(path.basename(directory)); } });
+    assert.equal(result, `${relative}${path.sep}leaf.txt:1: needle`);
+    assert.ok(!opened.includes("node_modules") && !opened.includes(".hidden"));
+    assert.equal(await foregroundText(root, "grep", { pattern: "missing" }), "[no matches]");
+    assert.equal(await foregroundText(root, "glob", { pattern: "nested/**/*.txt" }), path.join(relative, "leaf.txt"));
+    assert.equal(await foregroundText(root, "glob", { pattern: "nested/**/*.missing" }), "[no matches]");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground collection limits distinguish exact caps and cap rendered output", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-caps-"));
+  try {
+    for (let i = 0; i < 500; i++) await fs.writeFile(path.join(root, `file-${String(i).padStart(3, "0")}.txt`), i < 200 ? "needle\n" : "");
+    for (const [name, params] of [["list_dir", {}], ["glob", { pattern: "*.txt" }], ["grep", { pattern: "needle" }]] as const) {
+      assert.doesNotMatch(await foregroundText(root, name, params), /truncated|scan stopped/);
+    }
+    await fs.writeFile(path.join(root, "extra.txt"), "needle\n");
+    for (const [name, params, cap] of [["list_dir", {}, 500], ["glob", { pattern: "*.txt" }, 500], ["grep", { pattern: "needle" }, 200]] as const) {
+      const text = await foregroundText(root, name, params);
+      assert.match(text, new RegExp(`truncated at ${cap}`));
+      assert.ok(text.length <= 20_000);
+    }
+    await fs.writeFile(path.join(root, "file-000.txt"), `${"needle".padEnd(300, "x")}\n`.repeat(201));
+    const output = await foregroundText(root, "grep", { pattern: "needle" });
+    assert.ok(output.length <= 20_000);
+    assert.match(output, /output truncated/);
+    assert.match(output, /truncated at 200 matches/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground reads reject non-regular FIFOs without waiting for a writer", { skip: process.platform === "win32", timeout: 2_000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-fifo-"));
+  try {
+    await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+    await assert.rejects(foregroundText(root, "read_file", { path: "pipe" }), /not a regular file/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test("foreground matcher capacity rejects excess work and recovers after concurrent cancellations", async () => {
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const ready = controllers.map(() => (() => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { resolve, promise }; })());
+  const calls = controllers.map((controller, index) => withCodingToolMatcher(
+    "grep", "^(a+)+$", Date.now() + 5_000, controller.signal,
+    async (match) => { ready[index]!.resolve(); return await match(["a".repeat(100_000) + "!"], 1); },
+  ));
+  const settled = Promise.allSettled(calls);
+  try {
+    await Promise.all(ready.map((entry) => entry.promise));
+    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), /searches are busy/);
+  } finally {
+    for (const controller of controllers) controller.abort(new Error("capacity test cancelled"));
+  }
+  const outcomes = await settled;
+  assert.ok(outcomes.every((outcome) => outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled"));
+  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["other", "safe"], 1)), [1]);
+});
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+test("foreground callers cancel pending reads and late acquisitions while handles retain an owner", { timeout: 15_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-pending-"));
+  await fs.writeFile(path.join(root, "a.txt"), "needle");
+  try {
+    for (const phase of ["acquire", "read"] as const) {
+      for (const [name, params] of [["read_file", { path: "a.txt" }], ["list_dir", {}], ["glob", { pattern: "*" }], ["grep", { pattern: "needle" }]] as const) {
+        const entered = deferred(); const release = deferred(); const closed = deferred();
+        const controller = new AbortController();
+        let reads = 0; let closes = 0;
+        const method = name === "read_file" ? "open" : "opendir";
+        const original = fsPromises[method];
+        // Delay the actual descriptor acquisition/read promise, not just a tool hook.
+        t.mock.method(fsPromises, method, async (...args: unknown[]) => {
+          const handle = await Reflect.apply(original, fsPromises, args);
+          const read = handle.read.bind(handle); const close = handle.close.bind(handle);
+          handle.read = async (...readArgs: unknown[]) => {
+            reads++;
+            if (phase === "read") { entered.resolve(); await release.promise; }
+            return Reflect.apply(read, handle, readArgs);
+          };
+          handle.close = async () => { closes++; await close(); closed.resolve(); };
+          if (phase === "acquire") { entered.resolve(); await release.promise; }
+          return handle;
+        });
+        syncBuiltinESMExports();
+        const call = foregroundText(root, name, params, controller.signal);
+        try {
+          await entered.promise;
+          controller.abort(new Error("pending I/O cancelled"));
+          await assert.rejects(call, /pending I\/O cancelled/);
+          assert.equal(closes, 0, "pending I/O still owns its handle");
+          release.resolve();
+          await closed.promise;
+          assert.equal(closes, 1);
+          assert.equal(reads, phase === "acquire" ? 0 : 1, "no subsequent reads after cancellation");
+        } finally {
+          release.resolve();
+          t.mock.restoreAll(); syncBuiltinESMExports();
+        }
+      }
+    }
+    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground deadline returns while a directory read is pending and closes it when settled", { timeout: 12_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-deadline-"));
+  const entered = deferred(); const release = deferred(); const closed = deferred();
+  const original = fsPromises.opendir;
+  let reads = 0; let closes = 0;
+  t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof original>) => {
+    const directory = await original(...args);
+    const read = directory.read.bind(directory); const close = directory.close.bind(directory);
+    directory.read = (async () => { reads++; entered.resolve(); await release.promise; return read(); }) as typeof directory.read;
+    directory.close = (async () => { closes++; await close(); closed.resolve(); }) as typeof directory.close;
+    return directory;
+  });
+  syncBuiltinESMExports();
+  try {
+    const call = foregroundText(root, "list_dir", {});
+    await entered.promise;
+    assert.match(await call, /search stopped after 5000 ms/);
+    assert.equal(closes, 0);
+    release.resolve(); await closed.promise;
+    assert.equal(reads, 1); assert.equal(closes, 1);
+  } finally {
+    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("foreground operation admission remains bounded through repeated cancellation and late cleanup", { timeout: 5_000 }, async () => {
+  const scope = new ForegroundReadOperations(2);
+  const controllers = [new AbortController(), new AbortController()];
+  const pending = controllers.map(() => deferred());
+  const cleaning = controllers.map(() => deferred());
+  const cleanup = controllers.map(() => deferred());
+  const completed = controllers.map(() => deferred());
+  const started = controllers.map(() => deferred());
+  const calls = controllers.map((controller, i) => scope.run(controller.signal, undefined, async (signal) => {
+    started[i]!.resolve();
+    try { await pending[i]!.promise; signal.throwIfAborted(); return "unexpected"; }
+    finally { cleaning[i]!.resolve(); await cleanup[i]!.promise; completed[i]!.resolve(); }
+  }, () => "deadline"));
+  const rejected = calls.map((call) => assert.rejects(call, /cancelled/));
+  await Promise.all(started.map((gate) => gate.promise));
+  for (let i = 0; i < 2; i++) controllers[i]!.abort(new Error("cancelled"));
+  await Promise.all(rejected);
+  const run = () => scope.run(undefined, undefined, async () => "recovered", () => "deadline");
+  for (let i = 0; i < 8; i++) await assert.rejects(run(), /operations are busy/);
+  pending[0]!.reject(new Error("late I/O failure")); pending[1]!.resolve();
+  await Promise.all(cleaning.map((gate) => gate.promise));
+  await assert.rejects(run(), /operations are busy/, "cleanup retains admission");
+  cleanup.forEach((gate) => gate.resolve());
+  await Promise.all(completed.map((gate) => gate.promise));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(await run(), "recovered");
+});
+
+test("foreground cleanup failures quarantine admission and undefined failures still reject", async () => {
+  const scope = new ForegroundReadOperations(1);
+  await assert.rejects(scope.run(undefined, undefined, async () => {
+    await closeForegroundResource({ close: async () => { throw new Error("close failed"); } });
+  }, () => undefined), ForegroundReadCleanupError);
+  await assert.rejects(scope.run(undefined, undefined, async () => "unused", () => "timeout"), /operations are busy/);
+  const fresh = new ForegroundReadOperations(1);
+  const result = await Promise.allSettled([fresh.run(undefined, undefined, async () => { throw undefined; }, () => undefined)]);
+  assert.equal(result[0]!.status, "rejected");
+  assert.equal(await fresh.run(undefined, undefined, async () => "ok", () => "timeout"), "ok");
+});
+
+test("foreground workers terminate on cancellation while traversal callbacks remain pending", { timeout: 8_000 }, async (t) => {
+  const terminated = deferred();
+  let terminationCount = 0;
+  const originalTerminate = Worker.prototype.terminate;
+  t.mock.method(Worker.prototype, "terminate", async function (this: Worker) {
+    const code = await originalTerminate.call(this);
+    if (++terminationCount === 4) terminated.resolve();
+    return code;
+  });
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const started = controllers.map(() => deferred());
+  const release = deferred();
+  const calls = controllers.map((controller, i) => withCodingToolMatcher("grep", "safe", Date.now() + 5_000, controller.signal, async () => {
+    started[i]!.resolve(); await release.promise; controller.signal.throwIfAborted();
+  }));
+  const settled = Promise.allSettled(calls);
+  try {
+    await Promise.all(started.map((gate) => gate.promise));
+    controllers.forEach((controller) => controller.abort(new Error("pending traversal cancelled")));
+    await terminated.promise;
+    assert.equal(terminationCount, 4, "workers terminate without waiting for the traversal callback");
+    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async () => undefined), /searches are busy/);
+  } finally { release.resolve(); await settled; t.mock.restoreAll(); }
+  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), [0]);
+});
+
+test("foreground tools retain global admission until both root metadata requests settle", { timeout: 8_000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-metadata-"));
+  await fs.writeFile(path.join(root, "a.txt"), "needle");
+  const tool = buildCodingTools(root).find((tool) => tool.name === "read_file")!;
+  const started = deferred(); const release = deferred(); const metadataSettled = deferred();
+  const stat = fsPromises.stat; const realpath = fsPromises.realpath;
+  let pendingStats = 0; let completedStats = 0;
+  t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof realpath>) => {
+    if (args[0] === root) throw new Error("first metadata request failed");
+    return realpath(...args);
+  });
+  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof stat>) => {
+    if (args[0] === root) {
+      if (++pendingStats === 4) started.resolve();
+      await release.promise;
+    }
+    const result = await stat(...args);
+    if (args[0] === root && ++completedStats === 4) metadataSettled.resolve();
+    return result;
+  });
+  syncBuiltinESMExports();
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const calls = controllers.map((controller) => tool.execute("pending", { path: "a.txt" }, controller.signal));
+  const rejections = calls.map((call) => assert.rejects(call, /metadata cancelled/));
+  try {
+    await started.promise;
+    controllers.forEach((controller) => controller.abort(new Error("metadata cancelled")));
+    await Promise.all(rejections);
+    for (let i = 0; i < 8; i++) await assert.rejects(tool.execute("excess", { path: "a.txt" }), /operations are busy/);
+    assert.equal(pendingStats, 4, "excess calls never start another syscall");
+  } finally {
+    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
+    // Let all four original owners observe the completed metadata pair.
+    await metadataSettled.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  try {
+    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test("foreground glob worker preserves Windows drive and UNC roots in expanded arms", () => {
+  const require = createRequire(import.meta.url);
+  const fixtures = [
+    { pattern: "C:/repo/*.ts", expected: "C:\\repo\\a.ts" },
+    { pattern: "C:/", expected: "C:\\" },
+    { pattern: "//server/share", expected: "\\\\server\\share\\" },
+    { pattern: "//server/share/", expected: "\\\\server\\share\\" },
+    { pattern: "{src/*.js,//server/share}", expected: "\\\\server\\share\\" },
+    { pattern: "C:\\repo\\*.ts", expected: "C:\\repo\\a.ts" },
+    { pattern: "//server/share/repo/*.ts", expected: "\\\\server\\share\\repo\\a.ts" },
+    { pattern: "{C:/repo/*.ts,src/*.js}", expected: "C:\\repo\\a.ts" },
+    { pattern: "{src/*.js,//server/share/repo/*.ts}", expected: "\\\\server\\share\\repo\\a.ts" },
+  ];
+  for (const { pattern, expected } of fixtures) {
+    // Execute the production worker engine with Windows path/parser semantics.
+    const engine = runInNewContext(`${CODING_GLOB_WORKER_SOURCE}; ({ seeds, globStep });`, {
+      process: { platform: "win32" },
+      workerData: { pattern, minimatchPath: require.resolve("minimatch") },
+      require: (name: string) => name === "node:path" ? path.win32 : require(name),
+    }) as { seeds: CodingGlobTask[]; globStep(request: unknown): CodingGlobReply };
+    const matches: string[] = [];
+    for (const task of engine.seeds) {
+      const prepared = engine.globStep({ task, directory: true });
+      matches.push(...prepared.matches);
+      if (!prepared.done) matches.push(...engine.globStep({ task, directory: true, entries: [{ name: "a.ts", directory: false, link: false }] }).matches);
+    }
+    assert.deepEqual(matches, [expected], pattern);
+  }
 });

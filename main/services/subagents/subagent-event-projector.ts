@@ -19,6 +19,10 @@ import {
   type SubagentProjectionNoticeKind,
 } from "../../../renderer/shared/subagent-runs.js";
 import { reportedTokens } from "../usage-accounting.js";
+import {
+  subagentContextUsageFromReport,
+  type SubagentContextUsageV1,
+} from "../../../renderer/shared/subagent-context-usage.js";
 import type { SubagentTaskRequest, SubagentTaskResult } from "./contracts.js";
 import { sanitizeSubagentSnapshotTextWithFacts } from "../../../renderer/shared/subagent-safe-text.js";
 
@@ -35,6 +39,13 @@ export interface SubagentRunProjectorInput {
   chatId: string;
   workspaceId: string;
   modelId: string;
+  /** The child model's context window, for live context-usage readings. */
+  contextWindow?: number;
+  /**
+   * Live, non-durable context reading after each child response. It never
+   * enters the run snapshot, so it cannot bump a revision or reach storage.
+   */
+  onContextUsage?: (runId: string, usage: SubagentContextUsageV1) => void;
   /** Synchronous authority/admission seam that runs before a new run is published. */
   prepareSnapshot?: (snapshot: SubagentRunSnapshotV1) => void;
   onSnapshot?: (snapshot: SubagentRunSnapshotV1) => void | Promise<void>;
@@ -327,6 +338,7 @@ export class SubagentEventProjector {
   usage(runId: string, message: AssistantMessage): void {
     const current = this.require(runId);
     const reported = reportedTokens(message.usage)?.total ?? 0;
+    this.publishContextUsage(current, reported);
     const tokens = Number.isSafeInteger(reported)
       ? reported
       : Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(reported)));
@@ -454,6 +466,17 @@ export class SubagentEventProjector {
   async flush(): Promise<void> {
     await this.persistenceTail;
     if (this.persistenceError) throw this.persistenceError;
+  }
+
+  private publishContextUsage(current: SubagentRunSnapshotV1, reported: number): void {
+    if (current.finishedAt !== undefined || !this.input.onContextUsage) return;
+    const usage = subagentContextUsageFromReport(reported, this.input.contextWindow);
+    if (!usage) return;
+    try {
+      this.input.onContextUsage(current.runId, usage);
+    } catch {
+      // A presentation-only observer must never affect the child run.
+    }
   }
 
   private require(runId: string): SubagentRunSnapshotV1 {

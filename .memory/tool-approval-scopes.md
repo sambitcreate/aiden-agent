@@ -10,7 +10,7 @@
   - `chat:approve` options carry `scope`.
   - `chat:listApprovalRules`, `chat:revokeApprovalRule` and `chat:revokeAllApprovalRules` back the Settings section `approvals`.
   - `remote:respondApprovalFromHost` takes an optional 5th `scope`.
-- Remote contract revision 16:
+- Remote contract revision 17:
   - `PendingApproval.scopes` is present only when `canAllow`.
   - The respond body has an optional `scope` that must be allowed and offered, otherwise 400 `invalid_request`. The response echoes it.
   - The OpenAPI request schema encodes "scope requires allow" with if/then.

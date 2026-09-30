@@ -993,6 +993,97 @@ test("turn, usage, and tool telemetry has a hard durable-write bound", async () 
   assert.equal(emitted[emitted.length - 1]?.state, "completed");
 });
 
+test("live context usage follows the latest response without durable writes or revisions", async () => {
+  const emitted: SubagentRunSnapshotV1[] = [];
+  const readings: Array<{ runId: string; tokens: number; window: number }> = [];
+  const projector = new SubagentEventProjector({
+    generationId: "generation-context",
+    chatId: "chat-context",
+    workspaceId: "workspace-context",
+    modelId: "model-context",
+    contextWindow: 200_000,
+    onContextUsage: (runId, usage) => {
+      readings.push({ runId, ...usage });
+    },
+    onSnapshot: (snapshot) => {
+      emitted.push(snapshot);
+    },
+  });
+  const runId = "run-context";
+  projector.begin(
+    { runId, groupId: "generation-context:group", childId: "child-context" },
+    { role: "scout", label: "Context", task: "Measure context." },
+  );
+  projector.running(runId);
+  await projector.flush();
+  const durableBefore = emitted.length;
+  const revisionBefore = projector.snapshot()[0]!.revision;
+
+  projector.usage(runId, usageMessage(12_000));
+  projector.usage(runId, usageMessage(84_000));
+  // A child compaction shrinks context; the reading is the latest, not a sum.
+  projector.usage(runId, usageMessage(30_000));
+  projector.usage(runId, usageMessage(0));
+  await projector.flush();
+
+  assert.deepEqual(readings, [
+    { runId, tokens: 12_000, window: 200_000 },
+    { runId, tokens: 84_000, window: 200_000 },
+    { runId, tokens: 30_000, window: 200_000 },
+  ]);
+  // Cumulative spend still accrues on the snapshot, which never carries context.
+  const live = projector.snapshot()[0]!;
+  assert.equal(live.tokens, 126_000);
+  assert.equal("contextUsage" in live, false);
+  assert.equal(emitted.length, durableBefore);
+  assert.equal(live.revision, revisionBefore + 4);
+
+  projector.finish(runId, {
+    role: "scout",
+    label: "Context",
+    status: "completed",
+    summary: "Done.",
+  });
+  projector.usage(runId, usageMessage(99_000));
+  assert.equal(readings.length, 3, "a finished run publishes no further readings");
+});
+
+test("live context usage is skipped without a known window and never breaks the run", () => {
+  let calls = 0;
+  const unknownWindow = new SubagentEventProjector({
+    generationId: "generation-no-window",
+    chatId: "chat-no-window",
+    workspaceId: "workspace-no-window",
+    modelId: "model-no-window",
+    onContextUsage: () => {
+      calls += 1;
+    },
+  });
+  unknownWindow.begin(
+    { runId: "run-no-window", groupId: "generation-no-window:group", childId: "child" },
+    { role: "scout", label: "No window", task: "Measure context." },
+  );
+  unknownWindow.usage("run-no-window", usageMessage(500));
+  assert.equal(calls, 0);
+
+  const throwing = new SubagentEventProjector({
+    generationId: "generation-throwing",
+    chatId: "chat-throwing",
+    workspaceId: "workspace-throwing",
+    modelId: "model-throwing",
+    contextWindow: 1_000,
+    onContextUsage: () => {
+      throw new Error("renderer gone");
+    },
+  });
+  throwing.begin(
+    { runId: "run-throwing", groupId: "generation-throwing:group", childId: "child" },
+    { role: "scout", label: "Throwing", task: "Measure context." },
+  );
+  throwing.usage("run-throwing", usageMessage(500));
+  assert.equal(throwing.snapshot()[0]!.tokens, 500);
+});
+
 test("projector withholds text across stream boundaries until terminal sanitization", () => {
   const cases = [
     {

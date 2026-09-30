@@ -99,7 +99,7 @@ const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 16);
+  assert.equal(fixture.contractRevision, 17);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -190,6 +190,34 @@ test("task progress projections reject multiple active tasks and dependency cycl
   );
 });
 
+test("agent interrupt fixture stops one current-turn agent and rejects rosters that do not", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  assert.equal(fixture.server.features.includes("chat-agent-interrupt-v1"), true);
+  const stopped = fixture.agentInterrupt.response.agents.find(
+    (agent) => agent.agentId === fixture.agentInterrupt.agentId,
+  );
+  assert.equal(stopped?.state, "stopped");
+  assert.equal(typeof stopped?.finishedAt, "string");
+  assert.equal(fixture.agentInterrupt.response.turnId, fixture.agentRoster.turnId);
+
+  const stillRunning = structuredClone(raw);
+  const interrupt = record(stillRunning.agentInterrupt, "agentInterrupt");
+  const agents = record(interrupt.response, "response").agents as Record<string, unknown>[];
+  agents[0]!.state = "running";
+  delete agents[0]!.finishedAt;
+  assert.throws(() => parseAidenRemoteContractFixture(stillRunning), /must stop an agent/u);
+
+  const unknownAgent = structuredClone(raw);
+  record(unknownAgent.agentInterrupt, "agentInterrupt").agentId = "agent_fixture_missing";
+  assert.throws(() => parseAidenRemoteContractFixture(unknownAgent), /must stop an agent/u);
+
+  const unadvertised = structuredClone(raw);
+  const server = record(unadvertised.server, "server");
+  server.features = (server.features as string[]).filter((feature) => feature !== "chat-agent-interrupt-v1");
+  assert.throws(() => parseAidenRemoteContractFixture(unadvertised), /chat agent interrupt/u);
+});
+
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const roster = fixture.agentRoster;
@@ -250,6 +278,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/move",
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
+    "/chats/{chatId}/agents/{agentId}/interrupt",
     "/chats/{chatId}/skills",
     "/chats/{chatId}/progress/events",
     "/chats/{chatId}/turns",
@@ -401,6 +430,13 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   );
   assert.equal(agentsGet["x-aiden-capability"], "chat:read");
   assert.deepEqual(agentsGet["x-aiden-capabilities"], ["chat:read", "agents:read"]);
+  const agentInterruptPost = record(
+    record(paths["/chats/{chatId}/agents/{agentId}/interrupt"], "chat agent interrupt").post,
+    "chat agent interrupt post",
+  );
+  assert.equal(agentInterruptPost["x-aiden-capability"], "chat:write");
+  assert.deepEqual(agentInterruptPost["x-aiden-capabilities"], ["chat:write", "agents:read"]);
+  assert.equal(agentInterruptPost["x-aiden-archived-access"], "mutation_blocked");
   const skillsGet = record(
     record(paths["/chats/{chatId}/skills"], "chat skills").get,
     "chat skills get",
@@ -1619,7 +1655,7 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
   const approval = fixture.streamApproval.approval;
   assert.equal(pending(approval), true);
   const { scopes: _scopes, ...legacy } = approval;
-  assert.equal(pending(legacy), true, "revision 15 servers omit scopes");
+  assert.equal(pending(legacy), true, "revision 16 servers omit scopes");
   assert.equal(pending({ ...approval, scopes: ["once"] }), false, "a once-only offer is omitted, not listed");
   assert.equal(pending({ ...approval, scopes: ["once", "forever"] }), false);
 
