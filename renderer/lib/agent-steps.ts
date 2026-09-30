@@ -13,6 +13,8 @@ export interface ActivityLine {
   verb: string;
   object?: string;
   tone: "normal" | "warning" | "error";
+  /** Set while a tool call exists but has not started executing. */
+  stage?: "preparing";
 }
 
 interface VerbPair {
@@ -103,6 +105,9 @@ export function activityLine(step: AgentStep): ActivityLine {
   const verbs = VERBS[step.toolName];
   switch (step.status) {
     case "pending":
+      // The model is still writing this call's arguments (or execution has not
+      // begun), so name the tool rather than claim work that has not started.
+      return { verb: "Preparing", object: step.label, tone: "normal", stage: "preparing" };
     case "running":
       return { verb: verbs?.active ?? step.label, object, tone: "normal" };
     case "completed":

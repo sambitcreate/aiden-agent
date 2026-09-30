@@ -1,4 +1,5 @@
 import { sanitizeSubagentSnapshotText } from "./subagent-safe-text.js";
+import { boundedUnicodePrefix } from "./unicode-prefix.js";
 
 export const SUBAGENT_RUN_SNAPSHOT_VERSION = 1 as const;
 export const MAX_SUBAGENT_RUNS_PER_GENERATION = 8;
@@ -527,6 +528,59 @@ export function parseSubagentMessageReferenceV1(
   };
 }
 
+/**
+ * Activity recorded for a `needs_attention` child when it produced no usable
+ * pending question or approval text.
+ */
+export const SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY = "Needs attention.";
+
+/**
+ * Normalize a child's pending question or approval prompt into the single-line,
+ * redacted, bounded activity string a `needs_attention` snapshot carries.
+ * Whitespace and control characters collapse to single spaces, secrets are
+ * redacted, and long text is cut at a word boundary with an ellipsis. Text that
+ * cannot be represented safely falls back to
+ * {@link SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY}.
+ */
+export function subagentPendingQuestionActivity(question: unknown): string {
+  if (typeof question !== "string") return SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY;
+  const singleLine = (value: string) =>
+    Array.from(value)
+      .map((character) => (hasControl(character, false) ? " " : character))
+      .join("")
+      .replace(/\s+/gu, " ")
+      .trim();
+  const sanitized = singleLine(sanitizeSubagentSnapshotText(question));
+  if (!sanitized) return SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY;
+  let bounded = sanitized;
+  if (bounded.length > MAX_SUBAGENT_ACTIVITY_CHARS) {
+    // Snapshot text is NFKC-stable, so the ellipsis is ASCII "...". Leave room
+    // for it plus a surrogate pair the prefix may keep whole.
+    const prefix = boundedUnicodePrefix(bounded, MAX_SUBAGENT_ACTIVITY_CHARS - 4);
+    const wordBreak = prefix.lastIndexOf(" ");
+    const cut =
+      wordBreak >= Math.floor(MAX_SUBAGENT_ACTIVITY_CHARS / 2)
+        ? prefix.slice(0, wordBreak)
+        : prefix;
+    bounded = `${cut.replace(/[\s.,;:!?-]+$/u, "")}...`;
+  }
+  return safeText(bounded, MAX_SUBAGENT_ACTIVITY_CHARS)
+    ? bounded
+    : SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY;
+}
+
+/**
+ * The child's real pending question for a `needs_attention` run, or
+ * `undefined` when the run is not waiting or only carries the generic fallback.
+ */
+export function subagentPendingQuestion(
+  run: { state: string; activity?: string } | undefined,
+): string | undefined {
+  if (!run || run.state !== "needs_attention") return undefined;
+  const activity = run.activity?.trim();
+  return activity && activity !== SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY ? activity : undefined;
+}
+
 export const SUBAGENT_RUN_SNAPSHOT_VERSION_V2 = 2 as const;
 export type SubagentRunStateV2 = SubagentRunState | "needs_attention" | "stopped" | "unknown";
 export type SubagentExecutionModeV2 = "foreground" | "background";
@@ -603,11 +657,7 @@ function v2BaseProjection(
     label: value.label,
     taskPreview: value.taskPreview,
     state: v2StateAsV1(state),
-    ...(state === "needs_attention"
-      ? { activity: "Needs attention." }
-      : value.activity === undefined
-        ? {}
-        : { activity: value.activity }),
+    ...(value.activity === undefined ? {} : { activity: value.activity }),
     startedAt: value.startedAt,
     updatedAt: value.updatedAt,
     ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt }),
@@ -646,7 +696,9 @@ export function parseSubagentRunSnapshotV2(value: unknown): SubagentRunSnapshotV
     (value.depth === 1 && value.parentRunId !== undefined) ||
     (value.depth > 1 && value.parentRunId === undefined) ||
     value.parentRunId === value.runId ||
-    (value.state === "needs_attention" && value.activity !== "Needs attention.") ||
+    // A waiting child always says what it waits on: its pending question, or
+    // the generic fallback. The V1 parser below bounds and redaction-checks it.
+    (value.state === "needs_attention" && value.activity === undefined) ||
     value.retryOfRunId === value.runId
   ) {
     return undefined;

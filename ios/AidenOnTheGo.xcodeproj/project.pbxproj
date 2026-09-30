@@ -65,6 +65,7 @@
 		B07400000000000000000002 /* AidenProductShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07400000000000000000012 /* AidenProductShellTests.swift */; };
 		B07500000000000000000001 /* AidenBotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000011 /* AidenBotCache.swift */; };
 		B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000012 /* AidenChatDraftStore.swift */; };
+		B0D00000000000000000A001 /* AidenModelPreferenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D00000000000000000A011 /* AidenModelPreferenceStore.swift */; };
 		B07500000000000000000003 /* AidenBotCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000013 /* AidenBotCacheTests.swift */; };
 		B07600000000000000000001 /* AidenBotCustomAccessFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */; };
 		B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07700000000000000000011 /* AidenBotsHomeView.swift */; };
@@ -80,6 +81,7 @@
 		A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */; };
 		A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */; };
 		A713739233F64F4FA4C2B700 /* AidenChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */; };
+		A714739233F64F4FA4C2B700 /* AidenTranscriptPolish.swift in Sources */ = {isa = PBXBuildFile; fileRef = A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */; };
 		A0E000000000000000000001 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000011 /* Core.swift */; };
 		A0E000000000000000000002 /* Lattice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000012 /* Lattice.swift */; };
 		A0E000000000000000000003 /* Morph.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000013 /* Morph.swift */; };
@@ -172,12 +174,14 @@
 		A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentPicker.swift; sourceTree = "<group>"; };
 		A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentCamera.swift; sourceTree = "<group>"; };
 		A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatScrollPolicy.swift; sourceTree = "<group>"; };
+		A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenTranscriptPolish.swift; sourceTree = "<group>"; };
 		B07300000000000000000011 /* AidenBot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBot.swift; sourceTree = "<group>"; };
 		B07300000000000000000012 /* AidenBotContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotContractTests.swift; sourceTree = "<group>"; };
 		B07400000000000000000011 /* AidenProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellView.swift; sourceTree = "<group>"; };
 		B07400000000000000000012 /* AidenProductShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellTests.swift; sourceTree = "<group>"; };
 		B07500000000000000000011 /* AidenBotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCache.swift; sourceTree = "<group>"; };
 		B07500000000000000000012 /* AidenChatDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatDraftStore.swift; sourceTree = "<group>"; };
+		B0D00000000000000000A011 /* AidenModelPreferenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenModelPreferenceStore.swift; sourceTree = "<group>"; };
 		B07500000000000000000013 /* AidenBotCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCacheTests.swift; sourceTree = "<group>"; };
 		B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCustomAccessFlowView.swift; sourceTree = "<group>"; };
 		B07700000000000000000011 /* AidenBotsHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsHomeView.swift; sourceTree = "<group>"; };
@@ -450,6 +454,7 @@
 				A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */,
 				A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */,
 				A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */,
+				A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */,
 				A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */,
 			);
 			path = Chat;
@@ -467,6 +472,7 @@
 			children = (
 				B07500000000000000000011 /* AidenBotCache.swift */,
 				B07500000000000000000012 /* AidenChatDraftStore.swift */,
+				B0D00000000000000000A011 /* AidenModelPreferenceStore.swift */,
 				A0D700000000000000000013 /* AidenChatCache.swift */,
 			);
 			path = Persistence;
@@ -708,6 +714,7 @@
 				B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */,
 				B07500000000000000000001 /* AidenBotCache.swift in Sources */,
 				B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */,
+				B0D00000000000000000A001 /* AidenModelPreferenceStore.swift in Sources */,
 				B07400000000000000000001 /* AidenProductShellView.swift in Sources */,
 				B07300000000000000000001 /* AidenBot.swift in Sources */,
 				B07100000000000000000001 /* BotFirstPrototype.swift in Sources */,
@@ -730,6 +737,7 @@
 				A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */,
 				A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */,
 				A713739233F64F4FA4C2B700 /* AidenChatScrollPolicy.swift in Sources */,
+				A714739233F64F4FA4C2B700 /* AidenTranscriptPolish.swift in Sources */,
 				A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */,
 				A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */,
 				A0DD00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */,

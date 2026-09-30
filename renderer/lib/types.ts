@@ -10,6 +10,7 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
+import type { AssistantTurnStatsV1 } from "../shared/assistant-turn-stats";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
@@ -617,6 +618,7 @@ export interface ChatMessage {
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
+  turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;
 }
 

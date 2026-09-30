@@ -7,6 +7,7 @@ import type { AnthropicThinkingLevel } from "../../renderer/shared/anthropic-thi
 import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import type { AssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
@@ -315,6 +316,8 @@ export interface ChatMessage {
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
+  /** Content-free turn duration and provider-reported token totals for the footer. */
+  turnStats?: AssistantTurnStatsV1;
   /** Bounded references to separately persisted renderer-safe child run records. */
   subagents?: SubagentMessageReferenceV1;
 }

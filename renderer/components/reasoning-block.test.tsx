@@ -33,3 +33,15 @@ test("a custom label carries the Visualizing shimmer state", () => {
   );
   assert.match(settled, />Visualizing</u);
 });
+
+test("the automatic preview is a bounded, keyboard-scrollable viewport", () => {
+  const markup = renderToStaticMarkup(
+    <ReasoningBlock content="Long streaming thought" streaming active />,
+  );
+  assert.match(markup, /data-disclosure-layout="preview"/u);
+  // The preview region scrolls on its own, so it must be reachable by keyboard.
+  assert.match(markup, /role="region" aria-label="Model reasoning" tabindex="0"/u);
+  const collapsed = renderToStaticMarkup(<ReasoningBlock content="Stored thought" />);
+  assert.match(collapsed, /data-disclosure-layout="collapsed"/u);
+  assert.doesNotMatch(collapsed, /role="region"/u);
+});

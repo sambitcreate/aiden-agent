@@ -73,6 +73,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:questionnaire",
   "chat:reasoning-delta",
   "chat:status",
+  "chat:subagent-context",
   "chat:subagents",
   "chat:timeline",
   "chat:todo",
