@@ -2603,6 +2603,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={draft ? undefined : steerMessage}
                 onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
+                compactionHeld={queuedState.holdReason === "compaction"}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
@@ -2689,9 +2690,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ? undefined
                     : async (engine) => {
                         const compactChatId = chatId;
+                        // Follow-ups typed during compaction queue behind it and
+                        // wait until it settles, even if the user leaves the chat.
+                        const compactQueue = chatMessageQueue(compactChatId);
+                        let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
+                        compactQueue.holdForCompaction();
                         setContextCompactPending(true);
                         try {
                           const result = await chatsApi.compact(compactChatId, engine);
+                          compactOutcome = result;
                           // The pane may now show another chat; its meter
                           // chrome belongs to that chat, not this compaction.
                           if (result.compacted && chatIdRef.current === compactChatId) {
@@ -2707,6 +2714,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                           return result;
                         } finally {
                           if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+                          if (compactQueue.releaseCompactionHold(compactOutcome)) {
+                            const count = compactQueue.getSnapshot().messages.length;
+                            toast.info(
+                              `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
+                            );
+                          }
                         }
                       }
                 }
