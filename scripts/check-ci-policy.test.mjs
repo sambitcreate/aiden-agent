@@ -202,6 +202,15 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
   assert.ok(jobs.ios.steps.some((step) => step.run?.includes("xcodebuild build-for-testing")));
+  const simulator = jobs["ios-simulator"];
+  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test"));
+  const simulatorResults = simulator.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
+  assert.equal(simulatorTest["continue-on-error"], undefined);
+  assert.equal(simulatorResults.if, "failure()");
+  assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+  assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
+  assert.equal(simulatorResults.with["retention-days"], 7);
   assert.equal(jobs.verify.steps.filter((step) => step.run === "npm run build").length, 1);
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -359,4 +368,15 @@ test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lan
   assert.equal(steps[install].run, "npm ci");
   const registry = readRegistry();
   assert.ok(registry.lanes.some((lane) => lane.preserved.includes("ios-release-policy")));
+});
+
+test("foreground Electron smoke is a required package command in desktop verification", async () => {
+  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const command = "test:foreground-file-tools:electron";
+  assert.ok(scripts[command], "Electron smoke must be runnable from the package manifest");
+  const smoke = jobs.verify.steps.find((step) => step.run === `npm run ${command}`);
+  assert.ok(smoke, "Desktop CI must execute the foreground runtime assertions");
+  assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
+  assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
 });

@@ -6,6 +6,9 @@
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
 import { spawn } from "node:child_process";
+import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
+import { StringDecoder } from "node:string_decoder";
+import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   constants as fsConstants,
@@ -261,6 +264,9 @@ interface WorkspaceRootGuard {
     beforeDirectoryOpen?(directoryPath: string): void | Promise<void>;
     afterDirectoryOpen?(directoryPath: string): void | Promise<void>;
     beforeEntryAccess?(entryPath: string): void | Promise<void>;
+    afterFileStat?(entryPath: string): void | Promise<void>;
+    onFileRead?(bytes: number): void;
+    onDirectoryEntry?(entryPath: string): void;
     beforeWriteCommit?(entryPath: string): void | Promise<void>;
   };
 }
@@ -312,10 +318,13 @@ async function verifyWorkspaceRoot(
   let canonical: string;
   let identity: Stats;
   try {
-    [canonical, identity] = await Promise.all([
+    const results = await Promise.allSettled([
       fs.realpath(workspace.lexical),
       fs.stat(workspace.lexical),
     ]);
+    if (results[0].status === "rejected") throw results[0].reason;
+    if (results[1].status === "rejected") throw results[1].reason;
+    [canonical, identity] = [results[0].value, results[1].value];
   } catch {
     throwIfAborted(signal, "Filesystem operation cancelled.");
     throw new Error("The authorized workspace root changed during this generation.");
@@ -903,6 +912,123 @@ function makeSubagentReadFile(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
+/** Parent policy deliberately permits metadata/credential names other than .env. */
+async function readParentFile(
+  workspace: WorkspaceRootGuard,
+  root: string,
+  full: string,
+  maxBytes: number,
+  signal?: AbortSignal,
+  onRead?: (bytes: number) => void,
+): Promise<{ buffer: Buffer; truncated: boolean; bytesRead: number }> {
+  throwIfAborted(signal, "File read cancelled.");
+  await workspace.testObserver?.beforeEntryAccess?.(full);
+  await verifyWorkspaceRoot(workspace, signal);
+  const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
+  throwIfAborted(signal, "File read cancelled.");
+  rejectEnvironmentSecret(root, canonical);
+  const handle = await fs.open(canonical, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    throwIfAborted(signal, "File read cancelled.");
+    const stat = await handle.stat();
+    throwIfAborted(signal, "File read cancelled.");
+    if (!stat.isFile()) throw new Error("The requested path is not a regular file.");
+    const verified = assertRealPathInRoot(root, await fs.realpath(full), full);
+    throwIfAborted(signal, "File read cancelled.");
+    rejectEnvironmentSecret(root, verified);
+    if (!sameFile(stat, await fs.stat(verified))) throw new Error("File changed while opening.");
+    throwIfAborted(signal, "File read cancelled.");
+    await workspace.testObserver?.afterFileStat?.(full);
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      throwIfAborted(signal, "File read cancelled.");
+      const result = await handle.read(buffer, bytesRead, Math.min(64 * 1024, buffer.length - bytesRead), bytesRead);
+      onRead?.(result.bytesRead);
+      workspace.testObserver?.onFileRead?.(result.bytesRead);
+      if (!result.bytesRead) break;
+      bytesRead += result.bytesRead;
+    }
+    await verifyWorkspaceRoot(workspace, signal);
+    return { buffer: buffer.subarray(0, Math.min(bytesRead, maxBytes)), truncated: bytesRead > maxBytes, bytesRead };
+  } finally {
+    await closeForegroundResource(handle);
+  }
+}
+
+interface ParentScanBudget {
+  entries: number;
+  bytes: number;
+  deadline: number;
+  stopped: boolean;
+  warnings: Set<string>;
+}
+
+function parentScanBudget(): ParentScanBudget {
+  return { entries: 0, bytes: 0, deadline: Date.now() + MAX_GREP_DURATION_MS, stopped: false, warnings: new Set() };
+}
+
+function parentScanStopped(budget: ParentScanBudget, signal?: AbortSignal): boolean {
+  throwIfAborted(signal, "File search cancelled.");
+  if (Date.now() >= budget.deadline) {
+    budget.stopped = true;
+    budget.warnings.add(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`);
+  }
+  return budget.stopped;
+}
+
+/** opendir bounds enumeration even when a directory has no matching entries. */
+async function parentDirectoryEntries(
+  workspace: WorkspaceRootGuard,
+  full: string,
+  budget: ParentScanBudget,
+  signal?: AbortSignal,
+): Promise<Dirent[]> {
+  if (parentScanStopped(budget, signal)) return [];
+  const root = await verifyWorkspaceRoot(workspace, signal);
+  await workspace.testObserver?.beforeDirectoryOpen?.(full);
+  throwIfAborted(signal, "Directory traversal cancelled.");
+  const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
+  throwIfAborted(signal, "Directory traversal cancelled.");
+  const before = await fs.stat(canonical);
+  throwIfAborted(signal, "Directory traversal cancelled.");
+  const directory = await fs.opendir(canonical, { bufferSize: 1 });
+  try {
+    throwIfAborted(signal, "Directory traversal cancelled.");
+    await workspace.testObserver?.afterDirectoryOpen?.(full);
+    await verifyWorkspaceRoot(workspace, signal);
+    const after = assertRealPathInRoot(root, await fs.realpath(full), full);
+    throwIfAborted(signal, "Directory traversal cancelled.");
+    if (canonical !== after || !sameFile(before, await fs.stat(after))) throw new Error("Directory changed while opening.");
+    const entries: Dirent[] = [];
+    while (!parentScanStopped(budget, signal)) {
+      // No lookahead beyond the work budget: reaching it is conservatively incomplete.
+      if (budget.entries >= MAX_GLOB_ENTRIES) {
+        budget.stopped = true;
+        budget.warnings.add(`… [scan stopped after ${MAX_GLOB_ENTRIES} entries]`);
+        break;
+      }
+      const entry = await directory.read();
+      if (!entry) break;
+      budget.entries++;
+      workspace.testObserver?.onDirectoryEntry?.(path.join(full, entry.name));
+      throwIfAborted(signal, "Directory traversal cancelled.");
+      entries.push(entry);
+    }
+    // Omit an over-budget directory instead of allowing filesystem enumeration
+    // order to select the returned subset. Earlier complete directories survive.
+    return budget.stopped ? [] : entries.sort(compareEntryNames);
+  } finally {
+    await closeForegroundResource(directory);
+  }
+}
+
+function validateParentPattern(pattern: string): void {
+  if (typeof pattern !== "string" || pattern.length > MAX_SEARCH_PATTERN_CHARS) {
+    throw new Error(`Search pattern must be at most ${MAX_SEARCH_PATTERN_CHARS} characters.`);
+  }
+}
+
 function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
   return {
     name: "read_file",
@@ -912,14 +1038,15 @@ function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to the workspace folder." }),
     }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { path: p } = params as { path: string };
-      const { root: realRoot, full } = await resolveExistingInRoot(workspace, p);
+      const { root: realRoot, full } = await resolveExistingInRoot(workspace, p, signal);
       rejectEnvironmentSecret(realRoot, full);
-      const buffer = await fs.readFile(full);
-      const text = buffer.subarray(0, MAX_READ_BYTES).toString("utf-8");
+      const { buffer, truncated } = await readParentFile(workspace, realRoot, full, MAX_READ_BYTES, signal);
+      const decoder = new StringDecoder("utf8");
+      const text = decoder.write(buffer) + (truncated ? "" : decoder.end());
       return textResult(
-        buffer.length > MAX_READ_BYTES ? `${text}\n… [truncated]` : text || "[empty file]",
+        truncated ? `${text}\n… [truncated]` : text || "[empty file]",
       );
     },
   };
@@ -1107,15 +1234,21 @@ function makeParentListDir(workspace: WorkspaceRootGuard): AgentTool {
         Type.String({ description: "Directory relative to the workspace folder (default root)." }),
       ),
     }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { path: p } = params as { path?: string };
-      const { full } = await resolveExistingInRoot(workspace, p ?? ".");
-      const entries = await fs.readdir(full, { withFileTypes: true });
+      const { full } = await resolveExistingInRoot(workspace, p ?? ".", signal);
+      const budget = parentScanBudget();
+      const entries = await parentDirectoryEntries(workspace, full, budget, signal);
+      const truncated = entries.length > MAX_LIST_ENTRIES;
+      entries.sort(compareEntryNames);
+      entries.length = Math.min(entries.length, MAX_LIST_ENTRIES);
       const lines = entries.map(
         (entry) => `${entry.isDirectory() ? "dir " : "file"}  ${entry.name}`,
       );
       lines.sort();
-      return textResult(lines.length ? lines.join("\n") : "[empty directory]");
+      if (truncated) budget.warnings.add(`… [truncated at ${MAX_LIST_ENTRIES} entries]`);
+      await verifyWorkspaceRoot(workspace, signal);
+      return textResult(formatBoundedSearchResult(lines, budget.stopped ? "[no entries returned]" : "[empty directory]", [...budget.warnings]));
     },
   };
 }
@@ -1268,37 +1401,99 @@ function makeSubagentGlob(workspace: WorkspaceRootGuard): AgentTool {
 }
 
 function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
-  const root = workspace.lexical;
   return {
     name: "glob",
     label: "Find Files",
-    description: 'Find files in the workspace folder matching a glob pattern, e.g. "src/**/*.ts".',
-    parameters: Type.Object({
-      pattern: Type.String({ description: "Glob pattern relative to the workspace folder." }),
-    }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
+    description: 'Find files in the workspace folder matching a glob pattern, e.g. "src/**/*.ts". Large searches return an incomplete-result notice.',
+    parameters: Type.Object({ pattern: Type.String({ maxLength: MAX_SEARCH_PATTERN_CHARS, description: "Glob pattern relative to the workspace folder." }) }),
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { pattern } = params as { pattern: string };
-      const matches: string[] = [];
-      const realRoot = await verifyWorkspaceRoot(workspace);
-      for await (const entry of fs.glob(pattern, { cwd: root })) {
-        try {
-          const lexical = resolveInRoot(root, entry);
-          const realPath = await fs.realpath(lexical);
-          assertRealPathInRoot(realRoot, realPath, entry);
-          if (
-            isEnvironmentSecretPath(entry) ||
-            isEnvironmentSecretPath(path.relative(realRoot, realPath))
-          ) {
-            continue;
+      throwIfAborted(signal, "File search cancelled.");
+      validateParentPattern(pattern);
+      const budget = parentScanBudget();
+      const matches = new Set<string>();
+      const root = await verifyWorkspaceRoot(workspace, signal);
+      try {
+        await withCodingToolGlob(pattern, budget.deadline, signal, async (seeds, step) => {
+          const pending = [...seeds].reverse();
+          const acceptMatches = async (candidates: string[]) => {
+            for (const candidate of candidates) {
+              if (parentScanStopped(budget, signal)) break;
+              if (matches.has(candidate)) continue;
+              try {
+                const canonical = assertRealPathInRoot(root, await fs.realpath(resolveInRoot(workspace.lexical, candidate)), candidate);
+                if (isEnvironmentSecretPath(candidate) || isEnvironmentSecretPath(path.relative(root, canonical))) continue;
+              } catch {
+                throwIfAborted(signal, "File search cancelled.");
+                continue;
+              }
+              if (matches.size === MAX_GLOB_MATCHES) {
+                budget.warnings.add(`… [truncated at ${MAX_GLOB_MATCHES} matches]`);
+                budget.stopped = true;
+                break;
+              }
+              matches.add(candidate);
+            }
+          };
+          while (pending.length && !parentScanStopped(budget, signal)) {
+            const task = pending.pop()!;
+            let full: string;
+            let directory: boolean;
+            try {
+              const resolved = await resolveExistingInRoot(workspace, task.path, signal);
+              full = resolved.full;
+              if (isEnvironmentSecretPath(task.path) || isEnvironmentSecretPath(path.relative(root, full))) continue;
+              throwIfAborted(signal, "File search cancelled.");
+              directory = (await fs.stat(full)).isDirectory();
+            } catch {
+              throwIfAborted(signal, "File search cancelled.");
+              await verifyWorkspaceRoot(workspace, signal);
+              continue;
+            }
+            const prepared = await step({ task, directory });
+            await acceptMatches(prepared.matches);
+            if (prepared.done || parentScanStopped(budget, signal)) continue;
+            let entries: { name: string; directory: boolean; link: boolean }[];
+            if (prepared.literal !== undefined) {
+              if (budget.entries >= MAX_GLOB_ENTRIES) {
+                budget.stopped = true;
+                budget.warnings.add(`… [scan stopped after ${MAX_GLOB_ENTRIES} entries]`);
+                break;
+              }
+              budget.entries++;
+              try {
+                const lexical = resolveInRoot(workspace.lexical, path.join(task.path, prepared.literal));
+                await workspace.testObserver?.beforeEntryAccess?.(lexical);
+                throwIfAborted(signal, "File search cancelled.");
+                const stat = await fs.lstat(lexical);
+                workspace.testObserver?.onDirectoryEntry?.(lexical);
+                entries = [{ name: prepared.literal, directory: stat.isDirectory(), link: stat.isSymbolicLink() }];
+              } catch {
+                throwIfAborted(signal, "File search cancelled.");
+                continue;
+              }
+            } else {
+              try {
+                entries = (await parentDirectoryEntries(workspace, full, budget, signal)).map((entry) => ({ name: entry.name, directory: entry.isDirectory(), link: entry.isSymbolicLink() }));
+              } catch (error) {
+                if (error instanceof ForegroundReadCleanupError) throw error;
+                throwIfAborted(signal, "File search cancelled.");
+                await verifyWorkspaceRoot(workspace, signal);
+                budget.warnings.add("… [search incomplete: unreadable or changed paths skipped]");
+                continue;
+              }
+            }
+            const next = await step({ task, directory, entries });
+            await acceptMatches(next.matches);
+            pending.push(...next.tasks.reverse());
           }
-        } catch {
-          continue;
-        }
-        matches.push(entry);
-        if (matches.length >= 500) break;
+        });
+      } catch (error) {
+        if (!(error instanceof CodingToolMatchTimeout)) throw error;
+        budget.warnings.add(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`);
       }
-      matches.sort();
-      return textResult(matches.length ? matches.join("\n") : "[no matches]");
+      await verifyWorkspaceRoot(workspace, signal);
+      return textResult(formatBoundedSearchResult([...matches].sort(), "[no matches]", [...budget.warnings]));
     },
   };
 }
@@ -1505,74 +1700,87 @@ function makeSubagentGrep(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-async function grepParentDir(
-  dir: string,
-  root: string,
-  regex: RegExp,
-  out: string[],
-): Promise<void> {
-  if (out.length >= MAX_GREP_MATCHES) return;
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (out.length >= MAX_GREP_MATCHES) return;
-    if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      await grepParentDir(full, root, regex, out);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    let stat: Stats;
-    try {
-      stat = await fs.stat(full);
-    } catch {
-      continue;
-    }
-    if (stat.size > 512_000) continue;
-    let content: string;
-    try {
-      content = await fs.readFile(full, "utf-8");
-    } catch {
-      continue;
-    }
-    const relativePath = path.relative(root, full);
-    const lines = content.split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      if (regex.test(lines[index] ?? "")) {
-        out.push(`${relativePath}:${index + 1}: ${(lines[index] ?? "").trim().slice(0, 200)}`);
-        if (out.length >= MAX_GREP_MATCHES) return;
-      }
-    }
-  }
-}
-
 function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
   return {
     name: "grep",
     label: "Search Files",
-    description:
-      "Search the workspace folder for lines matching a regular expression. Returns file:line: match, capped at 200 hits.",
+    description: "Search the workspace folder for lines matching a JavaScript regular expression. Returns file:line: match, capped at 200 hits. Large searches return an incomplete-result notice.",
     parameters: Type.Object({
-      pattern: Type.String({ description: "JavaScript regular expression to search for." }),
-      path: Type.Optional(
-        Type.String({ description: "Subdirectory to limit the search to (default root)." }),
-      ),
+      pattern: Type.String({ maxLength: MAX_SEARCH_PATTERN_CHARS, description: "JavaScript regular expression to search for." }),
+      path: Type.Optional(Type.String({ description: "Subdirectory to limit the search to (default root)." })),
     }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { pattern, path: p } = params as { pattern: string; path?: string };
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern);
-      } catch (error) {
-        throw new Error(
-          `Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      const { root: realRoot, full: start } = await resolveExistingInRoot(workspace, p ?? ".");
+      throwIfAborted(signal, "File search cancelled.");
+      validateParentPattern(pattern);
+      const budget = parentScanBudget();
+      const { root, full: start } = await resolveExistingInRoot(workspace, p ?? ".", signal);
       const out: string[] = [];
-      await grepParentDir(start, realRoot, regex, out);
-      return textResult(out.length ? out.join("\n") : "[no matches]");
+      try {
+        await withCodingToolMatcher("grep", pattern, budget.deadline, signal, async (match) => {
+          const pending = [start];
+          while (pending.length && !parentScanStopped(budget, signal)) {
+            const full = pending.pop()!;
+            const stat = await fs.lstat(full).catch(() => null);
+            if (!stat) { budget.warnings.add("… [search incomplete: unreadable paths skipped]"); continue; }
+            if (stat.isDirectory()) {
+              let entries: Dirent[];
+              try { entries = await parentDirectoryEntries(workspace, full, budget, signal); }
+              catch (error) {
+                if (error instanceof ForegroundReadCleanupError) throw error;
+                throwIfAborted(signal, "File search cancelled.");
+                await verifyWorkspaceRoot(workspace, signal);
+                budget.warnings.add("… [search incomplete: unreadable or changed paths skipped]");
+                continue;
+              }
+              // Reverse push preserves the original sorted depth-first order.
+              for (const entry of entries.reverse()) {
+                if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+                if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
+                if (entry.isDirectory() || entry.isFile()) pending.push(path.join(full, entry.name));
+              }
+              continue;
+            }
+            if (!stat.isFile()) continue;
+            if (stat.size > 512_000) { budget.warnings.add("… [search incomplete: oversized files skipped]"); continue; }
+            const remaining = MAX_GREP_BYTES - budget.bytes;
+            if (remaining <= 1) {
+              budget.warnings.add(`… [scan stopped after ${MAX_GREP_BYTES} bytes]`);
+              break;
+            }
+            let read: Awaited<ReturnType<typeof readParentFile>>;
+            try {
+              read = await readParentFile(workspace, root, full, Math.min(512_000, remaining - 1), signal, (bytes) => { budget.bytes += bytes; });
+            } catch (error) {
+              if (error instanceof ForegroundReadCleanupError) throw error;
+              throwIfAborted(signal, "File search cancelled.");
+              await verifyWorkspaceRoot(workspace, signal);
+              budget.warnings.add("… [search incomplete: unreadable or changed paths skipped]");
+              continue;
+            }
+            if (read.truncated) {
+              budget.warnings.add(remaining <= 512_001 ? `… [scan stopped after ${MAX_GREP_BYTES} bytes]` : "… [search incomplete: oversized files skipped]");
+              if (remaining <= 512_001) break;
+              continue;
+            }
+            const lines = read.buffer.toString("utf8").split("\n");
+            const indices = await match(lines, MAX_GREP_MATCHES + 1 - out.length);
+            for (const index of indices) {
+              if (out.length === MAX_GREP_MATCHES) {
+                budget.warnings.add(`… [truncated at ${MAX_GREP_MATCHES} matches]`);
+                budget.stopped = true;
+                break;
+              }
+              out.push(`${path.relative(root, full)}:${index + 1}: ${lines[index]!.trim().slice(0, 200)}`);
+            }
+          }
+        });
+      } catch (error) {
+        if (!(error instanceof CodingToolMatchTimeout)) throw error;
+        budget.warnings.add(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`);
+      }
+      await verifyWorkspaceRoot(workspace, signal);
+      return textResult(formatBoundedSearchResult(out, "[no matches]", [...budget.warnings]));
     },
   };
 }
@@ -1728,12 +1936,28 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
   };
 }
 
+const foregroundReads = new ForegroundReadOperations();
+
+function withForegroundReadScope(tool: AgentTool): AgentTool {
+  return {
+    ...tool,
+    execute: (id, params, signal, onUpdate) => foregroundReads.run(
+      signal,
+      tool.name === "read_file" ? undefined : MAX_GREP_DURATION_MS,
+      (operationSignal) => tool.execute(id, params, operationSignal, onUpdate ? (update) => {
+        if (!operationSignal.aborted) onUpdate(update);
+      } : undefined),
+      () => textResult(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`),
+    ),
+  };
+}
+
 function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool[] {
   return [
-    declarePiRuntimeReplay(makeParentReadFile(workspace), "safe"),
-    declarePiRuntimeReplay(makeParentListDir(workspace), "safe"),
-    declarePiRuntimeReplay(makeParentGlob(workspace), "safe"),
-    declarePiRuntimeReplay(makeParentGrep(workspace), "safe"),
+    declarePiRuntimeReplay(withForegroundReadScope(makeParentReadFile(workspace)), "safe"),
+    declarePiRuntimeReplay(withForegroundReadScope(makeParentListDir(workspace)), "safe"),
+    declarePiRuntimeReplay(withForegroundReadScope(makeParentGlob(workspace)), "safe"),
+    declarePiRuntimeReplay(withForegroundReadScope(makeParentGrep(workspace)), "safe"),
     declarePiRuntimeReplay(makeEditFile(workspace), "never"),
     declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
     declarePiRuntimeReplay(makeRunCommand(workspace, options), "never"),

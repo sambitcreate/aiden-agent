@@ -741,6 +741,41 @@ textarea {
   --scroll-fade-size: 20px;
 }
 
+/* Section headers inside the transcript (Thinking disclosures, expanded
+   activity/compaction trails) stay reachable while their body scrolls past.
+   They rest just below the overlaid toolbar and paint an opaque copy of their
+   surface so scrolled text never shows through. State fills are layered on top
+   rather than replacing the base, keeping hover/focus legible while stuck. */
+.transcript-sticky-header {
+  --transcript-sticky-surface: transparent;
+  --transcript-sticky-state: transparent;
+  position: sticky;
+  top: var(--scroll-area-sticky-top, 0px);
+  z-index: 2;
+  background:
+    linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
+    linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
+    var(--color-background);
+}
+
+.transcript-sticky-header[data-surface="well"] {
+  --transcript-sticky-surface: var(--color-well);
+}
+
+.transcript-sticky-header:hover {
+  --transcript-sticky-state: var(--color-list-hover);
+}
+
+.transcript-sticky-header:focus-visible {
+  --transcript-sticky-state: var(--color-list-selection);
+}
+
+/* A collapse from a stuck header brings its section back into view below the
+   toolbar instead of leaving the reader stranded mid-transcript. */
+.transcript-sticky-section {
+  scroll-margin-top: var(--scroll-area-sticky-top, 0px);
+}
+
 .scroll-area-header {
   background: var(--surface-background);
   backdrop-filter: blur(12px) saturate(1.08);

@@ -1,6 +1,7 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
+import type * as React from "react";
 import { Callout, ErrorBoundary, Text } from "./ui";
 import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
@@ -34,6 +35,8 @@ export interface MessageBubbleProps {
   readAloud?: ReadAloudActionProps;
   /** Disable rich previews for a duplicate transcript copy during handoff. */
   richLinks?: boolean;
+  /** Settled turn facts rendered at the trailing edge of the action row. */
+  footer?: React.ReactNode;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -60,6 +63,7 @@ export function MessageBubble({
   copyText,
   readAloud,
   richLinks = true,
+  footer,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
@@ -122,6 +126,7 @@ export function MessageBubble({
             copyText={copyText ?? content}
             readAloud={readAloud}
             hidden={Boolean(streaming && !streamComplete)}
+            footer={footer}
           />
         ) : null}
         </div>

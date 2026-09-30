@@ -88,7 +88,12 @@ test("browser user and automation share a sandboxed page, annotations and isolat
         .filter(child => "webContents" in child && (child as Electron.WebContentsView).webContents.getURL().startsWith(guestUrl));
       return { attached: guests.length > 0, visible: guests.some(guest => guest.getVisible()) };
     }, url)).toEqual({ attached: process.platform === "linux", visible: false });
-    expect((await command(page, { action: "evaluate", tabId, expression: "globalThis.pickSideEffects" })).value).toBe(0);
+    // Read the guest directly: a user browser command would interrupt the
+    // editor's in-flight style preview and leave Add to chat disabled.
+    expect(await aiden.app.evaluate(({ webContents }, guestUrl) => {
+      const guest = webContents.getAllWebContents().find(contents => contents.getURL().startsWith(guestUrl))!;
+      return guest.executeJavaScript("globalThis.pickSideEffects");
+    }, url)).toBe(0);
     await page.getByRole("textbox", { name: "Annotation comment" }).fill("Make this button clearer.");
     await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = true; });
     // Keep the annotation open while checking the same real pointer action at

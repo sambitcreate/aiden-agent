@@ -200,6 +200,7 @@ export function Badge({
         color === "green" && "bg-status-green-surface text-status-green",
         color === "red" && "bg-status-red-surface text-status-red",
         color === "blue" && "bg-status-accent-surface text-status-accent",
+        color === "warning" && "bg-status-warning-surface text-status-warning",
         className,
       )}
       {...props}
@@ -1000,7 +1001,12 @@ export function ScrollArea({
     ) : null);
 
   return (
-    <div className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}>
+    <div
+      className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}
+      // Sticky descendants (transcript section headers) rest just below the
+      // overlaid toolbar instead of sliding underneath it.
+      style={{ "--scroll-area-sticky-top": `${toolbarHeight}px` } as React.CSSProperties}
+    >
       {resolvedToolbar ? (
         <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
           {resolvedToolbar}

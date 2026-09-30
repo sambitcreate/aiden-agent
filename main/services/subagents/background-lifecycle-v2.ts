@@ -1,6 +1,7 @@
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV2,
+  subagentPendingQuestionActivity,
   type SubagentRunSnapshotV2,
   type SubagentRunStateV2,
 } from "../../../renderer/shared/subagent-runs.js";
@@ -503,7 +504,16 @@ export class BackgroundSubagentLifecycleV2 {
         "Background subagent authority expired before execution transition.",
       );
     }
-    this.setState(run, next, safeVisible(activity, 512, "activity"), at);
+    this.setState(
+      run,
+      next,
+      // A waiting child surfaces its own pending question; the shared
+      // normalizer bounds and redacts it, falling back to generic copy.
+      next === "needs_attention"
+        ? subagentPendingQuestionActivity(activity)
+        : safeVisible(activity, 512, "activity"),
+      at,
+    );
     if (!(await this.store.put(copy(run), request.expectedRevision))) {
       throw new Error(
         "Background subagent revision changed before persistence.",

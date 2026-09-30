@@ -1,0 +1,32 @@
+# Web Search API key pool — 2026-09-27
+
+- Plan: `docs/plans/web-search-key-pool-plan.md`. Source idea: pi-web-access #453. No code was copied.
+- Pool-capable providers are listed in `WEB_SEARCH_KEY_POOL_PROVIDER_IDS` in `renderer/shared/web-search-key-pool.ts`. Only `tavily` is listed today.
+  - Add a provider only after its adapter maps 401/403 to `auth` and its quota statuses to `quota`.
+- Storage lives in `main/services/web-search-credential-core.ts`:
+  - The `primary` entry is the legacy single-key slot.
+  - Other keys are stored in `…:pool:<id>`.
+  - An encrypted index at `…:pool-index` holds the order, labels and strategy.
+  - With no index, a saved key is treated as `[primary]`.
+  - `read()` returns the first pool key, so `has()` and readiness already understand pools.
+  - `remove()` wipes every slot.
+  - Pool mutations are serialized through a promise chain.
+- Provider-wide removal deletes the credential's colon-delimited secret family in one encrypted-map write; cleanup does not rely on a readable index, so orphaned slots from a corrupt index or interrupted add/remove are erased.
+- Runtime lives in `main/services/web-search-key-pool-core.ts`:
+  - `runWithWebSearchKeyPool` plus `WebSearchKeyPoolTracker`. The tracker's cooldowns and round-robin cursor are in memory only.
+  - The service reads `getCredentialPool` (from `web-search-main.ts`) and uses the shared `webSearchKeyPoolTracker` singleton in `web-search-credentials.ts`.
+  - `beforeProviderAttempt` runs once per keyed request.
+  - When every key is cooling, no request is sent: the pool throws `quota` if any key was quota-limited, otherwise `auth`.
+- IPC lives in `main/handlers/web-search-key-pool.ts`:
+  - It has injected dependencies and is registered from `phase2.ts`.
+  - Tests register it and invoke it directly (register-and-invoke).
+  - `webSearch:removeCredential` also clears the tracker.
+- UI: `renderer/components/settings/web-search-key-pool.tsx` replaces the single API-key field in `ProviderSetupDialog` for pool providers.
+  - It adds a `warning` Badge color that uses the status-warning tokens.
+- `renderer/components/settings/web-search-settings.test.tsx` greps the source. Do not grow it. New UI coverage goes in `web-search-key-pool.test.tsx`, which uses renderToStaticMarkup.
+- Formatting: the repo uses `oxfmt`, not prettier. Running `oxfmt` on `ui.tsx`, `ipc.ts` or `package.json` reformats unrelated code, so format only new files.
+- Validation:
+  - `npm run test:web-search`: 175 tests pass.
+  - `npm run test:settings-design`: 60 tests pass.
+  - `npm run type-check` and scoped ESLint pass.
+  - No live provider requests were made.
