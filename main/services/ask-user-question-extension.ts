@@ -6,8 +6,13 @@ import {
   ASK_USER_MAX_LABEL_LENGTH,
   ASK_USER_MAX_OPTIONS,
   ASK_USER_MAX_QUESTIONS,
+  ASK_USER_MAX_TIMEOUT_SECONDS,
   ASK_USER_MIN_OPTIONS,
+  ASK_USER_MIN_TIMEOUT_SECONDS,
   ASK_USER_QUESTION_TOOL_NAME,
+  ASK_USER_UNATTENDED_TIMEOUT_SECONDS,
+  formatAskUserQuestionAnswers,
+  normalizeAskUserTimeoutSeconds,
   parseAskUserQuestions,
   type AskUserQuestionResponseV1,
   type AskUserQuestionV1,
@@ -28,6 +33,24 @@ export interface AskUserQuestionExtensionScope {
   excluded: boolean;
 }
 
+/**
+ * Resolve how long a questionnaire waits before the agent continues without
+ * an answer. Attended desktop owners wait until answered unless the agent
+ * asked for a deadline. Unattended owners always get one, capped at the
+ * Remote question lifetime so the phone card and the agent expire together.
+ */
+export function resolveAskUserQuestionTimeoutMs(
+  requestedSeconds: number | undefined,
+  owner: { unattended: boolean },
+): number | undefined {
+  const requested = normalizeAskUserTimeoutSeconds(requestedSeconds);
+  if (!owner.unattended) return requested === undefined ? undefined : requested * 1_000;
+  return (
+    Math.min(requested ?? ASK_USER_UNATTENDED_TIMEOUT_SECONDS, ASK_USER_UNATTENDED_TIMEOUT_SECONDS) *
+    1_000
+  );
+}
+
 export function shouldEnableAskUserQuestionExtension(
   scope: AskUserQuestionExtensionScope,
 ): boolean {
@@ -45,20 +68,13 @@ function formatResult(
   questions: readonly AskUserQuestionV1[],
   response: AskUserQuestionResponseV1,
 ): string {
+  if (response.timedOut) {
+    return "No answer was received before the question expired. Proceed with your best judgement, using any default you stated in the question. Say which assumption you made so the user can correct it. Do not ask the same question again; the user may still send their answer as a follow-up message.";
+  }
   if (response.cancelled) {
     return "The user closed the questionnaire without answering. Do not repeat it immediately; continue only if the task can proceed safely, otherwise ask in chat.";
   }
-  const byIndex = new Map(response.answers.map((answer) => [answer.questionIndex, answer]));
-  return questions
-    .map((question, index) => {
-      const answer = byIndex.get(index);
-      if (!answer) return `${index + 1}. ${question.question}\nAnswer: Skipped`;
-      if (answer.kind === "multi") {
-        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.join(", ")}`;
-      }
-      return `${index + 1}. ${question.question}\nAnswer: ${answer.answer}`;
-    })
-    .join("\n\n");
+  return formatAskUserQuestionAnswers(questions, response.answers);
 }
 
 export function createAskUserQuestionExtension(options: {
@@ -66,6 +82,7 @@ export function createAskUserQuestionExtension(options: {
     toolCallId: string,
     questions: AskUserQuestionV1[],
     signal?: AbortSignal,
+    timeoutSeconds?: number,
   ): Promise<AskUserQuestionResponseV1>;
 }): PiAgentRuntimeExtension {
   const tool: AgentTool = declarePiRuntimeReplay(
@@ -73,7 +90,7 @@ export function createAskUserQuestionExtension(options: {
       name: ASK_USER_QUESTION_TOOL_NAME,
       label: "Ask User Question",
       description:
-        "Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-4 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option.",
+        "Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-4 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option. Set timeoutSeconds when the task can reasonably continue without an answer (for example, state a default in the question): after that long you receive a no-answer result and should proceed with your best judgement. Some unattended surfaces always apply a short deadline.",
       // A second questionnaire cannot replace the first composer surface while
       // it is awaiting its owner. Serialize calls so every prompt is answered
       // or cancelled before another questionnaire can be published.
@@ -97,11 +114,22 @@ export function createAskUserQuestionExtension(options: {
           }),
           { minItems: 1, maxItems: ASK_USER_MAX_QUESTIONS },
         ),
+        timeoutSeconds: Type.Optional(
+          Type.Integer({
+            minimum: ASK_USER_MIN_TIMEOUT_SECONDS,
+            maximum: ASK_USER_MAX_TIMEOUT_SECONDS,
+            description:
+              "Optional. Seconds to wait for an answer before continuing without one.",
+          }),
+        ),
       }),
       execute: async (toolCallId, parameters, signal): Promise<AgentToolResult<null>> => {
         const questions = parseAskUserQuestions((parameters as { questions?: unknown }).questions);
         if (!questions) throw new Error("The questionnaire is invalid.");
-        const response = await options.request(toolCallId, questions, signal);
+        const timeoutSeconds = normalizeAskUserTimeoutSeconds(
+          (parameters as { timeoutSeconds?: unknown }).timeoutSeconds,
+        );
+        const response = await options.request(toolCallId, questions, signal, timeoutSeconds);
         return {
           content: [{ type: "text", text: formatResult(questions, response) }],
           details: null,

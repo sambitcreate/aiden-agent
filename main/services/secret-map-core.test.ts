@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   bindSecretEntryIfUnbound,
+  deleteSecretKeyFamily,
   deleteSecretKeyEntry,
   moveSecretEntryPairIfVacant,
   moveSecretEntryWithBindingIfVacant,
@@ -24,6 +25,35 @@ test("prototype-sensitive provider IDs round-trip as own secret-map entries", ()
     assert.equal(deleteSecretKeyEntry(restarted, providerId), true);
     assert.equal(secretKeyEntry(restarted, providerId), undefined);
   }
+});
+
+test("deleting a secret family removes descendant values and bindings only", () => {
+  const root = "web-search:tavily:api-key";
+  const bindingPrefix = "__binding__:";
+  const poolIndex = `${root}:pool-index`;
+  const orphanedPoolKey = `${root}:pool:orphaned-entry`;
+  const bindingOnlyOrphan = `${root}:pool:binding-only-orphan`;
+  const similarlyNamedKey = `${root}-backup`;
+  const map = normalizeSecretKeyMap({
+    [root]: "encrypted-primary",
+    [`${bindingPrefix}${root}`]: "encrypted-primary-binding",
+    [poolIndex]: "encrypted-index",
+    [`${bindingPrefix}${poolIndex}`]: "encrypted-index-binding",
+    [orphanedPoolKey]: "encrypted-orphaned-key",
+    [`${bindingPrefix}${orphanedPoolKey}`]: "encrypted-orphaned-binding",
+    [`${bindingPrefix}${bindingOnlyOrphan}`]: "encrypted-binding-only-orphan",
+    [similarlyNamedKey]: "encrypted-backup",
+    [`${bindingPrefix}${similarlyNamedKey}`]: "encrypted-backup-binding",
+    unrelated: "encrypted-unrelated",
+  });
+
+  assert.equal(deleteSecretKeyFamily(map, root, bindingPrefix), true);
+  assert.deepEqual(map, {
+    [similarlyNamedKey]: "encrypted-backup",
+    [`${bindingPrefix}${similarlyNamedKey}`]: "encrypted-backup-binding",
+    unrelated: "encrypted-unrelated",
+  });
+  assert.equal(deleteSecretKeyFamily(map, root, bindingPrefix), false);
 });
 
 test("strict secret-map parsing rejects roots that a write must never replace", () => {
