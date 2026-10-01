@@ -3816,14 +3816,6 @@ export const llmClient = {
     return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
-  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
-    const generation = active.get(streamId);
-    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
-      return false;
-    }
-    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
-  },
-
   /**
    * Release renderer-owned interaction surfaces without stopping the
    * main-owned model operation. Terminal chat state is reconciled by the

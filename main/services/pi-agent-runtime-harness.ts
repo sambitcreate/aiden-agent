@@ -269,6 +269,16 @@ export interface PiRuntimeRunOptions {
   }) => Promise<void> | void;
 }
 
+export interface PiRuntimeQueueOptions {
+  /**
+   * The host already committed this input to the visible chat under this id
+   * before admission. Emission reuses it instead of projecting a second copy,
+   * and a run that ends before emission does not report it as undelivered:
+   * it is durable conversation history the next turn syncs into Pi.
+   */
+  visibleChatMessageId?: string;
+}
+
 export type PiRuntimeQueueReceipt =
   | { accepted: true; queue: "steer" | "follow-up" }
   | {
@@ -786,7 +796,11 @@ export class PiAgentRuntimeHarness {
   private sessionSeedPromise?: Promise<void>;
   private compactionPromise?: Promise<PiCompactionCoordinator>;
   private pendingDurableMessages: AgentMessage[] = [];
-  private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
+  private acceptedQueuedMessages: Array<{
+    message: AgentMessage;
+    fingerprint: string;
+    visibleChatMessageId?: string;
+  }> = [];
   /** Visible-chat projections that app cancellation stopped waiting for. */
   private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> = [];
   /**
@@ -1321,19 +1335,32 @@ export class PiAgentRuntimeHarness {
         }
         // The managed initial input is already durable and Agent.continue()
         // does not re-emit it. Any emitted user is queued steer/follow-up input.
+        const emittedFingerprint =
+          event.message.role === "user" ? snapshotQueuedMessage(event.message)?.fingerprint : undefined;
+        const acceptedIndex =
+          event.message.role === "user"
+            ? this.acceptedQueuedMessages.findIndex(
+                (accepted) =>
+                  accepted.message === event.message || accepted.fingerprint === emittedFingerprint,
+              )
+            : -1;
+        // Host-committed input already has its visible chat message.
+        const committedVisibleId =
+          acceptedIndex >= 0 ? this.acceptedQueuedMessages[acceptedIndex].visibleChatMessageId : undefined;
         const visibleChatMessageId =
-          event.message.role === "user" && durability.beforeQueuedUser
+          committedVisibleId ??
+          (event.message.role === "user" && durability.beforeQueuedUser
             ? await this.projectQueuedUser(durability.beforeQueuedUser, event.message)
-            : undefined;
+            : undefined);
         this.pendingDurableMessages.push(event.message);
         this.capturedTurnMessages.push(structuredClone(event.message));
         if (event.message.role === "user") {
-          const emittedFingerprint = snapshotQueuedMessage(event.message)?.fingerprint;
-          const acceptedIndex = this.acceptedQueuedMessages.findIndex(
+          // Re-resolve: the projection await may have let the queue change.
+          const index = this.acceptedQueuedMessages.findIndex(
             (accepted) =>
               accepted.message === event.message || accepted.fingerprint === emittedFingerprint,
           );
-          if (acceptedIndex >= 0) this.acceptedQueuedMessages.splice(acceptedIndex, 1);
+          if (index >= 0) this.acceptedQueuedMessages.splice(index, 1);
         }
         if (event.message.role === "assistant") {
           this.lastAssistantMessage = event.message;
@@ -2217,22 +2244,22 @@ export class PiAgentRuntimeHarness {
     return undefined;
   }
 
-  queueSteer(message: AgentMessage): PiRuntimeQueueReceipt {
+  queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt {
     const rejected = this.rejectedQueueReceipt(message);
     if (rejected) return rejected;
     const queued = snapshotQueuedMessage(message);
     if (!queued) return { accepted: false, reason: "invalid-message" };
-    this.acceptedQueuedMessages.push(queued);
+    this.acceptedQueuedMessages.push({ ...queued, visibleChatMessageId: options?.visibleChatMessageId });
     this.agent.steer(queued.message);
     return { accepted: true, queue: "steer" };
   }
 
-  queueFollowUp(message: AgentMessage): PiRuntimeQueueReceipt {
+  queueFollowUp(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt {
     const rejected = this.rejectedQueueReceipt(message);
     if (rejected) return rejected;
     const queued = snapshotQueuedMessage(message);
     if (!queued) return { accepted: false, reason: "invalid-message" };
-    this.acceptedQueuedMessages.push(queued);
+    this.acceptedQueuedMessages.push({ ...queued, visibleChatMessageId: options?.visibleChatMessageId });
     this.agent.followUp(queued.message);
     return { accepted: true, queue: "follow-up" };
   }
@@ -2255,7 +2282,8 @@ export class PiAgentRuntimeHarness {
     if (this.running || this.managedRunning) {
       throw new Error("Pi runtime harness is busy.");
     }
-    const accepted = this.acceptedQueuedMessages;
+    // Host-committed input is already visible history, never returned.
+    const accepted = this.acceptedQueuedMessages.filter((item) => !item.visibleChatMessageId);
     const uncertain = this.uncertainQueuedProjections;
     this.acceptedQueuedMessages = [];
     this.uncertainQueuedProjections = [];
