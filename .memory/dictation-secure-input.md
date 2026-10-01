@@ -1,6 +1,6 @@
 # Dictation Secure Input warning — 2026-09-27
 
-Branch `feature/dictation-secure-input`; plan `docs/plans/dictation-secure-input-plan.md`.
+Branch `feature/dictation-secure-input`; plan `docs/plans/completed/dictation-secure-input-plan.md`.
 
 - `pasteTranscript` (main/services/dictation-paste.ts) takes an injectable
   `isSecureInputActive`. Order: Accessibility check → Secure Input probe → atomic
@@ -23,3 +23,5 @@ Review validation: 15 focused paste/pill tests pass, including a process-owned e
 The JXA probe explicitly binds `IsSecureEventInputEnabled` as a no-argument boolean function, avoiding reliance on OS BridgeSupport metadata. The plan index and PR description now match the Carbon detector and conservative copy fallback.
 
 Independent review: reading the original AXValue is optional, so text controls without an accessible value still receive a guarded paste attempt. An unconfirmed result or transport error says “Check the field — transcript copied.” It never instructs a second paste after a possibly successful attempt; the prior clipboard is restored only after confirmed delivery.
+
+Status (2026-10-01): merged in PR #267 (on main after 0.51.0); plan moved to `docs/plans/completed/`.

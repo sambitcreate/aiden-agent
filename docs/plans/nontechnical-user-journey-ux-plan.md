@@ -1,7 +1,7 @@
 # Make Aiden easier to start, understand, and recover
 
 Date: 2026-09-04
-Status: **Active — approved UX implementation in review; broader journey backlog and physical-device usability validation remain open.**
+Status: **Active — approved UX implementation merged in [PR #96](https://github.com/sambitcreate/aiden-agent/pull/96) on 2026-09-11; broader journey backlog and physical-device usability validation remain open.**
 Baseline: `d40d00f1d`
 Deliverable: UX audit, journey chart, remote-setup proposal, and implementation handoff.
 

@@ -1,6 +1,6 @@
 # Durable Bot and chat runs — OpenMuse adoption
 
-Status: PR 1 foundation implemented for review; production Bot runtime, desktop controls and Remote/native rollout remain pending. Implementation authorized in the follow-up request.
+Status: PR 1 foundation merged in [PR #243](https://github.com/sambitcreate/aiden-agent/pull/243) on 2026-09-26 and shipped in 0.50.0; production Bot runtime, desktop controls and Remote/native rollout remain pending. Implementation authorized in the follow-up request.
 Verified: 2026-09-23. Priority: P0.
 
 Adopt OpenMuse's SQL ownership leases and durable controls for **Mac-owned Bot/chat runs**, using SQLite around Aiden's existing Pi runtime. Start with accepted Bot chat turns, then regular workspace chats. Do not add Comfy, image-generation workflows, or Design integration in this scope.

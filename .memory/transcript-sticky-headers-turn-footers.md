@@ -1,6 +1,6 @@
 # Transcript sticky headers, preparing stage, turn footers
 
-Branch `feature/sticky-think-turn-footers`; plan `docs/plans/transcript-polish-sticky-headers-plan.md`.
+Branch `feature/sticky-think-turn-footers`; plan `docs/plans/completed/transcript-polish-sticky-headers-plan.md`.
 
 - `ScrollArea` root sets `--scroll-area-sticky-top` = measured toolbar height. The var sits on the root, not the viewport or content div, because `renderer/main/chat-transition.test.tsx` source-greps the viewport `style={{...}}` and `data-scroll-content className="min-h-full"` verbatim.
 - `.transcript-sticky-header` paints an opaque layered background (state var over surface var over `--color-background`). Hover and focus fills come from the CSS vars `--transcript-sticky-state`, not Tailwind `hover:bg-*`, since a Tailwind bg would replace the opaque base.
@@ -10,3 +10,5 @@ Branch `feature/sticky-think-turn-footers`; plan `docs/plans/transcript-polish-s
 - Android unit tests here need `ANDROID_HOME=~/Library/Android/sdk JAVA_HOME=/opt/homebrew/opt/openjdk@17`. No iOS simulator was available, so iOS XCTest runs in hosted CI.
 
 - Review recovery: sticky-section and assistant-turn-stats regressions now run from pretest through test:transcript-polish, with explicit renderer-other CI lane assignments. Previously they appeared only in test:preflight and were absent from the CI source union.
+
+Status (2026-10-01): merged in PR #269 and shipped in 0.51.0; plan moved to `docs/plans/completed/`.
