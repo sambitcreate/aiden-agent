@@ -198,6 +198,7 @@
     "@aiden/pi-legacy-harness": "npm:@earendil-works/pi-agent-core@0.87.1",
     "@earendil-works/pi-agent-core": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-codemode": "1.0.0",
     "@google/genai": "2.24.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@radix-ui/colors": "^3.0.0",
@@ -302,7 +303,9 @@
       "**/node_modules/sherpa-onnx-node/**",
       "**/node_modules/sherpa-onnx-darwin-*/**",
       "**/node_modules/sherpa-onnx-linux-*/**",
-      "**/node_modules/node-pty/**"
+      "**/node_modules/node-pty/**",
+      "**/node_modules/@earendil-works/pi-codemode/**",
+      "**/node_modules/quickjs-wasi/**"
     ],
     "directories": {
       "output": "release"

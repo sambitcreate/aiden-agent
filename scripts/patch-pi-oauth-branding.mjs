@@ -69,8 +69,7 @@ function replaceLogo(source, brandedLogo) {
   return `${source.slice(0, start)}${brandedLogo}${source.slice(end + "</svg>`;".length)}`;
 }
 
-export async function patchPiOAuthBranding(projectRoot) {
-  const packageRoot = path.join(projectRoot, PI_PACKAGE_PATH);
+export async function patchPiOAuthBranding(projectRoot, packageRoot = path.join(projectRoot, PI_PACKAGE_PATH)) {
   const packageJsonPath = path.join(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   if (packageJson.version !== PI_AI_VERSION) {
