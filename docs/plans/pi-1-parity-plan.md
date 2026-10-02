@@ -1,6 +1,6 @@
 # Pi 1.0 parity upgrade
 
-Status: planned; implementation begins after this audit checkpoint (2026-10-02).
+Status: implementation active; runtime and CLI 1.0 foundation is implemented in PR #299, with the remaining feature lanes in progress (2026-10-02).
 
 ## Baseline and target
 
@@ -51,8 +51,8 @@ Agents audit first, then implement their assigned lane in different worktrees. N
 
 - [x] Pull Aiden origin/main and pi checkout; parallel runtime, CLI, stable-feature audits.
 - [x] Record target, feature inventory, architecture decisions and three-worktree PR plan before edits.
-- [ ] Runtime foundation and replay gates.
-- [ ] CLI stable 1.0 parity and offline bundle/permission gates.
+- [x] Runtime foundation and replay gates — implemented in PR #299.
+- [x] CLI stable 1.0 parity and offline bundle/permission gates — included atomically in PR #299.
 - [ ] Provider/MCP integration and focused tests.
 - [ ] Desktop codemode/tool search/image/classifier capability acceptance.
 - [ ] Integrated validation, reviewable PRs and final status reconciliation.
