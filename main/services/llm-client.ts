@@ -127,6 +127,7 @@ import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
   reportedTokens,
+  isLocalModelProvider,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
 import {
@@ -339,6 +340,7 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
+import { createPiModelTools } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -1401,7 +1403,7 @@ async function prepareGeneration(
       assistantMode,
       workspaceRoot: folderPath,
       permission,
-      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+      excluded: false,
     })
   ) {
     const artifactStoreAvailability = displayImageArtifactStore.availability();
@@ -1461,7 +1463,32 @@ async function prepareGeneration(
         return true;
       },
     });
-    generationExtensions.push(displayImageRuntime.extension);
+    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+      generationExtensions.push(displayImageRuntime.extension);
+    }
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      tools: createPiModelTools({
+        models: runtime.models,
+        onImage: displayImageRuntime.presentGeneratedImage,
+        // Account at the provider-call boundary, not at nested/parent tool events.
+        onUsage: async (record) => {
+          const cost = record.usage?.cost.total;
+          const local = record.provider === runtime.provider.id && isLocalModelProvider(runtime.provider);
+          await usageStore.record({
+            source: options.usageSource ?? "chat",
+            providerId: record.provider,
+            providerLabel: record.provider === runtime.provider.id ? runtime.provider.label : record.provider,
+            modelId: record.model, modelLabel: record.modelLabel, local, status: record.status,
+            tokens: reportedTokens(record.usage),
+            costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
+            ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
+          });
+        },
+      })
+        .filter((tool) => !options.excludeToolNames?.has(tool.name)),
+    });
   }
   if (
     !botContext &&

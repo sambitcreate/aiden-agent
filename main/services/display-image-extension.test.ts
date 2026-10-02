@@ -384,3 +384,49 @@ test("duplicate tool delivery does not consume presentation quota twice", async 
   assert.equal(emitted, 20);
   await assert.rejects(tool.execute("over-limit", { path: "page.png" }), /up to 20 images/iu);
 });
+
+test("generated and workspace images share serialized count and pixel budgets", async () => {
+  const root = await workspace();
+  const large = pngWithDimensions(4000, 5000);
+  await fs.writeFile(path.join(root, "large.png"), large);
+  const artifacts: ChatImageArtifactV1[] = [];
+  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root, onArtifact: (artifact) => { artifacts.push(artifact); } });
+  await runtime.presentGeneratedImage("generated", { type: "image", mimeType: "image/png", data: large.toString("base64") });
+  await runtime.extension.tools![0]!.execute("workspace", { path: "large.png" });
+  await assert.rejects(runtime.presentGeneratedImage("overflow", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") }), /pixel limit/);
+  assert.equal(artifacts.length, 2);
+  assert.equal(artifacts[0]!.version, 1);
+  assert.equal(artifacts[0]!.attachment.name, "Generated image.png");
+  const limited = createDisplayImageExtensionRuntime({ workspaceRoot: root, existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1, onArtifact: () => undefined });
+  await limited.presentGeneratedImage("last", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") });
+  await assert.rejects(limited.extension.tools![0]!.execute("over", { path: "large.png" }), /image.*limit/);
+});
+
+test("generated images retain dedup identity and do not consume budget on declined presentation", async () => {
+  const root = await workspace();
+  const seen: string[] = [];
+  let accept = false;
+  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root, artifactNamespace: "generation", existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1,
+    onArtifact: (artifact) => { seen.push(artifact.attachment.id); return accept; } });
+  const image = { type: "image" as const, mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") };
+  await runtime.presentGeneratedImage("call", image);
+  accept = true;
+  await runtime.presentGeneratedImage("call", image);
+  assert.equal(seen[0], seen[1]);
+  await assert.rejects(runtime.presentGeneratedImage("another", image), /image-count limit/);
+  assert.equal(seen.length, 2);
+});
+
+test("generated images share existing chat byte budgets and cancellation before staging", async () => {
+  const root = await workspace();
+  const image = { type: "image" as const, mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") };
+  let staged = 0;
+  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root,
+    existingChatImageBytes: MAX_DISPLAY_IMAGE_BYTES_PER_CHAT - ONE_PIXEL_PNG.length + 1,
+    onArtifact: () => { staged++; } });
+  await assert.rejects(runtime.presentGeneratedImage("bytes", image), /storage limit/);
+  const controller = new AbortController();
+  const cancelled = createDisplayImageExtensionRuntime({ workspaceRoot: root, beforeArtifact: () => controller.abort(), onArtifact: () => { staged++; } });
+  await assert.rejects(cancelled.presentGeneratedImage("cancel", image, controller.signal), /abort/i);
+  assert.equal(staged, 0);
+});
