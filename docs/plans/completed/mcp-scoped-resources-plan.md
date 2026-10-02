@@ -1,6 +1,6 @@
 # Scoped MCP resources
 
-Status: Implemented for PR review; local validation and both independent Sol reviews clear.
+Status: Complete — merged in [PR #230](https://github.com/sambitcreate/aiden-agent/pull/230) on 2026-09-23 and shipped in 0.43.0.
 
 Separate branch from origin/main; PR214/226/229 remain untouched. No SDK/dependency or MCP tool-result spill changes.
 

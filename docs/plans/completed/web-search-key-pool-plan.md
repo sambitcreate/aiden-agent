@@ -1,6 +1,6 @@
 # Web Search API key pool
 
-Status: Implemented for review (Tavily).
+Status: Complete (Tavily) — merged in [PR #278](https://github.com/sambitcreate/aiden-agent/pull/278) on 2026-09-29 and shipped in 0.51.0. Other keyed providers and CLI parity remain follow-ups.
 
 ## Goal
 

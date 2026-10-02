@@ -1,7 +1,7 @@
 # Gemini 3.8 Read Aloud and Voice Studio — Implementation Status
 
 **Status:** Partial implementation (desktop unary-WAV and desktop-configured native playback implemented; live acceptance, streaming, Voice Studio, and physical playback verification pending).
-**Branch:** `feature/gemini-3-8-tts`.
+**Branch:** `feature/gemini-3-8-tts`, merged in [PR #245](https://github.com/sambitcreate/aiden-agent/pull/245) on 2026-09-26 and shipped in 0.50.0.
 **Full plan:** the delivered `plan.md` document (September 23, 2026 audit of `7a4d9d0b`).
 
 This document tracks the repository's implementation state against the audited
