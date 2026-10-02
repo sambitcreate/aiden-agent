@@ -469,6 +469,11 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await expect(page.getByRole("alert")).toContainText("whole numbers");
   await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("8192");
   await page.getByRole("spinbutton", { name: "Compaction recent tokens" }).fill("0");
+  const modelKey = page.getByRole("combobox", { name: "Model for compaction budget" });
+  await modelKey.fill("fixture/exact");
+  await modelKey.pressSequentially("-model");
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
   await aiden.relaunch();

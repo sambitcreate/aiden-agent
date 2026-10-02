@@ -2,7 +2,7 @@
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
 import { ipcMain, logger } from "../platform.js";
-import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
+import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
@@ -13,7 +13,6 @@ import { parseChatRunInput } from "../../renderer/shared/chat-run-input.js";
 import type { AskUserQuestionAnswerStatus } from "../../renderer/shared/ask-user-question.js";
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
-import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
 
@@ -44,14 +43,12 @@ export function registerChatGenerationHandlers(): void {
         const started = await startGenerationAndMaybeTitle(
           {
             start: (streamId, params) =>
-              llmClient.start(streamId, params, owner, {
-                allowSubagents: true,
-                usageSource: "chat",
-                turnId: messageTurnId,
-                onTurnAccepted: () => {
-                  accepted = true;
-                },
-              }),
+              llmClient.start(
+                streamId,
+                params,
+                owner,
+                desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
+              ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
             rememberSelection: (providerId, model) => {
               void configStore
@@ -125,18 +122,6 @@ export function registerChatGenerationHandlers(): void {
       return result;
     },
   );
-  ipcMain.handle("chat:steer", async (event, streamId: unknown, instruction: unknown) => {
-    if (!isSafeSubagentIdentifier(streamId) || typeof instruction !== "string" ||
-        !instruction.trim() ||
-        new TextEncoder().encode(instruction).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
-      throw new Error("Invalid chat guidance.");
-    }
-    const owner = chatGenerationOwner(event);
-    if (!llmClient.steer(streamId, instruction.trim(), owner.documentId)) {
-      throw new Error("This response can no longer accept guidance. Your draft is still here.");
-    }
-    return { status: "queued" as const };
-  });
 
   // Resolve a pending tool-approval request ("ask" mode).
   ipcMain.handle(

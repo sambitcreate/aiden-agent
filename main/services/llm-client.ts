@@ -1,5 +1,5 @@
-import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { providerRegistry } from "./provider-registry.js";
+import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -21,7 +21,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 
 import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
-import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -211,6 +211,7 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  updateGenerationContextOptions,
   chatContextPressureFromProjection,
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
@@ -344,7 +345,7 @@ import {
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
-import { createPiModelTools, piModelOperationUsage } from "./pi-model-tools.js";
+import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -451,6 +452,7 @@ interface ActiveGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
@@ -472,6 +474,7 @@ const initializing = new Map<
     chatId: string;
     owner: ChatGenerationOwner;
     removeOwnerInvalidation: () => void;
+    stopCacheWarming?: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
@@ -1484,17 +1487,20 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
+    const savedOperationProviders = await configStore.listProviders();
     const localClassifierModels = createLocalClassifierModels({
       models: providerRegistry.models,
-      providers: await configStore.listProviders(),
+      providers: savedOperationProviders,
       getProvider: (id) => configStore.getProvider(id),
       resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
+    const operationProviders = [runtime.provider, ...savedOperationProviders];
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
       tools: createPiModelTools({
         models: localClassifierModels.models,
+        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         onImage: displayImageRuntime.presentGeneratedImage,
@@ -1505,7 +1511,7 @@ async function prepareGeneration(
           await usageStore.record({
             source: options.usageSource ?? "chat",
             providerId: record.provider,
-            providerLabel: record.provider === runtime.provider.id ? runtime.provider.label : record.provider,
+            providerLabel: record.providerLabel,
             modelId: record.model, modelLabel: record.modelLabel, local, status: record.status,
             tokens: reportedTokens(record.usage),
             costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
@@ -1695,6 +1701,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
+      stopCacheWarming: undefined as (() => void) | undefined,
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
@@ -2593,12 +2600,7 @@ export const llmClient = {
           tools: [...runtimeTools],
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
-        generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
-        assertGenerationContextCapacity({
-          contextWindow: model.contextWindow,
-          systemPrompt: generationContextOptions.systemPrompt,
-          tools: runtimeTools,
-        });
+        updateGenerationContextOptions(generationContextOptions, prepared);
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.
@@ -2610,16 +2612,30 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
-      if (cacheWarmingEnabled && !isLocalModelProvider(runtime.provider) && !preparedBotContext && !options.usageSource && owner.id !== 0 && authoritativeMode !== "assistant-automation") {
+      if (canWarmForegroundChat({
+        enabled: cacheWarmingEnabled,
+        local: isLocalModelProvider(runtime.provider),
+        bot: Boolean(preparedBotContext),
+        owner,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        mode: authoritativeMode,
+      })) {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          isCurrent: () => {
+            const generation = active.get(streamId) ?? initializing.get(streamId);
+            return !!generation && generation.owner === owner && !generation.cancelRequested &&
+              !generation.rendererDetached && !owner.isDestroyed();
+          },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
         });
       }
+      initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       candidate = new PiAgentRuntimeHarness({
@@ -2744,13 +2760,7 @@ export const llmClient = {
           if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
-            assertGenerationContextCapacity({
-              ...generationContextOptions,
-              systemPrompt: getCurrentSystemPrompt(nextContext.messages),
-              tools: nextContext.tools ?? [],
-            });
-            generationContextOptions.tools = nextContext.tools ?? [];
-            generationContextOptions.systemPrompt = getCurrentSystemPrompt(nextContext.messages);
+            updateGenerationContextOptions(generationContextOptions, nextContext);
           }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
@@ -3041,6 +3051,18 @@ export const llmClient = {
                             context.args as Record<string, unknown>,
                           )
                         : summarizeToolCall(context.toolCall.name, context.args);
+          }
+          if (context.toolCall.name === "classify") {
+            try {
+              const providerId = (context.args as { provider?: unknown }).provider;
+              const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
+              approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
+              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Classification inputs could not be reviewed." };
+            }
           }
           if (context.toolCall.name === "generate_image") {
             try { summary += await modelImageReferences.disclosure(context.args, signal); }
@@ -3630,6 +3652,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
+      stopCacheWarming: initialization.stopCacheWarming,
       workspaceId: initialization.workspaceId,
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
@@ -3934,14 +3957,6 @@ export const llmClient = {
     return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
-  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
-    const generation = active.get(streamId);
-    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
-      return false;
-    }
-    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
-  },
-
   /**
    * Release renderer-owned interaction surfaces without stopping the
    * main-owned model operation. Terminal chat state is reconciled by the
@@ -3961,6 +3976,7 @@ export const llmClient = {
     if (generation) generation.rendererDetached = true;
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
+    runtimeOwner.stopCacheWarming?.();
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();

@@ -5,6 +5,7 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { randomBytes } from "node:crypto";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
@@ -121,9 +122,25 @@ export class McpOAuthAuthorizationFlow {
   private started = false;
   private consumed = false;
   requestedScope?: string;
+  private observedMetadata?: { url: string; issuer: string; issuerRequired: boolean };
+
+  observeAuthorizationMetadata(url: URL, document: unknown): void {
+    if (!isRecord(document) || typeof document.issuer !== "string") throw new Error("Invalid OAuth metadata issuer.");
+    const supported = document.authorization_response_iss_parameter_supported;
+    if (supported !== undefined && typeof supported !== "boolean") throw new Error("Invalid OAuth issuer response policy.");
+    this.observedMetadata = { url: url.href, issuer: document.issuer, issuerRequired: supported === true };
+  }
 
   saveDiscovery(state: OAuthDiscoveryState): void {
-    this.discovery = structuredClone(state);
+    const metadata = state.authorizationServerMetadata;
+    if (metadata && metadata.issuer !== state.authorizationServerUrl) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+    const discovery = structuredClone(state);
+    const observed = this.observedMetadata;
+    if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
+        buildDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
+      discovery.authorizationServerMetadata = { ...metadata, authorization_response_iss_parameter_supported: true };
+    }
+    this.discovery = discovery;
   }
 
   discoveryState(): OAuthDiscoveryState | undefined {
@@ -132,6 +149,7 @@ export class McpOAuthAuthorizationFlow {
 
   clearDiscovery(): void {
     this.discovery = undefined;
+    this.observedMetadata = undefined;
   }
 
   authorizationUrl(url: URL, grantedScope?: string): URL {

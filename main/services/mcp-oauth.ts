@@ -136,6 +136,11 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.authorization.saveDiscovery(state);
   }
 
+  observeAuthorizationMetadata(url: URL, document: unknown): void {
+    this.assertCanMutate();
+    this.authorization.observeAuthorizationMetadata(url, document);
+  }
+
   async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
     this.assertCanMutate();
     const metadataUrl = this.metadataServer && mcpOAuthMetadataUrlForServer(this.metadataServer);
