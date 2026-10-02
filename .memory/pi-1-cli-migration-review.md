@@ -1,0 +1,9 @@
+# Pi 1.0 CLI migration review — 2026-10-02
+
+PR299 review found parsed legacy data and backed-up bytes came from different reads, followed by a racy check/unlink of the active mcp.json pathname. Migration now acquires its destination lease before all reads, parses/validates/backs up one byte snapshot, and commits the Aiden inventory before atomically retiring the source into a private .mcp-migration-* directory. It compares the retired file with the validated bytes and restores unexpected content using exclusive hard-link publication only if no replacement occupies mcp.json. The retired inode stays available for recovery, including late writes through descriptors opened before the rename; the live config is never unlinked and recovery never overwrites another writer.
+
+Deterministic behavioral tests replace the source during validation, immediately before claiming, immediately after claiming, and through a previously opened descriptor. Native replacements survive, the canonical backup matches the validated legacy bytes, mismatches surface reconciliation, and private recovery copies remain readable only through their0700 directory. Existing invalid/conflicting inventory tests retained. README documents the recovery copy.
+
+The earlier revocation review is already corrected in c42320a28: createCliMcpRevision hashes aiden-mcp.json and Bot watchers invalidate that filename; existing parity tests verify both. Plan header and foundation/CLI progress checkpoints now reflect implemented PR299 work without importing later features.
+
+Validation: standalone CLI build and TypeScript passed under Node22.22.3; all39 parity tests passed (including existing Bot/subagent revocation behavior and new deterministic migration concurrency tests); full standalone CLI suite passed. Work remains local for coordinated parent restacking; no external review comments sent.

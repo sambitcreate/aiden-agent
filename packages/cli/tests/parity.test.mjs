@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -804,4 +804,53 @@ for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC
   const [listed] = await api.mcpCommand(dir, ["list"]);
   assert.equal(listed.authServerMetadataUrl, oidc ? undefined : `${issuer}/metadata`);
   assert.equal(listed.description, "Documents");
+});
+
+test("MCP migration validates one snapshot and restores a native replacement without deleting it", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  const servers = [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }];
+  const original = JSON.stringify(servers) + "\n";
+  const native = { mcpServers: { native: { command: "native" } } };
+  writeFileSync(legacy, original);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, (server) => {
+    api.validateMcpServer(server);
+    api.atomicJson(legacy, native);
+  }), /changed during migration/u);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), native);
+  assert.equal(readFileSync(join(dir, "mcp.pre-pi-1.json"), "utf8"), original);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), servers);
+});
+
+test("MCP source claiming never removes a replacement published before or after the claim", (t) => {
+  for (const replaceBefore of [true, false]) {
+    const dir = temporary(t), legacy = join(dir, "mcp.json");
+    const servers = [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }];
+    const native = { mcpServers: { live: { command: "keep-live" } } };
+    const concurrent = { mcpServers: { newer: { command: "keep-newer" } } };
+    api.atomicJson(legacy, servers);
+    let claimed;
+    const migrate = () => api.migrateAidenMcpConfig(dir, api.validateMcpServer, (source, target) => {
+      if (replaceBefore) api.atomicJson(source, native);
+      renameSync(source, target); claimed = target;
+      api.atomicJson(source, concurrent);
+    });
+    if (replaceBefore) assert.throws(migrate, /changed during migration/u); else migrate();
+    assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), concurrent);
+    assert.deepEqual(JSON.parse(readFileSync(claimed, "utf8")), replaceBefore ? native : servers);
+    assert.equal(statSync(dirname(claimed)).mode & 0o777, 0o700);
+  }
+});
+
+test("MCP migration retains writes through a source descriptor opened before retirement", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  api.atomicJson(legacy, [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }]);
+  const fd = openSync(legacy, "r+");
+  try {
+    api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+    const native = { mcpServers: { late: { command: "late-writer" } } };
+    ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(native));
+    const recovery = readdirSync(dir).find((name) => name.startsWith(".mcp-migration-"));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, recovery, "mcp.json"), "utf8")), native);
+    assert.equal(existsSync(legacy), false);
+  } finally { closeSync(fd); }
 });
