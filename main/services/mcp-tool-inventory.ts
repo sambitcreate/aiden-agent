@@ -1,8 +1,18 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { CallToolResultSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
+
+/** Call only behind the complete-inventory guard below, not SDK per-page schema caches. */
+export function callMcpTool(client: Pick<Client, "request">, params: CallToolRequest["params"], options?: RequestOptions) {
+  // The public request path retains envelope validation, progress, timeout and cancellation.
+  // Client.callTool additionally validates errors against the last tools/list page's schema.
+  return client.request({ method: "tools/call", params }, CallToolResultSchema, options);
+}
 
 /** The SDK returns one tools/list page. Publish only a complete, bounded inventory. */
 export async function listMcpToolInventory<T extends { name: string }>(options: {

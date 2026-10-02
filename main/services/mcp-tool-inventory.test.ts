@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];
@@ -116,4 +120,78 @@ test("schema guards preserve server error diagnostics while validating successfu
   }
   const success = await execute({ isError: false, content: [], structuredContent: { value: 42 } });
   assert.deepEqual(JSON.parse(JSON.stringify(success.structuredContent)), { value: 42 });
+});
+
+test("public SDK requests preserve errors on every inventory page, envelopes, progress and cancellation", async () => {
+  const server = new Server({ name: "inventory-fixture", version: "1" }, { capabilities: { tools: {} } });
+  const client = new Client({ name: "test-client", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }, outputSchema: {
+    type: "object" as const, required: ["value"], properties: { value: { type: "number" } },
+  } });
+  server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor
+    ? { tools: [tool("last"), { ...tool("task"), execution: { taskSupport: "required" } }] }
+    : { tools: [tool("first")], nextCursor: "last-page" });
+  let response: unknown = { isError: true, content: [{ type: "text", text: "Account permission denied" }], structuredContent: { code: "DENIED" } };
+  let calls = 0;
+  let entered = () => {};
+  let cancelled = () => {};
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
+    calls++;
+    if (params.arguments?.hang) {
+      entered();
+      await new Promise<void>(resolve => extra.signal.addEventListener("abort", () => { cancelled(); resolve(); }, { once: true }));
+    } else if (params._meta?.progressToken !== undefined) {
+      await extra.sendNotification({ method: "notifications/progress", params: { progressToken: params._meta.progressToken, progress: 1, total: 1 } });
+    }
+    return response as CallToolResult;
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const inventory = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => client.listTools(cursor ? { cursor } : undefined, { signal }) });
+    const guard = createMcpToolCallGuard(inventory);
+    const invoke = async (name: string) => {
+      guard.assertCallable(name);
+      const result = await callMcpTool(client, { name });
+      guard.validateResult(name, result);
+      return result;
+    };
+    for (const name of ["first", "last"]) {
+      const result = await invoke(name);
+      assert.equal(result.isError, true);
+      assert.deepEqual(result.structuredContent, { code: "DENIED" });
+      await assert.rejects(executeMcpAgentTool(async () => result), /Account permission denied/u);
+    }
+    const dispatched = calls;
+    await assert.rejects(invoke("task"), /task-based/u);
+    assert.equal(calls, dispatched);
+    response = { content: [], structuredContent: { value: "wrong" } };
+    await assert.rejects(invoke("last"), /output schema/u);
+    response = { isError: "true", content: [] };
+    await assert.rejects(invoke("last"), /boolean|invalid_type/u);
+    response = { content: [], structuredContent: { value: 42 } };
+    const progress: number[] = [];
+    const success = await callMcpTool(client, { name: "last" }, { onprogress: update => progress.push(update.progress), timeout: 500, maxTotalTimeout: 1_000, resetTimeoutOnProgress: true });
+    guard.validateResult("last", success);
+    assert.deepEqual(success.structuredContent, { value: 42 });
+    assert.deepEqual(progress, [1]);
+    const controller = new AbortController();
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const pending = callMcpTool(client, { name: "last", arguments: { hang: true } }, { signal: controller.signal, timeout: 1_000 });
+    const rejection = assert.rejects(pending, /cancelled by test/u);
+    await started;
+    controller.abort(new Error("cancelled by test"));
+    await rejection;
+    await aborted;
+    const timedOut = new Promise<void>(resolve => { cancelled = resolve; });
+    await assert.rejects(callMcpTool(client, { name: "last", arguments: { hang: true } }, {
+      timeout: 10, maxTotalTimeout: 10,
+    }), /timed out/u);
+    await timedOut;
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
