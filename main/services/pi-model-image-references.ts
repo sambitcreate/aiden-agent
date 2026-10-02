@@ -24,7 +24,7 @@ export function createPiModelImageReferences(options: {
         char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char,
       )
       .slice(0, 64)
-      .join("") || "Image";
+      .join("").trim() || "Image";
   const inventory = async (signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const current = await options.readCurrent(signal);

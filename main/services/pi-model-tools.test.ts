@@ -596,6 +596,23 @@ test("image references list metadata only and edit with current-chat images afte
   assert.equal(accounted, 1);
 });
 
+test("blank sanitized image names remain usable through listing, disclosure and image editing", async () => {
+  for (const name of ["   ", "\u0000\t\n\u007f", " ".repeat(64) + "outside-truncation.png"]) {
+    const attachment = { ...referenceAttachment(), name };
+    const references = createPiModelImageReferences({ snapshot: [attachment], readCurrent: async () => [attachment], generated: () => [] });
+    const { models, controls } = fixture();
+    const tools = createPiModelTools({ models, ...references, onImage: async () => {} });
+    const listed = await tools.find(tool => tool.name === "list_image_references")!.execute("list", {});
+    assert.equal((listed.structuredContent as { images: { name: string }[] }).images[0]?.name, "Image");
+    const args = { ...imageRequest, referenceImageIds: [attachment.id] };
+    assert.match(await references.disclosure(args), /Image \[chat-image\] — 70 bytes/u);
+    const result = await tools.find(tool => tool.name === "generate_image")!.execute("edit", args);
+    assert.equal(result.isError, undefined);
+    assert.equal(controls.imageCalls, 1);
+    assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: imageRequest.prompt }, image] });
+  }
+});
+
 test("reference authority rejects foreign, changed, ambiguous or malformed images before paid dispatch", async () => {
   const original = referenceAttachment();
   let current = [original];

@@ -1,3 +1,4 @@
+import type { PiModelToolsHost } from "./pi-model-tools.js";
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
@@ -74,6 +75,31 @@ export function isLocalModelProvider(
   provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">,
 ): boolean {
   return isLocalProviderDeployment(provider);
+}
+
+/** Secondary operations are accounted against their own provider, independent of the chat model. */
+export function modelOperationUsageRecord(
+  record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0],
+  providers: readonly Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">[],
+  source: UsageRequestSource,
+  // A host facade may have a newer authoritative local-provider snapshot.
+  localOverride = false,
+): UsageRequestRecord {
+  const provider = providers.find((candidate) => candidate.id === record.provider);
+  const local = localOverride || (provider !== undefined && isLocalModelProvider(provider));
+  const cost = record.usage?.cost.total;
+  return {
+    source,
+    providerId: record.provider,
+    providerLabel: record.providerLabel,
+    modelId: record.model,
+    modelLabel: record.modelLabel,
+    local,
+    status: record.status,
+    tokens: reportedTokens(record.usage),
+    costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
+    ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
+  };
 }
 
 function modelHasPricing(model: Model<Api>): boolean {
