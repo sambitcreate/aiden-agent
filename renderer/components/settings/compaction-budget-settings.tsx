@@ -17,8 +17,10 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
   const savingRef = React.useRef(false);
   const choose = (key: string) => {
     setModelKey(key);
-    setReserve(overrides[key]?.reserveTokens?.toString() ?? "");
-    setRecent(overrides[key]?.keepRecentTokens?.toString() ?? "");
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      setReserve(overrides[key]?.reserveTokens?.toString() ?? "");
+      setRecent(overrides[key]?.keepRecentTokens?.toString() ?? "");
+    }
     setError(undefined);
   };
   const save = async (reset: boolean) => {

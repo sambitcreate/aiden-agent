@@ -1092,7 +1092,7 @@ export class AidenRemoteStreamService {
         summary,
         toolCallId,
         toolName,
-        canAllow: !claimsStructuredDetails || details !== undefined,
+        canAllow: toolName !== "classify" && (!claimsStructuredDetails || details !== undefined),
         ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
         expiresAt,
