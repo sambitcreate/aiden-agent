@@ -89,6 +89,12 @@ test("approval summaries describe the consequence of mutating tools", () => {
     "Share image in chat: /Users/person/Picture.png",
   );
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("share_image"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("generate_image"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("classify"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
+  assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
+  assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
+  assert.doesNotMatch(summarizeToolCall("classify", { state: { secret: "private-data" } }), /private-data/);
 });
 
 test("share_image advertises outbound sharing rather than image inspection", () => {

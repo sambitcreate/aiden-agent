@@ -280,7 +280,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Model Freedom",
     description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
+      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints. Configured classifiers can evaluate structured data after you approve sending it; provider charges may apply.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -319,7 +319,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Attachments & Vision",
     description:
-      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline. Generate or edit attached images with configured image models after approving the prompt, reference images, and possible provider charges.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",

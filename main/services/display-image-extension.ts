@@ -3,7 +3,7 @@ import { realpathSync, statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, type ImageContent } from "@earendil-works/pi-ai";
 import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { CHAT_ARTIFACT_VERSION } from "../../renderer/shared/chat-artifacts.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
@@ -47,6 +47,7 @@ export interface DisplayImageExtensionOptions {
 
 export interface DisplayImageExtensionRuntime {
   extension: PiAgentRuntimeExtension;
+  presentGeneratedImage(toolCallId: string, image: ImageContent, signal?: AbortSignal): Promise<void>;
 }
 
 interface ImageDimensions {
@@ -444,6 +445,28 @@ export function createDisplayImageExtensionRuntime(
   let displayedPixels = 0;
   let serial = Promise.resolve();
 
+  const present = async (artifact: ChatImageArtifactV1, dimensions: ImageDimensions, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const pixels = dimensions.width * dimensions.height;
+    if (displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE || existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT) {
+      throw new Error("Inline images reached this response or chat's image-count limit.");
+    }
+    if (displayedBytes + artifact.attachment.size > MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE ||
+        existingChatImageBytes + displayedBytes + artifact.attachment.size > MAX_DISPLAY_IMAGE_BYTES_PER_CHAT) {
+      throw new Error("Inline images reached this response or chat's storage limit.");
+    }
+    if (displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_RESPONSE ||
+        existingChatImagePixels + displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT) {
+      throw new Error("Inline images reached this response or chat's decoded-pixel limit.");
+    }
+    const presented = (await options.onArtifact(artifact, dimensions)) !== false;
+    if (presented) {
+      displayedCount += 1;
+      displayedBytes += artifact.attachment.size;
+      displayedPixels += pixels;
+    }
+  };
+
   const assertWorkspaceRoot = async (): Promise<void> => {
     const [currentCanonical, currentIdentity] = await Promise.all([
       fs.realpath(lexicalRoot),
@@ -544,12 +567,7 @@ export function createDisplayImageExtensionRuntime(
               data: attachment.data,
             },
           };
-          const presented = (await options.onArtifact(artifact, dimensions)) !== false;
-          if (presented) {
-            displayedCount += 1;
-            displayedBytes += attachment.size;
-            displayedPixels += imagePixels;
-          }
+          await present(artifact, dimensions, signal);
           return {
             content: [
               {
@@ -569,6 +587,30 @@ export function createDisplayImageExtensionRuntime(
   );
 
   return {
+    async presentGeneratedImage(toolCallId, image, signal) {
+      const previous = serial;
+      let release!: () => void;
+      serial = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        signal?.throwIfAborted();
+        if (!DISPLAY_IMAGE_MIME_TYPES.has(image.mimeType) || image.data.length > Math.ceil(MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE / 3) * 4) throw new Error("Invalid generated image.");
+        const bytes = Buffer.from(image.data, "base64");
+        if (bytes.toString("base64") !== image.data) throw new Error("Invalid generated image encoding.");
+        const dimensions = validateDisplayImageDimensions(bytes, image.mimeType, "Generated image");
+        const extension = image.mimeType === "image/jpeg" ? "jpg" : image.mimeType.slice(6);
+        await options.beforeArtifact?.();
+        await present({
+          version: CHAT_ARTIFACT_VERSION,
+          kind: "image",
+          attachment: {
+            id: createHash("sha256").update(artifactNamespace).update("\0generated\0").update(toolCallId).update("\0").update(image.data).digest("hex"),
+            name: `Generated image.${extension}`,
+            kind: "image", mimeType: image.mimeType, size: bytes.length, data: image.data,
+          },
+        }, dimensions, signal);
+      } finally { release(); }
+    },
     extension: {
       id: DISPLAY_IMAGE_EXTENSION_ID,
       systemPrompt:
