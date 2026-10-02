@@ -509,9 +509,11 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
-  let commits = 0, provider = { id: "test", name: "Test", auth: { oauth: { login: async () => ({ type: "oauth", access: "test-only", refresh: "refresh", expires: Date.now() + 3600000 }) } } };
+  const deviceId = crypto.randomUUID();
+  let receivedDeviceId;
+  let commits = 0, provider = { id: "test", name: "Test", auth: { oauth: { login: async (_interaction, options) => { receivedDeviceId = options.getDeviceId(); return ({ type: "oauth", access: "test-only", refresh: "refresh", expires: Date.now() + 3600000 }); } } } };
   const runtime = { getProvider: () => provider, listCredentials: async () => [], registerNativeProvider: (next) => { provider = next; }, login: async (_id, _method, interaction) => { const credential = await provider.auth.oauth.login(interaction); commits++; return credential; }, refresh: async () => ({}), logout: async () => {} };
-  const coordinator = api.createCliAuthCoordinator(runtime, async () => {});
+  const coordinator = api.createCliAuthCoordinator(runtime, async () => {}, () => deviceId);
   async function login(cancel) {
     const flowId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
@@ -520,7 +522,7 @@ test("shared auth coordinator commits a returned credential once and suppresses 
       coordinator.start(owner, request); if (cancel) coordinator.cancel(owner, request);
     });
   }
-  try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
+  try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal(receivedDeviceId, deviceId); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
   finally { await coordinator.shutdown(); }
 });
 
@@ -661,4 +663,57 @@ test("the subagent rollback switch registers no tool and opens no history", asyn
   let registered = 0;
   await api.createSubagentsExtension(temporary(t)).factory({ registerTool() { registered++; } });
   assert.equal(registered, 0);
+});
+
+test("MCP migration preserves exact legacy bytes privately and keeps native configurations separate", async (t) => {
+  const dir = temporary(t);
+  const legacy = [{ id: "old", name: "Existing server", enabled: false, transport: "stdio", command: "example" }];
+  const bytes = JSON.stringify(legacy, null, 4) + "\n";
+  writeFileSync(join(dir, "mcp.json"), bytes);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), legacy);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+  assert.equal(readFileSync(join(dir, "mcp.pre-pi-1.json"), "utf8"), bytes);
+  assert.equal(statSync(join(dir, "mcp.pre-pi-1.json")).mode & 0o777, 0o600);
+  assert.equal(statSync(join(dir, "aiden-mcp.json")).mode & 0o777, 0o600);
+  const native = { mcpServers: { native: { command: "example-native" } } };
+  api.atomicJson(join(dir, "mcp.json"), native);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), legacy);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")), native);
+});
+
+test("MCP migration recovers a completed copy and refuses conflicting or invalid records without deleting data", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json"), destination = join(dir, "aiden-mcp.json");
+  const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
+  api.atomicJson(legacy, [server]);
+  api.atomicJson(destination, [{ ...server, id: "new" }]);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /Reconcile/);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [server]);
+  assert.equal(existsSync(join(dir, "mcp.pre-pi-1.json")), false);
+  api.atomicJson(destination, [server]);
+  api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+  assert.equal(existsSync(legacy), false);
+  api.atomicJson(legacy, [{ id: "invalid" }]);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs/);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
+});
+
+test("native settings keep Aiden header-only startup and persist one installation identity on demand", async (t) => {
+  const dir = temporary(t);
+  const settings = api.SettingsManager.create(dir, dir);
+  assert.equal(settings.getQuietStartup(), "header");
+  assert.equal(settings.getThemeSetting(), "light/dark");
+  settings.setTheme("system");
+  assert.equal(settings.getTheme(), "system");
+  assert.equal(settings.getEnableInstallTelemetry(), false);
+  assert.equal(settings.getGlobalSettings().deviceId, undefined);
+  const id = settings.getOrCreateDeviceId();
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  await settings.flush();
+  const reopened = api.SettingsManager.create(dir, dir);
+  assert.equal(reopened.getOrCreateDeviceId(), id);
+  reopened.setQuietStartup(false);
+  assert.equal(reopened.getQuietStartup(), false);
+  reopened.setQuietStartup(true);
+  assert.equal(reopened.getQuietStartup(), true);
+  await reopened.flush();
 });

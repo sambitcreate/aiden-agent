@@ -23,10 +23,11 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/chord": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "quickjs-wasi": "3.6.2"
   },
   "devDependencies": {
     "@types/node": "22.19.19",

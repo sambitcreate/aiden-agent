@@ -19,7 +19,12 @@ import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-sch
 import { JsonStore, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 
-export const storeFor = (dir: string) => new JsonStore<McpServer[]>(join(dir, "mcp.json"), []);
+import { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
+
+export const storeFor = (dir: string) => {
+  migrateAidenMcpConfig(dir, validateMcpServer);
+  return new JsonStore<McpServer[]>(join(dir, "aiden-mcp.json"), []);
+};
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
@@ -181,7 +186,7 @@ export function createMcpExtension(agentDir: string): InlineExtension {
   return { name: "aiden-mcp", async factory(pi) {
     const pool = createCliMcpPool(agentDir);
     pi.on("session_shutdown", () => pool.close());
-    pi.registerCommand("mcp", { description: "Configure MCP servers and inspect presets (login from a terminal)", handler: async (args, ctx) => {
+    pi.registerCommand("aiden-mcp", { description: "Configure MCP servers and inspect presets (login from a terminal)", handler: async (args, ctx) => {
       const parsed = splitArgs(args); if (parsed[0] === "login") throw new Error("Run aiden mcp login <id> in a terminal.");
       ctx.ui.notify(JSON.stringify(await mcpCommand(agentDir, parsed), null, 2), "info");
     } });
