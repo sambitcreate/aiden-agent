@@ -41,6 +41,10 @@ export function createProviderLoginDeviceId(filePath: () => string): () => strin
       // Publish a complete file without replacing a concurrent process's identity.
       try {
         linkSync(temporary, destination);
+        if (process.platform !== "win32") {
+          const directory = openSync(dirname(destination), constants.O_RDONLY);
+          try { fsyncSync(directory); } finally { closeSync(directory); }
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }

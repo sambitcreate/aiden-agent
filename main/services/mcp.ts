@@ -1,4 +1,5 @@
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
@@ -366,7 +367,7 @@ class McpManager {
       ? (await client.listTools()) as { tools: McpToolInfo[] }
       : { tools: [] };
     lease.assertCurrent();
-    const agentTools = tools.map((t): AgentTool => markToolOutputSource({
+    const agentTools = tools.map((t): AgentTool => markToolOutputSource(Object.assign<AgentTool, { codemode: boolean }>({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,
@@ -376,22 +377,33 @@ class McpManager {
         normalizeMcpToolInputSchema((t.inputSchema as object) ?? { type: "object", properties: {} }),
       ),
       execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-        return executeMcpAgentTool(() =>
-          client.callTool(
+        return executeMcpAgentTool(() => {
+          lease.assertCurrent();
+          signal?.throwIfAborted();
+          return client.callTool(
             {
               name: t.name,
               arguments: (args ?? {}) as Record<string, unknown>,
             },
             undefined,
             { signal },
-          ),
-        );
+          );
+        });
       },
-    }));
+    }, { codemode: true })));
     if (client.getServerCapabilities()?.resources) {
       agentTools.push(createMcpResourceTool(server, client, lease));
     }
-    return { tools: agentTools, instructions: snapshotMcpServerInstructions(server, agentTools, client.getInstructions()) };
+    const instructions = snapshotMcpServerInstructions(server, agentTools, client.getInstructions());
+    for (const tool of agentTools) Object.assign(tool, {
+      codemode: true,
+      discovery: {
+        namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
+        label: server.name.slice(0, 64) || "MCP service",
+        ...(instructions ? { instructions: instructions.instructions } : {}),
+      },
+    });
+    return { tools: agentTools, instructions };
   }
 
   connectionGeneration(id: string): number {

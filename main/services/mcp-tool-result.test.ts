@@ -1,7 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "./mcp-tool-identity.js";
-import { executeMcpAgentTool, mcpAgentToolResult, MAX_MCP_RESULT_TEXT_CHARS } from "./mcp-tool-result.js";
+import { executeMcpAgentTool, mcpAgentToolResult, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_IMAGES, MAX_MCP_IMAGE_BYTES } from "./mcp-tool-result.js";
+import { projectMessagesForModel } from "./generation-context.js";
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+
+test("MCP structured results retain exact JSON values independently of their text summary", async () => {
+  const payload = { answer: 42, nested: [{ enabled: true, label: "x".repeat(3000) }], empty: null };
+  const result = await executeMcpAgentTool(async () => ({ content: [], structuredContent: payload }));
+  assert.deepEqual(JSON.parse(JSON.stringify(result.structuredContent)), payload);
+  payload.nested[0]!.label = "changed";
+  assert.match(JSON.stringify(result.structuredContent), /x{3000}/u);
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  for (const value of [cycle, { value: "x".repeat(200_000) }, { get fail() { throw new Error("must not run"); } }]) {
+    assert.equal(mcpAgentToolResult({ structuredContent: value }).structuredContent, undefined);
+  }
+});
+
+test("MCP images are validated, bounded and projected out for text-only models", async () => {
+  const block = { type: "image", data: PNG, mimeType: "image/png" };
+  const result = await executeMcpAgentTool(async () => ({ content: [block] }));
+  assert.deepEqual(result.content[1], block);
+  const messages = [{ role: "toolResult" as const, toolCallId: "call", toolName: "mcp_fixture", content: result.content, isError: false, timestamp: 1 }];
+  assert.equal(projectMessagesForModel(messages, true)[0], messages[0]);
+  const projected = projectMessagesForModel(messages, false)[0]!;
+  assert.equal(projected.role, "toolResult");
+  if (projected.role === "toolResult") assert.ok(projected.content.every((part) => part.type === "text"));
+  for (const invalid of [{ ...block, data: "!!!!" }, { ...block, mimeType: "image/jpeg" },
+    { ...block, data: Buffer.alloc(MAX_MCP_IMAGE_BYTES + 1).toString("base64") },
+    { ...block, data: Buffer.from(PNG, "base64").subarray(0, 24).toString("base64") }]) {
+    assert.equal(mcpAgentToolResult({ content: [invalid] }).content.length, 1);
+  }
+  const many = mcpAgentToolResult({ content: Array.from({ length: 10 }, () => ({ ...block })) });
+  assert.equal(many.content.filter((part) => part.type === "image").length, MAX_MCP_IMAGES);
+  assert.throws(() => mcpAgentToolResult({ content: [block], isError: true }), /image attached/u);
+});
 
 test("MCP agent tool names bind to stable server and raw tool identities", () => {
   const first = mcpAgentToolName({ id: "github-work", name: "GitHub" }, "create_issue");

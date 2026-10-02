@@ -1,3 +1,4 @@
+import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 export type PiRuntimeReplayPolicy = "safe" | "never";
@@ -17,6 +18,17 @@ export function isPiCodemodeCallable(tool: AgentTool): boolean {
   const admission = (tool as PiRuntimeTool).codemode;
   return tool.name !== "codemode" && admission !== false &&
     (admission === true || CODEMODE_WORKSPACE_TOOLS.has(tool.name));
+}
+
+/** Apply only after host/model exclusions. Without codemode, tools stay directly declared. */
+export function partitionPiCodemodeTools(tools: readonly AgentTool[]): { declared: AgentTool[]; deferred: AgentTool[] } {
+  const enabled = tools.some((tool) => tool.name === "codemode");
+  const declared: AgentTool[] = [];
+  const deferred: AgentTool[] = [];
+  for (const tool of tools) {
+    (enabled && (tool as PiRuntimeTool).codemode === true && Boolean((tool as PiDiscoverableTool).discovery) && isPiCodemodeCallable(tool) ? deferred : declared).push(tool);
+  }
+  return { declared, deferred };
 }
 
 export function piRuntimeReplayPolicy(tool: unknown): PiRuntimeReplayPolicy {

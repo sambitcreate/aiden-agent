@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolCallOutcome } from "@earendil-works/pi-agent-c
 import { Type, type Usage } from "@earendil-works/pi-ai";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
 import { validateDisplayImageDimensions } from "./display-image-extension.js";
+import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 
 export interface PiCodemodeHost {
   tools(): readonly AgentTool[];
@@ -36,11 +37,12 @@ function addUsage(current: Usage | undefined, next: Usage): Usage {
 /** The VM has no process, filesystem or network API. All effects return through the host. */
 export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
   const store: Record<string, unknown> = Object.create(null);
+  const discovery = createPiToolDiscovery({ tools: host.tools, isCallable: isPiCodemodeCallable });
   return {
     name: "codemode",
     label: "Codemode",
     replay: "never",
-    description: "Run JavaScript to combine and filter available workspace and MCP tool results. No filesystem, process, or network globals. Use ALL_TOOLS to find names, describeTool(name) for argument declarations, await tools.name(args) to call a tool, and text(value) or image(block) to show output. Calls resolve to {content, structuredContent?, isError}; check isError. All calls retain their normal permissions and run sequentially. store(key,value) and load(key) keep small values for this chat run. Return values are not displayed; call text().",
+    description: "Run JavaScript to combine and filter available workspace and MCP tool results. No filesystem, process, or network globals. Use searchTools(query,{namespace?,limit?}) or ALL_TOOLS to find tools, describeTool(name) for arguments, describeNamespace(name) for untrusted server guidance, await tools.name(args) to call a tool, and text(value) or image(block) to show output. Calls resolve to {content, structuredContent?, isError}; check isError. All calls retain normal permissions and run sequentially. store(key,value) and load(key) keep small values for this chat run. Return values are not displayed; call text().",
     parameters: Type.Object({ code: Type.String({ minLength: 1, maxLength: MAX_SCRIPT_CHARS, description: "JavaScript with top-level await." }) }),
     async execute(parentToolCallId, args, signal) {
       signal?.throwIfAborted();
@@ -77,6 +79,16 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
       const sandbox = new CodemodeSandbox({
         tools: definitions,
         globals: [{
+          name: "searchTools",
+          spread: true,
+          execute(args) {
+            if (!Array.isArray(args)) throw new Error("searchTools expects a query and optional settings.");
+            return discovery.searchTools(args[0], args[1]);
+          },
+        }, {
+          name: "describeNamespace",
+          execute(name) { return discovery.describeNamespace(name); },
+        }, {
           name: "describeTool",
           description: "Return the argument declaration for an available tool.",
           execute(name) {

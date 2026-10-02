@@ -30,6 +30,7 @@ import {
 import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
@@ -65,6 +66,7 @@ async function managedTestHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
   options: {
     tools?: AgentTool[];
+    deferredTools?: readonly AgentTool[];
     extensions?: PiAgentRuntimeHarnessOptions["extensions"];
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
@@ -123,6 +125,7 @@ async function managedTestHarness(
     }),
   );
   const harness = new PiAgentRuntimeHarness({
+    deferredTools: options.deferredTools,
     extensions: options.extensions,
     identity: options.identity,
     convertToLlm,
@@ -3295,4 +3298,64 @@ test("AGENTS edits enter only the next logical model request and preserve the to
   assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
   assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
   assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
+});
+
+
+test("deferred MCP schemas stay outside provider requests while discovery and approved effects remain available", async (t) => {
+  const store = await effectStoreFixture(t);
+  let harness!: PiAgentRuntimeHarness;
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const leaseRegistry = new McpConfigurationLeaseRegistry();
+  const lease = leaseRegistry.acquire("docs");
+  const toolSets: string[][] = [];
+  const approved: string[] = [];
+  let dispatches = 0;
+  const remote = Object.assign<AgentTool, object>({
+    name: "remote_docs", label: "Docs", description: "Search documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute() {
+      lease.assertCurrent();
+      assert.ok((await store.listEffectsByChat("deferred")).some((effect) => effect.toolName === "remote_docs" && effect.state === "dispatch_started"));
+      dispatches += 1;
+      return { content: [{ type: "text", text: "document found" }], details: null };
+    },
+  }, { codemode: true, discovery: { namespace: "docs", label: "Documents" } });
+  const deferred = [remote];
+  const codemode = createPiCodemodeTool({ tools: () => harness.getCallableTools(), executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(await searchTools("documents")); text(await tools.remote_docs({query:"first"})); text(await tools.remote_docs({query:"revoked"}));' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    tools: [codemode], deferredTools: deferred, effects: { store, chatId: "deferred" },
+    beforeToolCall: async ({ toolCall }) => {
+      approved.push(toolCall.name);
+      if (toolCall.arguments.query === "revoked") leaseRegistry.invalidate("docs");
+      return undefined;
+    },
+    streamFn: (model, context, options) => {
+      toolSets.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return providerCore.streamSimple(model, context, options);
+    },
+  });
+  harness = prepared.harness;
+  providerCore = prepared.core;
+  deferred.length = 0;
+  remote.parameters = Type.Object({ changed: Type.Number() });
+  assert.equal((await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "search", timestamp: 1 } })).kind, "completed");
+  assert.deepEqual(toolSets, [["codemode"], ["codemode"]]);
+  assert.deepEqual(approved, ["codemode", "remote_docs", "remote_docs"]);
+  assert.equal(dispatches, 1);
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  assert.equal(outputs[0].tools[0].name, "remote_docs");
+  assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
+  assert.equal(outputs[1].isError, false);
+  assert.equal(outputs[2].isError, true);
+  assert.match(JSON.stringify(outputs[2]), /configuration changed/u);
+  const effects = await store.listEffectsByChat("deferred");
+  assert.equal(effects.filter((effect) => effect.toolName === "remote_docs").length, 2);
+  assert.deepEqual(effects.filter((effect) => effect.toolName === "remote_docs").map((effect) => effect.state).sort(), ["completed", "remote_error"]);
+  const fresh = testHarness([], { initialState: { tools: [codemode] } }).harness;
+  assert.deepEqual(fresh.getCallableTools().map((tool) => tool.name), ["codemode"]);
 });

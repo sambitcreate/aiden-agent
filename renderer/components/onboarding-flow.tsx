@@ -60,6 +60,7 @@ import {
   getOnboardingMoreProviders,
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
+  onboardingChatGptSelection,
 } from "../lib/pi-provider-display";
 import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
@@ -98,6 +99,7 @@ const FEATURE_ILLUSTRATIONS = {
   vision: new URL("../assets/onboarding/features/attachments-vision.png", import.meta.url).href,
   webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
+  toolScripts: new URL("../assets/onboarding/features/tool-scripts.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
   geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
   bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
@@ -282,6 +284,16 @@ const featureBentos: FeatureBento[] = [
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
+  },
+  {
+    id: "toolScripts",
+    group: "extend",
+    title: "Tool Scripts",
+    description:
+      "Combine workspace and connected-service tools in short scripts. Every tool keeps its normal permission checks; scripts cannot access your files or network directly.",
+    icon: SquareTerminal,
+    imageUrl: FEATURE_ILLUSTRATIONS.toolScripts,
+    size: "standard",
   },
   {
     id: "modelPad",
@@ -591,17 +603,14 @@ export function OnboardingFlow() {
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
   const openAiLoginProvider = providers.data?.find((provider) => provider.id === "openai" && provider.isBuiltin);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
-  const codexReady =
-    codexStatus.data?.configured === true &&
-    codexStatus.data.needsAttention === false &&
-    codexStatus.data.models.length > 0;
+  const chatGptSelection = onboardingChatGptSelection(openAiLoginProvider, codexStatus.data);
   const canContinue = !stateReady
     ? false
     : step === "profile"
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"
-          ? codexReady
+          ? Boolean(chatGptSelection)
           : hasProviderChoice
         : true;
 
@@ -723,13 +732,12 @@ export function OnboardingFlow() {
         return;
       }
       if (choice === "openai-signin") {
-        const model = codexStatus.data?.models[0]?.id;
-        if (!codexReady || !model) {
+        if (!chatGptSelection) {
           setProviderError("Complete ChatGPT sign-in before continuing.");
           return;
         }
-        persistModelSelection("openai-codex", model);
-        await completeProviderStep("openai-codex");
+        persistModelSelection(chatGptSelection.providerId, chatGptSelection.model);
+        await completeProviderStep(chatGptSelection.providerId);
         return;
       }
       if (choice === "custom") {

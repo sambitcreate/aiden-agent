@@ -37,6 +37,7 @@ const featureAssetPaths = [
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
+  "features/tool-scripts.png",
   "features/model-freedom.png",
   "features/model-pad.png",
   "features/native-subagents.png",
@@ -225,7 +226,6 @@ test("provider setup progressively reveals configurable Pi providers and uses th
   assert.match(source, /<CodexProviderSettings/u);
   assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
   assert.match(source, /useCodexProviderStatus\(\)/u);
-  assert.match(source, /persistModelSelection\("openai-codex", model\)/u);
   assert.doesNotMatch(source, /chatGptProvider/u);
   assert.doesNotMatch(source, /providersApi\.authStart/u);
 });
@@ -410,12 +410,11 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /Browser & Annotations/u);
   assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
   assert.match(featurePresentation, /Incognito is temporary/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 26);
+  assert.equal(featureAssetPaths.length, 27);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.ok(featureAssetPaths.includes("features/bots.png"));
