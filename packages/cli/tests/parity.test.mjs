@@ -458,6 +458,15 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   assert.equal(readFileSync(join(lease.authority.workingDirectory, "generated.txt"), "utf8"), "Bot-owned write");
   assert.ok(JSON.stringify(requests[0].messages).includes("Help in the Bot folder"));
   assert.ok(!requests[0].tools.some((tool) => ["bash", "run_command", "web_search", "subagent"].includes(tool.function.name)));
+  // Updating the migrated Aiden configuration must invalidate live Bot leases.
+  const invalidated = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("MCP update did not invalidate Bot authority")), 2000);
+    lease.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+  api.atomicJson(join(dir, "aiden-mcp.json"), []);
+  await invalidated;
+  await assert.rejects(write.execute("mcp-revoked", { path: "mcp-revoked.txt", content: "Denied" }));
+  assert.equal(existsSync(join(lease.authority.workingDirectory, "mcp-revoked.txt")), false);
   await app.revokeNoticeAudience(audienceId);
   await assert.rejects(write.execute("revoked", { path: "revoked.txt", content: "Denied" }));
   lease.release();
@@ -716,4 +725,22 @@ test("native settings keep Aiden header-only startup and persist one installatio
   reopened.setQuietStartup(true);
   assert.equal(reopened.getQuietStartup(), true);
   await reopened.flush();
+});
+
+
+test("delegated MCP revisions follow migrated Aiden configuration and encrypted credentials", (t) => {
+  const dir = temporary(t);
+  const revision = api.createCliMcpRevision(dir);
+  const original = revision();
+  api.atomicJson(join(dir, "mcp.json"), { mcpServers: { native: { command: "example" } } });
+  assert.equal(revision(), original);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: true }]);
+  const configured = revision();
+  assert.notEqual(configured, original);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: false }]);
+  assert.notEqual(revision(), configured);
+  const revoked = revision();
+  mkdirSync(join(dir, "credentials"), { recursive: true });
+  api.atomicJson(join(dir, "credentials/insights.json"), { encrypted: "changed" });
+  assert.notEqual(revision(), revoked);
 });
