@@ -5,7 +5,7 @@ import {
   isAppendReconciliationRequiredError,
 } from "./chat-append-commit.js";
 import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-contract.js";
-import type { PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
+import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
 import type {
   ChatRunInputAdmissionResult,
@@ -25,8 +25,8 @@ export interface ChatRunInputGenerationRef {
   cancelRequested: boolean;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
-    queueSteer(message: AgentMessage): PiRuntimeQueueReceipt;
-    queueFollowUp(message: AgentMessage): PiRuntimeQueueReceipt;
+    queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
+    queueFollowUp(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
   };
 }
 
@@ -132,12 +132,15 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       return { admitted: false, reason: "cancelled", committed: true, messageId };
     }
     const message: AgentMessage = { role: "user", content: input.text, timestamp: now() };
+    // The transcript already holds this input; Pi must reuse that visible
+    // message on emission instead of projecting a second copy.
+    const committed = { visibleChatMessageId: messageId };
     let receipt: PiRuntimeQueueReceipt;
     try {
       receipt =
         input.mode === "steer"
-          ? generation.agent.queueSteer(message)
-          : generation.agent.queueFollowUp(message);
+          ? generation.agent.queueSteer(message, committed)
+          : generation.agent.queueFollowUp(message, committed);
     } catch {
       // The harness pushes onto the accepted queue before invoking Pi; a throw
       // here leaves both delivery and transcript state ambiguous. Keep the

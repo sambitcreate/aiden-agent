@@ -631,6 +631,21 @@ export function assertGenerationContextCapacity(
   }
 }
 
+/** Revalidate changed instructions/tools against the same captured model budget. */
+export function updateGenerationContextOptions(
+  options: GenerationContextOptions,
+  context: { messages: AgentMessage[]; tools?: readonly AgentTool[] },
+): void {
+  const next = {
+    ...options,
+    systemPrompt: getCurrentSystemPrompt(context.messages),
+    tools: context.tools ?? [],
+  };
+  assertGenerationContextCapacity(next);
+  options.systemPrompt = next.systemPrompt;
+  options.tools = next.tools;
+}
+
 export function compactGenerationContext(
   messages: AgentMessage[],
   options: GenerationContextOptions,

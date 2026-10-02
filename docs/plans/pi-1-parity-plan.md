@@ -1,6 +1,6 @@
 # Pi 1.0 parity upgrade
 
-Status: implementation and combined validation complete; final focused acceptance fixes and PR review active (2026-10-02). Eight open PRs cover the stable Pi 1.0 integration. No PR has been merged; documented client differences remain intentional.
+Status: implementation and local validation complete; review follow-up and exact-head CI acceptance active (2026-10-02). Eight open PRs cover the stable Pi 1.0 integration. No PR has been merged; documented client differences remain intentional.
 
 ## Baseline and target
 
@@ -138,3 +138,9 @@ Desktop MCP resource reads retain opaque generation/server-scoped handles and bo
 - The same #304 run's renderer job failed during `npm ci`, before tests, when macOS rejected the esbuild executable (`EBADMACHO`). This is recorded as an infrastructure failure, not a passing renderer run. No blind hosted retry was used.
 
 The final stack has focused acceptance evidence after the broad green baseline. Hosted checks are still running on updated heads; this plan does not claim all eight PRs have green CI or that any have merged.
+
+## Review follow-up
+
+The PR stack is being brought current with main `afe51116d` (shared steering admission and the release catalog snapshot) using normal merges. Review fixes cover atomic MCP source retirement with retained recovery data, validation of the discovered authorization issuer, preservation of OIDC issuer-response policy before SDK schema parsing, compaction draft retention and post-instruction budget checks, attended desktop warming with ownership revocation and cumulative cost accounting, and inspectable classifier consent with Remote denial when full payload inspection is unavailable. Follow-up UI coverage verifies platform-accurate onboarding disclosures.
+
+Each fix is validated on its owning PR before propagation, and review threads receive the corresponding commit and behavioral evidence. Updated CI must pass on each exact PR head; green results from earlier commits are not reused. The latest acceptance results and any infrastructure failure/retry evidence are recorded in the PR descriptions so a documentation-only status update does not invalidate a tested head. No merge is authorized by this follow-up.

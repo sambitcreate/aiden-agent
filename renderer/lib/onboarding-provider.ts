@@ -134,6 +134,13 @@ export function discoveredDefaultModel(
   return discovery.models[0];
 }
 
+export function onboardingModelDescription(platform: string): string {
+  const providers = platform === "darwin"
+    ? "30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints"
+    : "30+ Pi providers, ChatGPT sign-in, or custom endpoints";
+  return `Choose from ${providers}. Enable local llama.cpp classification in a custom provider’s More options. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.`;
+}
+
 /** Platform filtering must preserve setup and privacy disclosures for available features. */
 export function visibleOnboardingFeatures<T extends { id: string; description: string }>(
   features: readonly T[],
@@ -142,7 +149,9 @@ export function visibleOnboardingFeatures<T extends { id: string; description: s
   return features.filter((feature) =>
     (capabilities.computerUse || feature.id !== "computerUse") &&
     (capabilities.bots || feature.id !== "bots"),
-  ).map((feature) => feature.id === "commands" && capabilities.platform === "linux"
+  ).map((feature) => feature.id === "models"
+    ? { ...feature, description: onboardingModelDescription(capabilities.platform) }
+    : feature.id === "commands" && capabilities.platform === "linux"
     ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
     : feature);
 }

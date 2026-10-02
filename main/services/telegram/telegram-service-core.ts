@@ -48,6 +48,11 @@ import {
   type TelegramModelChoice,
 } from "./telegram-controls.js";
 import type { TelegramCompactionResult } from "./telegram-session.js";
+import type {
+  ChatRunInputAdmissionRequest,
+  ChatRunInputAdmissionResult,
+} from "../chat-run-input-admission.js";
+import { MAX_RUN_INPUT_TEXT } from "../../../renderer/shared/chat-run-input.js";
 import { normalizeTelegramInbound } from "./telegram-inbound.js";
 import { GENERATION_THINKING_LEVELS } from "../../../renderer/shared/generation-thinking.js";
 import { createTelegramActivityProjector } from "./telegram-activity.js";
@@ -106,6 +111,8 @@ export interface TelegramServiceDeps {
   listWorkspaces(): Promise<readonly TelegramSelectableWorkspace[]>;
   listModels?(): Promise<readonly TelegramModelChoice[]>;
   abortChat?(chatId: string): Promise<void>;
+  /** Main's shared run-input admission (the same boundary as Remote and desktop Steer). */
+  admitRunInput?(input: ChatRunInputAdmissionRequest): Promise<ChatRunInputAdmissionResult>;
   compactChat?(chatId: string): Promise<TelegramCompactionResult>;
   transcribeAudio?(input: { audioBase64: string; mimeType: string }): Promise<string>;
   storeInboundFile?(input: {
@@ -197,6 +204,7 @@ const TELEGRAM_HELP_TEXT = [
   "/status — show runtime status and controls",
   "/model — choose the Telegram model",
   "/thinking — choose reasoning effort",
+  "/steer <guidance> — add guidance to the running response without stopping it",
   "/queue [prompt] — inspect the queue or add a follow-up",
   "/interrupt <prompt> — stop this turn and run your replacement next",
   "/new — compact a bound Bot conversation without replacing it",
@@ -231,6 +239,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   let botTopicsEnabled: boolean | undefined;
   let lastError: string | undefined;
   let activeInput: QueuedTelegramTurn | undefined;
+  /** The running Pi stream for activeInput, once its turn holds the chat. */
+  let activeStream: { streamId: string; ownerDocumentId: string } | undefined;
   let dispatchCancellation: AbortController | undefined;
   const mediaGroups = new Map<string, {
     turn: QueuedTelegramTurn;
@@ -614,6 +624,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
     // Control lane: commands are handled immediately (no LLM).
     if (rawText?.startsWith("/")) {
+      if (update.edited_message && commandName(rawText) === "/steer") {
+        // Guidance may already be in the transcript; an edit never resends it.
+        await deps.api.sendMessage({
+          chatId: message.chat.id, threadId: message.message_thread_id,
+          text: "Edited /steer commands are not sent. Send a new /steer message instead.",
+        }).catch(() => undefined);
+        return;
+      }
       if (update.edited_message && ["/queue", "/continue", "/interrupt"].includes(commandName(rawText))) {
         const pending = queue.findBySource(message.chat.id, message.message_id, message.message_thread_id, binding);
         await deps.api.sendMessage({
@@ -1000,6 +1018,60 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       (turn.chatId === message.chat.id && turn.threadId === message.message_thread_id));
   }
 
+  /**
+   * `/steer`: add guidance to this route's running turn through main's shared
+   * run-input admission. It never aborts, queues, or retries; a receipt that
+   * main already committed is reported as saved history, not as a failure.
+   */
+  async function steerActiveTurn(
+    guidance: string,
+    message: TelegramMessage,
+    binding?: TelegramBotBindingSnapshot,
+  ): Promise<void> {
+    const reply = (text: string) => deps.api
+      .sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text })
+      .catch(() => undefined);
+    if (!guidance.trim()) {
+      await reply("Use /steer followed by guidance for the running response.");
+      return;
+    }
+    if (guidance.length > MAX_RUN_INPUT_TEXT) {
+      await reply("That guidance is too long to steer. Use /queue to save it as a follow-up.");
+      return;
+    }
+    const stream = activeStream;
+    const chatId = activeChatId;
+    if (!deps.admitRunInput || !activeTurn || !stream || !matchesControl(activeInput, binding, message)) {
+      await reply("No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.");
+      return;
+    }
+    let receipt: ChatRunInputAdmissionResult;
+    try {
+      receipt = await deps.admitRunInput({
+        streamId: stream.streamId,
+        ...(chatId ? { chatId } : {}),
+        mode: "steer",
+        text: guidance,
+        ownerDocumentId: stream.ownerDocumentId,
+      });
+    } catch (cause) {
+      deps.error("Telegram: steer admission outcome is unknown.", cause);
+      await reply("⚠️ Aiden couldn't confirm the guidance. Check the conversation before sending it again.");
+      return;
+    }
+    if (receipt.admitted) {
+      await reply("🧭 Guidance accepted. Aiden will read it at the next step.");
+    } else if (receipt.committed) {
+      await reply("The response ended before reading your guidance, so it was saved to the conversation. Send a message to continue.");
+    } else if (receipt.reason === "capacity") {
+      await reply("This response already has the maximum pending guidance. Use /queue to save a follow-up.");
+    } else if (receipt.reason === "cancelled") {
+      await reply("This response is stopping, so it can't take guidance. Use /queue to save a follow-up.");
+    } else {
+      await reply("No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.");
+    }
+  }
+
   async function abortCurrentTurn(binding?: TelegramBotBindingSnapshot, message?: TelegramMessage): Promise<boolean> {
     if ((!activeTurn && !dispatchPending) || !activeInput) return false;
     if (!matchesControl(activeInput, binding, message)) return false;
@@ -1328,6 +1400,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
 
+    if (cmd === "/steer") {
+      await steerActiveTurn(commandArgument(command), message, binding);
+      return;
+    }
+
     if (cmd === "/queue" || cmd === "/interrupt") {
       const prompt = commandArgument(command);
       if (!prompt) {
@@ -1643,7 +1720,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         workspace,
         turn.attachments,
         activity.observe,
-        { binding: turn.binding, skillInvocation: turn.skillInvocation, signal: cancellation.signal },
+        {
+          binding: turn.binding,
+          skillInvocation: turn.skillInvocation,
+          signal: cancellation.signal,
+          onStream: (stream) => {
+            activeStream = stream;
+          },
+        },
       );
       await activity.settle();
       if (cancellation.signal.aborted) return;
@@ -1669,6 +1753,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       activeTurn = false;
       activeChatId = undefined;
       activeInput = undefined;
+      activeStream = undefined;
       dispatchPending = false;
       dispatchCancellation = undefined;
       tryDispatch();

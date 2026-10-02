@@ -452,6 +452,13 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       lifecycle.cancelChat(chatId);
       await llmClient.cancelChat(chatId);
     },
+    admitRunInput: async (input) => {
+      const result = await llmClient.admitChatRunInput(input);
+      // A committed /steer changes the transcript every desktop window shows,
+      // matching the desktop IPC and Remote inputs paths.
+      if (result.committed) ipcMain.broadcast("chats:changed", {});
+      return result;
+    },
     compactChat: lifecycle.compactChat,
     transcribeAudio: transcribe,
     storeInboundFile: async ({ bytes, name, workspaceId, botId }) => {
