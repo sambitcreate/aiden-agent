@@ -756,6 +756,11 @@ export interface McpServer {
   url?: string;
   headers?: Record<string, string>;
   oauth?: boolean;
+  /** Explicit authorization-server metadata document for custom remote OAuth connections. */
+  authServerMetadataUrl?: string;
+  oauthClientName?: string;
+  /** Optional bounded server description used for tool discovery. */
+  description?: string;
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;

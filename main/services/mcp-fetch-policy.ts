@@ -16,6 +16,25 @@ function isJsonRpcBody(body: BodyInit | null | undefined): boolean {
   }
 }
 
+/** Pi 1.0 accepts absent optional token values some OAuth servers encode as null or empty strings. */
+async function normalizeOAuthTokenResponse(response: Response): Promise<Response> {
+  if (!response.ok) return response;
+  const value: unknown = await response.json();
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid OAuth token response.");
+  const tokens = value as Record<string, unknown>;
+  if (typeof tokens.access_token !== "string" || !tokens.access_token || typeof tokens.token_type !== "string" || !tokens.token_type) throw new Error("OAuth token response is missing required credentials.");
+  for (const key of ["scope", "refresh_token", "id_token", "expires_in"]) {
+    if (tokens[key] === null || tokens[key] === "") delete tokens[key];
+  }
+  if (tokens.expires_in !== undefined) {
+    if ((typeof tokens.expires_in !== "string" && typeof tokens.expires_in !== "number") || !Number.isFinite(Number(tokens.expires_in)) || Number(tokens.expires_in) < 0) throw new Error("Invalid OAuth token lifetime.");
+    tokens.expires_in = Number(tokens.expires_in);
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-length"); headers.delete("content-encoding");
+  return new Response(JSON.stringify(tokens), { status: response.status, statusText: response.statusText, headers });
+}
+
 /** Count SSE frames, not the lifetime of an intentionally long-lived stream. */
 function frameCounter(maximumBytes: number) {
   let frameBytes = 0;
@@ -162,11 +181,14 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
           return reader!.cancel(reason);
         },
       });
-      return new Response(body, {
+      const boundedResponse = new Response(body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
       });
+      const grant = method === "POST" && contentType === "application/x-www-form-urlencoded"
+        ? new URLSearchParams(typeof init?.body === "string" || init?.body instanceof URLSearchParams ? init.body : "").get("grant_type") : null;
+      return grant === "authorization_code" || grant === "refresh_token" ? await normalizeOAuthTokenResponse(boundedResponse) : boundedResponse;
     } catch (error) {
       cleanup();
       throw error;
