@@ -1,3 +1,4 @@
+import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
 // Plugins settings — Codex official directory plus custom MCP servers whose
 // tools become available to the assistant. Connectable plugins reuse the
 // hosted HTTP preset flow; other directory entries explain compatibility.
@@ -455,6 +456,8 @@ function McpEditor({
   onSaved: () => void;
 }) {
   const [name, setName] = React.useState(server.name);
+  const [description, setDescription] = React.useState(server.description ?? "");
+  const [oauthClientName, setOauthClientName] = React.useState(server.oauthClientName ?? "");
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
   const [args, setArgs] = React.useState((server.args ?? []).join(" "));
@@ -462,6 +465,8 @@ function McpEditor({
   const [url, setUrl] = React.useState(server.url ?? "");
   const [headers, setHeaders] = React.useState(recordToLines(server.headers));
   const [oauth, setOauth] = React.useState(Boolean(server.oauth));
+  const [authServerMetadataUrl, setAuthServerMetadataUrl] = React.useState(server.authServerMetadataUrl ?? "");
+  const metadataError = transport !== "stdio" && oauth ? mcpOAuthMetadataFieldError(authServerMetadataUrl) : undefined;
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
@@ -469,6 +474,8 @@ function McpEditor({
   React.useEffect(() => {
     if (open) {
       setName(server.name);
+      setDescription(server.description ?? "");
+      setOauthClientName(server.oauthClientName ?? "");
       setTransport(server.transport);
       setCommand(server.command ?? "");
       setArgs((server.args ?? []).join(" "));
@@ -476,6 +483,7 @@ function McpEditor({
       setUrl(server.url ?? "");
       setHeaders(recordToLines(server.headers));
       setOauth(Boolean(server.oauth));
+      setAuthServerMetadataUrl(server.authServerMetadataUrl ?? "");
       setAuthorized(false);
       if (server.oauth) {
         void mcpApi.oauthStatus(server.id).then((status) => setAuthorized(status.authorized)).catch(() => setAuthorized(false));
@@ -486,6 +494,8 @@ function McpEditor({
   const build = (): McpServer => ({
     id: server.id,
     name: name.trim(),
+    description: description.trim() || undefined,
+    oauthClientName: transport !== "stdio" && oauth ? oauthClientName.trim() || undefined : undefined,
     transport,
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
@@ -494,6 +504,7 @@ function McpEditor({
     url: transport !== "stdio" ? url.trim() || undefined : undefined,
     headers: transport !== "stdio" ? linesToRecord(headers) : undefined,
     oauth: transport !== "stdio" ? oauth || undefined : undefined,
+    authServerMetadataUrl: transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
   });
 
   const handleAuthorize = async () => {
@@ -541,7 +552,7 @@ function McpEditor({
       description="Configure how Aiden connects to this tool server."
       size="large"
       confirmLabel="Save"
-      confirmDisabled={!name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
+      confirmDisabled={Boolean(metadataError) || !name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
       onConfirm={async () => {
         await mcpApi.save(build());
         onSaved();
@@ -551,6 +562,9 @@ function McpEditor({
       <FieldSet>
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My MCP server" autoFocus />
+        </Field>
+        <Field label="Description" description="Optional context to help Aiden find this server’s tools." orientation="vertical">
+          <Input aria-label="MCP server description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
         </Field>
         <Field label="Connection">
           <Select value={transport} onValueChange={(v) => setTransport(v as McpTransport)}>
@@ -598,9 +612,14 @@ function McpEditor({
               />
             </Field>
             {oauth ? (
+              <>
+              <Field label="OAuth client name" description="Optional name required by the server’s registration policy. Defaults to Aiden Agent.">
+                <Input aria-label="OAuth client name" maxLength={128} value={oauthClientName} onChange={(event) => { setOauthClientName(event.target.value); setAuthorized(false); }} placeholder="Aiden Agent" />
+              </Field>
+              <McpOAuthMetadataField value={authServerMetadataUrl} onChange={(value) => { setAuthServerMetadataUrl(value); setAuthorized(false); }} />
               <Field label="Authorize" description={authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."}>
                 <div className="flex items-center gap-2">
-                  <Button size="small" variant="filled" onClick={handleAuthorize} disabled={authorizing || !url.trim()}>
+                  <Button size="small" variant="filled" onClick={handleAuthorize} disabled={authorizing || !url.trim() || Boolean(metadataError)}>
                     {authorizing ? "Waiting for browser…" : authorized ? "Re-authorize" : "Authorize"}
                   </Button>
                   {authorized ? (
@@ -611,12 +630,13 @@ function McpEditor({
                   ) : null}
                 </div>
               </Field>
+              </>
             ) : null}
           </>
         )}
 
         <Field label="Test">
-          <Button size="small" variant="filled" onClick={handleTest} disabled={testing || !name.trim()}>
+          <Button size="small" variant="filled" onClick={handleTest} disabled={testing || !name.trim() || Boolean(metadataError)}>
             {testing ? "Connecting…" : "Test connection"}
           </Button>
         </Field>

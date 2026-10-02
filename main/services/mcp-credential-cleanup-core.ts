@@ -10,12 +10,15 @@ export interface McpCredentialConnectionSnapshot {
   envHash?: string;
   headersHash?: string;
   oauth?: boolean;
+  authServerMetadataUrl?: string;
+  oauthClientName?: string;
   presetId?: string;
 }
 
 /** Every field that can affect runtime admission or the resulting tool surface. */
 export interface McpRuntimeConnectionSnapshot extends McpCredentialConnectionSnapshot {
   name: string;
+  description?: string;
   enabled: boolean;
 }
 
@@ -49,6 +52,8 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
     "envHash",
     "headersHash",
     "oauth",
+    "authServerMetadataUrl",
+    "oauthClientName",
     "presetId",
   ]);
   if (
@@ -64,6 +69,8 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
     (record.headersHash !== undefined &&
       (typeof record.headersHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.headersHash))) ||
     (record.oauth !== undefined && typeof record.oauth !== "boolean") ||
+    (record.authServerMetadataUrl !== undefined && typeof record.authServerMetadataUrl !== "string") ||
+    (record.oauthClientName !== undefined && typeof record.oauthClientName !== "string") ||
     (record.presetId !== undefined && typeof record.presetId !== "string")
   ) {
     throw new Error("Invalid pending MCP credential cleanup.");
@@ -83,6 +90,8 @@ export function mcpCredentialConnectionSnapshot(
     ...(server.env !== undefined ? { envHash: secretMapHash(server.env) } : {}),
     ...(server.headers !== undefined ? { headersHash: secretMapHash(server.headers) } : {}),
     ...(server.oauth !== undefined ? { oauth: server.oauth } : {}),
+    ...(server.authServerMetadataUrl !== undefined ? { authServerMetadataUrl: server.authServerMetadataUrl } : {}),
+    ...(server.oauthClientName !== undefined ? { oauthClientName: server.oauthClientName } : {}),
     ...(server.presetId !== undefined ? { presetId: server.presetId } : {}),
   };
 }
@@ -98,6 +107,7 @@ export function mcpRuntimeConnectionSnapshot(server: McpServer): McpRuntimeConne
   return {
     ...mcpCredentialConnectionSnapshot(server),
     name: server.name,
+    ...(server.description !== undefined ? { description: server.description } : {}),
     enabled: server.enabled,
   };
 }

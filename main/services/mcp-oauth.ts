@@ -1,3 +1,5 @@
+import { mcpOAuthMetadataUrlForServer } from "../../renderer/shared/mcp-oauth-config.js";
+import { loadMcpOAuthMetadataOverride } from "./mcp-oauth-metadata.js";
 // OAuth 2.0 (PKCE + dynamic client registration) for remote MCP servers, per the
 // MCP authorization spec. Uses the official SDK's `OAuthClientProvider` contract
 // and a loopback redirect (RFC 8252 native-app flow): we open the provider's
@@ -77,6 +79,8 @@ class McpOAuthProvider implements OAuthClientProvider {
     private readonly observeTokens?: (tokens: OAuthTokens) => void,
     private readonly oauthClientName: string = mcpOAuthClientMetadata().client_name,
     private readonly authorization = new McpOAuthAuthorizationFlow(),
+    private readonly metadataServer?: McpServer,
+    private readonly metadataSignal?: AbortSignal,
   ) {}
 
   private async boundSession() {
@@ -132,8 +136,17 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.authorization.saveDiscovery(state);
   }
 
-  discoveryState(): OAuthDiscoveryState | undefined {
+  async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
     this.assertCanMutate();
+    const metadataUrl = this.metadataServer && mcpOAuthMetadataUrlForServer(this.metadataServer);
+    if (metadataUrl && !this.authorization.discoveryState()) {
+      const state = await loadMcpOAuthMetadataOverride(metadataUrl, {
+        serviceUrl: this.metadataServer!.url!, serviceHeaders: this.metadataServer!.headers,
+        signal: this.metadataSignal, isCurrent: this.mutationIsCurrent,
+      });
+      this.assertCanMutate();
+      this.authorization.saveDiscovery(state);
+    }
     return this.authorization.discoveryState();
   }
 
@@ -258,21 +271,25 @@ export function oauthProviderFor(
   if (!server.url) throw new Error("This MCP server needs a URL.");
   return new McpOAuthProvider(
     server.id,
-    mcpAuthorizationBinding(server.url),
+    mcpAuthorizationBinding(server.url, mcpOAuthMetadataUrlForServer(server), server.oauthClientName),
     oauthOperations.snapshot(server.id),
     isCurrent,
     undefined,
     observeTokens,
     mcpOAuthClientNameForServer(server),
+    undefined,
+    structuredClone(server),
   );
 }
 
 export async function hasOAuthTokens(
   serverId: string,
   url?: string,
+  authServerMetadataUrl?: string,
+  oauthClientName?: string,
 ): Promise<boolean> {
   const session = await mcpOAuthStore.get(serverId);
-  if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url)))
+  if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url, authServerMetadataUrl, oauthClientName)))
     return false;
   return Boolean(session.tokens);
 }
@@ -442,7 +459,7 @@ export async function authorizeMcpServer(
     throw new Error("OAuth applies only to remote (HTTP/SSE) MCP servers.");
   if (!server.url) throw new Error("Add the server URL before authorizing.");
 
-  const binding = mcpAuthorizationBinding(server.url);
+  const binding = mcpAuthorizationBinding(server.url, mcpOAuthMetadataUrlForServer(server), server.oauthClientName);
   if (!isCurrent())
     throw new Error("The renderer document is no longer active.");
   const operation = reservedOperation ?? oauthOperations.begin(server.id);
@@ -467,6 +484,8 @@ export async function authorizeMcpServer(
     undefined,
     mcpOAuthClientNameForServer(server),
     authorization,
+    structuredClone(server),
+    ownerSignal ? AbortSignal.any([operation.signal, ownerSignal]) : operation.signal,
   );
   let loopback: Loopback | null = null;
   let commitAttempted = false;

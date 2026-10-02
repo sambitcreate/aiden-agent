@@ -127,3 +127,27 @@ test("parseMcpServer passes through presetId only when it is a non-empty string"
   assert.equal(parseMcpServer({ id: "c", name: "C", presetId: "" }).presetId, undefined);
   assert.equal(parseMcpServer({ id: "d", name: "D", presetId: 42 }).presetId, undefined);
 });
+
+
+test("MCP metadata overrides require explicit remote OAuth and reject unsafe addresses", () => {
+  const server = { id: "custom", name: "Custom", transport: "http", oauth: true };
+  assert.equal(parseMcpServer({ ...server, authServerMetadataUrl: "https://IDP.test/metadata" }).authServerMetadataUrl, "https://idp.test/metadata");
+  for (const authServerMetadataUrl of ["http://remote.test/meta", "https://user:secret@idp.test/meta", "https://idp.test/meta#fragment", "file:///tmp/meta", "https://idp.test/" + "x".repeat(2048), 42, ""]) {
+    assert.throws(() => parseMcpServer({ ...server, authServerMetadataUrl }), /OAuth metadata/u);
+  }
+  for (const override of [{ oauth: false }, { transport: "stdio" }, { presetId: "figma" }]) {
+    assert.throws(() => parseMcpServer({ ...server, ...override, authServerMetadataUrl: "https://idp.test/meta" }), /OAuth metadata/u);
+  }
+  assert.equal(parseMcpServer({ ...server, authServerMetadataUrl: "http://127.0.0.1:3000/metadata" }).authServerMetadataUrl, "http://127.0.0.1:3000/metadata");
+});
+
+
+test("custom MCP descriptions and OAuth registration names are bounded and preserved", () => {
+  const server = { id: "custom", name: "Custom", transport: "http", oauth: true };
+  const parsed = parseMcpServer({ ...server, description: "Search our documents", oauthClientName: "Approved Aiden" });
+  assert.equal(parsed.description, "Search our documents");
+  assert.equal(parsed.oauthClientName, "Approved Aiden");
+  for (const override of [{ description: "x".repeat(1025) }, { oauthClientName: "x".repeat(129) }, { oauthClientName: "bad\nname" }, { oauthClientName: "Aiden", oauth: false }]) {
+    assert.throws(() => parseMcpServer({ ...server, ...override }), /description|client name/u);
+  }
+});
