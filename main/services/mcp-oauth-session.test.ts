@@ -383,3 +383,90 @@ test("SDK token exchanges normalize optional null and empty fields before saving
   }
   assert.deepEqual(saved, [{ access_token: "valid", token_type: "Bearer" }, { access_token: "valid", token_type: "Bearer", expires_in: 3600 }]);
 });
+
+
+for (const oidc of [false, true]) {
+  for (const issuerMismatch of [false, true]) {
+    test(`real MCP transport ${oidc ? "OIDC fallback" : "OAuth discovery"} ${issuerMismatch ? "rejects an inconsistent issuer before consent" : "preserves mandatory callback issuer policy"}`, async (t) => {
+      const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+      const { createMcpRemoteTransport } = await import("./mcp-remote-transport.js");
+      const flow = new McpOAuthAuthorizationFlow();
+      let browser: URL | undefined;
+      let verifier: string | undefined;
+      let exchanges = 0;
+      const requested: string[] = [];
+      const issuer = "https://identity.example.test/tenant";
+      const provider: OAuthClientProvider & { observeAuthorizationMetadata: (url: URL, document: unknown) => void } = {
+        redirectUrl: "http://127.0.0.1:49152/callback",
+        clientMetadata: { redirect_uris: ["http://127.0.0.1:49152/callback"], token_endpoint_auth_method: "none" },
+        clientInformation: () => ({ client_id: "registered-client" }),
+        state: () => flow.state,
+        tokens: () => undefined,
+        saveTokens: () => {},
+        saveDiscoveryState: (state) => flow.saveDiscovery(state),
+        discoveryState: () => flow.discoveryState(),
+        observeAuthorizationMetadata: (url, document) => flow.observeAuthorizationMetadata(url, document),
+        saveCodeVerifier: (value) => { verifier = value; },
+        codeVerifier: () => verifier!,
+        redirectToAuthorization: (url) => { browser = flow.authorizationUrl(url); },
+      };
+      const transport = createMcpRemoteTransport({
+        transport: "http", serviceUrl: "https://resource.example.test/mcp", authProvider: provider,
+        fetch: async (input) => {
+          const url = new URL(String(input));
+          requested.push(url.pathname);
+          if (url.pathname === "/mcp") return new Response(null, { status: 401 });
+          if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://resource.example.test/mcp", authorization_servers: [issuer] });
+          if (oidc && url.pathname.includes("oauth-authorization-server")) return new Response(null, { status: 404 });
+          if (url.pathname.includes("/.well-known/")) return Response.json({
+            issuer: issuerMismatch ? `${issuer}/other` : issuer,
+            authorization_endpoint: "https://identity.example.test/authorize",
+            token_endpoint: "https://identity.example.test/token",
+            response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
+            authorization_response_iss_parameter_supported: true,
+            ...(oidc ? { jwks_uri: "https://identity.example.test/jwks", subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"] } : {}),
+          });
+          if (url.pathname === "/token") { exchanges++; return Response.json({ access_token: "token", token_type: "Bearer" }); }
+          throw new Error(`Unexpected request ${url}`);
+        },
+      });
+      const client = new Client({ name: "issuer-regression", version: "1" });
+      t.after(async () => { await client.close(); await transport.close(); });
+      await assert.rejects(client.connect(transport), issuerMismatch ? /metadata issuer/u : /Unauthorized/u);
+      assert.equal(exchanges, 0);
+      assert.equal(requested.some((path) => path.includes("openid-configuration")), oidc);
+      if (issuerMismatch) {
+        assert.equal(browser, undefined);
+        assert.equal(flow.discoveryState(), undefined);
+        return;
+      }
+      assert.ok(browser);
+      const callback = new URL(`http://127.0.0.1:49152/callback?state=${flow.state}&code=trusted`);
+      assert.throws(() => flow.callback(callback), /issuer/u, "OIDC extension must survive the SDK's stripping schema");
+      callback.searchParams.set("iss", `${issuer}/`);
+      assert.throws(() => flow.callback(callback), /issuer/u);
+      assert.equal(exchanges, 0);
+      callback.searchParams.set("iss", issuer);
+      const accepted = flow.callback(callback);
+      assert.ok("code" in accepted);
+      await transport.finishAuth(accepted.code);
+      assert.equal(exchanges, 1);
+    });
+  }
+}
+
+
+test("metadata observation rejects oversized wire documents and forgets policy after invalidation", async () => {
+  const { withMcpOAuthMetadataObservation } = await import("./mcp-oauth-metadata.js");
+  const flow = new McpOAuthAuthorizationFlow();
+  const url = new URL("https://identity.test/.well-known/openid-configuration");
+  let observed = 0;
+  const fetch = withMcpOAuthMetadataObservation(async () => Response.json({ issuer: "https://identity.test", padding: "x".repeat(64 * 1024) }), () => { observed++; });
+  await assert.rejects(fetch(url), /bounds/u);
+  assert.equal(observed, 0);
+  flow.observeAuthorizationMetadata(url, { issuer: "https://identity.test", authorization_response_iss_parameter_supported: true });
+  flow.clearDiscovery();
+  flow.saveDiscovery({ authorizationServerUrl: "https://identity.test", authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", response_types_supported: ["code"] } });
+  flow.authorizationUrl(new URL(`https://identity.test/authorize?state=${flow.state}`));
+  assert.deepEqual(flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&code=allowed`)), { code: "allowed" });
+});
