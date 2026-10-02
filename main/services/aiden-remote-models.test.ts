@@ -222,3 +222,11 @@ test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking cho
     thinkingCanDisable: false,
   }]);
 });
+
+test("desktop local classifier opt-in does not alter the native chat catalog contract", async () => {
+  const saved = provider({ id: "custom:llama", baseUrl: "http://localhost:8080/v1", deployment: "local", llamaCppClassifierEnabled: true });
+  const service = new AidenRemoteModelService({ listProviders: async () => [saved], getSettings: async () => ({}) });
+  const projection = await service.list();
+  assert.deepEqual(Object.keys(projection.providers[0]).sort(), ["id", "label", "models"]);
+  assert.deepEqual(projection.providers[0].models.map((model) => model.id), ["chat-model"]);
+});

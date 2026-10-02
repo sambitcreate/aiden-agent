@@ -21,6 +21,8 @@ const CONTEXT_FALLBACK_TEXT =
   "[Aiden context notice: The active conversation could not be safely retained within this model's context window. Explain that the user should retry with a larger-context model or fewer/lower-size attachments. Do not call tools for this notice.]";
 
 export interface GenerationContextOptions {
+  /** User budget can reserve more context, but never reduce the response safety floor. */
+  compactionReserveTokens?: number;
   contextWindow: number;
   systemPrompt: string;
   tools: readonly AgentTool[];
@@ -597,7 +599,7 @@ function contextLimits(
   );
   const reserveTokens = Math.min(
     contextWindow - 1,
-    responseReserve + safetyReserve,
+    Math.max(responseReserve + safetyReserve, options.compactionReserveTokens ?? 0),
   );
   return {
     contextWindow,

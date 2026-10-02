@@ -1,9 +1,13 @@
+import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
+import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { providerRegistry } from "./provider-registry.js";
+import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -126,6 +130,7 @@ import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admissio
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
+  isLocalModelProvider,
   reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
@@ -339,6 +344,8 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
+import { createPiModelImageReferences } from "./pi-model-image-references.js";
+import { createPiModelTools, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -702,6 +709,19 @@ async function prepareGeneration(
   const displayedHtmlIds = new Set<string>();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
+  const modelImageReferences = createPiModelImageReferences({
+    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    generated: responseImages,
+    readCurrent: async (referenceSignal) => {
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      const current = await chatStore.get(params.chatId);
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
+      return current.messages.flatMap((message) => message.attachments ?? []);
+    },
+  });
   const shareImage = (attachment: Attachment) => {
     const existing = responseImages();
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
@@ -1048,6 +1068,7 @@ async function prepareGeneration(
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
+          compactionModelOverrides: settings.compactionModelOverrides,
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1243,6 +1264,15 @@ async function prepareGeneration(
   let tools = (
     await buildAgentTools({
       onMcpServerInstructions: mcpInstructionCollector.capture,
+      mcpProviderScope: {
+        signal,
+        onInvalidated: (listener) => browserOwner.onInvalidated(listener),
+        isCurrent: () => {
+          const generation = active.get(streamId) ?? initializing.get(streamId);
+          return !signal.aborted && !!generation && generation.owner === browserOwner && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
+        },
+      },
+      allowMcpProviderAuth: canUseProviderAuthenticatedMcp({ rendererOwner, permission, workspace: Boolean(workspace?.folderPath), assistant: assistantMode, bot: Boolean(botContext), usageSource: options.usageSource, interactionSurface: options.interactionSurface }),
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
@@ -1401,7 +1431,7 @@ async function prepareGeneration(
       assistantMode,
       workspaceRoot: folderPath,
       permission,
-      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+      excluded: false,
     })
   ) {
     const artifactStoreAvailability = displayImageArtifactStore.availability();
@@ -1461,7 +1491,40 @@ async function prepareGeneration(
         return true;
       },
     });
-    generationExtensions.push(displayImageRuntime.extension);
+    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+      generationExtensions.push(displayImageRuntime.extension);
+    }
+    const localClassifierModels = createLocalClassifierModels({
+      models: providerRegistry.models,
+      providers: await configStore.listProviders(),
+      getProvider: (id) => configStore.getProvider(id),
+      resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
+    });
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      tools: createPiModelTools({
+        models: localClassifierModels.models,
+        listImages: modelImageReferences.listImages,
+        resolveImage: modelImageReferences.resolveImage,
+        onImage: displayImageRuntime.presentGeneratedImage,
+        // Account at the provider-call boundary, not at nested/parent tool events.
+        onUsage: async (record) => {
+          const cost = record.usage?.cost.total;
+          const local = localClassifierModels.isLocalProvider(record.provider) || (record.provider === runtime.provider.id && isLocalModelProvider(runtime.provider));
+          await usageStore.record({
+            source: options.usageSource ?? "chat",
+            providerId: record.provider,
+            providerLabel: record.provider === runtime.provider.id ? runtime.provider.label : record.provider,
+            modelId: record.model, modelLabel: record.modelLabel, local, status: record.status,
+            tokens: reportedTokens(record.usage),
+            costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
+            ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
+          });
+        },
+      })
+        .filter((tool) => !options.excludeToolNames?.has(tool.name)),
+    });
   }
   if (
     !botContext &&
@@ -1571,6 +1634,7 @@ async function prepareGeneration(
     git,
     tools,
     generationExtensions,
+    modelImageReferences,
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
@@ -1584,6 +1648,8 @@ async function prepareGeneration(
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
+    compactionModelOverrides: settings.compactionModelOverrides,
+    cacheWarmingEnabled: settings.cacheWarmingEnabled === true,
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -1898,6 +1964,7 @@ export const llmClient = {
       git,
       tools,
       generationExtensions,
+      modelImageReferences,
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
@@ -1912,6 +1979,8 @@ export const llmClient = {
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
+      compactionModelOverrides,
+      cacheWarmingEnabled,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -2072,6 +2141,7 @@ export const llmClient = {
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
+    let cacheWarmer: PiCacheWarmer | undefined;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
@@ -2379,7 +2449,9 @@ export const llmClient = {
         tools: declared,
       };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
+        compactionReserveTokens: compactionBudget?.reserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2388,13 +2460,10 @@ export const llmClient = {
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
-      assertGenerationContextCapacity({
-        contextWindow: model.contextWindow,
-        systemPrompt,
-        tools: runtimeTools,
-      });
+      assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
+          cacheWarmer?.stop();
           activeCompactionStepId = timeline.compactionStarted();
           logger.info("pi", `Started ${event.reason} compaction for stream ${streamId}.`, {
             model: model.id,
@@ -2439,6 +2508,7 @@ export const llmClient = {
         thinkingLevel,
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
+          ...compactionBudget,
           enabled: piUpgradeCompactionEnabled,
         },
         signal: initialization.controller.signal,
@@ -2549,6 +2619,19 @@ export const llmClient = {
       });
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
+      const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      if (cacheWarmingEnabled && !isLocalModelProvider(runtime.provider) && !preparedBotContext && !options.usageSource && owner.id !== 0 && authoritativeMode !== "assistant-automation") {
+        cacheWarmer = new PiCacheWarmer({
+          signal: initialization.controller.signal,
+          enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
+          recordUsage: async (message, freshRuntime) => {
+            await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
+          },
+        });
+      }
+      const realStream = agentRuntimeOptions.streamFn!;
+      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       candidate = new PiAgentRuntimeHarness({
         contributions: runtimeContributions,
         deferredTools,
@@ -2578,7 +2661,8 @@ export const llmClient = {
             pressure: chatContextPressureFromProjection(projection, projectionOptions),
           });
         },
-        ...buildAgentRuntimeOptions(params.chatId, runtime),
+        ...agentRuntimeOptions,
+        streamFn: observedStream,
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
         runtime.apiKey &&
@@ -2608,6 +2692,7 @@ export const llmClient = {
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
+          compactionReserveTokens: compactionBudget?.reserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {
@@ -2967,6 +3052,14 @@ export const llmClient = {
                           )
                         : summarizeToolCall(context.toolCall.name, context.args);
           }
+          if (context.toolCall.name === "generate_image") {
+            try { summary += await modelImageReferences.disclosure(context.args, signal); }
+            catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Reference images could not be verified." };
+            }
+          }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
           }
@@ -3135,6 +3228,9 @@ export const llmClient = {
 
       candidate.subscribe(async (event) => {
         switch (event.type) {
+          case "agent_end":
+            cacheWarmer?.dispose();
+            break;
           case "message_start":
             if (event.message.role === "assistant") {
               requestUsage.started();
@@ -3293,6 +3389,9 @@ export const llmClient = {
             timeline.toolRunning(event.toolCallId);
             break;
           case "tool_execution_end": {
+            // Nested calls emit their own events; the enclosing codemode usage
+            // includes these again, so only the actual paid operation counts.
+            turnUsage = addTurnUsage(turnUsage, reportedTokens(piModelOperationUsage(event.toolName, event.result)));
             const denied = deniedToolCalls.delete(event.toolCallId);
             const terminalStatus = generationCancelRequested()
               ? "cancelled"
@@ -3335,6 +3434,7 @@ export const llmClient = {
         }
       });
     } catch (error) {
+      cacheWarmer?.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3568,6 +3668,7 @@ export const llmClient = {
           error,
         );
       });
+      cacheWarmer?.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -3794,6 +3895,7 @@ export const llmClient = {
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
+          cacheWarmer?.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});

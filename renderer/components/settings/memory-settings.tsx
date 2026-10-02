@@ -1,16 +1,21 @@
-import { compactionEngineFrom, type CompactionEngine } from "../../shared/compaction";
+import { CompactionBudgetSettings } from "./compaction-budget-settings";
+import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
 import { settingsApi, workspacesApi } from "../../lib/ipc";
-import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
+import { queryKeys, useSettings, useWorkspaces, useProviders, useCodexProviderStatus } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
 
 export function MemorySettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const workspaces = useWorkspaces();
+  const providers = useProviders();
+  const codex = useCodexProviderStatus();
   const [compactionSaving, setCompactionSaving] = React.useState(false);
+  const [warmingSaving, setWarmingSaving] = React.useState(false);
+  const warmingSavingRef = React.useRef(false);
   const [globalSaving, setGlobalSaving] = React.useState(false);
   const [workspaceSaving, setWorkspaceSaving] = React.useState<Set<string>>(() => new Set());
   const globallyEnabled = settings.data?.memoryEnabled !== false;
@@ -25,6 +30,21 @@ export function MemorySettings() {
       toast.error("Couldn't update automatic compaction.");
     } finally {
       setCompactionSaving(false);
+    }
+  };
+
+  const setWarmingEnabled = async (enabled: boolean) => {
+    if (warmingSavingRef.current) return;
+    warmingSavingRef.current = true;
+    setWarmingSaving(true);
+    try {
+      const saved = await settingsApi.set({ cacheWarmingEnabled: enabled });
+      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
+    } catch {
+      toast.error("Couldn’t update cache warming.");
+    } finally {
+      warmingSavingRef.current = false;
+      setWarmingSaving(false);
     }
   };
 
@@ -110,6 +130,30 @@ export function MemorySettings() {
           can retrieve from the current chat. That context may be sent to your chat model when the
           conversation continues. Current-chat recall works independently of memory below.
         </Text>
+      </FieldSet>
+
+      <CompactionBudgetSettings
+        overrides={settings.data?.compactionModelOverrides ?? {}}
+        modelKeys={[
+          ...(providers.data ?? []).flatMap((provider) => provider.models.map((model) => `${provider.id}/${model}`)),
+          ...(codex.data?.models ?? []).map((model) => `openai-codex/${model.id}`),
+        ]}
+        disabled={settings.isLoading}
+        onSave={async (modelKey: string, budget: CompactionModelBudget | undefined) => {
+          const current = await settingsApi.get();
+          const overrides = { ...current.compactionModelOverrides };
+          if (budget) overrides[modelKey] = budget;
+          else delete overrides[modelKey];
+          const saved = await settingsApi.set({ compactionModelOverrides: overrides });
+          queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
+        }}
+      />
+
+      <FieldSet title="Prompt cache">
+        <Field label="Warm caches during active chats" description="Optional paid one-token requests keep an eligible provider cache warm during long desktop agent runs. Off by default; starts with your next chat run and stops when the run ends.">
+          <Switch aria-label="Warm prompt caches during active chats" checked={settings.data?.cacheWarmingEnabled === true} disabled={settings.isLoading || warmingSaving} onCheckedChange={(enabled) => void setWarmingEnabled(enabled)} />
+        </Field>
+        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear in Usage. Stops after one hour, on cancellation, or when switched off. Does not warm idle chats, Bots, scheduled tasks, or subagents.</Text>
       </FieldSet>
 
       <FieldSet title="Memory controls">

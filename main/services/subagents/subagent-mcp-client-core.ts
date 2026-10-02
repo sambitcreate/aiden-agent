@@ -90,6 +90,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
   dependencies: IsolatedSubagentMcpClientDependencies;
 }): Promise<T> {
   if (input.signal.aborted) throw abortReason(input.signal);
+  if (input.server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   if (input.server.transport === "stdio") {
     throw new Error("Subagent MCP requires an isolated remote transport.");
   }

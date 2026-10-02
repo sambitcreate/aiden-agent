@@ -151,3 +151,10 @@ test("custom MCP descriptions and OAuth registration names are bounded and prese
     assert.throws(() => parseMcpServer({ ...server, ...override }), /description|client name/u);
   }
 });
+
+
+test("MCP provider references require HTTPS HTTP and cannot mix credential sources", () => {
+  const input = { id: "custom", name: "Custom", enabled: true, transport: "http", url: "https://tools.test/mcp", authProvider: "openai" };
+  assert.equal(parseMcpServer(input).authProvider, "openai");
+  for (const change of [{ transport: "stdio" }, { transport: "sse" }, { url: "http://localhost/mcp" }, { oauth: true }, { headers: { Authorization: "secret" } }, { presetId: "figma" }, { authProvider: "../secret" }]) assert.throws(() => parseMcpServer({ ...input, ...change }), /authentication|provider|OAuth/u);
+});

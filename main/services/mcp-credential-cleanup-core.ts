@@ -12,6 +12,7 @@ export interface McpCredentialConnectionSnapshot {
   oauth?: boolean;
   authServerMetadataUrl?: string;
   oauthClientName?: string;
+  authProvider?: string;
   presetId?: string;
 }
 
@@ -54,6 +55,7 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
     "oauth",
     "authServerMetadataUrl",
     "oauthClientName",
+    "authProvider",
     "presetId",
   ]);
   if (
@@ -71,6 +73,7 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
     (record.oauth !== undefined && typeof record.oauth !== "boolean") ||
     (record.authServerMetadataUrl !== undefined && typeof record.authServerMetadataUrl !== "string") ||
     (record.oauthClientName !== undefined && typeof record.oauthClientName !== "string") ||
+    (record.authProvider !== undefined && typeof record.authProvider !== "string") ||
     (record.presetId !== undefined && typeof record.presetId !== "string")
   ) {
     throw new Error("Invalid pending MCP credential cleanup.");
@@ -92,6 +95,7 @@ export function mcpCredentialConnectionSnapshot(
     ...(server.oauth !== undefined ? { oauth: server.oauth } : {}),
     ...(server.authServerMetadataUrl !== undefined ? { authServerMetadataUrl: server.authServerMetadataUrl } : {}),
     ...(server.oauthClientName !== undefined ? { oauthClientName: server.oauthClientName } : {}),
+    ...(server.authProvider !== undefined ? { authProvider: server.authProvider } : {}),
     ...(server.presetId !== undefined ? { presetId: server.presetId } : {}),
   };
 }

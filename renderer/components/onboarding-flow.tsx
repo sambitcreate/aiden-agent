@@ -280,7 +280,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Model Freedom",
     description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
+      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints. Enable local llama.cpp classification in a custom provider’s More options. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -319,7 +319,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Attachments & Vision",
     description:
-      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline. Generate or edit attached images with configured image models after approving the prompt, reference images, and possible provider charges.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -347,7 +347,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
+    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools. Sharing a provider sign-in requires approval on each device.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
@@ -1010,6 +1010,10 @@ export function OnboardingFlow() {
                   Pressing the speaker sends the latest response text to Google, even for local-model replies;
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
+                </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
                 </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices

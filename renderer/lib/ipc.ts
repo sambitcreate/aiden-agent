@@ -461,7 +461,8 @@ export const mcpApi = {
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
+  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
