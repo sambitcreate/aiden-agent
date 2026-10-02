@@ -1001,6 +1001,10 @@ export function OnboardingFlow() {
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
                 </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
+                </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices
                     .filter((item) =>

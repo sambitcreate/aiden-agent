@@ -595,3 +595,15 @@ test("TTS accounting survives reload and keeps unknown cost and usage separate f
   assert.equal(ttsUsageRecord({ kind: "preview", model: "tts", status: "completed", inputTokens: 1, outputTokens: null, usageKnown: false }).tokens, null);
   assert.ok(persistence.read().buckets.every(bucket => bucket.source === "text-to-speech"));
 });
+
+
+test("cache warming charges survive reload and are included in user-visible usage totals", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(record({ source: "cache-warm", providerId: "fixture", modelId: "priced", costStatus: "reported", costUsd: 0.10003 }));
+  const reloaded = createUsageStore(persistence, () => NOW);
+  const summary = await reloaded.summary("7d");
+  assert.equal(summary.totals.requests, 1);
+  assert.equal(summary.totals.hostedCostUsd, 0.10003);
+  assert.equal(persistence.read().buckets[0]?.source, "cache-warm");
+});

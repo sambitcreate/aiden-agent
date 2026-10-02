@@ -17,7 +17,8 @@ export type UsageRequestSource =
   | "telegram"
   | "btw"
   | "advisor"
-  | "compaction";
+  | "compaction"
+  | "cache-warm";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -89,6 +90,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "btw",
   "advisor",
   "compaction",
+  "cache-warm",
 ]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {

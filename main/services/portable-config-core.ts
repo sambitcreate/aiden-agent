@@ -671,6 +671,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
+  if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
   if (settings.compactionModelOverrides !== undefined) {
     try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
     catch { delete runtime.compactionModelOverrides; }

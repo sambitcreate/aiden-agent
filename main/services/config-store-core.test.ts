@@ -2941,3 +2941,15 @@ test("per-model compaction budgets persist, reset and reject invalid patches ato
   await next.setSettings({ compactionModelOverrides: {} });
   assert.deepEqual((await next.getSettings()).compactionModelOverrides, {});
 });
+
+
+test("cache warming is off by default and persists only an explicit boolean opt-in", async (t) => {
+  const h = await harness(t);
+  assert.equal((await h.store.getSettings()).cacheWarmingEnabled ?? false, false);
+  await h.store.setSettings({ cacheWarmingEnabled: true });
+  const restarted = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, true);
+  await assert.rejects(restarted.setSettings({ cacheWarmingEnabled: "true" as never }));
+  await restarted.setSettings({ cacheWarmingEnabled: false });
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, false);
+});
