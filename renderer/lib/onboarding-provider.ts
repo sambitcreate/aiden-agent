@@ -133,3 +133,16 @@ export function discoveredDefaultModel(
   }
   return discovery.models[0];
 }
+
+/** Platform filtering must preserve setup and privacy disclosures for available features. */
+export function visibleOnboardingFeatures<T extends { id: string; description: string }>(
+  features: readonly T[],
+  capabilities: { computerUse: boolean; bots: boolean; platform: string },
+): T[] {
+  return features.filter((feature) =>
+    (capabilities.computerUse || feature.id !== "computerUse") &&
+    (capabilities.bots || feature.id !== "bots"),
+  ).map((feature) => feature.id === "commands" && capabilities.platform === "linux"
+    ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
+    : feature);
+}
