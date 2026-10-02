@@ -27,6 +27,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   export <session.jsonl> [output.aiden-chat.json]
   auth list|login|logout                     Provider credentials (OAuth or API key)
   mcp list|presets|add|preset|login|remove    MCP servers and browser OAuth
+  pi-mcp add|remove|list|login|logout         Native pi MCP configuration (also /mcp)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   catalog refresh|models-dev fetch|models-dev status
   insights aa|openrouter show|fetch|disconnect

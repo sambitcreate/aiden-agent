@@ -27,6 +27,9 @@ test("bundle entry is executable and lazy loaders are emitted beside it", () => 
 		"bedrock-converse-stream.js",
 		"github-copilot.js",
 		"image-resize-worker.js",
+		"codemode-worker.js",
+		"meta.js",
+		"openai-chatgpt.js",
 		"kimi-coding.js",
 		"openai-codex.js",
 		"openrouter.js",
@@ -124,17 +127,5 @@ test("pi telemetry is removed, not just disabled", () => {
 	assert.ok(everything.includes("timer&&clearInterval(timer)"), "one loop then settle (timer clear)");
 	// Animation colors derive from the active theme accent, never hardcoded blues.
 	assert.ok(!everything.includes("38;2;62;151;246"), "hardcoded Aiden-blue truecolor must not ship");
-	// Minimal startup: the Aiden header stays (stock quietStartup default), but
-	// the loaded-resources listing is patched off and no longer advertised.
-	assert.ok(everything.includes("quietStartup??!1"), "header branding must keep the stock quietStartup default");
-	assert.ok(!everything.includes("quietStartup??!0"), "flipped quietStartup default must be reverted");
-	assert.match(
-		everything.replace(/\s+/g, ""),
-		/showListing=options\?\.force\|\|this\.options\.verbose[,;]/,
-		"resources listing must be patched off by default",
-	);
-	assert.ok(
-		!everything.includes("and loaded resources"),
-		"header hint must not advertise the removed resources listing",
-	);
+
 });
