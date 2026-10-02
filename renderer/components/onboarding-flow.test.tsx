@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { OnboardingOpenAiLogin } from "./onboarding-openai-login.js";
 import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
@@ -10,6 +12,19 @@ import {
 import type { Provider } from "../lib/types.js";
 
 const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8");
+
+test("OpenAI onboarding discloses login identity and waits for an available auth method", () => {
+  let calls = 0;
+  const enabled = renderToStaticMarkup(<OnboardingOpenAiLogin available disabled={false} onConnect={() => { calls++; }} />);
+  assert.match(enabled, /Sign in with OpenAI/u);
+  assert.match(enabled, /random installation/u);
+  assert.doesNotMatch(enabled, /disabled=""/u);
+  for (const props of [{ available: false, disabled: false }, { available: true, disabled: true }]) {
+    const markup = renderToStaticMarkup(<OnboardingOpenAiLogin {...props} onConnect={() => { calls++; }} />);
+    assert.match(markup, /disabled=""/u);
+  }
+  assert.equal(calls, 0, "rendering onboarding must never start login");
+});
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 const featureAssetPaths = [
   "aiden-workspace.png",

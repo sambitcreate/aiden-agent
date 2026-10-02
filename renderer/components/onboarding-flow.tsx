@@ -41,6 +41,7 @@ import { ProviderIcon } from "./provider-icon";
 import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
+import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
 import { appApi, profileApi, providersApi } from "../lib/ipc";
 import {
@@ -588,6 +589,7 @@ export function OnboardingFlow() {
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
+  const openAiLoginProvider = providers.data?.find((provider) => provider.id === "openai" && provider.isBuiltin);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
   const codexReady =
     codexStatus.data?.configured === true &&
@@ -1055,7 +1057,19 @@ export function OnboardingFlow() {
                 </div>
                 {choice === "openai-signin" ? (
                   <div className="mt-3">
-                    <CodexProviderSettings layer="onboarding" />
+                    <OnboardingOpenAiLogin
+                      available={openAiLoginProvider?.authMethods?.some((method) => method.type === "oauth" && method.canLogin) === true}
+                      disabled={saving}
+                      onConnect={() => {
+                        if (openAiLoginProvider) setSettingUpProvider(openAiLoginProvider);
+                      }}
+                    />
+                    <details className="mt-3">
+                      <summary className="cursor-pointer rounded-control text-sm text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+                        Existing Codex connection
+                      </summary>
+                      <CodexProviderSettings layer="onboarding" />
+                    </details>
                   </div>
                 ) : null}
                 <button
