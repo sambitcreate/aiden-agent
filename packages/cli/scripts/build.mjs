@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
 const pkgDir = dirname(fileURLToPath(import.meta.url)) + "/..";
@@ -46,6 +47,7 @@ const piAiPkg = [
 if (piAiPkg === undefined) {
 	throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
 }
+await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
@@ -267,6 +269,7 @@ const mainResult = await build({
 
 const bedrockLoaderOutput = findContainingOutput(mainResult.metafile, "pi-ai/dist/api/bedrock-converse-stream.lazy.js");
 const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "pi-ai/dist/auth/oauth/load.js");
+const configOutput = findContainingOutput(mainResult.metafile, "pi-coding-agent/dist/config.js");
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "pi-coding-agent/dist/utils/image-resize.js");
 if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
@@ -282,6 +285,9 @@ const lazyResult = await build({
 		anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
 		"bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
 		"github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
+		"codemode-worker": join(piAgentPkg, "dist", "extensions", "codemode", "worker.js"),
+		meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
+		"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
 		"image-resize-worker": join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
 		"kimi-coding": join(piAiPkg, "dist", "auth", "oauth", "kimi-coding.js"),
 		"openai-codex": join(piAiPkg, "dist", "auth", "oauth", "openai-codex.js"),
@@ -297,6 +303,8 @@ const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-res
 if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
+
+if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) throw new Error("Codemode worker must be emitted beside config.js");
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
 

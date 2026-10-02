@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -163,10 +163,59 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 			.map((line) => JSON.parse(line))
 			.filter((message) => message.type === "response" && message.command === "get_commands")
 			.flatMap((message) => message.data.commands.map((command) => command.name));
-		for (const expected of ["usage", "voice", "dictate", "btw"]) {
+		for (const expected of ["usage", "voice", "dictate", "btw", "mcp", "aiden-mcp"]) {
 			assert.ok(commands.includes(expected), `/${expected} missing over RPC; got: ${commands.join(", ")}`);
 		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });
 	}
+});
+
+test("native MCP command routing leaves Aiden's migrated inventory intact", () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+  try {
+    const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
+    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify([server]));
+    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+    const native = runCli(["pi-mcp", "list"], options);
+    assert.equal(native.status, 0, native.stderr);
+    const legacy = runCli(["mcp", "list"], options);
+    assert.equal(legacy.status, 0, legacy.stderr);
+    assert.deepEqual(JSON.parse(legacy.stdout), [server]);
+  } finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+for (const revoke of [false, true]) {
+  test(`bundled codemode executes nested tools with current workspace authority (revoke=${revoke})`, () => {
+    const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
+    const agentDir = path.join(root, "agent"), workspace = path.join(root, "workspace");
+    mkdirSync(agentDir); mkdirSync(workspace);
+    try {
+      writeFileSync(path.join(agentDir, "workspaces.json"), JSON.stringify([{ id: "fixture", name: "Fixture", folderPath: realpathSync(workspace), access: "full" }]));
+      const result = runCli(["--mode", "json", "--no-session", "--tools", "codemode,write,fixture_revoke", "-e",
+        path.resolve(pkgDir, "tests/fixtures/codemode-provider.mjs"), "--model", "offline-fixture/fixture", "Exercise codemode"], {
+        cwd: workspace,
+        env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", AIDEN_TEST_REVOKE: revoke ? "1" : "0" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const events = result.stdout.trim().split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
+      const nested = events.find((event) => event.type === "tool_execution_end" && event.toolName === "write" && event.parentToolCallId === "codemode-fixture");
+      assert.ok(nested, result.stderr + JSON.stringify(events.filter((event) => event.type.startsWith("tool_execution"))));
+      assert.equal(nested.isError, revoke, JSON.stringify(nested));
+      const file = path.join(workspace, "codemode-result.txt");
+      if (revoke) {
+        assert.equal(existsSync(file), false, "revoked nested write must have no filesystem effect");
+        assert.match(JSON.stringify(nested), /Workspace tool access is disabled/);
+      } else assert.equal(readFileSync(file, "utf8"), "worker executed");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("bundled ChatGPT OAuth module loads and rejects missing installation identity before networking", async () => {
+  const module = await import(pathToFileURL(path.resolve(pkgDir, "dist/app/openai-chatgpt.js")).href);
+  await assert.rejects(module.openaiChatGPTOAuth.login({
+    signal: new AbortController().signal,
+    prompt: async () => { throw new Error("Unexpected prompt before identity validation"); },
+    notify: () => { throw new Error("Unexpected network login before identity validation"); },
+  }), /requires a device ID/);
 });
