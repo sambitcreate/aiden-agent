@@ -394,6 +394,8 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
+  assert.match(featurePresentation, /Generate or edit attached images.*approving the prompt, reference images, and possible provider charges/u);
+  assert.match(featurePresentation, /classifiers.*approve sending it.*provider charges/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
   assert.match(
     featurePresentation,

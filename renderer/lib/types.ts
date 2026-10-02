@@ -1,5 +1,5 @@
 import type { CustomModelOptions } from "../shared/custom-model-options";
-import type { CompactionEngine } from "../shared/compaction";
+import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
@@ -85,6 +85,8 @@ export interface Provider {
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   isPreset?: boolean;
   /** Pi owns this provider's endpoint, models, auth, and transport. */
   isBuiltin?: boolean;
@@ -877,6 +879,9 @@ export interface AssistantConfigSnapshot {
 
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

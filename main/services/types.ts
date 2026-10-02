@@ -1,5 +1,5 @@
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import type { CompactionEngine } from "../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -68,6 +68,8 @@ export interface StoredProvider {
    * treat them as local even off localhost.
    */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   /** Legacy marker retained only for persisted custom-connection migration. */
   isPreset?: boolean;
   /**
@@ -654,6 +656,9 @@ export interface AssistantConfigSnapshot {
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */

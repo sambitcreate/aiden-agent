@@ -2928,3 +2928,42 @@ test("custom model overrides survive restart and reset through the config store"
   assert.equal(reset?.modelMetadata?.["qwen3-8b"].overrides, undefined);
   assert.equal(reset?.customModelOptions, undefined);
 });
+
+
+test("per-model compaction budgets persist, reset and reject invalid patches atomically", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ compactionModelOverrides: { "openai/model": { reserveTokens: 8_000, keepRecentTokens: 0 } } });
+  const next = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await next.getSettings()).compactionModelOverrides?.["openai/model"]?.keepRecentTokens, 0);
+  await assert.rejects(next.setSettings({ compactionModelOverrides: { "openai/model": { reserveTokens: -1 } }, memoryEnabled: false }));
+  assert.equal((await next.getSettings()).compactionModelOverrides?.["openai/model"]?.reserveTokens, 8_000);
+  assert.notEqual((await next.getSettings()).memoryEnabled, false);
+  await next.setSettings({ compactionModelOverrides: {} });
+  assert.deepEqual((await next.getSettings()).compactionModelOverrides, {});
+});
+
+
+test("cache warming is off by default and persists only an explicit boolean opt-in", async (t) => {
+  const h = await harness(t);
+  assert.equal((await h.store.getSettings()).cacheWarmingEnabled ?? false, false);
+  await h.store.setSettings({ cacheWarmingEnabled: true });
+  const restarted = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, true);
+  await assert.rejects(restarted.setSettings({ cacheWarmingEnabled: "true" as never }));
+  await restarted.setSettings({ cacheWarmingEnabled: false });
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, false);
+});
+
+test("local classifier opt-in persists independently of cached models and can be disabled", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider({ ...provider, llamaCppClassifierEnabled: true });
+  const restarted = createConfigStore(h.stores, h.secrets.port);
+  assert.equal((await restarted.getProvider(provider.id))?.llamaCppClassifierEnabled, true);
+  const portable = await readJson<{ providers: StoredProvider[] }>(h.portableFile);
+  assert.equal(portable.providers[0].llamaCppClassifierEnabled, true);
+  assert.equal("models" in portable.providers[0], false);
+  await restarted.saveProvider({ ...provider, llamaCppClassifierEnabled: false });
+  assert.equal((await h.store.getProvider(provider.id))?.llamaCppClassifierEnabled, false);
+  await assert.rejects(restarted.saveProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: true }), /custom local/);
+  assert.equal((await h.store.getProvider(provider.id))?.deployment, "local");
+});

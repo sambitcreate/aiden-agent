@@ -78,7 +78,7 @@ export interface PiCompactionCoordinatorOptions {
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
   consumeHostFailure?: () => "inference" | "policy" | undefined;
-  settings?: CompactionSettings;
+  settings?: Partial<CompactionSettings>;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
   /** Bounded host backoff for transient provider/transport retries. */

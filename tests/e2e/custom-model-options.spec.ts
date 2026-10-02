@@ -163,3 +163,30 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     }),
   ).toHaveValue("7777");
 });
+
+test("local classifier capability is off by default and survives provider save", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Providers", exact: true }).click();
+  const configure = page.getByText("LM Studio (local)", { exact: true })
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
+    .getByRole("button", { name: "Configure", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
+  await configure.click();
+  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  const capability = dialog.getByRole("switch", { name: "Enable llama.cpp classification", exact: true });
+  await expect(capability).toHaveAttribute("data-state", "unchecked");
+  await capability.click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await configure.click();
+  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  await expect(capability).toHaveAttribute("data-state", "checked");
+  await capability.click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await configure.click();
+  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  await expect(capability).toHaveAttribute("data-state", "unchecked");
+});

@@ -1,4 +1,5 @@
-import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
@@ -709,6 +710,7 @@ export function createConfigStore(
       provider: StoredProvider,
       isCurrent: () => boolean = () => true,
     ): Promise<Provider> {
+      validateLocalClassifierPreference(provider);
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
@@ -840,6 +842,10 @@ export function createConfigStore(
     ): Promise<AppSettings> {
       if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
         throw new Error("Invalid compaction engine.");
+      }
+      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.compactionModelOverrides !== undefined) {
+        patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
