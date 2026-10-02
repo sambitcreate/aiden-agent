@@ -399,21 +399,16 @@ final class AidenNativeIntegrationTests: XCTestCase {
         await manager.appendResponse("private response text", instanceID: proofID, streamID: proofID)
         await manager.markStale(instanceID: proofID, streamID: proofID)
 
-        let staleDeadline = Date().addingTimeInterval(2)
-        while !activity.content.state.isStale && Date() < staleDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
+        guard let stale = await deliveredContent(of: activity, expecting: "the stale state", where: { $0.isStale }) else {
+            await manager.endAll(forInstanceID: proofID)
+            return
         }
-        XCTAssertTrue(activity.content.state.isStale)
-        XCTAssertEqual(activity.content.state.status, .responding)
-        XCTAssertEqual(activity.content.state.responseExcerpt, "")
+        XCTAssertTrue(stale.isStale)
+        XCTAssertEqual(stale.status, .responding)
+        XCTAssertEqual(stale.responseExcerpt, "")
 
         await manager.endAll(forInstanceID: proofID)
 
-        let endDeadline = Date().addingTimeInterval(2)
-        while (activity.activityState == .active || activity.activityState == .stale),
-              Date() < endDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
         XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
@@ -474,21 +469,21 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         let adoptingManager = AidenRemoteLiveActivityManager(defaults: defaults)
 
+        let persisted = activity.content.state
         await adoptingManager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
-        let reconcileDeadline = Date().addingTimeInterval(2)
-        while activity.content.state.status != .responding && Date() < reconcileDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
+        guard let reconciled = await deliveredContent(
+            of: activity,
+            expecting: "a reconciled state after the persisted one",
+            where: { $0 != persisted }
+        ) else {
+            await adoptingManager.endAll(forInstanceID: proofID)
+            return
         }
-        XCTAssertEqual(activity.content.state.status, .responding)
-        XCTAssertFalse(activity.content.state.isStale)
-        XCTAssertEqual(activity.content.state.responseExcerpt, "")
+        XCTAssertEqual(reconciled.status, .responding)
+        XCTAssertFalse(reconciled.isStale)
+        XCTAssertEqual(reconciled.responseExcerpt, "")
 
         await adoptingManager.endAll(forInstanceID: proofID)
-        let endDeadline = Date().addingTimeInterval(2)
-        while (activity.activityState == .active || activity.activityState == .stale),
-              Date() < endDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
         XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
@@ -577,22 +572,22 @@ final class AidenNativeIntegrationTests: XCTestCase {
                 session: URLSession(configuration: configuration)
             )
             let manager = AidenRemoteLiveActivityManager(defaults: defaults)
+            let persisted = activity.content.state
             await manager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
 
-            let reconcileDeadline = Date().addingTimeInterval(2)
-            while activity.content.state.status != .responding && Date() < reconcileDeadline {
-                try await Task.sleep(nanoseconds: 20_000_000)
+            guard let reconciled = await deliveredContent(
+                of: activity,
+                expecting: "a reconciled state after the persisted one",
+                where: { $0 != persisted }
+            ) else {
+                await manager.endAll(forInstanceID: proofID)
+                return
             }
-            XCTAssertEqual(activity.content.state.status, .responding)
-            XCTAssertFalse(activity.content.state.isStale)
-            XCTAssertEqual(activity.content.state.responseExcerpt, "")
+            XCTAssertEqual(reconciled.status, .responding)
+            XCTAssertFalse(reconciled.isStale)
+            XCTAssertEqual(reconciled.responseExcerpt, "")
 
             await manager.endAll(forInstanceID: proofID)
-            let endDeadline = Date().addingTimeInterval(2)
-            while (activity.activityState == .active || activity.activityState == .stale),
-                  Date() < endDeadline {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            }
             XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
             XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
             print("AIDEN_ACTIVITYKIT_PROCESS checkpoint=reconciled-and-ended proof=\(proofID)")
@@ -805,6 +800,93 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: Int16.self) }, 0)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
+    }
+}
+
+/// ActivityKit echoes an app's own `update(_:)` back to its `Activity`
+/// instances asynchronously and throttles those echoes: an update issued right
+/// after `request` can take seconds to reach `content`, even though the awaited
+/// `update` call has already returned. Await the delivered content event
+/// instead of polling `content` against a wall-clock budget.
+///
+/// The ceiling is not a pass/fail timing budget, and it does not raise a
+/// timeout to hide a race: correctness comes only from the delivered event.
+/// The ceiling exists so that a regression where the expected state never
+/// arrives fails promptly, with a message, instead of hanging the CI job.
+/// It sits an order of magnitude above the throttled delivery latency (about
+/// 3 s observed), so a correct run never reaches it. Returns nil after recording a failure when the ceiling passes or
+/// the content stream finishes first.
+@MainActor
+private func deliveredContent(
+    of activity: Activity<AgentRunActivityAttributes>,
+    expecting expectation: String,
+    failureCeiling: Duration = .seconds(30),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    where isExpected: @escaping @Sendable (AgentRunActivityAttributes.ContentState) -> Bool
+) async -> AgentRunActivityAttributes.ContentState? {
+    // Race the stream against the ceiling without a task group: ActivityKit's
+    // `contentUpdates` does not end when its task is cancelled, and a group
+    // would wait for that child before returning, so it would hang anyway.
+    let race = AidenDeliveredContentRace()
+    let outcome = await withCheckedContinuation { continuation in
+        race.continuation = continuation
+        race.observer = Task { @MainActor in
+            // `contentUpdates` starts with the current content, so an echo
+            // that has already landed is observed rather than missed.
+            for await content in activity.contentUpdates {
+                race.last = content.state
+                if isExpected(content.state) {
+                    race.finish(.delivered(content.state))
+                    return
+                }
+            }
+            race.finish(.streamFinished)
+        }
+        race.ceiling = Task { @MainActor in
+            guard (try? await Task.sleep(for: failureCeiling)) != nil else { return }
+            race.finish(.ceilingReached)
+        }
+    }
+    race.observer?.cancel()
+    race.ceiling?.cancel()
+
+    let lastSeen = race.last.map { "status \($0.status), stale \($0.isStale)" } ?? "no content"
+    switch outcome {
+    case let .delivered(state):
+        return state
+    case .streamFinished:
+        XCTFail(
+            "ActivityKit ended the content stream before delivering \(expectation); last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    case .ceilingReached:
+        XCTFail(
+            "ActivityKit did not deliver \(expectation) within the \(failureCeiling) failure ceiling; last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    }
+    return nil
+}
+
+private enum AidenDeliveredContentOutcome: Sendable {
+    case delivered(AgentRunActivityAttributes.ContentState)
+    case streamFinished
+    case ceilingReached
+}
+
+@MainActor
+private final class AidenDeliveredContentRace {
+    var last: AgentRunActivityAttributes.ContentState?
+    var continuation: CheckedContinuation<AidenDeliveredContentOutcome, Never>?
+    var observer: Task<Void, Never>?
+    var ceiling: Task<Void, Never>?
+
+    func finish(_ outcome: AidenDeliveredContentOutcome) {
+        continuation?.resume(returning: outcome)
+        continuation = nil
     }
 }
 

@@ -1,6 +1,6 @@
 # Chronological Chat Motion
 
-Status: Implemented in [PR #224](https://github.com/sambitcreate/aiden-agent/pull/224); review and visual acceptance pending.
+Status: Complete — merged in [PR #224](https://github.com/sambitcreate/aiden-agent/pull/224) on 2026-09-23 and shipped in 0.43.0. Hands-on visual acceptance is a release follow-up, not open plan scope.
 
 ## Objective
 

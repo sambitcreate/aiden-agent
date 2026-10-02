@@ -1,6 +1,6 @@
 # Transcript polish: sticky section headers, preparing tool stage, turn footers
 
-Status: Implemented for review (desktop). Source: the DeepSeek transcript research page, items on sticky reasoning headers, tool-call staging and per-turn metadata.
+Status: Complete — merged in [PR #269](https://github.com/sambitcreate/aiden-agent/pull/269) on 2026-09-28 and shipped in 0.51.0. The mobile and live-streaming footers remain follow-ups. Source: the DeepSeek transcript research page, items on sticky reasoning headers, tool-call staging and per-turn metadata.
 
 ## Goals
 

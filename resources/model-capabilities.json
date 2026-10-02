@@ -75888,8 +75888,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 943718
+          "context": 1048575,
+          "output": 943717
         },
         "cost": {
           "input": 0.15,
@@ -78456,9 +78456,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.015,
-          "output": 1.2,
-          "cache_read": 0.002115
+          "input": 0.02,
+          "output": 0.6,
+          "cache_read": 0.02
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -78540,9 +78540,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.012825,
-          "output": 1.6,
-          "cache_read": 0.012825
+          "input": 0.005775,
+          "output": 1.472,
+          "cache_read": 0.005775
         }
       },
       "~x-ai/grok-latest": {
@@ -80919,7 +80919,7 @@
       },
       "inclusionai/ling-3.1-flash": {
         "id": "inclusionai/ling-3.1-flash",
-        "name": "inclusionAI: Ling 3.1 Flash",
+        "name": "inclusionAI: Ling 3.1 Flash (new)",
         "description": "Ling 3.1 Flash is a hybrid reasoning mixture-of-experts model from inclusionAI, with 25B active parameters out of 560B total.",
         "family": "ling",
         "attachment": false,
@@ -111803,9 +111803,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0171,
+          "input": 0.0077,
           "output": 1.28,
-          "cache_read": 0.0171
+          "cache_read": 0.0077
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -111850,9 +111850,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.3,
-          "output": 1.2,
-          "cache_read": 0.006
+          "input": 0.02,
+          "output": 0.6,
+          "cache_read": 0.02
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -113270,12 +113270,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 943717
         },
         "cost": {
-          "input": 0.02625,
-          "output": 0.9,
-          "cache_read": 0.01125
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.03
         },
         "canonical_model_id": "zhipuai/glm-5.3-flash"
       },
@@ -116042,9 +116042,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.015,
-          "output": 1.2,
-          "cache_read": 0.002115
+          "input": 0.02,
+          "output": 0.6,
+          "cache_read": 0.02
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -116130,9 +116130,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.012825,
-          "output": 1.6,
-          "cache_read": 0.012825
+          "input": 0.005775,
+          "output": 1.472,
+          "cache_read": 0.005775
         }
       },
       "~x-ai/grok-latest": {
