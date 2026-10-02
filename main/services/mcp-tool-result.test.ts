@@ -93,7 +93,8 @@ test("mixed MCP evidence retains text and structured content with explicit media
   assert.match(result, /image omitted/);
   assert.match(result, /audio omitted/);
   assert.match(result, /no resource was fetched/);
-  assert.doesNotMatch(result, /PRIVATE_|private.example/);
+  assert.doesNotMatch(result, /PRIVATE_/);
+  assert.match(result, /private.example/);
 });
 
 test("binary-only results never stringify the protocol envelope", () => {
@@ -148,4 +149,33 @@ test("structured field limits never rename colliding keys or overwrite a real om
   const result = text({ structuredContent: fields });
   assert.match(result, /KEEP_REAL_VALUE/);
   assert.match(result, /fields omitted/);
+});
+
+
+test("embedded MCP text and raster resources survive without dereferencing resource links", async () => {
+  let fetches = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { fetches++; throw new Error("No resource request is authorized"); };
+  try {
+    const result = await executeMcpAgentTool(async () => ({ content: [
+      { type: "resource", resource: { uri: "file:///unopened/private.txt", text: "Embedded evidence" } },
+      { type: "resource", resource: { uri: "custom://image", mimeType: "image/png", blob: PNG } },
+      { type: "resource_link", uri: "https://example.invalid/artifact", name: "Artifact", description: "Available separately" },
+      { type: "resource", resource: { uri: "custom://binary", mimeType: "application/octet-stream", blob: "SECRET_BINARY" } },
+    ] }));
+    const summary = result.content[0];
+    assert.equal(summary.type, "text");
+    if (summary.type !== "text") throw new Error("Missing summary");
+    assert.match(summary.text, /Embedded evidence/);
+    assert.match(summary.text, /example.invalid\/artifact/);
+    assert.match(summary.text, /no resource was fetched/);
+    assert.doesNotMatch(summary.text, /unopened|SECRET_BINARY/);
+    assert.deepEqual(result.content[1], { type: "image", mimeType: "image/png", data: PNG });
+    assert.equal(fetches, 0);
+  } finally { globalThis.fetch = original; }
+  const result = mcpAgentToolResult({ content: Array.from({ length: 20 }, () => ({
+    type: "resource", resource: { uri: "custom://image", mimeType: "image/png", blob: PNG },
+  })) });
+  assert.equal(result.content.filter((part) => part.type === "image").length, MAX_MCP_IMAGES);
+  assert.ok(text({ content: [{ type: "resource", resource: { text: "x".repeat(100_000) } }] }).length <= MAX_MCP_RESULT_TEXT_CHARS);
 });

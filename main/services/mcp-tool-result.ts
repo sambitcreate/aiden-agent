@@ -54,14 +54,18 @@ function imagesFor(result: unknown): Map<unknown, ImageContent> {
   if (!record(result) || !Array.isArray(result.content)) return images;
   for (const part of result.content.slice(0, MAX_PARTS)) {
     if (images.size >= MAX_MCP_IMAGES) break;
-    if (!record(part) || part.type !== "image" || typeof part.data !== "string" ||
-      typeof part.mimeType !== "string" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(part.mimeType) ||
-      part.data.length > Math.ceil(MAX_MCP_IMAGE_BYTES / 3) * 4 || part.data.length % 4 !== 0 ||
-      !/^[A-Za-z0-9+/]+={0,2}$/u.test(part.data)) continue;
-    const bytes = Buffer.from(part.data, "base64");
-    if (bytes.length > MAX_MCP_IMAGE_BYTES || bytes.toString("base64") !== part.data) continue;
-    try { validateDisplayImageDimensions(bytes, part.mimeType, "MCP image"); } catch { continue; }
-    images.set(part, { type: "image", data: part.data, mimeType: part.mimeType });
+    if (!record(part)) continue;
+    const image = part.type === "image" ? part
+      : part.type === "resource" && record(part.resource) && typeof part.resource.text !== "string"
+        ? { data: part.resource.blob, mimeType: part.resource.mimeType } : undefined;
+    if (!image || typeof image.data !== "string" ||
+      typeof image.mimeType !== "string" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.mimeType) ||
+      image.data.length > Math.ceil(MAX_MCP_IMAGE_BYTES / 3) * 4 || image.data.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/u.test(image.data)) continue;
+    const bytes = Buffer.from(image.data, "base64");
+    if (bytes.length > MAX_MCP_IMAGE_BYTES || bytes.toString("base64") !== image.data) continue;
+    try { validateDisplayImageDimensions(bytes, image.mimeType, "MCP image"); } catch { continue; }
+    images.set(part, { type: "image", data: image.data, mimeType: image.mimeType });
   }
   return images;
 }
@@ -154,9 +158,19 @@ function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts 
       else if (part.type === "image") append(images.has(part)
         ? "[MCP image attached for vision-capable models.]"
         : "[MCP image omitted: invalid, unsupported, or above the image limit.]");
-      else if (part.type === "audio") append("[MCP audio omitted: this tool result supports text only.]");
-      else if (part.type === "resource" || part.type === "resource_link") {
-        append("[MCP resource omitted: no resource was fetched.]");
+      else if (part.type === "audio") append("[MCP audio omitted: this tool result supports text and raster images.]");
+      else if (part.type === "resource" && record(part.resource)) {
+        const resource = part.resource;
+        if (typeof resource.text === "string") append(resource.text);
+        else append(images.has(part)
+          ? "[Embedded MCP resource image attached for vision-capable models.]"
+          : "[Embedded MCP resource omitted: unsupported, invalid, or above the image limit.]");
+      } else if (part.type === "resource_link" && typeof part.uri === "string") {
+        append(`MCP resource link (no resource was fetched): ${structuredText({
+          uri: part.uri, ...(typeof part.name === "string" ? { name: part.name } : {}),
+          ...(typeof part.description === "string" ? { description: part.description } : {}),
+          ...(typeof part.mimeType === "string" ? { mimeType: part.mimeType } : {}),
+        })}`);
       } else append("[Unsupported MCP content block omitted.]");
       if (remaining <= 0) { truncated = true; break; }
     }
