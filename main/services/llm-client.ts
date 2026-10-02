@@ -126,8 +126,8 @@ import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admissio
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
-  reportedTokens,
   isLocalModelProvider,
+  reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
 import {
