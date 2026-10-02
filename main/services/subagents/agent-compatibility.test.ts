@@ -15,6 +15,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { desktopChatExecutionOptions } from "../chat-generation-start.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
@@ -25,6 +26,7 @@ import {
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
 import { SubagentConcurrencyGate } from "./concurrency-gate.js";
+import { subagentsAllowedForGeneration } from "./eligibility.js";
 import {
   assertSubagentHistoryEnabled,
   registerSubagentTool,
@@ -286,12 +288,11 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
 });
 
 test("production generation carries parent exclusions and Bot Files authority into child reads", async () => {
-  const [generationSource, childRuntimeSource, assemblySource, chatHandlerSource] =
+  const [generationSource, childRuntimeSource, assemblySource] =
     await Promise.all([
       readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
       readFile(new URL("./subagent-child-runtime.ts", import.meta.url), "utf-8"),
       readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf-8"),
-      readFile(new URL("../../handlers/chat.ts", import.meta.url), "utf-8"),
     ]);
   assert.match(
     generationSource,
@@ -306,7 +307,24 @@ test("production generation carries parent exclusions and Bot Files authority in
     assemblySource,
     /capabilityProfile:\s*\{\s*kind: "subagent",\s*role: input\.role,\s*inheritedCeiling: input\.inheritedCeiling,/,
   );
-  assert.match(chatHandlerSource, /allowSubagents: true,\s*usageSource: "chat",/);
+});
+
+test("desktop execution options admit foreground delegation without bypassing workspace authority", () => {
+  const generation = {
+    ...desktopChatExecutionOptions("desktop-turn", () => {}),
+    assistantMode: false,
+    workspaceId: "workspace-1",
+    folderPath: "/workspace",
+    permission: "ask",
+  };
+
+  assert.equal(subagentsAllowedForGeneration(generation), true);
+  assert.equal(
+    subagentsAllowedForGeneration({ ...generation, excludedToolNames: new Set(["subagent"]) }),
+    false,
+  );
+  assert.equal(subagentsAllowedForGeneration({ ...generation, workspaceId: undefined }), false);
+  assert.equal(subagentsAllowedForGeneration({ ...generation, permission: "none" }), false);
 });
 
 test("production V2 control registration is reachable only through the canonical store selection", async () => {
