@@ -10,6 +10,8 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   createPiModelTools,
+  classifierApprovalFor,
+  piModelOperationProviderLabel,
   piModelOperationUsage,
   resolvePiModelImageInputs,
   type PiModelToolsHost,
@@ -72,6 +74,7 @@ function fixture() {
     listed: 0,
     imageSignal: undefined as AbortSignal | undefined,
     imageContext: undefined as unknown,
+    classifierContext: undefined as unknown,
     classifierSignal: undefined as AbortSignal | undefined,
     imageEffect: undefined as (() => void) | undefined,
     imageResult: {
@@ -133,6 +136,7 @@ function fixture() {
       options: { signal?: AbortSignal },
     ) => {
       controls.classifyCalls++;
+      controls.classifierContext = _context;
       controls.classifierSignal = options.signal;
       return controls.classifierResult;
     },
@@ -696,4 +700,56 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
     /does not support reference images/,
   );
   assert.equal(controls.imageCalls, 0);
+});
+
+
+test("classification approval includes the exact complete dispatched state and questions", async () => {
+  const { get, controls } = fixture();
+  const request = { ...classifierRequest, state: { first: "x".repeat(25_000), last: "PRIVATE-LATE-FIELD\u202e", html: "<script>private()</script>" } };
+  const details = classifierApprovalFor(request, "Research provider");
+  assert.equal(details.providerLabel, "Research provider");
+  assert.ok(details.stateJson.includes("PRIVATE-LATE-FIELD"));
+  assert.ok(!details.stateJson.includes("\u202e"));
+  await get("classify").execute("complete", request);
+  assert.deepEqual(JSON.parse(JSON.stringify(controls.classifierContext)), { state: JSON.parse(details.stateJson), questions: JSON.parse(details.questionsJson) });
+  assert.equal(details.stateBytes, Buffer.byteLength(JSON.stringify(request.state)));
+  assert.throws(() => classifierApprovalFor({ ...request, state: { data: "x".repeat(32_768) } }), /large|bytes|size|exceed/iu);
+});
+
+test("cross-provider operation accounting uses configured or built-in display names", async () => {
+  const { models } = fixture();
+  const labels: string[] = [];
+  const tools = createPiModelTools({ models, onImage: async () => {},
+    providerLabel: id => piModelOperationProviderLabel(id, [{ id: "fixture", label: "Research team" }], "Built-in name"),
+    onUsage: async record => { labels.push(record.providerLabel); } });
+  await tools.find(tool => tool.name === "classify")!.execute("paid", classifierRequest);
+  assert.deepEqual(labels, ["Research team"]);
+  assert.equal(piModelOperationProviderLabel("builtin", [], "Readable provider"), "Readable provider");
+});
+
+test("denying or cancelling full classifier approval dispatches no provider request", async () => {
+  const { createFauxCore, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const { PiAgentRuntimeHarness } = await import("./pi-agent-runtime-harness.js");
+  const { ToolApprovalCoordinator } = await import("./tool-approval.js");
+  const { convertToLlm } = await import("./pi-legacy-harness.js");
+  for (const outcome of ["deny", "cancel"] as const) {
+    const { tools, controls } = fixture();
+    const core = createFauxCore({ provider: `classifier-${outcome}` });
+    core.setResponses([fauxAssistantMessage([fauxToolCall("classify", classifierRequest)], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    let displayed = 0;
+    const coordinator = new ToolApprovalCoordinator(prompt => {
+      assert.equal(prompt.details?.kind, "model-classification");
+      if (prompt.details?.kind === "model-classification") assert.deepEqual(JSON.parse(prompt.details.stateJson), classifierRequest.state);
+      displayed++;
+      queueMicrotask(() => outcome === "deny" ? coordinator.decide(prompt.approvalId, false) : coordinator.cancelStream("classification"));
+    });
+    const harness = new PiAgentRuntimeHarness({ convertToLlm, streamFn: core.streamSimple,
+      initialState: { model: core.getModel(), systemPrompt: "Test", thinkingLevel: "off", messages: [], tools },
+      beforeToolCall: async ({ toolCall, args }) => {
+        const approval = await coordinator.request({ streamId: "classification", toolCallId: toolCall.id, toolName: toolCall.name, summary: "Classification", details: classifierApprovalFor(args) });
+        return approval === "allowed" ? undefined : { block: true, reason: "User did not approve classification" };
+      } });
+    try { await harness.prompt("classify"); assert.equal(displayed, 1); assert.equal(controls.classifyCalls, 0); }
+    finally { await harness.dispose(); }
+  }
 });

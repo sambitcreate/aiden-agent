@@ -1,3 +1,4 @@
+import { CLASSIFIER_JSON_BYTES, isClassifierApprovalDetails, type ClassifierApprovalDetails } from "../../renderer/shared/classifier-approval.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   Type,
@@ -38,8 +39,10 @@ export interface PiModelToolsHost {
     Models,
     "getAvailableOfType" | "getModelOfType" | "generateImages" | "classify"
   >;
+  providerLabel?(providerId: string): string;
   onUsage?(record: {
     provider: string;
+    providerLabel: string;
     model: string;
     modelLabel: string;
     usage?: Usage;
@@ -53,7 +56,7 @@ export interface PiModelToolsHost {
 }
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const MAX_JSON_BYTES = 32_768;
+const MAX_JSON_BYTES = CLASSIFIER_JSON_BYTES;
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const own = (value: object, key: string) =>
@@ -208,6 +211,34 @@ function questions(value: unknown): Record<string, ClassifierQuestion> {
   }
   return output;
 }
+/** Shared normalization makes the reviewed state/questions identical to provider inputs. */
+export function parsePiClassifierRequest(args: unknown): { provider: string; modelId: string; context: ClassifierContext } {
+  const input = fields(args, ["provider", "model", "state", "questions"], "classification request");
+  return {
+    provider: text(input.provider, 128, "provider"), modelId: text(input.model, 256, "model"),
+    context: { state: jsonObject(input.state, "classifier state"), questions: questions(input.questions) },
+  };
+}
+
+export function piModelOperationProviderLabel(providerId: string, configured: readonly { id: string; label: string }[], builtinLabel?: string): string {
+  return configured.find((provider) => provider.id === providerId)?.label ?? builtinLabel ?? providerId;
+}
+
+export function classifierApprovalFor(args: unknown, providerLabel?: string): ClassifierApprovalDetails {
+  const { provider, modelId, context } = parsePiClassifierRequest(args);
+  // Make directional controls visible without removing or changing any input bytes.
+  const display = (value: unknown) => JSON.stringify(value).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const details: ClassifierApprovalDetails = {
+    kind: "model-classification", providerId: provider, providerLabel: providerLabel ?? provider, modelId,
+    stateJson: display(context.state), questionsJson: display(context.questions),
+    stateBytes: Buffer.byteLength(JSON.stringify(context.state), "utf8"), questionsBytes: Buffer.byteLength(JSON.stringify(context.questions), "utf8"),
+    payloadComplete: true,
+  };
+  if (!isClassifierApprovalDetails(details)) throw new Error("The complete classification payload cannot be displayed safely.");
+  return details;
+}
+
 function errorResult(message: string, usage?: Usage): AgentToolResult<null> {
   return {
     content: [{ type: "text", text: message.slice(0, 4096) }],
@@ -429,12 +460,14 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     signal: AbortSignal | undefined,
     invoke: () => Promise<T>,
   ): Promise<T> => {
+    const providerLabel = host.providerLabel?.(model.provider) ?? model.provider;
     let result: T;
     try {
       result = await invoke();
     } catch (error) {
       await account({
         provider: model.provider,
+        providerLabel,
         model: model.id,
         modelLabel: model.name,
         status: signal?.aborted ? "cancelled" : "failed",
@@ -443,6 +476,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     }
     await account({
       provider: model.provider,
+      providerLabel,
       model: model.id,
       modelLabel: model.name,
       usage: result.usage,
@@ -622,17 +656,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     ),
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
-      const input = fields(
-        args,
-        ["provider", "model", "state", "questions"],
-        "classification request",
-      );
-      const provider = text(input.provider, 128, "provider"),
-        modelId = text(input.model, 256, "model");
-      const context: ClassifierContext = {
-        state: jsonObject(input.state, "classifier state"),
-        questions: questions(input.questions),
-      };
+      const { provider, modelId, context } = parsePiClassifierRequest(args);
       const model = host.models.getModelOfType("classifier", provider, modelId);
       if (
         !model ||

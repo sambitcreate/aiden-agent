@@ -2,20 +2,31 @@ import * as React from "react";
 import {
   ArrowDown,
   ArrowUp,
+  CornerDownRight,
   FileText,
   GripVertical,
   MoreHorizontal,
   Trash2,
 } from "lucide-react";
 import { Button, Dialog, Textarea, toast } from "./ui";
-import { type ChatMessageQueue, type QueuedChatMessage } from "../lib/chat-message-queue";
+import {
+  canSteerQueuedMessage,
+  type ChatMessageQueue,
+  type QueuedChatMessage,
+} from "../lib/chat-message-queue";
 
 export function QueuedMessages({
   queue,
   returnFocus,
+  canSteer = false,
+  onSteer,
 }: {
   queue: ChatMessageQueue;
   returnFocus: () => HTMLElement | null;
+  /** A response is running that can take guidance now. */
+  canSteer?: boolean;
+  /** Send one queued text message into the running response. */
+  onSteer?: (id: string) => Promise<void>;
 }) {
   const state = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot);
   const [draft, setDraft] = React.useState<QueuedChatMessage | null>(null);
@@ -99,6 +110,38 @@ export function QueuedMessages({
             <span className="min-w-0 flex-1 truncate text-regular" title={message.text}>
               {message.text || message.attachments.map((attachment) => attachment.name).join(", ")}
             </span>
+            {onSteer ? (
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                disabled={
+                  !canSteer ||
+                  Boolean(state.sendingId) ||
+                  state.editingId === message.id ||
+                  !canSteerQueuedMessage(message)
+                }
+                aria-label={`Steer with queued message ${index + 1}`}
+                title={
+                  canSteerQueuedMessage(message)
+                    ? "Steer · Add as guidance to the running response"
+                    : "Steer accepts text only"
+                }
+                onClick={(event) => {
+                  const trigger = event.currentTarget;
+                  void onSteer(message.id).finally(() => {
+                    // A steered row leaves the list; keep keyboard focus in the composer.
+                    requestAnimationFrame(() => {
+                      if (trigger.isConnected) return;
+                      const target = returnFocus();
+                      if (target?.isConnected) target.focus({ preventScroll: true });
+                    });
+                  });
+                }}
+              >
+                <CornerDownRight aria-hidden="true" />
+              </Button>
+            ) : null}
             <Button
               variant="transparent"
               size="small"

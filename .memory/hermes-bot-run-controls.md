@@ -201,3 +201,20 @@ sides — AidenSettledMessageRows now takes chat: AidenChat as a value
 snapshot (9997383e). Hermes's pass on c07287f6 (assistant chats now return
 {"skills":[]} instead of 409 from the registry) reported no findings; all
 17 PR checks green on c07287f6.
+
+Desktop + Telegram Steer (2026-10-01, `feature/desktop-telegram-steer`,
+replaces the desktop/Telegram parts of #220 on top of #251): desktop
+composer Steer and a new per-row Steer on queued messages call
+`chat:admitRunInput`; Telegram `/steer <text>` calls
+`llmClient.admitChatRunInput` for the route's own active stream (captured
+via `sendTelegramTurn`'s `onStream`) and broadcasts `chats:changed` when
+committed. No contract/contractRevision (18), endpoint, receipt or IPC
+changes; legacy `chat:steer` was removed. Harness fix kept from #220:
+`PiRuntimeQueueOptions.visibleChatMessageId` makes the queued-user
+projection reuse the admission's committed message (no duplicate row) and
+keeps it out of undelivered guidance on Stop. Dropped from #220: request-id
+idempotency ledger + replay, its own receipt/IPC, persisted-input requeue,
+compaction-store marker change (flushDurableMessages already writes it),
+and the Telegram afterPersist offset barrier (a crash ends the run, so a
+redelivered /steer is rejected as run_not_active). Edited /steer is never
+sent.

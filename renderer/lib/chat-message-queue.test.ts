@@ -3,9 +3,30 @@ import test from "node:test";
 import {
   ChatMessageQueue,
   chatMessageQueue,
+  canSteerQueuedMessage,
   deliverQueuedMessage,
+  steerQueuedMessage,
+  withCommittedRunInput,
   type QueuedChatMessage,
 } from "./chat-message-queue";
+
+test("committed steer shows once in the open chat, even if a reload already has it", () => {
+  const chat = {
+    id: "chat-1",
+    messages: [{ id: "m1", role: "user" as const, content: "Start", createdAt: 1 }],
+  };
+  const committed = { messageId: "m2", text: "Prefer bullet points", createdAt: 2 };
+  const shown = withCommittedRunInput(chat, committed);
+  assert.deepEqual(
+    shown.messages.map((item) => [item.id, item.role, item.content]),
+    [
+      ["m1", "user", "Start"],
+      ["m2", "user", "Prefer bullet points"],
+    ],
+  );
+  assert.equal(chat.messages.length, 1, "the cached chat is not mutated");
+  assert.equal(withCommittedRunInput(shown, committed).messages.length, 2);
+});
 
 function message(id: string): QueuedChatMessage {
   return { id, text: `message ${id}`, attachments: [] };
@@ -305,4 +326,133 @@ test("a delivery waiting for idle defers when compaction takes the chat", async 
   assert.equal(queue.getSnapshot().paused, false);
   queue.releaseCompactionHold({ compacted: true });
   assert.deepEqual((await drain(queue)).sent, ["one"]);
+});
+
+function ids(queue: ChatMessageQueue) {
+  return queue.getSnapshot().messages.map((item) => item.id);
+}
+
+test("steering a later queued message sends only its text and leaves the rest in order", async () => {
+  const queue = new ChatMessageQueue();
+  ["one", "two", "three"].forEach((id) => queue.add(message(id)));
+  const admitted: string[] = [];
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "two",
+    admit: async (text) => {
+      admitted.push(text);
+      // The row is held while admission is in flight, so auto-delivery waits.
+      assert.equal(queue.claim(), undefined);
+      return { admitted: true, queue: "steer", committed: true, messageId: "m-1" };
+    },
+  });
+  assert.deepEqual(outcome, { kind: "admitted" });
+  assert.deepEqual(admitted, ["message two"]);
+  assert.deepEqual(ids(queue), ["one", "three"]);
+  assert.equal(queue.getSnapshot().paused, false);
+  assert.equal(queue.claim()?.id, "one");
+});
+
+test("an explicit steer works while the queue is paused and keeps it paused", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  queue.pause();
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    admit: async () => ({ admitted: true, queue: "steer", committed: true, messageId: "m" }),
+  });
+  assert.equal(outcome.kind, "admitted");
+  assert.deepEqual(ids(queue), []);
+  assert.equal(queue.getSnapshot().paused, true);
+});
+
+test("a steer committed as history after the run ended is removed, never resent as a turn", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    admit: async () => ({
+      admitted: false,
+      reason: "run_not_active",
+      committed: true,
+      messageId: "m",
+    }),
+  });
+  assert.deepEqual(outcome, { kind: "committed", reason: "run_not_active" });
+  assert.deepEqual(ids(queue), []);
+  assert.deepEqual((await drain(queue)).sent, []);
+});
+
+test("an uncommitted steer rejection keeps the message queued for the normal follow-up", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    admit: async () => ({ admitted: false, reason: "capacity", committed: false }),
+  });
+  assert.deepEqual(outcome, { kind: "rejected", reason: "capacity" });
+  assert.equal(queue.getSnapshot().paused, false);
+  assert.deepEqual((await drain(queue)).sent, ["one"]);
+});
+
+test("an unknown steer outcome keeps the message but stops auto-delivery", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const error = new Error("outcome requires reconciliation");
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    admit: async () => {
+      throw error;
+    },
+  });
+  assert.deepEqual(outcome, { kind: "unknown", error });
+  assert.deepEqual(ids(queue), ["one"]);
+  assert.equal(queue.getSnapshot().paused, true);
+  assert.deepEqual((await drain(queue)).sent, []);
+});
+
+test("messages a run cannot take as guidance are never offered to admission", async () => {
+  const queue = new ChatMessageQueue();
+  const attachment = {
+    id: "file",
+    name: "notes.txt",
+    kind: "text" as const,
+    mimeType: "text/plain",
+    size: 4,
+    text: "note",
+  };
+  const unsteerable: QueuedChatMessage[] = [
+    { id: "file", text: "see file", attachments: [attachment] },
+    { id: "visual", text: "draw it", attachments: [], options: { visualize: true } },
+    {
+      id: "skill",
+      text: "run it",
+      attachments: [],
+      skillInvocation: { name: "s" } as unknown as QueuedChatMessage["skillInvocation"],
+    },
+    { id: "blank", text: "   ", attachments: [attachment] },
+    { id: "huge", text: "x".repeat(200_001), attachments: [] },
+  ];
+  unsteerable.forEach((item) => queue.add(item));
+  queue.add(message("editing"));
+  queue.edit("editing");
+  let calls = 0;
+  for (const id of [...unsteerable.map((item) => item.id), "editing", "missing"]) {
+    const outcome = await steerQueuedMessage({
+      queue,
+      id,
+      admit: async () => {
+        calls++;
+        return { admitted: true, committed: true };
+      },
+    });
+    assert.deepEqual(outcome, { kind: "unavailable" }, id);
+  }
+  assert.equal(calls, 0);
+  assert.equal(queue.getSnapshot().messages.length, unsteerable.length + 1);
+  assert.equal(canSteerQueuedMessage(message("plain")), true);
 });
