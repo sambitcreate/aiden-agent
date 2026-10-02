@@ -3984,6 +3984,7 @@ export const llmClient = {
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
+      initialization.stopCacheWarming?.();
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
       initialization.formFill?.revoke();
@@ -3992,6 +3993,7 @@ export const llmClient = {
     if (generation) {
       generation.cancelRequested = true;
       generation.cancellationOrigin = origin;
+      generation.stopCacheWarming?.();
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       generation.formFill?.revoke();

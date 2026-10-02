@@ -1,6 +1,10 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+import { assistantUsageRecord } from "./usage-accounting.js";
+import { createEmptyUsageDatabase, createUsageStore } from "./usage-store-core.js";
 import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, Type, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { desktopChatExecutionOptions } from "./chat-generation-start.js";
 import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
@@ -27,12 +31,15 @@ const model: Model<Api> = {
 function usageMessage() {
   return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
 }
+type WarmOutcome = "stop" | "length" | "error" | "aborted";
 function fixture(t: test.TestContext) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
   const contexts: unknown[] = [];
   const recorded: unknown[] = [];
+  let database = createEmptyUsageDatabase();
+  const usageStore = createUsageStore({ load: async () => structuredClone(database), save: async (value) => { database = structuredClone(value); } });
   let enabled = true;
   let current = true;
   let warmCost = 0.10003;
@@ -41,7 +48,7 @@ function fixture(t: test.TestContext) {
   let key = "fresh-key";
   let hold = false;
   let resolutionBarrier: Promise<void> | undefined;
-  let completeHeld: (reason: "stop" | "aborted") => void = () => {};
+  let completeHeld: (reason: WarmOutcome) => void = () => {};
   const runtime = (): ResolvedModelRuntime => ({
     model: runtimeModel, provider: { id: "fixture", label: "Fixture", kind: "openai", models: ["priced"], baseUrl: model.baseUrl, needsKey: true },
     models: undefined as never, apiKey: key, headers: { Authorization: `Bearer ${key}` },
@@ -53,15 +60,15 @@ function fixture(t: test.TestContext) {
           input: 0, output: 1, cacheRead: 100_000, cacheWrite: 0, totalTokens: 100_001,
           cost: { input: 0, output: 0.00003, cacheRead: warmCost - 0.00003, cacheWrite: 0, total: warmCost },
         } };
-        if (reason === "aborted") stream.push({ type: "error", reason: "aborted", error: message });
-        else stream.push({ type: "done", reason: "stop", message });
+        if (reason === "aborted" || reason === "error") stream.push({ type: "error", reason, error: message });
+        else stream.push({ type: "done", reason, message });
         stream.end(message);
       };
       if (!hold) completeHeld("stop");
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message) => { recorded.push(message); } });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); } });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model) => {
     const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
@@ -69,7 +76,7 @@ function fixture(t: test.TestContext) {
     response(usageMessage());
     return context;
   };
-  return { setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: "stop" | "aborted") => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
+  return { usageStore, setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: WarmOutcome) => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
 }
 
 test("warming waits for real usage, snapshots the prefix and resolves fresh credentials at dispatch", async (t) => {
@@ -300,4 +307,97 @@ test("lost foreground ownership fences refreshes before and after asynchronous a
   pending.setCurrent(false); release(); await pending.clock.advance(0);
   assert.equal(pending.requests.length, 0);
   assert.equal(pending.clock.timers.size, 0);
+});
+
+// Load the actual host cancellation method with controlled service ports. The
+// admission service receives the real active registry during module setup.
+async function cancellationHost() {
+  type Entry = {
+    owner: { documentId: string };
+    cancelRequested: boolean;
+    stopCacheWarming: () => void;
+    agent: { abort: () => void };
+  };
+  let active!: Map<string, Entry>;
+  const children: string[] = [];
+  const approvals: string[] = [];
+  class UnusedService {}
+  const mocks: Record<string, unknown> = {
+    "../platform.js": { logger: { info() {} } },
+    "./computer-use/generation-gate.js": { ComputerUseGenerationGate: UnusedService, ChatComputerUseMutationGate: UnusedService },
+    "./chat-deletion-gate.js": { ChatDeletionGate: UnusedService },
+    "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
+    "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },
+    "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
+    "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
+    "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
+    "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
+    "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
+  };
+  const bundle = await build({
+    entryPoints: [fileURLToPath(new URL("./llm-client.ts", import.meta.url))],
+    bundle: true, write: false, platform: "node", format: "cjs", external: ["*"],
+  });
+  const module = { exports: {} as typeof import("./llm-client.js") };
+  new Function("require", "module", "exports", bundle.outputFiles[0]!.text)(
+    (name: string) => mocks[name] ?? {}, module, module.exports,
+  );
+  return { client: module.exports.llmClient, active, children, approvals };
+}
+
+test("host Stop immediately aborts owned warming while an active Agent is still draining", async (t) => {
+  const host = await cancellationHost();
+  const owned = fixture(t);
+  const other = fixture(t);
+  owned.setHold(); other.setHold();
+  owned.start(); other.start();
+  await owned.clock.advance(270_000);
+  await other.clock.advance(270_000);
+  let agentAborts = 0;
+  host.active.set("owned", {
+    owner: { documentId: "document-owned" }, cancelRequested: false,
+    stopCacheWarming: () => owned.warmer.dispose(),
+    agent: { abort: () => { agentAborts++; assert.equal(owned.requests[0]?.signal?.aborted, true); } },
+  });
+  host.active.set("other", {
+    owner: { documentId: "document-other" }, cancelRequested: false,
+    stopCacheWarming: () => other.warmer.dispose(), agent: { abort() {} },
+  });
+  assert.equal(host.client.cancel("owned", "user_stop", "document-other"), false);
+  assert.equal(owned.requests[0]?.signal?.aborted, false);
+  assert.equal(host.client.cancel("owned", "user_stop", "document-owned"), true);
+  assert.equal(owned.signal.signal.aborted, false, "the initialization signal is not the active Agent lifetime");
+  assert.equal(owned.requests[0]?.signal?.aborted, true);
+  assert.equal(other.requests[0]?.signal?.aborted, false);
+  assert.equal(host.client.cancel("owned", "user_stop", "document-owned"), false);
+  assert.equal(agentAborts, 1);
+  assert.deepEqual(host.children, ["owned"]);
+  assert.deepEqual(host.approvals, ["owned"]);
+  owned.completeHeld("length");
+  await owned.clock.advance(0);
+  const summary = await owned.usageStore.summary("all");
+  assert.equal(summary.totals.requests, 1);
+  assert.equal(summary.totals.completedRequests, 1);
+  assert.equal(summary.totals.hostedCostUsd, 0.10003);
+  assert.equal(owned.clock.timers.size, 0);
+});
+
+test("one-token warming completion, provider errors and aborts retain distinct billed outcomes", async (t) => {
+  for (const reason of ["length", "error", "aborted"] as const) {
+    const h = fixture(t);
+    h.setHold(); h.start();
+    await h.clock.advance(270_000);
+    assert.equal(h.requests[0]?.maxTokens, 1);
+    h.completeHeld(reason);
+    await h.clock.advance(0);
+    const summary = await h.usageStore.summary("all");
+    assert.equal(summary.totals.requests, 1);
+    assert.equal(summary.totals.completedRequests, reason === "length" ? 1 : 0);
+    assert.equal(summary.totals.failedRequests, reason === "error" ? 1 : 0);
+    assert.equal(summary.totals.cancelledRequests, reason === "aborted" ? 1 : 0);
+    assert.equal(summary.totals.hostedCostUsd, 0.10003);
+    assert.equal(summary.totals.tokens.cacheRead, 100_000);
+    assert.equal(summary.totals.tokens.output, 1);
+    assert.equal(h.clock.timers.size, reason === "length" ? 1 : 0);
+  }
 });
