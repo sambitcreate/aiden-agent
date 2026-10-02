@@ -1,3 +1,4 @@
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
@@ -299,6 +300,7 @@ function isWorkspace(value: unknown): value is Workspace {
 
 export function isMcpServer(value: unknown): value is McpServer {
   if (!isRecord(value)) return false;
+  try { validateMcpServerMetadata(value); } catch { return false; }
   return (
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&

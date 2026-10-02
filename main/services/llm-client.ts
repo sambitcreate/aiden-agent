@@ -309,6 +309,9 @@ import {
 } from "./chat-run-input-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
+import { createPiCodemodeTool } from "./pi-codemode.js";
+import { createPiToolDiscovery } from "./pi-tool-discovery.js";
+import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
@@ -2268,9 +2271,28 @@ export const llmClient = {
             }
           : {}),
       });
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = advisorExtension
-        ? [...baseRuntimeExtensions, advisorExtension]
-        : baseRuntimeExtensions;
+      const codemodeExtension: PiAgentRuntimeExtension | undefined =
+        workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
+        permission !== "none" && !options.excludeToolNames?.has("codemode")
+          ? {
+              id: "aiden.workspace-codemode",
+              tools: [createPiCodemodeTool({
+                tools: () => candidate?.getCallableTools() ?? [],
+                executeTool: (parentId, name, args, requestSignal) => {
+                  if (!candidate) throw new Error("The workspace runtime is not ready.");
+                  return candidate.executeNestedToolCall(parentId, name, args, requestSignal);
+                },
+              }), ...(!options.excludeToolNames?.has("tool_search") ? [createPiToolDiscovery({
+                tools: () => candidate?.getCallableTools() ?? [],
+                isCallable: isPiCodemodeCallable,
+              }).toolSearch] : [])],
+            }
+          : undefined;
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
+        ...baseRuntimeExtensions,
+        ...(advisorExtension ? [advisorExtension] : []),
+        ...(codemodeExtension ? [codemodeExtension] : []),
+      ];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -2352,7 +2374,13 @@ export const llmClient = {
         ),
         mcpServerInstructions,
       );
-      const runtimeContributions = modelContributions;
+      // Freeze only the already-admitted MCP inventory. The provider sees the
+      // discovery/script tools; nested calls still use the ordinary host gates.
+      const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
+      const runtimeContributions = {
+        ...modelContributions,
+        tools: declared,
+      };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
@@ -2525,6 +2553,7 @@ export const llmClient = {
       initialization.skillPrompt = undefined;
       candidate = new PiAgentRuntimeHarness({
         contributions: runtimeContributions,
+        deferredTools,
         models: runtime.models,
         identity: {
           runId: streamId,

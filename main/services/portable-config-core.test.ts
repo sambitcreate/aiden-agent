@@ -1427,3 +1427,11 @@ test("invalid stored compaction budgets fall back without rewriting the saved pr
   settings.compactionModelOverrides["provider/model"].reserveTokens = 64_000;
   assert.equal(valid.compactionModelOverrides?.["provider/model"].reserveTokens, 8_192);
 });
+
+test("portable MCP OAuth metadata validates authority without requiring new fields on old configs", () => {
+  const server = { id: "custom", name: "Custom", transport: "http", enabled: true, oauth: true, url: "https://service.test/mcp" };
+  assert.equal(isMcpServer(server), true);
+  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "https://identity.test/metadata" }), true);
+  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "http://identity.test/metadata" }), false);
+  assert.equal(isMcpServer({ ...server, oauth: false, authServerMetadataUrl: "https://identity.test/metadata" }), false);
+});

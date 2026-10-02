@@ -1,3 +1,4 @@
+import { mcpOAuthMetadataUrlForServer, validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 // Pure parsing helpers for the phase-2 IPC handlers (Skills, MCP servers),
 // extracted so they can be unit-tested without importing Electron.
 // See handlers/phase2.ts.
@@ -52,6 +53,7 @@ export function parseMcpServer(value: unknown): McpServer {
   const s = value as Record<string, unknown>;
   const transport: McpTransport =
     s.transport === "http" || s.transport === "sse" ? s.transport : "stdio";
+  validateMcpServerMetadata({ ...s, transport });
   const args = Array.isArray(s.args)
     ? s.args.filter((argument): argument is string => typeof argument === "string")
     : undefined;
@@ -65,6 +67,9 @@ export function parseMcpServer(value: unknown): McpServer {
     url: typeof s.url === "string" ? s.url : undefined,
     headers: parseStringRecord(s.headers),
     oauth: typeof s.oauth === "boolean" ? s.oauth : undefined,
+    authServerMetadataUrl: mcpOAuthMetadataUrlForServer({ ...s, transport }),
+    oauthClientName: typeof s.oauthClientName === "string" ? s.oauthClientName.trim() : undefined,
+    description: typeof s.description === "string" ? s.description.trim() : undefined,
     presetId: typeof s.presetId === "string" && s.presetId ? s.presetId : undefined,
     enabled: typeof s.enabled === "boolean" ? s.enabled : true,
   };
