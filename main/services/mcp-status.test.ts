@@ -107,3 +107,26 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   assert.deepEqual(replacement.serverCapabilities, {});
   assert.ok(closes >= 2);
 });
+
+test("status includes later pages and preserves capabilities when pagination is incomplete", async (t) => {
+  const server = new Server({ name: "paged", version: "1" }, { capabilities: { tools: {} } });
+  let failSecond = false;
+  server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+    if (params?.cursor === "next") {
+      if (failSecond) throw new Error("later page unavailable");
+      return { tools: [{ name: "last", inputSchema: { type: "object" as const } }] };
+    }
+    return { tools: [{ name: "first", inputSchema: { type: "object" as const } }], nextCursor: "next" };
+  });
+  const client = new Client({ name: "paged-test", version: "1" }, { capabilities: {} });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  assert.deepEqual(await inspectInitializedMcpStatus(client, () => true), { connected: true, tools: ["first", "last"], toolCount: 2, serverCapabilities: { tools: {} } });
+  failSecond = true;
+  const failed = await inspectInitializedMcpStatus(client, () => true);
+  assert.equal(failed.connected, false);
+  assert.deepEqual(failed.tools, []);
+  assert.deepEqual(failed.serverCapabilities, { tools: {} });
+  assert.match(failed.error!, /later page unavailable/u);
+});

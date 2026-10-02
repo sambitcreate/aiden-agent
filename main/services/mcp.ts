@@ -1,4 +1,5 @@
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import { createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -153,6 +154,8 @@ interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  outputSchema?: unknown;
+  execution?: unknown;
 }
 
 function subagentMcpAbortReason(signal: AbortSignal): Error {
@@ -248,10 +251,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
           botMcpRequestOptions(operationSignal),
         );
         isCurrent();
-        const { tools } = await client.listTools(
-          undefined,
-          botMcpRequestOptions(operationSignal),
-        );
+        const tools = await listMcpToolInventory({
+          signal: operationSignal,
+          assertCurrent: isCurrent,
+          listPage: (cursor, pageSignal) => client.listTools(cursor === undefined ? undefined : { cursor }, botMcpRequestOptions(pageSignal)),
+        });
         isCurrent();
         return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
           name,
@@ -363,10 +367,18 @@ class McpManager {
     const lease = mcpConfigurationLeases.acquire(server.id);
     const client = await this.ensureConnected(server, generation);
     lease.assertCurrent();
-    const { tools } = client.getServerCapabilities()?.tools
-      ? (await client.listTools()) as { tools: McpToolInfo[] }
-      : { tools: [] };
+    const tools: McpToolInfo[] = client.getServerCapabilities()?.tools
+      ? await listMcpToolInventory({
+        signal: lease.signal,
+        assertCurrent: () => {
+          lease.assertCurrent();
+          if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
+        },
+        listPage: (cursor, signal) => client.listTools(cursor === undefined ? undefined : { cursor }, { signal }),
+      })
+      : [];
     lease.assertCurrent();
+    const callGuard = createMcpToolCallGuard(tools);
     const agentTools = tools.map((t): AgentTool => markToolOutputSource(Object.assign<AgentTool, { codemode: boolean }>({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
@@ -377,10 +389,11 @@ class McpManager {
         normalizeMcpToolInputSchema((t.inputSchema as object) ?? { type: "object", properties: {} }),
       ),
       execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-        return executeMcpAgentTool(() => {
+        return executeMcpAgentTool(async () => {
           lease.assertCurrent();
           signal?.throwIfAborted();
-          return client.callTool(
+          callGuard.assertCallable(t.name);
+          const result = await client.callTool(
             {
               name: t.name,
               arguments: (args ?? {}) as Record<string, unknown>,
@@ -388,6 +401,8 @@ class McpManager {
             undefined,
             { signal },
           );
+          callGuard.validateResult(t.name, result);
+          return result;
         });
       },
     }, { codemode: true })));

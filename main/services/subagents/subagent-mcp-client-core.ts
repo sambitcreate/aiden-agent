@@ -1,4 +1,5 @@
 import type { McpServer } from "../types.js";
+import { createMcpToolCallGuard, listMcpToolInventory } from "../mcp-tool-inventory.js";
 import type { SubagentMcpClientPort, SubagentMcpRemoteTool } from "./subagent-mcp-read.js";
 import type {
   SubagentMcpCredentialBoundary,
@@ -18,9 +19,9 @@ export interface IsolatedSubagentMcpSdkClient {
   connect(transport: unknown, options: RequestOptions): Promise<void>;
   close(): Promise<void>;
   listTools(
-    params: undefined,
+    params: { cursor: string } | undefined,
     options: RequestOptions,
-  ): Promise<{ tools: readonly SubagentMcpRemoteTool[] }>;
+  ): Promise<{ tools: readonly SubagentMcpRemoteTool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments: Record<string, unknown> },
     resultSchema: undefined,
@@ -146,18 +147,25 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           registerCredentialRedactor(current.redactText);
           return true;
         };
+        let callGuard: ReturnType<typeof createMcpToolCallGuard> | undefined;
         return await input.operation({
           credentialRevision: credentialBoundary.revision,
           credentialRevisionIsCurrent,
           redactCredentialText,
           listTools: async (requestSignal) => {
             if (requestSignal.aborted) throw abortReason(requestSignal);
-            // Exact synchronous fence immediately before raw SDK request.
-            assertRawRequestCurrent(input.configurationLease, requestSignal);
-            const { tools } = await client.listTools(undefined, requestOptions(requestSignal));
-            if (!(await credentialRevisionIsCurrent(requestSignal))) {
-              throw new Error("MCP credential revision changed.");
-            }
+            const tools = await listMcpToolInventory({
+              signal: AbortSignal.any([requestSignal, input.signal, input.configurationLease.signal]),
+              assertCurrent: () => assertRawRequestCurrent(input.configurationLease, requestSignal),
+              listPage: async (cursor, pageSignal) => {
+                // Exact synchronous fence immediately before each raw SDK request.
+                assertRawRequestCurrent(input.configurationLease, pageSignal);
+                const result = await client.listTools(cursor === undefined ? undefined : { cursor }, requestOptions(pageSignal));
+                if (!(await credentialRevisionIsCurrent(pageSignal))) throw new Error("MCP credential revision changed.");
+                return result;
+              },
+            });
+            callGuard = createMcpToolCallGuard(tools);
             return tools.map(
               ({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
                 name,
@@ -175,6 +183,8 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
             }
             return credentialRevisionIsCurrent(requestSignal).then(async (current) => {
               if (!current) throw new Error("MCP credential revision changed.");
+              const guard = callGuard;
+              guard?.assertCallable(toolName);
               beforeEffect?.();
               // No await may be inserted between this main-owned config
               // fence and the SDK instruction that emits raw request bytes.
@@ -192,6 +202,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
                 throw new Error("MCP credential revision changed.");
               }
               registerCredentialRedactor(currentBoundary.redactText);
+              guard?.validateResult(toolName, result);
               return redactTextResult(result, {
                 revision: currentBoundary.revision,
                 redactText: redactCredentialText,
@@ -204,6 +215,8 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
             // No await may be inserted between these fences and the one SDK
             // invocation that can emit request bytes.
             assertRawRequestCurrent(input.configurationLease, requestSignal);
+            const guard = callGuard;
+            guard?.assertCallable(toolName);
             beforeRawBytes();
             const raw = client.callTool(
               { name: toolName, arguments: args },
@@ -219,6 +232,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
                 throw new Error("MCP credential revision changed.");
               }
               registerCredentialRedactor(currentBoundary.redactText);
+              guard?.validateResult(toolName, result);
               return redactTextResult(result, {
                 revision: currentBoundary.revision,
                 redactText: redactCredentialText,
