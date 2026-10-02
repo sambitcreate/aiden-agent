@@ -388,7 +388,6 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /Generate or edit attached images.*approving the prompt, reference images, and possible provider charges/u);
-  assert.match(featurePresentation, /classifiers.*approve sending it.*provider charges/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
   assert.match(
     featurePresentation,
@@ -489,10 +488,12 @@ test("Linux feature filtering retains classifier setup and approval disclosures 
   ];
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
-  assert.match(linux[0]!.description, /More options; approve sending data and possible provider charges/u);
+  assert.match(linux[0]!.description, /More options.*approve sending it; provider charges/u);
+  assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
   const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true });
   assert.equal(mac.length, 4);
-  assert.match(mac[0]!.description, /More options; approve sending data and possible provider charges/u);
+  assert.match(mac[0]!.description, /More options.*approve sending it; provider charges/u);
+  assert.match(mac[0]!.description, /Apple models/u);
 });

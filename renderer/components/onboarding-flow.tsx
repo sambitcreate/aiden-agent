@@ -54,6 +54,7 @@ import {
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
   visibleOnboardingFeatures,
+  onboardingModelDescription,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
 import {
@@ -280,8 +281,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints. Enable local llama.cpp classification in a custom provider’s More options. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.",
+    description: onboardingModelDescription("other"),
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
