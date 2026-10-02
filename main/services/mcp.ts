@@ -1,6 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -158,6 +159,8 @@ interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  outputSchema?: unknown;
+  execution?: unknown;
 }
 
 function subagentMcpAbortReason(signal: AbortSignal): Error {
@@ -185,11 +188,18 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () =>
-        new Client(
+      createClient: () => {
+        const client = new Client(
           { name: "aiden-subagent-mcp-read", version: "1.0.0" },
           { capabilities: {} },
-        ) as unknown as IsolatedSubagentMcpSdkClient,
+        );
+        return {
+          connect: (transport, options) => client.connect(transport as Parameters<Client["connect"]>[0], options),
+          close: () => client.close(),
+          listTools: (params, options) => client.listTools(params, options),
+          callTool: (params, _schema, options) => callMcpTool(client, params, options),
+        } satisfies IsolatedSubagentMcpSdkClient;
+      },
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -254,10 +264,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
           botMcpRequestOptions(operationSignal),
         );
         isCurrent();
-        const { tools } = await client.listTools(
-          undefined,
-          botMcpRequestOptions(operationSignal),
-        );
+        const tools = await listMcpToolInventory({
+          signal: operationSignal,
+          assertCurrent: isCurrent,
+          listPage: (cursor, pageSignal) => client.listTools(cursor === undefined ? undefined : { cursor }, botMcpRequestOptions(pageSignal)),
+        });
         isCurrent();
         return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
           name,
@@ -385,19 +396,32 @@ class McpManager {
     const cachedClient = server.authProvider ? undefined : await this.ensureConnected(server, generation);
     lease.assertCurrent();
     const inspect = async (client: Client, signal?: AbortSignal) => ({
-      tools: client.getServerCapabilities()?.tools ? (await client.listTools(undefined, { signal })).tools as McpToolInfo[] : [],
+      tools: client.getServerCapabilities()?.tools ? await listMcpToolInventory({
+        signal: signal ? AbortSignal.any([lease.signal, signal]) : lease.signal,
+        assertCurrent: () => {
+          lease.assertCurrent();
+          if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
+        },
+        listPage: (cursor, pageSignal) => client.listTools(cursor === undefined ? undefined : { cursor }, { signal: pageSignal }),
+      }) as McpToolInfo[] : [],
       resources: Boolean(client.getServerCapabilities()?.resources),
       instructions: client.getInstructions(),
     });
     const metadata = cachedClient ? await inspect(cachedClient) : await scoped(inspect);
-    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ?? {
-      callTool: (params, schema, options) => scoped((connection, signal) => connection.callTool(params, schema, { ...options, signal }), options?.signal),
+    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
+      callTool: (params, _schema, options) => callMcpTool(cachedClient, params, options),
+      listResources: cachedClient.listResources.bind(cachedClient),
+      listResourceTemplates: cachedClient.listResourceTemplates.bind(cachedClient),
+      readResource: cachedClient.readResource.bind(cachedClient),
+    } : {
+      callTool: (params, _schema, options) => scoped((connection, signal) => callMcpTool(connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
       listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
     };
     const { tools } = metadata;
     lease.assertCurrent();
+    const callGuard = createMcpToolCallGuard(tools);
     const agentTools = tools.map((t): AgentTool => markToolOutputSource(Object.assign<AgentTool, { codemode: boolean }>({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
@@ -408,10 +432,11 @@ class McpManager {
         normalizeMcpToolInputSchema((t.inputSchema as object) ?? { type: "object", properties: {} }),
       ),
       execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-        return executeMcpAgentTool(() => {
+        return executeMcpAgentTool(async () => {
           lease.assertCurrent();
           signal?.throwIfAborted();
-          return client.callTool(
+          callGuard.assertCallable(t.name);
+          const result = await client.callTool(
             {
               name: t.name,
               arguments: (args ?? {}) as Record<string, unknown>,
@@ -419,6 +444,8 @@ class McpManager {
             undefined,
             { signal },
           );
+          callGuard.validateResult(t.name, result);
+          return result;
         });
       },
     }, { codemode: true })));

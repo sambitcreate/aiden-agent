@@ -81,6 +81,82 @@ test("Create a bot submits limited access in two steps and retains a failed draf
   await expect(editor.getByPlaceholder("Release reviewer")).toHaveValue("Writing bot");
 });
 
+
+test("feature gallery reveals complete descriptions through keyboard focus at narrow widths", async ({ aiden }) => {
+  const { page } = aiden;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const width of [1000, 600, 390]) {
+    await aiden.app.evaluate(({ BrowserWindow }, nextWidth) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setMinimumSize(320, 400);
+      window.setSize(nextWidth, 800);
+    }, width);
+    const scripts = onboarding.getByRole("article", { name: /^Tool Scripts\./u });
+    await scripts.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(scripts).toBeFocused();
+    for (const name of [/^Tool Scripts\./u, /^Attachments & Vision\./u, /^Model Freedom\./u]) {
+      const tile = onboarding.getByRole("article", { name });
+      await tile.focus();
+      await tile.scrollIntoViewIfNeeded();
+      const description = tile.locator("[data-onboarding-feature-description]");
+      await expect.poll(() => description.evaluate((element) => {
+        const overlay = element.parentElement!.parentElement!;
+        return getComputedStyle(overlay).opacity;
+      })).toBe("1");
+      const bounds = await description.evaluate((element) => {
+        const text = element.getBoundingClientRect();
+        const card = element.closest("article")!.getBoundingClientRect();
+        return { top: text.top - card.top, bottom: card.bottom - text.bottom, left: text.left - card.left, right: card.right - text.right };
+      });
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeGreaterThanOrEqual(0);
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeGreaterThanOrEqual(0);
+    }
+  }
+});
+
+
+for (const platform of ["linux", "darwin"] as const) {
+  test(`Model Freedom renders platform-accurate providers and classifier disclosures on ${platform}`, async ({ aiden }) => {
+    // Only platform capability IPC is substituted: the real onboarding data,
+    // filtering, gallery card and accessible description are rendered unchanged.
+    await aiden.app.evaluate(({ ipcMain }, hostPlatform) => {
+      ipcMain.removeHandler("app:getInfo");
+      ipcMain.handle("app:getInfo", () => ({
+        name: "Aiden", version: "e2e", environment: "test",
+        capabilities: { platform: hostPlatform, appleFoundationModels: hostPlatform === "darwin" },
+      }));
+    }, platform);
+    await aiden.page.reload();
+    const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
+    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
+    await card.focus();
+    const description = card.locator("[data-onboarding-feature-description]");
+    await expect(description).toContainText("30+ Pi providers, ChatGPT sign-in");
+    await expect(description).toContainText("custom endpoints");
+    if (platform === "darwin") await expect(description).toContainText("Apple models");
+    else {
+      await expect(description).not.toContainText("Apple");
+      await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
+    }
+    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s More options");
+    await expect(description).toContainText("approve sending it; provider charges may apply");
+  });
+}
+
 test("feature tour explains image and classifier disclosure on rendered cards", async ({ aiden }) => {
   const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
@@ -137,36 +213,3 @@ test("classifier approval lets users inspect late payload fields before denying"
   await expect(aiden.page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
   await expect(aiden.page.getByRole("button", { name: "Deny", exact: true })).toBeEnabled();
 });
-
-for (const platform of ["linux", "darwin"] as const) {
-  test(`Model Freedom renders platform-accurate providers and classifier disclosures on ${platform}`, async ({ aiden }) => {
-    // Only platform capability IPC is substituted: the real onboarding data,
-    // filtering, gallery card and accessible description are rendered unchanged.
-    await aiden.app.evaluate(({ ipcMain }, hostPlatform) => {
-      ipcMain.removeHandler("app:getInfo");
-      ipcMain.handle("app:getInfo", () => ({
-        name: "Aiden", version: "e2e", environment: "test",
-        capabilities: { platform: hostPlatform, appleFoundationModels: hostPlatform === "darwin" },
-      }));
-    }, platform);
-    await aiden.page.reload();
-    const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
-    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
-    await card.hover();
-    const description = card.getByText(/^Choose from/u);
-    await expect(description).toBeVisible();
-    await expect(description).toContainText("30+ Pi providers, ChatGPT sign-in");
-    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s More options");
-    await expect(description).toContainText("approve sending it; provider charges may apply");
-    await expect(description).toContainText("custom endpoints");
-    if (platform === "darwin") await expect(description).toContainText("Apple models");
-    else {
-      await expect(description).not.toContainText("Apple");
-      await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
-    }
-  });
-}

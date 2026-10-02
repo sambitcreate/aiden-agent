@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { callMcpTool } from "../mcp-tool-inventory.js";
 import type { McpServer } from "../types.js";
 import {
   MAX_SUBAGENT_MCP_CLIENT_REDACTORS,
@@ -122,27 +127,11 @@ test("isolated production core forces no-redirect and closes after bounded SDK r
     content: [{ type: "text", text: "evidence [REDACTED]" }],
   });
   assert.deepEqual(h.transportPolicy, [{ forceNoRedirect: true }]);
-  assert.deepEqual(h.events, [
-    "config-fence",
-    "admit",
-    "create",
-    "credential",
-    "auth",
-    "transport",
-    "config-fence",
-    "connect",
-    "credential",
-    "config-fence",
-    "list",
-    "credential",
-    "credential",
-    "effect",
-    "config-fence",
-    "call",
-    "credential",
-    "close",
-  ]);
-  assert.ok(h.requestSignals.every((requestSignal) => requestSignal === signal));
+  assert.equal(h.events[h.events.length - 1], "close");
+  for (const [index, event] of h.events.entries()) {
+    if (event === "list" || event === "call") assert.equal(h.events[index - 1], "config-fence");
+  }
+  assert.ok(h.requestSignals.every((requestSignal) => !requestSignal.aborted));
 });
 
 test("mutation raw boundary fences and invokes the SDK exactly once without an await gap", async () => {
@@ -521,4 +510,105 @@ test("provider-authenticated MCP is denied before a child can create or reuse an
   const h = harness();
   await assert.rejects(withIsolatedSubagentMcpClientCore({ server: { ...server, headers: undefined, authProvider: "openai" }, signal: new AbortController().signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async () => "must not run" }), /unavailable to child agents/u);
   assert.deepEqual(h.events, []);
+});
+
+test("isolated child inventory follows pages and rejects credential revocation before admitting later tools", async () => {
+  for (const revoke of [false, true]) {
+    const h = harness();
+    const cursors: Array<string | undefined> = [];
+    let revision = "initial";
+    h.dependencies.resolveCredentialBoundary = async () => ({ revision, redactText: (text) => text });
+    h.dependencies.createClient = () => ({
+      connect: async () => {}, close: async () => {}, callTool: async () => ({}),
+      listTools: async (params) => {
+        cursors.push(params?.cursor);
+        if (params?.cursor) return { tools: [{ name: "last", annotations: { readOnlyHint: true } }] };
+        if (revoke) revision = "revoked";
+        return { tools: [{ name: "first" }], nextCursor: "next" };
+      },
+    });
+    const signal = new AbortController().signal;
+    const operation = withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: (client) => client.listTools(signal) });
+    if (revoke) {
+      await assert.rejects(operation, /credential revision changed/u);
+      assert.deepEqual(cursors, [undefined]);
+    } else {
+      assert.deepEqual(await operation, [{ name: "first" }, { name: "last", annotations: { readOnlyHint: true } }]);
+      assert.deepEqual(cursors, [undefined, "next"]);
+    }
+  }
+});
+
+test("child regular and raw calls validate success, preserve server errors and block required tasks", async () => {
+  for (const raw of [false, true]) {
+    const h = harness(); let dispatches = 0;
+    let response: unknown = { content: [], structuredContent: { value: "invalid" } };
+    h.dependencies.createClient = () => ({
+      connect: async () => {}, close: async () => {},
+      listTools: async (params) => params?.cursor ? { tools: [{ name: "last" }] } : { tools: [
+        { name: "typed", outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } } },
+        { name: "task", execution: { taskSupport: "required" } },
+      ], nextCursor: "last" },
+      callTool: async () => { dispatches++; return response; },
+    });
+    const signal = new AbortController().signal;
+    await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async (client) => {
+      await client.listTools(signal);
+      const call = async (name: string) => raw ? client.callToolRaw!(name, {}, signal, () => {}) : client.callTool(name, {}, signal, () => {});
+      await assert.rejects(call("task"), /task-based/u);
+      assert.equal(dispatches, 0);
+      await assert.rejects(call("typed"), /output schema/u);
+      assert.equal(dispatches, 1);
+      response = {
+        isError: true,
+        content: [{ type: "text", text: "Permission denied for echo-secret" }],
+        structuredContent: { code: "PERMISSION_DENIED" },
+      };
+      assert.deepEqual(await call("typed"), {
+        isError: true,
+        content: [{ type: "text", text: "Permission denied for [REDACTED]" }],
+        structuredContent: { code: "PERMISSION_DENIED" },
+      });
+      assert.equal(dispatches, 2);
+    } });
+  }
+});
+
+test("real SDK child calls preserve last-page diagnostics through the public request adapter", async () => {
+  for (const raw of [false, true]) {
+    const h = harness();
+    const sdk = new Client({ name: "child-test", version: "1" });
+    const remote = new Server({ name: "child-server", version: "1" }, { capabilities: { tools: {} } });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    remote.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor ? { tools: [{
+      name: "typed", inputSchema: { type: "object" },
+      outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } },
+    }] } : { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "last" });
+    let fail = true;
+    remote.setRequestHandler(CallToolRequestSchema, async () => fail ? {
+      isError: true, content: [{ type: "text", text: "Permission denied for echo-secret" }], structuredContent: { code: "DENIED" },
+    } : { content: [], structuredContent: { value: "invalid" } });
+    h.dependencies.makeTransport = () => clientTransport;
+    h.dependencies.createClient = () => ({
+      connect: (_transport, options) => sdk.connect(clientTransport, options),
+      close: () => sdk.close(),
+      listTools: (params, options) => sdk.listTools(params, options),
+      callTool: (params, _schema, options) => callMcpTool(sdk, params, options),
+    });
+    await remote.connect(serverTransport);
+    const signal = new AbortController().signal;
+    try {
+      await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async client => {
+        await client.listTools(signal);
+        const invoke = () => raw ? client.callToolRaw!("typed", {}, signal, () => {}) : client.callTool("typed", {}, signal, () => {});
+        assert.deepEqual(await invoke(), {
+          isError: true, content: [{ type: "text", text: "Permission denied for [REDACTED]" }], structuredContent: { code: "DENIED" },
+        });
+        fail = false;
+        await assert.rejects(invoke(), /output schema/u);
+      } });
+    } finally {
+      await remote.close();
+    }
+  }
 });

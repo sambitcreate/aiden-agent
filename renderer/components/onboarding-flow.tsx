@@ -1315,18 +1315,19 @@ export function OnboardingFlow() {
                             {features.length} features
                           </Text>
                         </div>
-                        <div className="grid auto-rows-[118px] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[112px] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
+                        <div className="grid auto-rows-[minmax(118px,auto)] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[minmax(112px,auto)] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
                           {features.map((feature) => {
                             const Icon = feature.icon;
                             return (
                               <article
                                 key={feature.id}
+                                tabIndex={0}
                                 aria-label={`${feature.title}. ${feature.description}`}
-                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
+                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none ${FEATURE_LAYOUTS[feature.size]}`}
                               >
                                 <div
                                   aria-hidden="true"
-                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0"
+                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0 motion-reduce:transition-none"
                                 >
                                   <FeatureBentoVisual feature={feature} />
                                   <Text
@@ -1346,13 +1347,13 @@ export function OnboardingFlow() {
                                 </div>
                                 <div
                                   aria-hidden="true"
-                                  className="absolute inset-0 bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+                                  className="relative flex min-h-full flex-col justify-end bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 motion-reduce:transition-none"
                                 >
                                   <Icon
                                     aria-hidden="true"
                                     className="absolute right-3 top-3 size-4 text-accent"
                                   />
-                                  <div className="absolute bottom-3 left-3 right-3">
+                                  <div className="mt-5">
                                     <Text variant="small-strong" className="block leading-4">
                                       {feature.title}
                                     </Text>
@@ -1360,6 +1361,7 @@ export function OnboardingFlow() {
                                       variant="small"
                                       color="secondary"
                                       className="mt-1 block text-small leading-4"
+                                      data-onboarding-feature-description
                                     >
                                       {feature.description}
                                     </Text>

@@ -108,9 +108,9 @@ export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
     const { tools } = inventory();
     const ranked = tools.flatMap(({ tool, metadata }) => {
       if (namespace !== undefined && metadata?.namespace !== namespace) return [];
-      const fields = [tool.name, tool.label, metadata?.namespace ?? "", metadata?.label ?? "", tool.description].map((field) => field.toLowerCase());
+      const fields = [tool.name, tool.label, metadata?.namespace ?? "", metadata?.label ?? "", tool.description, metadata?.description ?? ""].map((field) => field.toLowerCase());
       if (terms.some((term) => !fields.some((field) => field.includes(term)))) return [];
-      const score = terms.reduce((sum, term) => sum + fields.reduce((total, field, index) => total + (field.includes(term) ? [16, 8, 4, 4, 1][index]! : 0), 0), 0);
+      const score = terms.reduce((sum, term) => sum + fields.reduce((total, field, index) => total + (field.includes(term) ? [16, 8, 4, 4, 1, 1][index]! : 0), 0), 0);
       return [{ tool, metadata, score }];
     }).sort((left, right) => right.score - left.score || left.tool.name.localeCompare(right.tool.name, "en"));
     const matches: JsonObject[] = [];
