@@ -5,6 +5,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpServer } from "./types.js";
+import { mcpResourceImages } from "./mcp-tool-result.js";
 
 export const MCP_RESOURCE_LIMITS = Object.freeze({ pages: 4, entries: 128, bytes: 32_000, field: 2048 });
 type ResourceClient = Pick<Client, "listResources" | "listResourceTemplates" | "readResource">;
@@ -164,17 +165,21 @@ export function createMcpResourceTool(
       const result = await client.readResource({ uri }, { signal: operationSignal, timeout: 10_000, maxTotalTimeout: 10_000 });
       guard(operationSignal);
       if (result.contents.length > MCP_RESOURCE_LIMITS.entries) throw new Error("Too many resource content blocks.");
-      const contents = result.contents.map((content) => {
+      const images = mcpResourceImages(result.contents);
+      const contents = result.contents.map((content, index) => {
         const returnedUri = field(content.uri);
         const mimeType = content.mimeType === undefined ? undefined : field(content.mimeType);
         if ("text" in content) {
           if (Buffer.byteLength(content.text) > MCP_RESOURCE_LIMITS.bytes) throw new Error("MCP resource text exceeds the response limit.");
           return { uri: returnedUri, mimeType, text: content.text };
         }
-        // Do not inline arbitrary binary data into model context.
-        return { uri: returnedUri, mimeType, omitted: "Binary resource content is not supported." };
+        if (images.has(index)) return { uri: returnedUri, mimeType, image: "Attached for vision-capable models." };
+        // Reading a resource grants no file-creation authority. Never inline binary as text.
+        return { uri: returnedUri, mimeType, omitted: mimeType?.startsWith("image/")
+          ? "Resource image omitted: invalid, unsupported, or above the image limit."
+          : "Binary resource content is not supported; no file was created." };
       });
-      return { content: [{ type: "text", text: boundedJson({ requestedUri: uri, contents }) }], details: null };
+      return { content: [{ type: "text", text: boundedJson({ requestedUri: uri, contents }) }, ...images.values()], details: null };
     },
   };
 }

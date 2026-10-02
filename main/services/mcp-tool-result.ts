@@ -70,6 +70,18 @@ function imagesFor(result: unknown): Map<unknown, ImageContent> {
   return images;
 }
 
+/** Resource reads share the exact raster validation and output budgets of tool results. */
+export function mcpResourceImages(contents: readonly unknown[]): Map<number, ImageContent> {
+  const blocks = contents.slice(0, MAX_PARTS).map((resource) => ({ type: "resource", resource }));
+  const validated = imagesFor({ content: blocks });
+  const images = new Map<number, ImageContent>();
+  blocks.forEach((block, index) => {
+    const image = validated.get(block);
+    if (image) images.set(index, image);
+  });
+  return images;
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
