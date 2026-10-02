@@ -7,14 +7,8 @@ import {
   type ToolResultMessage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  estimateContextTokens,
-  estimateTokens,
-  shouldCompact,
-  type AgentMessage,
-  type AgentTool,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { DEFAULT_COMPACTION_SETTINGS, estimateContextTokens, estimateTokens, shouldCompact } from "./pi-legacy-harness.js";
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
