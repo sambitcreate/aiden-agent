@@ -1,6 +1,6 @@
 # Skill and MCP session context
 
-Status: Partial — invocation-policy slice implemented in PR #214, with hosted CI and review passed on implementation head 5ab368c1. Physical iOS execution remains blocked by a locked device; broader MCP scope remains deferred.
+Status: Complete — the invocation-policy slice merged in [PR #214](https://github.com/sambitcreate/aiden-agent/pull/214) on 2026-09-23 and shipped in 0.43.0. The broader MCP scope shipped in separate slices (#226, #229, #230, #232; see the [audit](mcp-session-context-audit.md)). Physical iOS execution remains a device-acceptance follow-up.
 
 ## Bounded implementation
 

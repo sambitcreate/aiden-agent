@@ -1,6 +1,6 @@
 # Queue Messages While Compaction Runs
 
-Status: Implemented for review (desktop first slice).
+Status: Complete (desktop first slice) — merged in [PR #272](https://github.com/sambitcreate/aiden-agent/pull/272) on 2026-09-30; on main after 0.51.0, not yet released.
 
 ## Problem
 

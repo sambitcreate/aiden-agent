@@ -1,6 +1,6 @@
 # Live Activity freshness chips and Bot deep links (2026-09-27)
 
-Branch: `feature/live-activity-freshness`. Plan: `docs/plans/live-activity-freshness-bot-deeplinks-plan.md`.
+Branch: `feature/live-activity-freshness`. Plan: `docs/plans/completed/live-activity-freshness-bot-deeplinks-plan.md`.
 
 ## Live Activity state and chips
 
@@ -24,3 +24,5 @@ Branch: `feature/live-activity-freshness`. Plan: `docs/plans/live-activity-fresh
 ## Coordination
 
 PR #119 adds `AidenBotLiveActivityStateTests.swift` and edits the pbxproj. This branch adds no new iOS files, to avoid conflicting with it.
+
+Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `docs/plans/completed/`.

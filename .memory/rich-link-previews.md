@@ -9,3 +9,5 @@
 - Escape fences both the open card and Radix's delayed focus-open callback until the next pointer-enter or focus interaction, without moving focus.
 - No network, IPC, connector, persistence, schema, transcript, Bot runtime, main-process, iOS, or Android contract changed.
 - Validation: focused rich-link/transcript suite 42/42; Bot suite 451/451; Chat/slash-command suite passed; TypeScript, ESLint, CI policy, production build, and `git diff --check` passed. Packaged-app, pointer/keyboard visual, assistive-technology, and physical-device acceptance remain separate.
+
+Status (2026-09-27 plan refresh): PR #253 merged 2026-09-26 and shipped in 0.50.0; plan moved to docs/plans/completed/rich-link-previews-plan.md. The optional authenticated metadata phase is unstarted.

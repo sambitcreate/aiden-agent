@@ -1,6 +1,6 @@
 # Composer Context Meter
 
-Status: Implemented in [PR #187](https://github.com/sambitcreate/aiden-agent/pull/187); review and visual acceptance pending.
+Status: Complete — merged in [PR #187](https://github.com/sambitcreate/aiden-agent/pull/187) on 2026-09-26 and shipped in 0.50.0. Hands-on visual acceptance is a release follow-up, not open plan scope.
 
 ## Objective
 

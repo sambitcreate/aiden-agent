@@ -1,6 +1,6 @@
 # MCP numeric schema formats
 
-Status: Implemented for review.
+Status: Complete — merged in [PR #264](https://github.com/sambitcreate/aiden-agent/pull/264) on 2026-09-30; on main after 0.51.0, not yet released.
 
 ## Problem
 

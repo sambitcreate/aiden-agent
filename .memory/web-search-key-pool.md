@@ -1,6 +1,6 @@
 # Web Search API key pool — 2026-09-27
 
-- Plan: `docs/plans/web-search-key-pool-plan.md`. Source idea: pi-web-access #453. No code was copied.
+- Plan: `docs/plans/completed/web-search-key-pool-plan.md`. Source idea: pi-web-access #453. No code was copied.
 - Pool-capable providers are listed in `WEB_SEARCH_KEY_POOL_PROVIDER_IDS` in `renderer/shared/web-search-key-pool.ts`. Only `tavily` is listed today.
   - Add a provider only after its adapter maps 401/403 to `auth` and its quota statuses to `quota`.
 - Storage lives in `main/services/web-search-credential-core.ts`:
@@ -30,3 +30,5 @@
   - `npm run test:settings-design`: 60 tests pass.
   - `npm run type-check` and scoped ESLint pass.
   - No live provider requests were made.
+
+Status (2026-10-01): merged in PR #278 and shipped in 0.51.0; plan moved to `docs/plans/completed/`.

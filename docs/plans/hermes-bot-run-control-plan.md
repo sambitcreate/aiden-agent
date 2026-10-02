@@ -1,6 +1,6 @@
 # Hermes-inspired Bot run control
 
-Status: Active (Telegram slice under review; shared foreground admission next)
+Status: Active — Telegram slice merged in [PR #216](https://github.com/sambitcreate/aiden-agent/pull/216) (0.43.0); shared foreground admission (`chat-run-input-v1`), native Steer/Queue/Redirect and pending-question prompts merged in [PR #251](https://github.com/sambitcreate/aiden-agent/pull/251) (0.50.0). Earlier stacked PRs #220 and #223 are still open.
 
 September 23 desktop composer slice: Steer is exposed through exact-stream,
 document-owned IPC to Pi's existing queue, with text-only validation and a
