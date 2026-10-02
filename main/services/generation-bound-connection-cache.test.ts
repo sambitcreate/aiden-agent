@@ -350,3 +350,14 @@ test("real SDK server closure allows the next discovery to establish a fresh ses
   assert.equal((await second.listTools()).tools[0].name, "session_2");
   assert.equal(servers.length, 2);
 });
+
+
+test("settled Settings attempts revoke their transport predicate before asynchronous close", async () => {
+  const attempts = new GenerationBoundConnectionAttempts<object>();
+  let current!: () => boolean;
+  let checkedDuringClose = false;
+  await attempts.run("settings", 0, () => ({}), async (_value, isCurrent) => { current = isCurrent; },
+    async () => "status", async () => { checkedDuringClose = true; assert.equal(current(), false); });
+  assert.equal(checkedDuringClose, true);
+  assert.equal(current(), false);
+});

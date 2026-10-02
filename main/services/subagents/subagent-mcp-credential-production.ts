@@ -35,6 +35,7 @@ export async function resolveProductionSubagentMcpCredentialBoundary(
   signal: AbortSignal,
 ): Promise<SubagentMcpCredentialBoundary> {
   assertCurrent(signal);
+  if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   if (server.transport === "stdio") {
     throw new Error("Subagent MCP requires an isolated remote transport.");
   }

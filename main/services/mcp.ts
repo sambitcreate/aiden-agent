@@ -1,3 +1,5 @@
+import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
+import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
@@ -102,6 +104,7 @@ function makeTransport(
   isCurrent: () => boolean = () => true,
   options: {
     forceNoRedirect?: boolean;
+    signal?: AbortSignal;
     onTerminalFailure?: () => void;
     registerCredentialRedactor?: (
       redactor: SubagentMcpCredentialRedactor,
@@ -123,6 +126,7 @@ function makeTransport(
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
   assertMcpPresetServer(server);
+  if (server.authProvider && options.forceNoRedirect) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   const guardedFetch = options.forceNoRedirect
     ? createBoundedSubagentMcpFetch()
     : undefined;
@@ -140,11 +144,12 @@ function makeTransport(
     : undefined;
   return createMcpRemoteTransport({
     transport: server.transport,
+    signal: options.signal,
     serviceUrl: server.url,
     serviceHeaders: server.headers,
     isCurrent,
     authProvider,
-    fetch: guardedFetch,
+    fetch: server.authProvider ? mcpProviderAuthenticatedFetch(server, isCurrent) : guardedFetch,
     onTerminalFailure: options.onTerminalFailure,
   });
 }
@@ -227,6 +232,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   server: McpServer,
   signal: AbortSignal,
 ): Promise<readonly SubagentMcpRemoteTool[]> {
+  if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to Bots.");
   const lease = mcpConfigurationLeases.acquire(server.id);
   const operationSignal = AbortSignal.any([signal, lease.signal]);
   const isCurrent = () => {
@@ -359,13 +365,38 @@ class McpManager {
   async agentContextFor(
     server: McpServer,
     generation: number,
+    providerScope?: McpProviderExecutionScope,
   ): Promise<{ tools: AgentTool[]; instructions?: McpServerInstructionSnapshot }> {
     const lease = mcpConfigurationLeases.acquire(server.id);
-    const client = await this.ensureConnected(server, generation);
+    if (server.authProvider && !providerScope) throw new Error("Provider-authenticated MCP requires a live attended operation.");
+    const scoped = <R>(use: (client: Client, signal: AbortSignal) => Promise<R>, callerSignal?: AbortSignal): Promise<R> => withMcpProviderOperation({
+      scope: {
+        onInvalidated: providerScope!.onInvalidated,
+        signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
+        isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
+      },
+      create: () => new Client({ name: "aiden-agent-attended", version: "1.0.0" }, { capabilities: {} }),
+      connect: async (client, signal, isCurrent) => {
+        await client.connect(makeTransport(await resolveAuth(server, isCurrent), isCurrent, { signal }) as never, { signal });
+      },
+      use,
+      close: async (client) => client.close(),
+    });
+    const cachedClient = server.authProvider ? undefined : await this.ensureConnected(server, generation);
     lease.assertCurrent();
-    const { tools } = client.getServerCapabilities()?.tools
-      ? (await client.listTools()) as { tools: McpToolInfo[] }
-      : { tools: [] };
+    const inspect = async (client: Client, signal?: AbortSignal) => ({
+      tools: client.getServerCapabilities()?.tools ? (await client.listTools(undefined, { signal })).tools as McpToolInfo[] : [],
+      resources: Boolean(client.getServerCapabilities()?.resources),
+      instructions: client.getInstructions(),
+    });
+    const metadata = cachedClient ? await inspect(cachedClient) : await scoped(inspect);
+    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ?? {
+      callTool: (params, schema, options) => scoped((connection, signal) => connection.callTool(params, schema, { ...options, signal }), options?.signal),
+      listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
+      listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
+      readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
+    };
+    const { tools } = metadata;
     lease.assertCurrent();
     const agentTools = tools.map((t): AgentTool => markToolOutputSource(Object.assign<AgentTool, { codemode: boolean }>({
       name: mcpAgentToolName(server, t.name),
@@ -391,10 +422,10 @@ class McpManager {
         });
       },
     }, { codemode: true })));
-    if (client.getServerCapabilities()?.resources) {
+    if (metadata.resources) {
       agentTools.push(createMcpResourceTool(server, client, lease));
     }
-    const instructions = snapshotMcpServerInstructions(server, agentTools, client.getInstructions());
+    const instructions = snapshotMcpServerInstructions(server, agentTools, metadata.instructions);
     for (const tool of agentTools) Object.assign(tool, {
       codemode: true,
       discovery: {
@@ -421,17 +452,17 @@ export const mcpManager = new McpManager();
 /** Merge tools from enabled servers. Strict callers fail closed instead of silently losing access. */
 export async function collectMcpAgentTools(
   servers: McpServer[],
-  options: { strict?: boolean; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
+  options: { strict?: boolean; allowProviderAuth?: boolean; providerScope?: McpProviderExecutionScope; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
 ): Promise<AgentTool[]> {
   const all: AgentTool[] = [];
-  for (const server of servers) {
+  for (const server of admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true)) {
     if (!server.enabled) continue;
     try {
       let generation = 0;
       const serverContext = await withConfiguredMcp(
         server.id,
         mcpRuntimeConnectionSnapshot(server),
-        () => mcpManager.agentContextFor(server, generation),
+        () => mcpManager.agentContextFor(server, generation, options.providerScope),
         () => true,
         () => {
           generation = mcpManager.connectionGeneration(server.id);

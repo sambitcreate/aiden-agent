@@ -70,6 +70,7 @@ export function parseMcpServer(value: unknown): McpServer {
     authServerMetadataUrl: mcpOAuthMetadataUrlForServer({ ...s, transport }),
     oauthClientName: typeof s.oauthClientName === "string" ? s.oauthClientName.trim() : undefined,
     description: typeof s.description === "string" ? s.description.trim() : undefined,
+    authProvider: typeof s.authProvider === "string" ? s.authProvider : undefined,
     presetId: typeof s.presetId === "string" && s.presetId ? s.presetId : undefined,
     enabled: typeof s.enabled === "boolean" ? s.enabled : true,
   };

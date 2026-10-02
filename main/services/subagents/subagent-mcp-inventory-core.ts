@@ -170,7 +170,7 @@ export async function resolveBoundedSubagentMcpInventory(
       return [];
     }
     const servers = listed.servers
-      .filter((server) => server.enabled && server.transport !== "stdio")
+      .filter((server) => server.enabled && server.transport !== "stdio" && !server.authProvider)
       .slice(0, MAX_SUBAGENT_MCP_SCOPES);
     const tasks = servers.map(async (server) => {
       let fingerprint: string | undefined;
