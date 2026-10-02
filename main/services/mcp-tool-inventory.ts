@@ -1,8 +1,18 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { CallToolResultSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
+
+/** Call only behind the complete-inventory guard below, not SDK per-page schema caches. */
+export function callMcpTool(client: Pick<Client, "request">, params: CallToolRequest["params"], options?: RequestOptions) {
+  // The public request path retains envelope validation, progress, timeout and cancellation.
+  // Client.callTool additionally validates errors against the last tools/list page's schema.
+  return client.request({ method: "tools/call", params }, CallToolResultSchema, options);
+}
 
 /** The SDK returns one tools/list page. Publish only a complete, bounded inventory. */
 export async function listMcpToolInventory<T extends { name: string }>(options: {
@@ -64,7 +74,10 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
       const validate = validators.get(name);
       if (!validate) return;
       const record = result && typeof result === "object" ? result as { structuredContent?: unknown; isError?: unknown } : {};
-      if (!record.structuredContent && !record.isError) throw new Error("MCP tool has an output schema but did not return structured content.");
+      // Tool failures may carry diagnostic JSON instead of the successful output shape.
+      // Preserve that failure for the normal tool-result error path.
+      if (record.isError === true) return;
+      if (!record.structuredContent) throw new Error("MCP tool has an output schema but did not return structured content.");
       if (record.structuredContent && !validate(record.structuredContent).valid) throw new Error("MCP structured content does not match the tool's output schema.");
     },
   };

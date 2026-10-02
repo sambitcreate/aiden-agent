@@ -1,7 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
-import { createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -188,11 +188,18 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () =>
-        new Client(
+      createClient: () => {
+        const client = new Client(
           { name: "aiden-subagent-mcp-read", version: "1.0.0" },
           { capabilities: {} },
-        ) as unknown as IsolatedSubagentMcpSdkClient,
+        );
+        return {
+          connect: (transport, options) => client.connect(transport as Parameters<Client["connect"]>[0], options),
+          close: () => client.close(),
+          listTools: (params, options) => client.listTools(params, options),
+          callTool: (params, _schema, options) => callMcpTool(client, params, options),
+        } satisfies IsolatedSubagentMcpSdkClient;
+      },
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -401,8 +408,13 @@ class McpManager {
       instructions: client.getInstructions(),
     });
     const metadata = cachedClient ? await inspect(cachedClient) : await scoped(inspect);
-    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ?? {
-      callTool: (params, schema, options) => scoped((connection, signal) => connection.callTool(params, schema, { ...options, signal }), options?.signal),
+    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
+      callTool: (params, _schema, options) => callMcpTool(cachedClient, params, options),
+      listResources: cachedClient.listResources.bind(cachedClient),
+      listResourceTemplates: cachedClient.listResourceTemplates.bind(cachedClient),
+      readResource: cachedClient.readResource.bind(cachedClient),
+    } : {
+      callTool: (params, _schema, options) => scoped((connection, signal) => callMcpTool(connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
       listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
