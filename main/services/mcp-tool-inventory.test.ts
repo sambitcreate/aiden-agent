@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { executeMcpAgentTool } from "./mcp-tool-result.js";
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];
@@ -94,4 +95,25 @@ test("complete inventory guards preserve early-page output schemas and task requ
   guard.validateResult("validated", { isError: true, content: [] });
   assert.throws(() => guard.assertCallable("task"), /task-based/u);
   guard.assertCallable("ordinary");
+});
+
+test("schema guards preserve server error diagnostics while validating successful output", async () => {
+  const guard = createMcpToolCallGuard([{ name: "lookup", outputSchema: {
+    type: "object", properties: { value: { type: "number" } }, required: ["value"],
+  } }]);
+  const execute = (result: unknown) => executeMcpAgentTool(async () => {
+    guard.validateResult("lookup", result);
+    return result;
+  });
+  await assert.rejects(execute({
+    isError: true,
+    content: [{ type: "text", text: "Lookup permission denied; reconnect the account." }],
+    structuredContent: { code: "PERMISSION_DENIED", retryable: false },
+  }), /Lookup permission denied; reconnect the account/u);
+  for (const isError of [undefined, false, "true"]) {
+    await assert.rejects(execute({ isError, content: [], structuredContent: { code: "PERMISSION_DENIED" } }), /output schema/u);
+    await assert.rejects(execute({ isError, content: [] }), /did not return structured content/u);
+  }
+  const success = await execute({ isError: false, content: [], structuredContent: { value: 42 } });
+  assert.deepEqual(JSON.parse(JSON.stringify(success.structuredContent)), { value: 42 });
 });

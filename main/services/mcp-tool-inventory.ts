@@ -64,7 +64,10 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
       const validate = validators.get(name);
       if (!validate) return;
       const record = result && typeof result === "object" ? result as { structuredContent?: unknown; isError?: unknown } : {};
-      if (!record.structuredContent && !record.isError) throw new Error("MCP tool has an output schema but did not return structured content.");
+      // Tool failures may carry diagnostic JSON instead of the successful output shape.
+      // Preserve that failure for the normal tool-result error path.
+      if (record.isError === true) return;
+      if (!record.structuredContent) throw new Error("MCP tool has an output schema but did not return structured content.");
       if (record.structuredContent && !validate(record.structuredContent).valid) throw new Error("MCP structured content does not match the tool's output schema.");
     },
   };
