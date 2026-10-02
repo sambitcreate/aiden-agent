@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
   OAuthClientInformation,
   OAuthClientInformationFull,
@@ -21,6 +21,7 @@ import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   hasMcpOAuthSessionData,
   McpOAuthSessionTransaction,
+  McpOAuthAuthorizationFlow,
   mcpAuthorizationBinding,
   publicMcpClientInformation,
   sessionMatchesMcpBinding,
@@ -75,6 +76,7 @@ class McpOAuthProvider implements OAuthClientProvider {
     private readonly transaction?: McpOAuthSessionTransaction,
     private readonly observeTokens?: (tokens: OAuthTokens) => void,
     private readonly oauthClientName: string = mcpOAuthClientMetadata().client_name,
+    private readonly authorization = new McpOAuthAuthorizationFlow(),
   ) {}
 
   private async boundSession() {
@@ -120,6 +122,21 @@ class McpOAuthProvider implements OAuthClientProvider {
     return mcpOAuthClientMetadata(this.oauthClientName) as OAuthClientMetadata;
   }
 
+  state(): string {
+    this.assertCanMutate();
+    return this.authorization.state;
+  }
+
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    this.assertCanMutate();
+    this.authorization.saveDiscovery(state);
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    this.assertCanMutate();
+    return this.authorization.discoveryState();
+  }
+
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     const information = (await this.boundSession()).clientInformation;
     return information ? publicMcpClientInformation(information) : undefined;
@@ -149,10 +166,12 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.observeTokens?.(tokens);
     const session = await this.boundSession();
     this.assertCanMutate();
+    const grantedScope = tokens.scope || this.authorization.requestedScope || session.tokens?.scope || session.grantedScope;
     await this.saveSession({
       ...session,
       authorizationBinding: this.binding,
       tokens,
+      ...(grantedScope ? { grantedScope } : {}),
     });
   }
 
@@ -181,13 +200,17 @@ class McpOAuthProvider implements OAuthClientProvider {
       );
     }
     this.assertCanMutate();
-    await shell.openExternal(authorizationUrl.toString());
+    const session = await this.boundSession();
+    this.assertCanMutate();
+    const boundUrl = this.authorization.authorizationUrl(authorizationUrl, session.tokens?.scope || session.grantedScope);
+    await shell.openExternal(boundUrl.toString());
   }
 
   async invalidateCredentials(
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
     this.assertCanMutate();
+    if (scope === "all" || scope === "discovery") this.authorization.clearDiscovery();
     if (scope === "all") {
       if (this.transaction) {
         await this.saveSession({ authorizationBinding: this.binding });
@@ -198,7 +221,10 @@ class McpOAuthProvider implements OAuthClientProvider {
     }
     const session = await this.boundSession();
     this.assertCanMutate();
-    if (scope === "tokens") delete session.tokens;
+    if (scope === "tokens") {
+      if (session.tokens?.scope) session.grantedScope = session.tokens.scope;
+      delete session.tokens;
+    }
     if (scope === "verifier") delete session.codeVerifier;
     if (scope === "client") delete session.clientInformation;
     await this.saveSession(session);
@@ -288,7 +314,7 @@ interface Loopback {
   close: () => void;
 }
 
-function startLoopbackServer(): Promise<Loopback> {
+function startLoopbackServer(authorization: McpOAuthAuthorizationFlow): Promise<Loopback> {
   return new Promise((resolve, reject) => {
     let resolveCode!: (code: string) => void;
     let rejectCode!: (error: Error) => void;
@@ -296,26 +322,28 @@ function startLoopbackServer(): Promise<Loopback> {
       resolveCode = res;
       rejectCode = rej;
     });
+    // The callback can arrive while the initial transport is still settling.
+    void codePromise.catch(() => undefined);
 
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? "/", OAUTH_REDIRECT_URI);
-      if (url.pathname !== "/callback") {
+      if (req.method !== "GET" || url.pathname !== "/callback") {
         res.writeHead(404);
         res.end();
         return;
       }
+      let callback: ReturnType<McpOAuthAuthorizationFlow["callback"]>;
+      try {
+        callback = authorization.callback(url);
+      } catch {
+        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Invalid OAuth callback. Return to the sign-in window and try again.");
+        return;
+      }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(CALLBACK_HTML);
-      const code = url.searchParams.get("code");
-      const error = url.searchParams.get("error");
-      if (error)
-        rejectCode(
-          new Error(
-            `Authorization denied: ${url.searchParams.get("error_description") || error}`,
-          ),
-        );
-      else if (code) resolveCode(code);
-      else rejectCode(new Error("No authorization code was returned."));
+      if ("error" in callback) rejectCode(callback.error);
+      else resolveCode(callback.code);
     });
 
     server.once("error", (err: NodeJS.ErrnoException) => {
@@ -335,7 +363,7 @@ function startLoopbackServer(): Promise<Loopback> {
       );
       resolve({
         waitForCode: () => codePromise.finally(() => clearTimeout(timer)),
-        close: () => server.close(),
+        close: () => { clearTimeout(timer); server.close(); },
       });
     });
   });
@@ -429,6 +457,7 @@ export async function authorizeMcpServer(
   const transaction = new McpOAuthSessionTransaction(
     sessionForFreshMcpAuthorization(previousSession, binding),
   );
+  const authorization = new McpOAuthAuthorizationFlow();
   const provider = new McpOAuthProvider(
     server.id,
     binding,
@@ -437,11 +466,12 @@ export async function authorizeMcpServer(
     transaction,
     undefined,
     mcpOAuthClientNameForServer(server),
+    authorization,
   );
   let loopback: Loopback | null = null;
   let commitAttempted = false;
   try {
-    loopback = await startLoopbackServer();
+    loopback = await startLoopbackServer(authorization);
     // Re-authorization is transactional: preserve the durable old session
     // while the SDK mutates a private replacement buffer. A renderer reload,
     // failed provider, or process crash before final verification cannot erase
