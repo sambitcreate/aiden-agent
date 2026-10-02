@@ -157,7 +157,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     const pending = (async () => {
       const client = new Client({ name: "aiden-cli", version: "0.1.0" });
       try {
-        const options = { fetch: createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
+        const options = server.transport === "stdio" ? undefined : { fetch: createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
         const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })
           : server.transport === "http" ? new StreamableHTTPClientTransport(new URL(server.url!), options) : new SSEClientTransport(new URL(server.url!), options);
         if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
