@@ -1,5 +1,6 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
+import { listMcpToolInventory } from "./mcp-tool-inventory.js";
 
 /** Inspect only an initialized, still-owned client. Never consult another connection's cache. */
 export async function inspectInitializedMcpStatus(
@@ -17,7 +18,10 @@ export async function inspectInitializedMcpStatus(
   try {
     // Resources/prompts-only servers are valid MCP servers. Do not issue a
     // method they never advertised merely to test their connection.
-    const tools = capabilities?.tools === undefined ? [] : (await client.listTools()).tools;
+    const tools = capabilities?.tools === undefined ? [] : await listMcpToolInventory({
+      assertCurrent,
+      listPage: (cursor, signal) => client.listTools(cursor === undefined ? undefined : { cursor }, { signal }),
+    });
     assertCurrent();
     return { connected: true, toolCount: tools.length, tools: tools.map(({ name }) => name), serverCapabilities };
   } catch (error) {

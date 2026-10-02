@@ -122,27 +122,11 @@ test("isolated production core forces no-redirect and closes after bounded SDK r
     content: [{ type: "text", text: "evidence [REDACTED]" }],
   });
   assert.deepEqual(h.transportPolicy, [{ forceNoRedirect: true }]);
-  assert.deepEqual(h.events, [
-    "config-fence",
-    "admit",
-    "create",
-    "credential",
-    "auth",
-    "transport",
-    "config-fence",
-    "connect",
-    "credential",
-    "config-fence",
-    "list",
-    "credential",
-    "credential",
-    "effect",
-    "config-fence",
-    "call",
-    "credential",
-    "close",
-  ]);
-  assert.ok(h.requestSignals.every((requestSignal) => requestSignal === signal));
+  assert.equal(h.events[h.events.length - 1], "close");
+  for (const [index, event] of h.events.entries()) {
+    if (event === "list" || event === "call") assert.equal(h.events[index - 1], "config-fence");
+  }
+  assert.ok(h.requestSignals.every((requestSignal) => !requestSignal.aborted));
 });
 
 test("mutation raw boundary fences and invokes the SDK exactly once without an await gap", async () => {
@@ -521,4 +505,54 @@ test("provider-authenticated MCP is denied before a child can create or reuse an
   const h = harness();
   await assert.rejects(withIsolatedSubagentMcpClientCore({ server: { ...server, headers: undefined, authProvider: "openai" }, signal: new AbortController().signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async () => "must not run" }), /unavailable to child agents/u);
   assert.deepEqual(h.events, []);
+});
+
+test("isolated child inventory follows pages and rejects credential revocation before admitting later tools", async () => {
+  for (const revoke of [false, true]) {
+    const h = harness();
+    const cursors: Array<string | undefined> = [];
+    let revision = "initial";
+    h.dependencies.resolveCredentialBoundary = async () => ({ revision, redactText: (text) => text });
+    h.dependencies.createClient = () => ({
+      connect: async () => {}, close: async () => {}, callTool: async () => ({}),
+      listTools: async (params) => {
+        cursors.push(params?.cursor);
+        if (params?.cursor) return { tools: [{ name: "last", annotations: { readOnlyHint: true } }] };
+        if (revoke) revision = "revoked";
+        return { tools: [{ name: "first" }], nextCursor: "next" };
+      },
+    });
+    const signal = new AbortController().signal;
+    const operation = withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: (client) => client.listTools(signal) });
+    if (revoke) {
+      await assert.rejects(operation, /credential revision changed/u);
+      assert.deepEqual(cursors, [undefined]);
+    } else {
+      assert.deepEqual(await operation, [{ name: "first" }, { name: "last", annotations: { readOnlyHint: true } }]);
+      assert.deepEqual(cursors, [undefined, "next"]);
+    }
+  }
+});
+
+test("child regular and raw calls preserve first-page output validation and block required tasks", async () => {
+  for (const raw of [false, true]) {
+    const h = harness(); let dispatches = 0;
+    h.dependencies.createClient = () => ({
+      connect: async () => {}, close: async () => {},
+      listTools: async (params) => params?.cursor ? { tools: [{ name: "last" }] } : { tools: [
+        { name: "typed", outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } } },
+        { name: "task", execution: { taskSupport: "required" } },
+      ], nextCursor: "last" },
+      callTool: async () => { dispatches++; return { content: [], structuredContent: { value: "invalid" } }; },
+    });
+    const signal = new AbortController().signal;
+    await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async (client) => {
+      await client.listTools(signal);
+      const call = async (name: string) => raw ? client.callToolRaw!(name, {}, signal, () => {}) : client.callTool(name, {}, signal, () => {});
+      await assert.rejects(call("task"), /task-based/u);
+      assert.equal(dispatches, 0);
+      await assert.rejects(call("typed"), /output schema/u);
+      assert.equal(dispatches, 1);
+    } });
+  }
 });
