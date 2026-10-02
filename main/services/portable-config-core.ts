@@ -1,6 +1,6 @@
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 // Splits Aiden's persisted configuration into a portable half and a
@@ -673,6 +673,11 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
+  if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.compactionModelOverrides !== undefined) {
+    try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
+    catch { delete runtime.compactionModelOverrides; }
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;

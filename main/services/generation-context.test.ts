@@ -959,3 +959,12 @@ test("an AGENTS.md revision still active after a stale anchor is priced once nea
   );
   assert.ok(overCompaction.estimatedTokensAfter <= overCompaction.inputBudgetTokens);
 });
+
+
+test("model-specific reserves tighten context capacity without reducing safety floors", () => {
+  const ordinary = projectChatContextPressure([user("hello")], options);
+  const configured = projectChatContextPressure([user("hello")], { ...options, compactionReserveTokens: 64_000 });
+  assert.equal(configured.reservedTokens, 64_000);
+  assert.equal(configured.inputBudgetTokens, 64_000);
+  assert.equal(projectChatContextPressure([user("hello")], { ...options, compactionReserveTokens: 2 }).reservedTokens, ordinary.reservedTokens);
+});
