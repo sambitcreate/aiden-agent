@@ -1,6 +1,6 @@
 import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js";
 import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
-import { loadMcpOAuthMetadataOverride } from "../../../main/services/mcp-oauth-metadata.js";
+import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
 import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
 import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -106,7 +106,7 @@ export async function mcpLogin(agentDir: string, server: McpServer): Promise<voi
     await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
     const port = (listener.address() as import("node:net").AddressInfo).port;
     const provider = await oauthProvider(agentDir, server, { flow, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
-    const fetchFn = createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers });
+    const fetchFn = withMcpOAuthMetadataObservation(createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers }), (url, document) => flow.observeAuthorizationMetadata(url, document));
     const status = await auth(provider, { serverUrl: server.url, fetchFn });
     if (status === "REDIRECT") {
       const authorizationCode = await Promise.race([code, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MCP login timed out.")), 180_000); })]);
