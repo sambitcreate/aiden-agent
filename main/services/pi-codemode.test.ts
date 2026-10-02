@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Type, type JsonObject } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 
 function fixture() {
@@ -136,4 +137,37 @@ test("codemode forwards valid images but malformed raster output never enters mo
   const invalid = await tool.execute("parent", { code: `image(${JSON.stringify({ type: "image", mimeType: "image/png", data: truncated })});` });
   assert.equal(invalid.isError, true);
   assert.equal(invalid.content.some((part) => part.type === "image"), false);
+});
+
+
+test("deferral requires explicit host admission, discovery metadata and an admitted codemode tool", () => {
+  const core: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) };
+  const remote = Object.assign({ ...core, name: "remote_docs" }, { codemode: true, discovery: { namespace: "docs", label: "Documents" } });
+  const undeclared = { ...core, name: "mcp_guessed" };
+  const optedOut = { ...remote, name: "denied", codemode: false };
+  const hostOnly = { ...core, name: "host", codemode: true };
+  const codemode = fixture().tool;
+  const inventory = [core, remote, undeclared, optedOut, hostOnly];
+  assert.deepEqual(partitionPiCodemodeTools(inventory), { declared: inventory, deferred: [] });
+  const enabled = partitionPiCodemodeTools([...inventory, codemode]);
+  assert.deepEqual(enabled.deferred.map((tool) => tool.name), ["remote_docs"]);
+  assert.deepEqual(enabled.declared.map((tool) => tool.name), ["read_file", "mcp_guessed", "denied", "host", "codemode"]);
+  assert.deepEqual(partitionPiCodemodeTools([core, codemode]).deferred, []);
+});
+
+test("sandbox discovery exposes fresh admitted schemas and treats server instructions as data", async () => {
+  const base: AgentTool = { name: "remote_docs", label: "Docs", description: "Search documents", parameters: Type.Object({ query: Type.String() }), execute: async () => ({ content: [], details: null }) };
+  let inventory = [Object.assign(base, { codemode: true, discovery: { namespace: "docs", label: "Documents", instructions: "Use query to search." } })];
+  const tool = createPiCodemodeTool({ tools: () => inventory, executeTool: async () => { throw new Error("Discovery must not dispatch effects"); } });
+  const found = await tool.execute("one", { code: 'text(await searchTools("documents", {namespace:"docs"})); text(await describeNamespace("docs"));' });
+  assert.equal(found.isError, false);
+  const outputs = found.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  assert.equal(outputs[0].tools[0].name, "remote_docs");
+  assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
+  assert.equal(outputs[1].instructionsAreUntrusted, true);
+  assert.equal(outputs[1].instructions, "Use query to search.");
+  inventory = [];
+  const removed = await tool.execute("two", { code: 'text(await searchTools("documents"));' });
+  assert.equal(removed.isError, false);
+  assert.deepEqual(JSON.parse((removed.content[0] as { text: string }).text).tools, []);
 });

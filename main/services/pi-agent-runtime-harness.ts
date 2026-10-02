@@ -117,6 +117,8 @@ export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolEx
   extensions?: readonly PiAgentRuntimeExtension[];
   /** Fully resolved immutable contributions for one foreground operation. */
   contributions?: PiRuntimeContributionSnapshot;
+  /** Host-admitted tools callable through codemode, omitted from provider declarations. */
+  deferredTools?: readonly AgentTool[];
   /** Owning Pi collection retained for native Harness-compatible operations. */
   models?: Models;
   resources?: AgentHarnessResources;
@@ -341,9 +343,11 @@ function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeEx
 }
 
 function snapshotAgentTool(tool: AgentTool): AgentTool {
+  const discovery = (tool as AgentTool & { discovery?: unknown }).discovery;
   return Object.freeze({
     ...tool,
     parameters: cloneAndDeepFreeze(tool.parameters),
+    ...(discovery === undefined ? {} : { discovery: cloneAndDeepFreeze(discovery) }),
   });
 }
 
@@ -764,6 +768,7 @@ async function waitForManagedPromise<T>(
 export class PiAgentRuntimeHarness {
   private static readonly MAX_ACCEPTED_QUEUE_MESSAGES = 32;
   private readonly agent: Agent;
+  private readonly deferredTools: readonly AgentTool[];
   private readonly agentListeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
   private readonly activeTools = new Map<string, string>();
   private readonly nestedCalls = new Map<string, NestedToolCalls>();
@@ -834,6 +839,7 @@ export class PiAgentRuntimeHarness {
     const {
       extensions: requestedExtensions = [],
       contributions,
+      deferredTools = [],
       onFault,
       durability,
       models,
@@ -878,6 +884,12 @@ export class PiAgentRuntimeHarness {
         ? [...contributions.tools]
         : composeTools(baseState.tools ?? [], extensions),
     };
+    const names = new Set(initialState.tools.map((tool) => tool.name));
+    this.deferredTools = Object.freeze(deferredTools.map((tool) => {
+      if (!tool.name || names.has(tool.name) || !isPiCodemodeCallable(tool)) throw new Error("Deferred tools must have unique admitted callable identities.");
+      names.add(tool.name);
+      return snapshotAgentTool(tool);
+    }));
     if (initialState.model) {
       this.contextProjectionOptions = {
         contextWindow: initialState.model.contextWindow,
@@ -1506,6 +1518,18 @@ export class PiAgentRuntimeHarness {
     return this.agent.state;
   }
 
+  /** Callable inventory is scoped to this admitted generation; never rebuild it from config. */
+  getCallableTools(): readonly AgentTool[] {
+    const tools = [...this.agent.state.tools];
+    const names = new Set(tools.map((tool) => tool.name));
+    for (const tool of this.deferredTools) {
+      if (names.has(tool.name)) throw new Error("A deferred tool conflicts with a declared tool.");
+      names.add(tool.name);
+      tools.push(tool);
+    }
+    return tools;
+  }
+
   private subscribeAgent(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
     this.agentListeners.add(listener);
     const unsubscribe = this.agent.subscribe(listener);
@@ -1526,7 +1550,7 @@ export class PiAgentRuntimeHarness {
       if (!activeSignal) throw new Error("The tool runtime is not active.");
       const callSignal = signal ? AbortSignal.any([signal, activeSignal]) : activeSignal;
       callSignal.throwIfAborted();
-      const tools = this.agent.state.tools;
+      const tools = [...this.getCallableTools()];
       const tool = tools.find((item) => item.name === name && isPiCodemodeCallable(item));
       if (!tool) throw new Error("This tool is not available to codemode.");
       if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
