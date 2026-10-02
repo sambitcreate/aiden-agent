@@ -399,21 +399,14 @@ final class AidenNativeIntegrationTests: XCTestCase {
         await manager.appendResponse("private response text", instanceID: proofID, streamID: proofID)
         await manager.markStale(instanceID: proofID, streamID: proofID)
 
-        let staleDeadline = Date().addingTimeInterval(2)
-        while !activity.content.state.isStale && Date() < staleDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        XCTAssertTrue(activity.content.state.isStale)
-        XCTAssertEqual(activity.content.state.status, .responding)
-        XCTAssertEqual(activity.content.state.responseExcerpt, "")
+        let delivered = await deliveredContent(of: activity) { $0.isStale }
+        let stale = try XCTUnwrap(delivered, "ActivityKit ended the stream before delivering the stale state.")
+        XCTAssertTrue(stale.isStale)
+        XCTAssertEqual(stale.status, .responding)
+        XCTAssertEqual(stale.responseExcerpt, "")
 
         await manager.endAll(forInstanceID: proofID)
 
-        let endDeadline = Date().addingTimeInterval(2)
-        while (activity.activityState == .active || activity.activityState == .stale),
-              Date() < endDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
         XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
@@ -474,21 +467,15 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         let adoptingManager = AidenRemoteLiveActivityManager(defaults: defaults)
 
+        let persisted = activity.content.state
         await adoptingManager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
-        let reconcileDeadline = Date().addingTimeInterval(2)
-        while activity.content.state.status != .responding && Date() < reconcileDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        XCTAssertEqual(activity.content.state.status, .responding)
-        XCTAssertFalse(activity.content.state.isStale)
-        XCTAssertEqual(activity.content.state.responseExcerpt, "")
+        let delivered = await deliveredContent(of: activity) { $0 != persisted }
+        let reconciled = try XCTUnwrap(delivered, "ActivityKit ended the stream before delivering the reconciled state.")
+        XCTAssertEqual(reconciled.status, .responding)
+        XCTAssertFalse(reconciled.isStale)
+        XCTAssertEqual(reconciled.responseExcerpt, "")
 
         await adoptingManager.endAll(forInstanceID: proofID)
-        let endDeadline = Date().addingTimeInterval(2)
-        while (activity.activityState == .active || activity.activityState == .stale),
-              Date() < endDeadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
         XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
@@ -577,22 +564,16 @@ final class AidenNativeIntegrationTests: XCTestCase {
                 session: URLSession(configuration: configuration)
             )
             let manager = AidenRemoteLiveActivityManager(defaults: defaults)
+            let persisted = activity.content.state
             await manager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
 
-            let reconcileDeadline = Date().addingTimeInterval(2)
-            while activity.content.state.status != .responding && Date() < reconcileDeadline {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            }
-            XCTAssertEqual(activity.content.state.status, .responding)
-            XCTAssertFalse(activity.content.state.isStale)
-            XCTAssertEqual(activity.content.state.responseExcerpt, "")
+            let delivered = await deliveredContent(of: activity) { $0 != persisted }
+            let reconciled = try XCTUnwrap(delivered, "ActivityKit ended the stream before delivering the reconciled state.")
+            XCTAssertEqual(reconciled.status, .responding)
+            XCTAssertFalse(reconciled.isStale)
+            XCTAssertEqual(reconciled.responseExcerpt, "")
 
             await manager.endAll(forInstanceID: proofID)
-            let endDeadline = Date().addingTimeInterval(2)
-            while (activity.activityState == .active || activity.activityState == .stale),
-                  Date() < endDeadline {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            }
             XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
             XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
             print("AIDEN_ACTIVITYKIT_PROCESS checkpoint=reconciled-and-ended proof=\(proofID)")
@@ -806,6 +787,25 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
     }
+}
+
+/// ActivityKit echoes an app's own `update(_:)` back to its `Activity`
+/// instances asynchronously and throttles those echoes: an update issued right
+/// after `request` can take seconds to reach `content`, even though the awaited
+/// `update` call has already returned. Await the delivered content event
+/// instead of polling `content` against a wall-clock budget. Returns nil only
+/// when the activity's content stream finishes first.
+@MainActor
+private func deliveredContent(
+    of activity: Activity<AgentRunActivityAttributes>,
+    where isExpected: (AgentRunActivityAttributes.ContentState) -> Bool
+) async -> AgentRunActivityAttributes.ContentState? {
+    // `contentUpdates` starts with the current content, so an echo that has
+    // already landed is observed rather than missed.
+    for await content in activity.contentUpdates where isExpected(content.state) {
+        return content.state
+    }
+    return nil
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {
