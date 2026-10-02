@@ -130,7 +130,6 @@ import {
   assistantUsageRecord,
   isLocalModelProvider,
   reportedTokens,
-  isLocalModelProvider,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
 import {
