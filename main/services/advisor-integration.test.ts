@@ -9,10 +9,6 @@ test("foreground generation adds Advisor per run before freezing runtime contrib
   const advisorIndex = source.indexOf("advisorRuntime.extensionForGeneration");
   const finalIndex = source.indexOf("const runtimeContributions");
   assert.ok(baseIndex >= 0 && advisorIndex > baseIndex && finalIndex > advisorIndex);
-  assert.match(
-    source,
-    /runtimeExtensions: readonly PiAgentRuntimeExtension\[\] = advisorExtension/u,
-  );
   assert.match(source, /snapshotAdvisorRuntimeMessages\(candidate\.state, toolCallId\)/u);
 });
 

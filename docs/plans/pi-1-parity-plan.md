@@ -1,6 +1,6 @@
 # Pi 1.0 parity upgrade
 
-Status: planned; implementation begins after this audit checkpoint (2026-10-02).
+Status: active implementation and validation (2026-10-02). Foundation and compaction PRs are open; desktop model operations, cache warming, and MCP metadata overrides are in progress.
 
 ## Baseline and target
 
@@ -51,8 +51,22 @@ Agents audit first, then implement their assigned lane in different worktrees. N
 
 - [x] Pull Aiden origin/main and pi checkout; parallel runtime, CLI, stable-feature audits.
 - [x] Record target, feature inventory, architecture decisions and three-worktree PR plan before edits.
-- [ ] Runtime foundation and replay gates.
-- [ ] CLI stable 1.0 parity and offline bundle/permission gates.
+- [x] Runtime foundation and replay gates — PR #299.
+- [x] CLI stable 1.0 upgrade and offline bundle/permission gates — combined into PR #299 so desktop and CLI pins change atomically. Review follow-up covers migrated MCP revocation readers.
 - [ ] Provider/MCP integration and focused tests.
 - [ ] Desktop codemode/tool search/image/classifier capability acceptance.
 - [ ] Integrated validation, reviewable PRs and final status reconciliation.
+
+
+## Implementation checkpoints
+
+- [PR #299](https://github.com/sambitcreate/aiden-agent/pull/299): atomic desktop/CLI 1.0 upgrade. The separate CLI PR #300 was superseded and closed after CI proved that mixed desktop/CLI versions break standalone types. Frozen journal helpers remain an explicit compatibility boundary.
+- [PR #301](https://github.com/sambitcreate/aiden-agent/pull/301): exact provider/model compaction budgets across foreground, child, nested, manual and idle paths; Memory settings save/reset. Real Electron save/relaunch/reset passed.
+- Desktop scripts execute in QuickJS without ambient filesystem/network access. Nested calls reuse approval, schema validation, durable effects and public activity IDs. Final admitted MCP schemas are deferred only when codemode is enabled; search returns schemas for execution inside codemode. Excluding codemode restores direct MCP tools. Bots, assistant mode and child supervisors retain their existing tool inventories.
+- OpenAI OAuth receives a private, lazily generated installation identity. First-run login prefers the new OpenAI provider while preserving legacy Codex selections. MCP callbacks validate state/issuer and preserve scope consent. Small JSON structured results and validated raster images survive tool conversion.
+- Focused desktop script/discovery/runtime tests pass (418 compaction suite tests at the first integrated checkpoint). iOS 230 and Android 62 tests passed, with follow-up public activity-ID fixtures rerun. No native wire change or physical-device validation is claimed.
+- Remaining stable acceptance: production image/classifier tools with paid-operation disclosure and artifact accounting; explicit authorization-server metadata override; off-default cache warming; final integrated tests and PR review. Desktop warming initially targets active foreground generations only, with timers tied to generation cancellation and bounded provider cost eligibility.
+
+## Onboarding illustration provenance
+
+`renderer/assets/onboarding/features/tool-scripts.png` was generated with the imagegen skill/tool and resampled to the required 1024 × 1024 transparent PNG. Prompt: premium 3D clay Aiden Tool Scripts illustration; friendly purple ghost, navy script console with cyan brackets, blue folder, purple magnifying glass, coral result card, short purple cables and a small gold padlock; matte lavender/navy/blue/coral palette, centered with generous transparent margin, no floor, background, text, frame or brain imagery. The onboarding asset contract validates the shipped image.
