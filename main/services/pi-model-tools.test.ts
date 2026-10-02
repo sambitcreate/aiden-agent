@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { AssistantImages, ClassifierResult, ImageContent, Usage } from "@earendil-works/pi-ai";
+import { createPiModelTools, type PiModelToolsHost } from "./pi-model-tools.js";
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const image: ImageContent = { type: "image", mimeType: "image/png", data: PNG };
+const usage: Usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } };
+const questionSet = {
+  category: { type: "choice", instructions: "Choose the topic", criteria: { code: "Software", other: "Other topics" } },
+  urgency: { type: "score", instructions: "Rate urgency", criteria: ["Low", "High"] },
+  relevant: { type: "bool", instructions: "Is it relevant?", criteria: { true: "Relevant", false: "Irrelevant" } },
+};
+function fixture() {
+  const catalog = [
+    { type: "image", provider: "fixture", id: "image", name: "Image", api: "fixture-images", baseUrl: "https://secret.invalid", headers: { Authorization: "must-never-leak" } },
+    { type: "classifier", provider: "fixture", id: "classifier", name: "Classifier", api: "fixture-classifier", baseUrl: "https://secret.invalid" },
+  ];
+  const controls = {
+    catalog, spoof: false, imageCalls: 0, classifyCalls: 0, listed: 0,
+    imageSignal: undefined as AbortSignal | undefined, classifierSignal: undefined as AbortSignal | undefined,
+    imageEffect: undefined as (() => void) | undefined,
+    imageResult: { api: "fixture-images", provider: "fixture", model: "image", output: [image], usage, stopReason: "stop", timestamp: 1 } as AssistantImages,
+    classifierResult: { api: "fixture-classifier", provider: "fixture", model: "classifier", answers: {
+      category: { type: "choice", choice: "code", probabilities: { code: 0.9, other: 0.1 }, confidence: 0.9 },
+      urgency: { type: "score", score: 0.7, confidence: 0.8 }, relevant: { type: "bool", probability: 0.95 },
+    }, usage, stopReason: "stop", timestamp: 1 } as ClassifierResult,
+  };
+  const models = {
+    getAvailableOfType: async (type: string) => { controls.listed++; return catalog.filter((entry) => entry.type === type); },
+    getModelOfType: (type: string, provider: string, id: string) => controls.spoof ? catalog[1] : catalog.find((entry) => entry.type === type && entry.provider === provider && entry.id === id),
+    generateImages: async (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => { controls.imageCalls++; controls.imageSignal = options.signal; controls.imageEffect?.(); return controls.imageResult; },
+    classify: async (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => { controls.classifyCalls++; controls.classifierSignal = options.signal; return controls.classifierResult; },
+  } as unknown as PiModelToolsHost["models"];
+  const staged: ImageContent[] = [];
+  const tools = createPiModelTools({ models, onImage: async (_id, item) => { staged.push(item); } });
+  const get = (name: string) => tools.find((tool) => tool.name === name)!;
+  return { controls, models, tools, get, staged };
+}
+const imageRequest = { provider: "fixture", model: "image", prompt: "Draw a small lighthouse" };
+const classifierRequest = { provider: "fixture", model: "classifier", state: { subject: "Please review this code", count: 2 }, questions: questionSet };
+
+test("operation inventory includes only projected image/classifier metadata, never credentials or endpoints", async () => {
+  const { get, controls } = fixture();
+  const result = await get("list_operation_models").execute("list", {});
+  assert.deepEqual(result.structuredContent, { models: [
+    { provider: "fixture", model: "image", label: "Image", type: "image" },
+    { provider: "fixture", model: "classifier", label: "Classifier", type: "classifier" },
+  ], truncated: false });
+  assert.doesNotMatch(JSON.stringify(result), /secret.invalid|Authorization|must-never-leak/);
+  assert.equal(controls.imageCalls + controls.classifyCalls, 0);
+  const single = await get("list_operation_models").execute("list", { type: "classifier" });
+  assert.equal((single.structuredContent as { models: unknown[] }).models.length, 1);
+  controls.catalog.push(...Array.from({ length: 105 }, (_, i) => ({ ...controls.catalog[0]!, id: `image-${i}` })));
+  const bounded = await get("list_operation_models").execute("list", { type: "image" });
+  assert.equal((bounded.structuredContent as { models: unknown[] }).models.length, 100);
+  assert.equal((bounded.structuredContent as { truncated: boolean }).truncated, true);
+});
+
+test("image generation validates an entire batch before staging and carries usage", async () => {
+  const { get, staged, controls } = fixture();
+  const signal = new AbortController().signal;
+  const result = await get("generate_image").execute("generate", imageRequest, signal);
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content.filter((part) => part.type === "image").length, 1);
+  assert.deepEqual(staged, [image]);
+  assert.deepEqual(result.usage, usage);
+  assert.equal(controls.imageSignal, signal);
+  staged.length = 0;
+  controls.imageResult.output = [image, { ...image, data: "!!!!" }];
+  const invalid = await get("generate_image").execute("invalid", imageRequest);
+  assert.equal(invalid.isError, true);
+  assert.deepEqual(invalid.usage, usage);
+  assert.deepEqual(staged, [], "a later malformed image must not leave earlier images staged");
+});
+
+test("model type and request validation reject endpoints, credentials, oversized input and wrong inventories before requests", async () => {
+  const { get, controls } = fixture();
+  for (const args of [{ ...imageRequest, endpoint: "https://attacker.invalid" }, { ...imageRequest, apiKey: "secret" },
+    { ...imageRequest, prompt: "x".repeat(16_385) }, { ...imageRequest, model: "classifier" }]) {
+    await assert.rejects(get("generate_image").execute("invalid", args));
+  }
+  controls.spoof = true;
+  await assert.rejects(get("generate_image").execute("wrong-kind", imageRequest), /Unknown image model/);
+  assert.equal(controls.imageCalls, 0);
+});
+
+test("image errors, cancellation, output limits and artifact failures retain billed usage without success artifacts", async () => {
+  const { get, controls, staged, models } = fixture();
+  for (const stopReason of ["error", "aborted"] as const) {
+    controls.imageResult.stopReason = stopReason;
+    const result = await get("generate_image").execute("failed", imageRequest);
+    assert.equal(result.isError, true); assert.deepEqual(result.usage, usage); assert.equal(staged.length, 0);
+  }
+  controls.imageResult.stopReason = "stop";
+  for (const output of [Array.from({ length: 5 }, () => image), [{ ...image, data: Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64") }], [{ ...image, mimeType: "image/jpeg" }], []]) {
+    controls.imageResult.output = output;
+    const result = await get("generate_image").execute("oversized", imageRequest);
+    assert.equal(result.isError, true); assert.deepEqual(result.usage, usage); assert.equal(staged.length, 0);
+  }
+  controls.imageResult.output = [image];
+  const controller = new AbortController();
+  controls.imageEffect = () => controller.abort();
+  const cancelled = await get("generate_image").execute("cancelled", imageRequest, controller.signal);
+  assert.equal(cancelled.isError, true); assert.deepEqual(cancelled.usage, usage); assert.equal(staged.length, 0);
+  controls.imageEffect = undefined;
+  const failingArtifact = createPiModelTools({ models, onImage: async () => { throw new Error("Disk full"); } }).find((tool) => tool.name === "generate_image")!;
+  const result = await failingArtifact.execute("disk", imageRequest);
+  assert.equal(result.isError, true); assert.deepEqual(result.usage, usage);
+});
+
+test("classification supports choice, score and bool answers with bounded structured state and usage", async () => {
+  const { get, controls } = fixture();
+  const signal = new AbortController().signal;
+  const result = await get("classify").execute("classification", classifierRequest, signal);
+  assert.deepEqual(result.structuredContent, { answers: controls.classifierResult.answers });
+  assert.deepEqual(result.usage, usage);
+  assert.equal(controls.classifierSignal, signal);
+  assert.equal(controls.classifyCalls, 1);
+});
+
+test("malformed classifier questions/state cannot trigger requests or evaluate accessors", async () => {
+  const { get, controls } = fixture();
+  const cycle: Record<string, unknown> = {}; cycle.self = cycle;
+  let accessed = false;
+  for (const state of [[], cycle, { text: "x".repeat(32_769) }, { get secret() { accessed = true; return "private"; } }]) {
+    await assert.rejects(get("classify").execute("invalid", { ...classifierRequest, state }));
+  }
+  for (const questions of [{}, { q: { type: "boolean", instructions: "x", criteria: {} } },
+    { q: { type: "bool", instructions: "x", criteria: { true: "yes" } } },
+    { q: { type: "score", instructions: "x", criteria: ["one"] } },
+    { q: { type: "choice", instructions: "x", criteria: { only: "One" }, endpoint: "extra" } }]) {
+    await assert.rejects(get("classify").execute("invalid", { ...classifierRequest, questions }));
+  }
+  assert.equal(accessed, false); assert.equal(controls.classifyCalls, 0);
+});
+
+test("classifier provider failures and invalid answer identities preserve usage and never present partial answers", async () => {
+  const { get, controls } = fixture();
+  controls.classifierResult.stopReason = "error";
+  const failure = await get("classify").execute("error", classifierRequest);
+  assert.equal(failure.isError, true); assert.deepEqual(failure.usage, usage);
+  controls.classifierResult.stopReason = "stop";
+  controls.classifierResult.answers.category = { type: "choice", choice: "unrequested", probabilities: { unrequested: 1 }, confidence: 1 };
+  const invalid = await get("classify").execute("invalid", classifierRequest);
+  assert.equal(invalid.isError, true); assert.equal(invalid.structuredContent, undefined); assert.deepEqual(invalid.usage, usage);
+  await assert.rejects(get("classify").execute("aborted", classifierRequest, AbortSignal.abort()), /abort/i);
+  assert.equal(controls.classifyCalls, 2);
+});
