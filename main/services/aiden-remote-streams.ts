@@ -59,6 +59,13 @@ const STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_PERSIST_COALESCE_MS = 250;
+const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "approval_required",
+  "question_required",
+  "cancelled",
+  "snapshot",
+]);
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
 const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
 const MAX_ACTIVITY_PROJECTION_CHATS = 200;
@@ -441,6 +448,7 @@ export class AidenRemoteStreamService {
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
   private persistRunning = false;
+  private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceError: unknown;
   private readonly idempotency: AidenIdempotencyLedger;
 
@@ -474,6 +482,14 @@ export class AidenRemoteStreamService {
       notifyApprovalChanged?: (chatId: string) => void;
       snapshot?: AidenRemoteStreamSnapshot;
       persist?: (snapshot: AidenRemoteStreamSnapshot) => Promise<void>;
+      /**
+       * Streaming content (deltas, timeline, tool progress) is journaled at
+       * most this many milliseconds (default 250) after it arrives; terminal,
+       * prompt, cancel, snapshot and state-change events are written at once.
+       * A crash can therefore lose up to this window of non-boundary events;
+       * restart still recovers the stream as `server_interrupted`.
+       */
+      persistCoalesceMs?: number;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       onPersistenceError?: (error: unknown) => void;
@@ -654,6 +670,9 @@ export class AidenRemoteStreamService {
 
   private persist(): void {
     if (!this.options.persist) return;
+    // The snapshot taken below already includes any coalesced events.
+    clearTimeout(this.persistTimer);
+    this.persistTimer = undefined;
     this.persistDirty = true;
     if (this.persistRunning) return;
     this.persistRunning = true;
@@ -674,8 +693,20 @@ export class AidenRemoteStreamService {
       });
   }
 
+  private schedulePersist(): void {
+    if (!this.options.persist || this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.persist();
+    }, this.options.persistCoalesceMs ?? DEFAULT_PERSIST_COALESCE_MS);
+    this.persistTimer.unref?.();
+  }
+
   async settlePersistence(): Promise<void> {
-    while (this.persistRunning || this.persistDirty) await this.persistTail;
+    while (this.persistTimer || this.persistRunning || this.persistDirty) {
+      if (this.persistTimer) this.persist();
+      await this.persistTail;
+    }
     if (this.persistenceError) throw this.persistenceError;
   }
 
@@ -894,6 +925,13 @@ export class AidenRemoteStreamService {
     state?: AidenRemoteStreamState,
   ): AidenRemoteStreamEvent {
     if (terminal(stream.state)) return stream.events[stream.events.length - 1]!;
+    // A new journal, any state transition, and every event a client must not
+    // miss across a crash are durable boundaries; plain content is coalesced.
+    const boundary =
+      isTerminal ||
+      IMMEDIATE_PERSIST_EVENT_TYPES.has(type) ||
+      stream.events.length === 0 ||
+      (state !== undefined && state !== stream.state);
     const event: AidenRemoteStreamEvent = {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
       streamId: stream.streamId,
@@ -937,7 +975,8 @@ export class AidenRemoteStreamService {
       }
       this.options.notifyChatChanged?.(stream.chatId);
     }
-    this.persist();
+    if (boundary) this.persist();
+    else this.schedulePersist();
     return event;
   }
 
