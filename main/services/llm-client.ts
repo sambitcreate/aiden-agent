@@ -1,5 +1,5 @@
 import { providerRegistry } from "./provider-registry.js";
-import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
@@ -20,7 +20,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 
 import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
-import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -210,6 +210,7 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  updateGenerationContextOptions,
   chatContextPressureFromProjection,
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
@@ -450,6 +451,7 @@ interface ActiveGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
@@ -471,6 +473,7 @@ const initializing = new Map<
     chatId: string;
     owner: ChatGenerationOwner;
     removeOwnerInvalidation: () => void;
+    stopCacheWarming?: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
@@ -1690,6 +1693,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
+      stopCacheWarming: undefined as (() => void) | undefined,
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
@@ -2588,12 +2592,7 @@ export const llmClient = {
           tools: [...runtimeTools],
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
-        generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
-        assertGenerationContextCapacity({
-          contextWindow: model.contextWindow,
-          systemPrompt: generationContextOptions.systemPrompt,
-          tools: runtimeTools,
-        });
+        updateGenerationContextOptions(generationContextOptions, prepared);
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.
@@ -2605,16 +2604,30 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
-      if (cacheWarmingEnabled && !isLocalModelProvider(runtime.provider) && !preparedBotContext && !options.usageSource && owner.id !== 0 && authoritativeMode !== "assistant-automation") {
+      if (canWarmForegroundChat({
+        enabled: cacheWarmingEnabled,
+        local: isLocalModelProvider(runtime.provider),
+        bot: Boolean(preparedBotContext),
+        owner,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        mode: authoritativeMode,
+      })) {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          isCurrent: () => {
+            const generation = active.get(streamId) ?? initializing.get(streamId);
+            return !!generation && generation.owner === owner && !generation.cancelRequested &&
+              !generation.rendererDetached && !owner.isDestroyed();
+          },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
         });
       }
+      initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       candidate = new PiAgentRuntimeHarness({
@@ -2739,13 +2752,7 @@ export const llmClient = {
           if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
-            assertGenerationContextCapacity({
-              ...generationContextOptions,
-              systemPrompt: getCurrentSystemPrompt(nextContext.messages),
-              tools: nextContext.tools ?? [],
-            });
-            generationContextOptions.tools = nextContext.tools ?? [];
-            generationContextOptions.systemPrompt = getCurrentSystemPrompt(nextContext.messages);
+            updateGenerationContextOptions(generationContextOptions, nextContext);
           }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
@@ -3637,6 +3644,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
+      stopCacheWarming: initialization.stopCacheWarming,
       workspaceId: initialization.workspaceId,
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
@@ -3941,14 +3949,6 @@ export const llmClient = {
     return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
-  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
-    const generation = active.get(streamId);
-    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
-      return false;
-    }
-    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
-  },
-
   /**
    * Release renderer-owned interaction surfaces without stopping the
    * main-owned model operation. Terminal chat state is reconciled by the
@@ -3968,6 +3968,7 @@ export const llmClient = {
     if (generation) generation.rendererDetached = true;
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
+    runtimeOwner.stopCacheWarming?.();
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();

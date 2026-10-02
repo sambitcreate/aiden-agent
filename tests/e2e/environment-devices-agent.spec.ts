@@ -164,7 +164,8 @@ test.describe("Simulator agent tools", () => {
       expect(opened).toContain("--config");
       expect(opened).toContain("--session");
       expect(opened).toContain("snapshot -i");
-      expect(opened).not.toMatch(/adb|android/iu);
+      // A session hash can contain "adb" without recommending the adb command.
+      expect(opened).not.toMatch(/\b(?:adb|android)\b/iu);
       expect(located).toMatch(/devices\/bin\/agent-device/u);
       expect(located).toContain("aiden e2e fake");
       expect(refused).toContain("Call device_open first");

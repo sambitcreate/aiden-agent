@@ -2,11 +2,30 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createHash } from "node:crypto";
 import type { Api, AssistantMessage, TranscriptContext, Model, SimpleStreamOptions, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { UsageRequestSource } from "./usage-store-core.js";
+import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import type { ChatStartParams } from "./types.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
 const MAX_AGE_MS = 60 * 60_000;
 const MIN_SAVINGS_USD = 0.05;
 const activeWarmers = new Set<PiCacheWarmer>();
+
+/** Accounting provenance is separate from the attended renderer authority. */
+export function canWarmForegroundChat(options: {
+  enabled: boolean;
+  local: boolean;
+  bot: boolean;
+  owner: Pick<ChatGenerationOwner, "id" | "kind" | "isDestroyed">;
+  usageSource?: UsageRequestSource;
+  interactionSurface?: "telegram";
+  mode?: ChatStartParams["mode"];
+}): boolean {
+  return options.enabled && !options.local && !options.bot && options.owner.id > 0 && options.owner.kind !== "remote" && !options.owner.isDestroyed() &&
+    (options.usageSource === undefined || options.usageSource === "chat") &&
+    options.interactionSurface === undefined && options.mode !== "assistant-automation";
+}
+
 
 export function stopAllPiCacheWarmers(): void {
   for (const warmer of activeWarmers) warmer.dispose();
@@ -56,6 +75,7 @@ interface WarmRun {
   delayMs: number;
   deadlineAt: number;
   promptTokens: number;
+  spentUsd: number;
   controller: AbortController;
   removeAbort: () => void;
   timer?: unknown;
@@ -64,6 +84,8 @@ interface WarmRun {
 export interface PiCacheWarmerDependencies {
   signal: AbortSignal;
   enabled(): Promise<boolean>;
+  /** Current attended generation ownership, independent of accounting provenance. */
+  isCurrent(): boolean;
   /** Resolve credentials only when dispatching, never retain them in a timer. */
   resolveRuntime(signal: AbortSignal): Promise<ResolvedModelRuntime>;
   recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime): Promise<void>;
@@ -91,7 +113,7 @@ export class PiCacheWarmer {
     const ttlMs = retention === "none" ? 0 : (model.promptCache?.[retention] ?? 0) * 1000;
     // Payload rewrites, arbitrary sampling/metadata and deferred requests cannot be
     // replayed faithfully without retaining callbacks or opaque authority.
-    if (this.disposed || options.signal?.aborted || !Number.isFinite(ttlMs) || ttlMs <= 10_000 || options.headers || options.onPayload || (options as ModelsSimpleStreamOptions).transformHeaders || options.samplingParams || options.metadata || options.env || options.deferred || model.samplingParams ||
+    if (this.disposed || !this.deps.isCurrent() || options.signal?.aborted || !Number.isFinite(ttlMs) || ttlMs <= 10_000 || options.headers || options.onPayload || (options as ModelsSimpleStreamOptions).transformHeaders || options.samplingParams || options.metadata || options.env || options.deferred || model.samplingParams ||
       (options.reasoning && model.api === "anthropic-messages" && (model as Model<"anthropic-messages">).compat?.forceAdaptiveThinking !== true)) return () => {};
     const controller = new AbortController();
     const requestSignal = options.signal;
@@ -106,7 +128,7 @@ export class PiCacheWarmer {
       },
       cost: structuredClone(model.cost), startedAt: this.clock.now(), ttlMs,
       delayMs: Math.floor(Math.min(ttlMs * 0.9, ttlMs - 10_000)), deadlineAt: 0,
-      promptTokens: 0, controller,
+      promptTokens: 0, spentUsd: 0, controller,
       removeAbort: () => requestSignal?.removeEventListener("abort", cancel),
     };
     this.run = run;
@@ -140,12 +162,13 @@ export class PiCacheWarmer {
     run.deadlineAt = nextAt + Math.floor((run.ttlMs - run.delayMs) / 2);
     const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
     if (this.run !== run) return;
-    if (!economics || economics.expectedSavings < MIN_SAVINGS_USD || nextAt > run.startedAt + MAX_AGE_MS || this.clock.now() > run.deadlineAt) { this.stop(); return; }
+    if (!this.deps.isCurrent()) { this.stop(); return; }
+    if (!economics || economics.expectedSavings - run.spentUsd < MIN_SAVINGS_USD || nextAt > run.startedAt + MAX_AGE_MS || this.clock.now() > run.deadlineAt) { this.stop(); return; }
     run.timer = this.clock.setTimeout(() => void this.refresh(run), Math.max(0, nextAt - this.clock.now()));
   }
 
   private current(run: WarmRun): boolean {
-    return this.run === run && !run.controller.signal.aborted && !this.deps.signal.aborted && this.clock.now() <= run.deadlineAt && this.clock.now() <= run.startedAt + MAX_AGE_MS;
+    return this.run === run && this.deps.isCurrent() && !run.controller.signal.aborted && !this.deps.signal.aborted && this.clock.now() <= run.deadlineAt && this.clock.now() <= run.startedAt + MAX_AGE_MS;
   }
 
   private async refresh(run: WarmRun): Promise<void> {
@@ -155,6 +178,11 @@ export class PiCacheWarmer {
       const runtime = await this.deps.resolveRuntime(run.controller.signal);
       if (!this.current(run) || modelIdentity(runtime.model) !== run.identity || !(await this.deps.enabled())) { if (this.run === run) this.stop(); return; }
       if (!this.current(run)) { if (this.run === run) this.stop(); return; }
+      const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
+      if (!economics || economics.expectedSavings - run.spentUsd < MIN_SAVINGS_USD) { this.stop(); return; }
+      // One replayed prefix can avoid only one future miss. Reserve this request's
+      // estimated cost before dispatch; every later refresh shares that budget.
+      run.spentUsd += economics.warmCost;
       const dispatchedAt = this.clock.now();
       const message = await runtime.streams.streamSimple(runtime.model, run.context, {
         ...run.options, apiKey: runtime.apiKey, headers: runtime.headers,
@@ -162,6 +190,10 @@ export class PiCacheWarmer {
       }).result();
       // Account provider usage even when cancellation races a completed response.
       await this.deps.recordUsage(message, runtime);
+      const reportedCost = message.usage.cost.total;
+      if (Number.isFinite(reportedCost) && reportedCost > economics.warmCost) {
+        run.spentUsd += reportedCost - economics.warmCost;
+      }
       if (message.stopReason === "error" || message.stopReason === "aborted") { if (this.run === run) this.stop(); return; }
       if (this.run === run) this.schedule(run, dispatchedAt);
     } catch {
