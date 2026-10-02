@@ -7,6 +7,7 @@ import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
+  visibleOnboardingFeatures,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider.js";
 import type { Provider } from "../lib/types.js";
@@ -325,13 +326,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
-  assert.match(source, /if \(!capabilities\.bots && feature\.id === "bots"\) continue/u);
   assert.match(source, /data-onboarding-feature-count=\{visibleFeatureBentos\.length\}/u);
-  assert.match(
-    source,
-    /if \(!capabilities\.computerUse && feature\.id === "computerUse"\) continue/u,
-  );
-  assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
   assert.match(source, /FEATURE_LAYOUTS[\s\S]*?col-span-4 row-span-2/u);
   assert.match(source, /group-hover:opacity-100/u);
   assert.match(source, /group-focus:opacity-100/u);
@@ -339,7 +334,6 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     source,
     /Use Command-K or \/ for app commands, and \$ to attach a reusable skill\./u,
   );
-  assert.match(source, /Use Ctrl-K or \/ for app commands/u);
   assert.match(
     source,
     /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
@@ -353,7 +347,6 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
-  assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
   assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
   for (const group of [
     "Build in your workspace",
@@ -484,4 +477,22 @@ test("provider onboarding explains separate opt-in and cloud speech privacy with
 
 test("feature tour introduces native folder browsing and source previews", () => {
   assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
+});
+
+
+test("Linux feature filtering retains classifier setup and approval disclosures while adapting shortcuts", () => {
+  const features = [
+    { id: "models", description: "Enable local classification in More options; approve sending data and possible provider charges." },
+    { id: "commands", description: "Use Command-K to open commands." },
+    { id: "computerUse", description: "Control the desktop." },
+    { id: "bots", description: "Configure a Bot." },
+  ];
+  const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false });
+  assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
+  assert.match(linux[0]!.description, /More options; approve sending data and possible provider charges/u);
+  assert.match(linux[1]!.description, /Ctrl-K/u);
+  assert.equal(features[1]!.description, "Use Command-K to open commands.");
+  const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true });
+  assert.equal(mac.length, 4);
+  assert.match(mac[0]!.description, /More options; approve sending data and possible provider charges/u);
 });

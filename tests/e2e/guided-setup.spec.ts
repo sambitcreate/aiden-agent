@@ -80,3 +80,46 @@ test("Create a bot submits limited access in two steps and retains a failed draf
   await editor.getByRole("button", { name: "Back", exact: true }).click();
   await expect(editor.getByPlaceholder("Release reviewer")).toHaveValue("Writing bot");
 });
+
+
+test("feature gallery reveals complete descriptions through keyboard focus at narrow widths", async ({ aiden }) => {
+  const { page } = aiden;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const width of [1000, 600, 390]) {
+    await aiden.app.evaluate(({ BrowserWindow }, nextWidth) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setMinimumSize(320, 400);
+      window.setSize(nextWidth, 800);
+    }, width);
+    const scripts = onboarding.getByRole("article", { name: /^Tool Scripts\./u });
+    await scripts.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(scripts).toBeFocused();
+    for (const name of [/^Tool Scripts\./u, /^Attachments & Vision\./u, /^Model Freedom\./u]) {
+      const tile = onboarding.getByRole("article", { name });
+      await tile.focus();
+      await tile.scrollIntoViewIfNeeded();
+      const description = tile.locator("[data-onboarding-feature-description]");
+      await expect.poll(() => description.evaluate((element) => {
+        const overlay = element.parentElement!.parentElement!;
+        return getComputedStyle(overlay).opacity;
+      })).toBe("1");
+      const bounds = await description.evaluate((element) => {
+        const text = element.getBoundingClientRect();
+        const card = element.closest("article")!.getBoundingClientRect();
+        return { top: text.top - card.top, bottom: card.bottom - text.bottom, left: text.left - card.left, right: card.right - text.right };
+      });
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeGreaterThanOrEqual(0);
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeGreaterThanOrEqual(0);
+    }
+  }
+});

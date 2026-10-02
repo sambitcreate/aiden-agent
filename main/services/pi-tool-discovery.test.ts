@@ -97,3 +97,19 @@ test("namespace output is bounded and oversized inventories reject instead of pa
   const excessive = createPiToolDiscovery({ tools: () => Array.from({ length: 513 }, (_, i) => tool(`tool_${i}`)), isCallable: () => true });
   assert.throws(() => excessive.searchTools(""), /exceeds 512/);
 });
+
+
+test("server descriptions make otherwise generic tools discoverable without exposing excluded servers", () => {
+  const generic = tool("query", "mcp:warehouse");
+  generic.discovery!.description = "Inventory and shipment tracking";
+  const specific = tool("shipment_status", "mcp:shipping");
+  const excluded = tool("secret", "mcp:private");
+  excluded.discovery!.description = "Private shipment records";
+  let admitted = [generic, specific, excluded];
+  const discovery = createPiToolDiscovery({ tools: () => admitted, isCallable: (candidate) => candidate !== excluded });
+  assert.deepEqual(names(discovery.searchTools("shipment")), ["shipment_status", "query"]);
+  assert.deepEqual(names(discovery.searchTools("inventory")), ["query"]);
+  assert.deepEqual(names(discovery.searchTools("inventory", { namespace: "mcp:shipping" })), []);
+  admitted = [specific, excluded];
+  assert.deepEqual(names(discovery.searchTools("inventory")), []);
+});
