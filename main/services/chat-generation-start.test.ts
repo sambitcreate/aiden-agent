@@ -192,7 +192,7 @@ test("desktop execution options hand off the appended turn only for its exact ow
   assert.equal(admission.handoff("chat-a", options.turnId, "renderer-document-2", () => {
     events.push("stolen");
   }), false);
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   assert.equal(admission.isAdmitted("chat-a"), true);
 
   assert.equal(
