@@ -19,7 +19,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 
 import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
-import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -209,6 +209,7 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  updateGenerationContextOptions,
   chatContextPressureFromProjection,
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
@@ -2541,12 +2542,7 @@ export const llmClient = {
           tools: [...runtimeTools],
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
-        generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
-        assertGenerationContextCapacity({
-          contextWindow: model.contextWindow,
-          systemPrompt: generationContextOptions.systemPrompt,
-          tools: runtimeTools,
-        });
+        updateGenerationContextOptions(generationContextOptions, prepared);
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.
@@ -2692,13 +2688,7 @@ export const llmClient = {
           if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
-            assertGenerationContextCapacity({
-              ...generationContextOptions,
-              systemPrompt: getCurrentSystemPrompt(nextContext.messages),
-              tools: nextContext.tools ?? [],
-            });
-            generationContextOptions.tools = nextContext.tools ?? [];
-            generationContextOptions.systemPrompt = getCurrentSystemPrompt(nextContext.messages);
+            updateGenerationContextOptions(generationContextOptions, nextContext);
           }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
