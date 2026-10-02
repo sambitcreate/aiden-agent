@@ -478,21 +478,23 @@ test("feature tour introduces native folder browsing and source previews", () =>
 });
 
 
-test("Linux feature filtering retains classifier setup and approval disclosures while adapting shortcuts", () => {
+test("platform feature filtering preserves classifier consent and unavailable-feature boundaries", () => {
   const features = [
-    { id: "models", description: "Enable local classification in More options; approve sending data and possible provider charges." },
+    { id: "models", description: "Platform model choices" },
     { id: "commands", description: "Use Command-K to open commands." },
     { id: "computerUse", description: "Control the desktop." },
     { id: "bots", description: "Configure a Bot." },
   ];
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
-  assert.match(linux[0]!.description, /More options.*approve sending it; provider charges/u);
+  assert.match(linux[0]!.description, /classifiers.*approve sending it; provider charges/u);
+  assert.match(linux[0]!.description, /Enable local llama.cpp classification.*More options/u);
   assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
   const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true });
   assert.equal(mac.length, 4);
-  assert.match(mac[0]!.description, /More options.*approve sending it; provider charges/u);
   assert.match(mac[0]!.description, /Apple models/u);
+  assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
+  assert.match(mac[0]!.description, /Enable local llama.cpp classification.*More options/u);
 });
