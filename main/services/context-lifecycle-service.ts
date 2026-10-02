@@ -1,5 +1,5 @@
 import { createModels } from "@earendil-works/pi-ai";
-import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, parseCompactionModelOverrides, resolveCompactionModelBudget, type CompactionEngine, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
 import { type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { estimateTokens } from "./pi-legacy-harness.js";
@@ -44,6 +44,7 @@ export type CompactChatResult =
 
 export interface ContextLifecycleServiceDeps {
   getCompactionEngine?(): Promise<CompactionEngine>;
+  getCompactionPreferences?(): Promise<{ compactionEngine?: CompactionEngine; compactionModelOverrides?: CompactionModelOverrides }>;
   resolveLocalModel?(
     providerId: string,
     model: string,
@@ -111,8 +112,12 @@ export class ContextLifecycleService {
     engineOverride?: CompactionEngine,
   ): Promise<CompactChatResult> {
     const startedAt = performance.now();
+    const preferences = await this.deps.getCompactionPreferences?.();
+    const modelOverrides = preferences?.compactionModelOverrides
+      ? parseCompactionModelOverrides(preferences.compactionModelOverrides)
+      : undefined;
     const engine = compactionEngineFrom(
-      engineOverride ?? (await this.deps.getCompactionEngine?.()),
+      engineOverride ?? preferences?.compactionEngine ?? (await this.deps.getCompactionEngine?.()),
     );
     if (this.deps.compactionEnabled?.() === false) {
       return { compacted: false, reason: "already_compact" };
@@ -196,6 +201,7 @@ export class ContextLifecycleService {
       const coordinator = new PiCompactionCoordinator({
         session,
         engine,
+        settings: resolveCompactionModelBudget(modelOverrides, model, engine),
         models: runtime
           ? createPiCompactionModels(runtime, (message) =>
               this.deps.recordUsage?.(message, runtime!),
