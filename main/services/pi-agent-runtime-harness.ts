@@ -1,19 +1,5 @@
-import {
-  Agent,
-  type AfterToolCallContext,
-  type AfterToolCallResult,
-  type AgentEvent,
-  type AgentMessage,
-  type AgentOptions,
-  type AgentState,
-  type AgentTool,
-  type AgentHarnessResources,
-  type AgentHarnessStreamOptions,
-  type AgentHarnessStreamOptionsPatch,
-  type BeforeToolCallContext,
-  type BeforeToolCallResult,
-  formatSkillsForSystemPrompt,
-} from "@earendil-works/pi-agent-core";
+import { Agent, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
+import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
   getCurrentSystemPrompt,
   getCurrentSystemMessage,
@@ -761,9 +747,9 @@ async function waitForManagedPromise<T>(
 /**
  * Aiden's Pi-shaped runtime boundary.
  *
- * Pi 0.87.1's public AgentHarness owns a different session lifecycle and
- * silently falls back to parallel tool execution. This adapter keeps Aiden's
- * durable journal/compaction protocol while centralizing the stable Pi Agent
+ * Pi 1.0 removed its experimental AgentHarness. This adapter keeps Aiden's
+ * durable journal/compaction protocol and sequential tools while centralizing
+ * the stable Pi 1.0 Agent
  * surface that both foreground and child runs need. It is deliberately the
  * only place future trusted Pi extension adapters should contribute tools,
  * prompt resources, hooks, and passive events.

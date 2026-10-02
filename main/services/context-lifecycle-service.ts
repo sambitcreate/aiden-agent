@@ -1,7 +1,8 @@
 import { createModels } from "@earendil-works/pi-ai";
 import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
-import { estimateTokens, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { estimateTokens } from "./pi-legacy-harness.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 import { createPiCompactionModels, PiCompactionCoordinator } from "./pi-compaction-core.js";
 import {

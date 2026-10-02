@@ -1,7 +1,7 @@
 import { createVccRecallTool } from "../pi-vcc/recall.js";
 import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
-import { convertToLlm } from "@earendil-works/pi-agent-core";
+import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
   AgentMessage,
   AgentTool,

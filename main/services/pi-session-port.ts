@@ -1,15 +1,5 @@
-import {
-  branchTip,
-  createBranchSummaryMessage,
-  createCompactionSummaryMessage,
-  insertEntry,
-  setValue,
-  Session,
-  type AgentMessage,
-  type JsonValue,
-  type Entry,
-  TODO_CONTEXT,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { branchTip, createBranchSummaryMessage, createCompactionSummaryMessage, insertEntry, setValue, Session, type JsonValue, type Entry, TODO_CONTEXT } from "./pi-legacy-harness.js";
 import type { Usage } from "@earendil-works/pi-ai";
 
 export interface PiSessionMetadata {

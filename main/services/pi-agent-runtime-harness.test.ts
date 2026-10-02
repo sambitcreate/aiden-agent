@@ -12,7 +12,8 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { convertToLlm, type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
@@ -219,6 +220,28 @@ test("Pi runtime harness preserves sequential execution for effectful tool batch
     "second_effect:start",
     "second_effect:end",
   ]);
+});
+
+test("Pi 1.0 records requested thinking level through the legacy journal boundary", async () => {
+  const checkpoint = createCompactionSummaryMessage("Keep migration decision", 10_000, 1);
+  const { harness } = testHarness([fauxAssistantMessage("Continued on the current agent")], {
+    initialState: { thinkingLevel: "high", messages: [checkpoint] },
+  });
+  await harness.prompt("Continue");
+  const response = harness.state.messages.find((message) => message.role === "assistant");
+  assert.ok(response && response.role === "assistant");
+  // 0.87.1 did not record the requested level. This exercises the actual host
+  // runtime instead of merely checking which package version was installed.
+  assert.equal(response.thinkingLevel, "high");
+  const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: "pi-one-replay" }));
+  await session.appendMessage(checkpoint);
+  await session.appendMessage(response);
+  const reopenedContext = await session.buildContext();
+  assert.deepEqual(reopenedContext.messages, [checkpoint, response]);
+  const projected = convertToLlm(reopenedContext.messages);
+  assert.equal(projected[0]?.role, "user");
+  assert.match(JSON.stringify(projected[0]), /Keep migration decision/u);
+  assert.equal(projected[1]?.role === "assistant" && projected[1].thinkingLevel, "high");
 });
 
 test("extension observer failures are reported without corrupting the Pi turn", async () => {
