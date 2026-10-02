@@ -1,6 +1,6 @@
 # Mobile task progress and subagents
 
-Status: Active — read-only task progress and agent inspection implemented and automated validation passed; PR review and physical UI acceptance remain. Optional mutation controls remain separate.
+Status: Active — read-only task progress and agent inspection merged in [PR #123](https://github.com/sambitcreate/aiden-agent/pull/123) on 2026-09-15; physical UI acceptance remains. Optional mutation controls remain separate; the first one, a confirmed single-agent Stop from the iOS and Android agent sheets, merged in [PR #275](https://github.com/sambitcreate/aiden-agent/pull/275) on 2026-09-30 (Aiden Remote contract revision 16).
 Date: 2026-09-14
 
 ## Outcome and scope

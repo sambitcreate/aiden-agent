@@ -1,6 +1,6 @@
 # Mobile transcript polish (Hermex Tier 1)
 
-Branch `feature/mobile-transcript-polish`. Plan: `docs/plans/mobile-transcript-polish-plan.md`.
+Branch `feature/mobile-transcript-polish`. Plan: `docs/plans/completed/mobile-transcript-polish-plan.md`.
 
 - There was no protocol change. "Worked for" reads `Message.timeline`, but only when the status is completed and `finishedAt >= startedAt`. The live timer uses the running timeline's `startedAt` and otherwise falls back to the newest user message's `createdAt`. Timestamps use `createdAt`.
 - iOS code lives in `Features/Chat/AidenTranscriptPolish.swift`. It is a new file because `AidenChatFeature.swift` is far over the 500-line Swift warning, and it is registered manually in the pbxproj with IDs `A714739233F64F4FA4C2B700` and `...710`. The footer replaced the old safeAreaInset copy/read-aloud row. `AidenSettledMessageRows` computes `showsFooter`, so Bot clusters show it only on the last joined bubble.
@@ -9,3 +9,5 @@ Branch `feature/mobile-transcript-polish`. Plan: `docs/plans/mobile-transcript-p
 - SwiftUI `.textSelection` and Compose `SelectionContainer` cannot add custom menu items, so selection uses a native select-text sheet/dialog. On iOS this is a `UITextView` with `editMenuForTextIn`; on Android it is a `TextView` with `customSelectionActionModeCallback`.
 - User messages are now copyable on iOS. `copyText` returns nil only for empty text.
 - Open items: flatten Markdown in the Android select-text dialog, and focus the Android composer after Ask.
+
+Status (2026-10-01): merged in PR #277 and shipped in 0.51.0; plan moved to `docs/plans/completed/`. Physical-device visual acceptance remains.

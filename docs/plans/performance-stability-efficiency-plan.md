@@ -1,6 +1,6 @@
 # Performance, Stability, Battery, and Efficiency Master Plan
 
-Status: planned; source audit complete, implementation not started  
+Status: planned; source audit complete, phased implementation not started. Separate targeted performance fixes landed outside this phase sequence (#282–#288; 0.51.0 and later, evidence in `docs/performance/`) and do not complete any phase here.  
 Date: 2026-07-27  
 Audit snapshot: dirty working tree on `feature/aiden-assistant-plan-777723` at `7299340282f84fb816f1615f54a27bf97390f6fe`; findings refer to the current filesystem, not only `HEAD`  
 Scope: Electron main/preload, React renderer, native helpers, storage, IPC, networking, background services, packaging, and macOS lifecycle
