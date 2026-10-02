@@ -32,6 +32,7 @@ export const storeFor = (dir: string) => {
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
+  if (server.authProvider !== undefined) throw new Error("Desktop MCP provider approvals do not apply to the CLI. Configure native MCP auth.provider separately.");
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(server.id) || typeof server.name !== "string" || !server.name.trim() || typeof server.enabled !== "boolean") throw new Error("MCP server needs an id, name, and enabled flag.");
   if (server.transport === "stdio") {
     if (typeof server.command !== "string" || !server.command.trim() || (server.args !== undefined && (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string")))) throw new Error("Invalid MCP stdio command or arguments.");

@@ -117,7 +117,7 @@ export function assertMcpPresetServer(server: McpServer): McpPreset | undefined 
   const idPreset = getMcpPresetForServerId(server.id);
   const declaredPreset = server.presetId ? getMcpPreset(server.presetId) : undefined;
   if (!idPreset && !server.presetId) return undefined;
-  if (server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
+  if (server.authProvider !== undefined || server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
   if (!idPreset || !declaredPreset || idPreset.id !== declaredPreset.id) {
     throw new Error("This MCP preset has an invalid identity.");
   }

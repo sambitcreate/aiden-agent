@@ -1,3 +1,4 @@
+import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
@@ -1267,6 +1268,15 @@ async function prepareGeneration(
   let tools = (
     await buildAgentTools({
       onMcpServerInstructions: mcpInstructionCollector.capture,
+      mcpProviderScope: {
+        signal,
+        onInvalidated: (listener) => browserOwner.onInvalidated(listener),
+        isCurrent: () => {
+          const generation = active.get(streamId) ?? initializing.get(streamId);
+          return !signal.aborted && !!generation && generation.owner === browserOwner && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
+        },
+      },
+      allowMcpProviderAuth: canUseProviderAuthenticatedMcp({ rendererOwner, permission, workspace: Boolean(workspace?.folderPath), assistant: assistantMode, bot: Boolean(botContext), usageSource: options.usageSource, interactionSurface: options.interactionSurface }),
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,

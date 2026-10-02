@@ -1,6 +1,6 @@
 # Pi 1.0 parity upgrade
 
-Status: active implementation and validation (2026-10-02). Foundation and compaction PRs are open; provider/MCP OAuth integration, including custom authorization-server metadata overrides, is implemented in PR #302. Desktop model operations, cache warming and integrated acceptance remain in progress.
+Status: active implementation and validation (2026-10-02). Foundation and compaction PRs are open; desktop model operations, cache warming, and provider-backed MCP consent are in progress. Custom authorization-server metadata overrides are implemented in PR #302.
 
 ## Baseline and target
 
@@ -53,7 +53,7 @@ Agents audit first, then implement their assigned lane in different worktrees. N
 - [x] Record target, feature inventory, architecture decisions and three-worktree PR plan before edits.
 - [x] Runtime foundation and replay gates — PR #299.
 - [x] CLI stable 1.0 upgrade and offline bundle/permission gates — combined into PR #299 so desktop and CLI pins change atomically. Review follow-up covers migrated MCP revocation readers.
-- [x] Provider/MCP OAuth integration and focused tests — PR #302, including custom authorization-server metadata override.
+- [x] Provider login and MCP metadata/OAuth/rich-result integration — PR #302, including custom authorization-server metadata overrides; provider-backed credential consent remains a separate active acceptance item.
 - [ ] Desktop codemode/tool search/image/classifier capability acceptance.
 - [ ] Integrated validation, reviewable PRs and final status reconciliation.
 
@@ -70,3 +70,25 @@ Agents audit first, then implement their assigned lane in different worktrees. N
 ## Onboarding illustration provenance
 
 `renderer/assets/onboarding/features/tool-scripts.png` was generated with the imagegen skill/tool and resampled to the required 1024 × 1024 transparent PNG. Prompt: premium 3D clay Aiden Tool Scripts illustration; friendly purple ghost, navy script console with cyan brackets, blue folder, purple magnifying glass, coral result card, short purple cables and a small gold padlock; matte lavender/navy/blue/coral palette, centered with generous transparent margin, no floor, background, text, frame or brain imagery. The onboarding asset contract validates the shipped image.
+
+## Stable capability coverage by client
+
+| Published Pi surface | Aiden CLI 1.0 | Aiden desktop/native adaptation |
+| --- | --- | --- |
+| TUI/fullscreen, quiet header, terminal palettes, keybindings, copy/paste, export | Inherited from exact coding-agent/chord 1.0; Aiden themes and branding retained | Existing Electron/native interface stays authoritative; terminal settings are CLI features |
+| Sessions/branching, compaction, queue/steering, cancellation | Native Pi behavior with Aiden wrappers and capability gates | Existing durable journals and queue ownership retained; exact model compaction budgets in #301 |
+| Provider transport, thinking, retries, auth, catalog types | Inherited 1.0 | Live Models/Agent 1.0; new OpenAI identity, callback branding, chat-only picker filtering; custom runtime constraints retained |
+| Codemode/tool search/deferred MCP schemas | Native Pi sandbox/worker, permission-tested offline | Approved nested host lifecycle, final admitted inventory, sequential effects; schemas remain callable through codemode rather than activating new direct declarations |
+| Image generation/classification | Native models APIs including image inputs | #303 adds paid-operation approval, bounded outputs, shared artifacts and single usage accounting; reference-image follow-up in progress |
+| MCP transports/OAuth/resources | Native Pi config plus separate Aiden server store/admin commands | Explicit metadata/client-name overrides, scope/state/issuer checks, bounded JSON/text/raster/resource-link results; provider credential sharing is a separate local-consent lane |
+| Skills/templates/AGENTS/packages/extensions and programmatic CLI modes | Native Pi 1.0 resources, SDK/RPC/JSON/print surfaces with Aiden trust/capability gates | Existing Aiden skills/plugins/native protocol remain authoritative; no arbitrary terminal extension UI injected into Electron |
+| Cache warming | Native settings include while-running and idle modes | Off by default, active foreground generations only, bounded economics/lifetime, cancellation and usage accounting; no idle/background warming |
+| llama.cpp router management/local classifiers | Inherited built-in llama.cpp extension | Existing local chat connections remain; router management/local classifier adapter is an explicit desktop difference under audit |
+| Radius setup | Native Radius login and MCP setup convenience | Generic provider login exists; Radius service is early alpha, convenience auto-configuration is CLI-only |
+| Experimental virtual models/durable/client/server/protocol | Upstream APIs remain available where shipped by CLI dependencies | No automatic replacement of Aiden security, remote protocol or journals |
+
+Functional parity preserves Aiden's stronger admission boundaries. It does not imply copying terminal UI into native clients or exposing every extension SDK primitive as a desktop setting. In particular, desktop MCP connections still use Aiden's admitted snapshot rather than Pi's lazy background connection timing, and codemode serializes effects. These differences are explicit rather than silently advertised as byte-identical behavior.
+
+## Integrated validation checkpoint
+
+The first broad `npm run test` covered 7,680 cases: 7,673 passed, 5 skipped, 2 failed. The introduced onboarding `text-sm` token was replaced by the semantic `text-small` token; all 18 appearance tests then passed. The untouched Git timeout reconciliation test failed under concurrent load and passed its single focused rerun. This is not a claim that the broad run was green. Both native chat suites were rerun successfully (230 iOS / 62 Android). A real Electron Node runtime smoke started the installed Pi sandbox worker/WASM, dispatched one offline tool, and verified absent ambient `process`/`fetch` globals. Signed-package, physical-device, and live paid-provider calls have not been exercised.

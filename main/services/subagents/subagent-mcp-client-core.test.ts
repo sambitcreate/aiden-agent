@@ -515,3 +515,10 @@ test("stdio is withheld before client, credential, or process-transport allocati
   assert.deepEqual(h.events, []);
   assert.deepEqual(h.transportPolicy, []);
 });
+
+
+test("provider-authenticated MCP is denied before a child can create or reuse any client", async () => {
+  const h = harness();
+  await assert.rejects(withIsolatedSubagentMcpClientCore({ server: { ...server, headers: undefined, authProvider: "openai" }, signal: new AbortController().signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async () => "must not run" }), /unavailable to child agents/u);
+  assert.deepEqual(h.events, []);
+});

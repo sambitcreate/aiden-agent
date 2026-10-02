@@ -558,6 +558,8 @@ export interface McpServer {
   /** Explicit authorization-server metadata document for custom remote OAuth connections. */
   authServerMetadataUrl?: string;
   oauthClientName?: string;
+  /** Built-in provider reference; requires separate device-local consent before use. */
+  authProvider?: string;
   /** Optional bounded server description used for tool discovery. */
   description?: string;
   /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
