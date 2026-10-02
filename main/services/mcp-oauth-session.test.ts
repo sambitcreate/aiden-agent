@@ -466,7 +466,7 @@ test("metadata observation rejects oversized wire documents and forgets policy a
   assert.equal(observed, 0);
   flow.observeAuthorizationMetadata(url, { issuer: "https://identity.test", authorization_response_iss_parameter_supported: true });
   flow.clearDiscovery();
-  flow.saveDiscovery({ authorizationServerUrl: "https://identity.test", authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", response_types_supported: ["code"] } });
+  flow.saveDiscovery({ authorizationServerUrl: "https://identity.test", authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] } });
   flow.authorizationUrl(new URL(`https://identity.test/authorize?state=${flow.state}`));
   assert.deepEqual(flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&code=allowed`)), { code: "allowed" });
 });
