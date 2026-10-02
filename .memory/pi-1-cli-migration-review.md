@@ -7,3 +7,11 @@ Deterministic behavioral tests replace the source during validation, immediately
 The earlier revocation review is already corrected in c42320a28: createCliMcpRevision hashes aiden-mcp.json and Bot watchers invalidate that filename; existing parity tests verify both. Plan header and foundation/CLI progress checkpoints now reflect implemented PR299 work without importing later features.
 
 Validation: standalone CLI build and TypeScript passed under Node22.22.3; all39 parity tests passed (including existing Bot/subagent revocation behavior and new deterministic migration concurrency tests); full standalone CLI suite passed. Work remains local for coordinated parent restacking; no external review comments sent.
+
+## PR299 detached-response E2E phase follow-up
+
+Exact-head CI run37038628632 / Electron3/3 job110943055472 reported `Stop after revisiting cancels the detached response and permits a new message` flaky: the post-revisit Stop button was absent on the first attempt, and the built-in retry passed. `--fail-on-flaky-tests` correctly failed the job. No hosted rerun was requested. Hosted artifacts contain only the sanitized receipt, so the original event ordering cannot be proven from a trace.
+
+Stop-enabled is a renderer initialization state, not proof that the mock provider's held SSE response has begun. The scenario now explicitly observes its exact provider request before navigating away; its existing route-selection, Stop, cancellation and fresh-message assertions remain. This is a deterministic test-phase precondition, not a claimed production lifecycle fix. Temporary controlled admission-delay instrumentation showed lifecycle cancellation reaches main and authoritative recovery waits for the admitted turn to become idle, rather than pruning it from an early inactive snapshot; that unconfirmed hypothesis did not justify production changes and the instrumentation was removed.
+
+Validation on Node22.22.3: production build, E2E types, scoped lint and diff check pass. The corrected scenario plus the nearby revisit/queue scenarios passed five iterations each (15 actual Electron executions) with `--fail-on-flaky-tests`; no timeout or retry configuration changed. No production, shared contract or native client changes.
