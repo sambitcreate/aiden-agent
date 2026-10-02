@@ -398,6 +398,7 @@ class McpManager {
     for (const tool of agentTools) Object.assign(tool, {
       codemode: true,
       discovery: {
+        ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
         namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
         label: server.name.slice(0, 64) || "MCP service",
         ...(instructions ? { instructions: instructions.instructions } : {}),

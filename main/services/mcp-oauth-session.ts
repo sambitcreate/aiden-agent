@@ -1,3 +1,4 @@
+import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import type {
   OAuthClientInformationFull,
   OAuthTokens,
@@ -74,11 +75,12 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
  * Start an explicit Settings re-authorization without discarding the dynamic
  * client registration. The caller retains the original snapshot for rollback.
  */
-export function mcpAuthorizationBinding(url: string): string {
+export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, oauthClientName?: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
-  return parsed.toString();
+  const resource = parsed.toString();
+  return authServerMetadataUrl === undefined && oauthClientName === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), oauthClientName?.trim() ?? null]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {

@@ -300,3 +300,86 @@ test("decrypted MCP sessions preserve compatible future fields", () => {
     { mode: "device" },
   );
 });
+
+test("configured OAuth metadata bypasses a wrong advertised issuer without changing resource or callback binding", async () => {
+  const { loadMcpOAuthMetadataOverride } = await import("./mcp-oauth-metadata.js");
+  const flow = new McpOAuthAuthorizationFlow();
+  const requests: string[] = [];
+  let browser: URL | undefined;
+  let verifier = "";
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = String(input); requests.push(url);
+    if (url === "https://identity.test/config") {
+      assert.equal(new Headers(init?.headers).has("X-Service-Secret"), false);
+      assert.equal(init?.redirect, "error");
+      return Response.json({ issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true });
+    }
+    if (url.includes("oauth-protected-resource")) return Response.json({ resource: "https://service.test/mcp", authorization_servers: ["https://wrong.test"], scopes_supported: ["files.read"] });
+    if (url === "https://identity.test/token") {
+      const body = new URLSearchParams(String(init?.body));
+      assert.equal(body.get("resource"), "https://service.test/mcp");
+      assert.equal(body.get("redirect_uri"), "http://127.0.0.1:41390/callback");
+      return Response.json({ access_token: "new", token_type: "Bearer" });
+    }
+    throw new Error(`Unexpected request ${url}`);
+  };
+  const provider: OAuthClientProvider = {
+    redirectUrl: "http://127.0.0.1:41390/callback",
+    clientMetadata: { redirect_uris: ["http://127.0.0.1:41390/callback"], token_endpoint_auth_method: "none" },
+    state: () => flow.state, clientInformation: () => ({ client_id: "registered" }), tokens: () => undefined, saveTokens() {},
+    saveDiscoveryState: (state) => flow.saveDiscovery(state),
+    async discoveryState() {
+      if (!flow.discoveryState()) flow.saveDiscovery(await loadMcpOAuthMetadataOverride("https://identity.test/config", { serviceUrl: "https://service.test/mcp", serviceHeaders: { "X-Service-Secret": "secret" }, fetch: fetchFn }));
+      return flow.discoveryState();
+    },
+    saveCodeVerifier(value) { verifier = value; }, codeVerifier: () => verifier,
+    redirectToAuthorization(url) { browser = flow.authorizationUrl(url, "files.old"); },
+  };
+  assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", fetchFn }), "REDIRECT");
+  assert.equal(browser?.origin, "https://identity.test");
+  assert.equal(browser?.searchParams.get("scope"), "files.old files.read");
+  assert.throws(() => flow.callback(new URL(`http://127.0.0.1:41390/callback?state=${flow.state}&code=code&iss=https://wrong.test`)), /issuer/u);
+  const accepted = flow.callback(new URL(`http://127.0.0.1:41390/callback?state=${flow.state}&code=code&iss=https://identity.test`));
+  assert.ok("code" in accepted);
+  assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: accepted.code, fetchFn }), "AUTHORIZED");
+  assert.equal(requests.filter((url) => url === "https://identity.test/config").length, 1);
+  assert.ok(requests.every((url) => !url.includes("wrong.test")));
+});
+
+test("OAuth metadata overrides reject oversized, insecure and stale discovery before browser use", async () => {
+  const { loadMcpOAuthMetadataOverride } = await import("./mcp-oauth-metadata.js");
+  const options = { serviceUrl: "https://service.test/mcp" };
+  await assert.rejects(loadMcpOAuthMetadataOverride("https://identity.test/config", { ...options, fetch: async () => Response.json({ pad: "x".repeat(65536) }) }), /transport limit/u);
+  await assert.rejects(loadMcpOAuthMetadataOverride("https://identity.test/config", { ...options, fetch: async () => Response.json({ issuer: "https://identity.test", authorization_endpoint: "http://remote.test/login", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] }) }), /HTTPS/u);
+  let current = true;
+  await assert.rejects(loadMcpOAuthMetadataOverride("https://identity.test/config", { ...options, isCurrent: () => current, fetch: async () => { current = false; return Response.json({}); } }), /no longer current/u);
+  const oldBinding = mcpAuthorizationBinding("https://service.test/mcp");
+  const newBinding = mcpAuthorizationBinding("https://service.test/mcp", "https://identity.test/config");
+  assert.notEqual(oldBinding, newBinding);
+  assert.deepEqual(sessionForFreshMcpAuthorization({ authorizationBinding: oldBinding, tokens: { access_token: "old", token_type: "Bearer", scope: "secret.scope" } }, newBinding), { authorizationBinding: newBinding });
+  assert.notEqual(newBinding, mcpAuthorizationBinding("https://service.test/mcp", "https://identity.test/config", "Different client"));
+});
+
+
+test("SDK token exchanges normalize optional null and empty fields before saving without weakening required credentials", async () => {
+  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
+  const responses = [
+    { access_token: "valid", token_type: "Bearer", scope: null, refresh_token: "", id_token: null, expires_in: null },
+    { access_token: "valid", token_type: "Bearer", scope: "", refresh_token: null, id_token: "", expires_in: "3600" },
+    { access_token: "", token_type: "Bearer", scope: null },
+    { access_token: "valid", token_type: null, scope: null },
+  ];
+  const saved: unknown[] = [];
+  const provider: OAuthClientProvider = {
+    redirectUrl: "http://127.0.0.1/callback", clientMetadata: { redirect_uris: ["http://127.0.0.1/callback"] },
+    clientInformation: () => ({ client_id: "registered" }), tokens: () => undefined, saveTokens: (tokens) => { saved.push(tokens); },
+    discoveryState: () => ({ authorizationServerUrl: "https://identity.test", resourceMetadata: { resource: "https://service.test/mcp" }, authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] } }),
+    saveCodeVerifier() {}, codeVerifier: () => "verifier", redirectToAuthorization() { throw new Error("Unexpected browser request"); },
+  };
+  for (const response of responses) {
+    const fetchFn = createMcpFetchPolicy({ serviceUrl: "https://service.test/mcp", fetch: async () => Response.json(response) });
+    if (response.access_token && response.token_type) assert.equal(await auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetchFn }), "AUTHORIZED");
+    else await assert.rejects(auth(provider, { serverUrl: "https://service.test/mcp", authorizationCode: "code", fetchFn }), /required credentials/u);
+  }
+  assert.deepEqual(saved, [{ access_token: "valid", token_type: "Bearer" }, { access_token: "valid", token_type: "Bearer", expires_in: 3600 }]);
+});
