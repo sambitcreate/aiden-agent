@@ -876,6 +876,8 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

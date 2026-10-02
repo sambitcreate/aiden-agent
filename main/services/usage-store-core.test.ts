@@ -450,7 +450,7 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
     maxTokens: 2_048,
   };
 
-  for (const stopReason of ["toolUse", "error", "aborted"] as const) {
+  for (const stopReason of ["toolUse", "error", "length", "aborted"] as const) {
     const message: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -472,12 +472,12 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
   }
 
   const summary = await store.summary("7d");
-  assert.equal(summary.totals.requests, 3);
+  assert.equal(summary.totals.requests, 4);
   assert.equal(summary.totals.completedRequests, 1);
-  assert.equal(summary.totals.failedRequests, 1);
+  assert.equal(summary.totals.failedRequests, 2);
   assert.equal(summary.totals.cancelledRequests, 1);
-  assert.equal(summary.totals.unmeteredRequests, 3);
-  assert.equal(summary.totals.costedRequests, 3);
+  assert.equal(summary.totals.unmeteredRequests, 4);
+  assert.equal(summary.totals.costedRequests, 4);
 });
 
 test("ignores impossible persisted dates and recovers with a valid record", async () => {
@@ -594,4 +594,16 @@ test("TTS accounting survives reload and keeps unknown cost and usage separate f
   assert.equal(totals.costedRequests, 0); assert.equal(totals.failedRequests, 1); assert.equal(totals.cancelledRequests, 1);
   assert.equal(ttsUsageRecord({ kind: "preview", model: "tts", status: "completed", inputTokens: 1, outputTokens: null, usageKnown: false }).tokens, null);
   assert.ok(persistence.read().buckets.every(bucket => bucket.source === "text-to-speech"));
+});
+
+
+test("cache warming charges survive reload and are included in user-visible usage totals", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(record({ source: "cache-warm", providerId: "fixture", modelId: "priced", costStatus: "reported", costUsd: 0.10003 }));
+  const reloaded = createUsageStore(persistence, () => NOW);
+  const summary = await reloaded.summary("7d");
+  assert.equal(summary.totals.requests, 1);
+  assert.equal(summary.totals.hostedCostUsd, 0.10003);
+  assert.equal(persistence.read().buckets[0]?.source, "cache-warm");
 });

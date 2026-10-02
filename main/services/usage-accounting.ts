@@ -84,9 +84,11 @@ function modelHasPricing(model: Model<Api>): boolean {
   );
 }
 
-function statusFor(message: AssistantMessage): UsageRequestStatus {
+function statusFor(message: AssistantMessage, source: UsageRequestSource): UsageRequestStatus {
   if (message.stopReason === "aborted") return "cancelled";
-  if (message.stopReason === "error" || message.stopReason === "length") return "failed";
+  if (message.stopReason === "error") return "failed";
+  // Warming intentionally caps output at one token; reaching that cap succeeds.
+  if (message.stopReason === "length" && source !== "cache-warm") return "failed";
   return "completed";
 }
 
@@ -135,7 +137,7 @@ export function assistantUsageRecord(input: {
     modelId: responseModel || input.model.id,
     modelLabel: responseModel || input.model.name || input.model.id,
     local,
-    status: statusFor(input.message),
+    status: statusFor(input.message, input.source),
     tokens: reportedTokens(input.message.usage),
     costStatus: local
       ? "not-applicable"

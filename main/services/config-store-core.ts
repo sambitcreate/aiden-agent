@@ -841,6 +841,7 @@ export function createConfigStore(
       if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
         throw new Error("Invalid compaction engine.");
       }
+      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }

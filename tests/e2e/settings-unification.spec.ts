@@ -490,3 +490,33 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await openMemory();
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
 });
+
+
+test("paid cache warming stays off until explicitly enabled and can be disabled after relaunch", async ({ aiden }) => {
+  let page = aiden.page;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill("E2E Local User");
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
+  await expect(onboarding).toBeHidden();
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+  };
+  await openMemory();
+  const toggle = () => page.getByRole("switch", { name: "Warm prompt caches during active chats" });
+  await expect(toggle()).not.toBeChecked();
+  await expect(page.getByText(/Optional paid one-token requests/u)).toBeVisible();
+  await toggle().click();
+  await expect(toggle()).toBeChecked();
+  await aiden.relaunch();
+  page = aiden.page;
+  await openMemory();
+  await expect(toggle()).toBeChecked();
+  await toggle().click();
+  await expect(toggle()).not.toBeChecked();
+  expect(aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions")).toHaveLength(0);
+});
