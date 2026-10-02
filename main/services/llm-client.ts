@@ -129,6 +129,7 @@ import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
   isLocalModelProvider,
+  modelOperationUsageRecord,
   reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
@@ -1498,17 +1499,7 @@ async function prepareGeneration(
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
-          const cost = record.usage?.cost.total;
-          const local = record.provider === runtime.provider.id && isLocalModelProvider(runtime.provider);
-          await usageStore.record({
-            source: options.usageSource ?? "chat",
-            providerId: record.provider,
-            providerLabel: record.providerLabel,
-            modelId: record.model, modelLabel: record.modelLabel, local, status: record.status,
-            tokens: reportedTokens(record.usage),
-            costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
-            ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
-          });
+          await usageStore.record(modelOperationUsageRecord(record, operationProviders, options.usageSource ?? "chat"));
         },
       })
         .filter((tool) => !options.excludeToolNames?.has(tool.name)),
