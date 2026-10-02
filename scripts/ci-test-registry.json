@@ -214,6 +214,7 @@
       "name": "runtime-subagents",
       "description": "Runtime, remote, bot, Computer Use, and subagent tests.",
       "prerequisites": [
+        "vcc-build",
         "worktree-remover-build",
         "bot-inbox-writer-build",
         "bot-inbox-writer-test-build",
@@ -774,14 +775,15 @@
     {
       "id": "vcc-build",
       "for": [
-        "core-git"
+        "core-git",
+        "runtime-subagents"
       ],
       "command": [
         "npm",
         "run",
         "build:vcc"
       ],
-      "reason": "pretest:vcc builds the VCC worker before its tests."
+      "reason": "VCC tests and child compaction budget recovery require the built worker."
     },
     {
       "id": "worktree-file-io-build",
