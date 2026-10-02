@@ -1,10 +1,70 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ImageContent, JsonValue } from "@earendil-works/pi-ai";
 import { boundedToolOutput } from "./tool-output-context.js";
 import { MAX_STORED_TOOL_OUTPUT_CHARS } from "./tool-output-store.js";
+import { validateDisplayImageDimensions } from "./display-image-extension.js";
 
 export const MAX_MCP_RESULT_TEXT_CHARS = 32_000;
 const MAX_PARTS = 64;
 const OMITTED = "\n[MCP result truncated; additional content omitted.]";
+export const MAX_MCP_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_MCP_IMAGES = 4;
+export const MAX_MCP_STRUCTURED_CHARS = 128 * 1024;
+
+/** Preserve complete JSON for programmatic callers, or omit it rather than silently alter values. */
+function structuredContent(value: unknown): JsonValue | undefined {
+  let remaining = MAX_MCP_STRUCTURED_CHARS;
+  let nodes = 0;
+  const seen = new Set<object>();
+  function clone(entry: unknown, depth: number): JsonValue {
+    if (++nodes > 4096 || depth > 32 || remaining <= 0) throw new Error("limit");
+    if (entry === null || typeof entry === "boolean") { remaining -= 5; return entry; }
+    if (typeof entry === "number" && Number.isFinite(entry)) { remaining -= 32; return entry; }
+    if (typeof entry === "string") {
+      remaining -= entry.length * 6 + 2;
+      if (remaining < 0) throw new Error("limit");
+      return entry;
+    }
+    if (!entry || typeof entry !== "object" || seen.has(entry)) throw new Error("invalid JSON");
+    const proto = Object.getPrototypeOf(entry);
+    if (!Array.isArray(entry) && proto !== Object.prototype && proto !== null) throw new Error("invalid object");
+    seen.add(entry);
+    remaining -= 2;
+    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry) ? [] : Object.create(null);
+    for (const key in entry) {
+      if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+      remaining -= key.length * 6 + 4;
+      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      if (!descriptor || !("value" in descriptor)) throw new Error("accessor");
+      const next = clone(descriptor.value, depth + 1);
+      if (Array.isArray(output)) {
+        if (key !== String(output.length)) throw new Error("non-JSON array");
+        output.push(next);
+      } else output[key] = next;
+    }
+    if (Array.isArray(entry) && (output as JsonValue[]).length !== entry.length) throw new Error("sparse array");
+    seen.delete(entry);
+    return output;
+  }
+  try { return clone(value, 0); } catch { return undefined; }
+}
+
+function imagesFor(result: unknown): Map<unknown, ImageContent> {
+  const images = new Map<unknown, ImageContent>();
+  if (!record(result) || !Array.isArray(result.content)) return images;
+  for (const part of result.content.slice(0, MAX_PARTS)) {
+    if (images.size >= MAX_MCP_IMAGES) break;
+    if (!record(part) || part.type !== "image" || typeof part.data !== "string" ||
+      typeof part.mimeType !== "string" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(part.mimeType) ||
+      part.data.length > Math.ceil(MAX_MCP_IMAGE_BYTES / 3) * 4 || part.data.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/u.test(part.data)) continue;
+    const bytes = Buffer.from(part.data, "base64");
+    if (bytes.length > MAX_MCP_IMAGE_BYTES || bytes.toString("base64") !== part.data) continue;
+    try { validateDisplayImageDimensions(bytes, part.mimeType, "MCP image"); } catch { continue; }
+    images.set(part, { type: "image", data: part.data, mimeType: part.mimeType });
+  }
+  return images;
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -64,7 +124,7 @@ function structuredText(value: unknown): string {
   return json + (fieldsOmitted ? "\n[Structured fields omitted: key or field limit.]" : "");
 }
 
-function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts = MAX_PARTS): string {
+function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts = MAX_PARTS, images = new Map<unknown, ImageContent>()): string {
   if (!record(result)) throw new Error("MCP tool returned an invalid result.");
   const parts: string[] = [];
   let remaining = maxChars - OMITTED.length;
@@ -91,7 +151,9 @@ function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts 
       const part: unknown = result.content[index];
       if (!record(part)) append("[Invalid MCP content block omitted.]");
       else if (part.type === "text" && typeof part.text === "string") append(part.text);
-      else if (part.type === "image") append("[MCP image omitted: this tool result supports text only.]");
+      else if (part.type === "image") append(images.has(part)
+        ? "[MCP image attached for vision-capable models.]"
+        : "[MCP image omitted: invalid, unsupported, or above the image limit.]");
       else if (part.type === "audio") append("[MCP audio omitted: this tool result supports text only.]");
       else if (part.type === "resource" || part.type === "resource_link") {
         append("[MCP resource omitted: no resource was fetched.]");
@@ -110,18 +172,24 @@ function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts 
  * Activity, and claim checking all observe the same terminal state.
  */
 export function mcpAgentToolResult(result: unknown): AgentToolResult<null> {
-  const text = toText(result);
+  const images = imagesFor(result);
+  const text = toText(result, MAX_MCP_RESULT_TEXT_CHARS, MAX_PARTS, images);
   if ((result as { isError?: unknown } | null)?.isError === true) {
     throw new Error(text);
   }
-  return { content: [{ type: "text", text }], details: null };
+  const structured = record(result) ? structuredContent(result.structuredContent) : undefined;
+  return { content: [{ type: "text", text }, ...images.values()], details: null,
+    ...(structured === undefined ? {} : { structuredContent: structured }) };
 }
 
 export async function executeMcpAgentTool(
   callTool: () => Promise<unknown>,
 ): Promise<AgentToolResult<null>> {
   const result = await callTool();
-  const text = await boundedToolOutput(toText(result, MAX_STORED_TOOL_OUTPUT_CHARS, 2_048), MAX_MCP_RESULT_TEXT_CHARS);
+  const images = imagesFor(result);
+  const text = await boundedToolOutput(toText(result, MAX_STORED_TOOL_OUTPUT_CHARS, 2_048, images), MAX_MCP_RESULT_TEXT_CHARS);
   if ((result as { isError?: unknown } | null)?.isError === true) throw new Error(text);
-  return { content: [{ type: "text", text }], details: null };
+  const structured = record(result) ? structuredContent(result.structuredContent) : undefined;
+  return { content: [{ type: "text", text }, ...images.values()], details: null,
+    ...(structured === undefined ? {} : { structuredContent: structured }) };
 }

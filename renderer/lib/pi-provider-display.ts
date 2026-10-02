@@ -153,6 +153,22 @@ export function isOnboardingBuiltinProviderReady(provider: OnboardingBuiltinProv
   return provider.models.length > 0 && provider.hasKey;
 }
 
+/** Prefer current OpenAI sign-in while retaining an already connected legacy Codex account. */
+export function onboardingChatGptSelection(
+  openai: (OnboardingBuiltinProvider & { defaultModel?: string }) | undefined,
+  codex: { configured: boolean; needsAttention?: boolean; models: readonly { id: string }[] } | undefined,
+): { providerId: string; model: string } | undefined {
+  if (openai && isOnboardingBuiltinProviderReady(openai)) {
+    const model = openai.defaultModel && openai.models.includes(openai.defaultModel)
+      ? openai.defaultModel : openai.models[0]!;
+    return { providerId: "openai", model };
+  }
+  if (codex?.configured && codex.needsAttention === false && codex.models[0]) {
+    return { providerId: "openai-codex", model: codex.models[0].id };
+  }
+  return undefined;
+}
+
 /**
  * First-run setup can use every Pi-owned interactive credential flow. Providers
  * that resolve credentials from the system remain selectable once they are
