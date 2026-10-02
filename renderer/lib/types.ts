@@ -85,6 +85,8 @@ export interface Provider {
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   isPreset?: boolean;
   /** Pi owns this provider's endpoint, models, auth, and transport. */
   isBuiltin?: boolean;

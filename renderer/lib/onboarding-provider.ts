@@ -138,7 +138,7 @@ export function onboardingModelDescription(platform: string): string {
   const providers = platform === "darwin"
     ? "30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints"
     : "30+ Pi providers, ChatGPT sign-in, or custom endpoints";
-  return `Choose from ${providers}. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.`;
+  return `Choose from ${providers}. Enable local llama.cpp classification in a custom provider’s More options. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.`;
 }
 
 /** Platform filtering must preserve setup and privacy disclosures for available features. */

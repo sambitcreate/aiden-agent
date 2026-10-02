@@ -160,6 +160,7 @@ for (const platform of ["linux", "darwin"] as const) {
     const description = card.getByText(/^Choose from/u);
     await expect(description).toBeVisible();
     await expect(description).toContainText("30+ Pi providers, ChatGPT sign-in");
+    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s More options");
     await expect(description).toContainText("approve sending it; provider charges may apply");
     await expect(description).toContainText("custom endpoints");
     if (platform === "darwin") await expect(description).toContainText("Apple models");

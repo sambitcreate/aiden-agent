@@ -353,6 +353,7 @@
         "main/services/peer-transport.test.ts",
         "main/services/pi-cache-warming.test.ts",
         "main/services/pi-model-tools.test.ts",
+        "main/services/pi-local-classifier.test.ts",
         "main/services/schedule-guard.test.ts",
         "main/services/scheduled-settings-core.test.ts",
         "main/services/scheduled-task-application-service.test.ts",

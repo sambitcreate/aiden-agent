@@ -490,6 +490,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
   assert.match(linux[0]!.description, /classifiers.*approve sending it; provider charges/u);
+  assert.match(linux[0]!.description, /Enable local llama.cpp classification.*More options/u);
   assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
@@ -497,4 +498,5 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   assert.equal(mac.length, 4);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
+  assert.match(mac[0]!.description, /Enable local llama.cpp classification.*More options/u);
 });

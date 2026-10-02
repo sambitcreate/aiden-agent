@@ -1,5 +1,6 @@
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
@@ -1487,19 +1488,29 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
-    const operationProviders = [runtime.provider, ...await configStore.listProviders()];
+    const savedOperationProviders = await configStore.listProviders();
+    const localClassifierModels = createLocalClassifierModels({
+      models: providerRegistry.models,
+      providers: savedOperationProviders,
+      getProvider: (id) => configStore.getProvider(id),
+      resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
+    });
+    const operationProviders = [runtime.provider, ...savedOperationProviders];
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
       tools: createPiModelTools({
-        models: runtime.models,
+        models: localClassifierModels.models,
         providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
-          await usageStore.record(modelOperationUsageRecord(record, operationProviders, options.usageSource ?? "chat"));
+          await usageStore.record(modelOperationUsageRecord(
+            record, operationProviders, options.usageSource ?? "chat",
+            localClassifierModels.isLocalProvider(record.provider),
+          ));
         },
       })
         .filter((tool) => !options.excludeToolNames?.has(tool.name)),
