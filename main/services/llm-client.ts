@@ -1,3 +1,4 @@
+import { providerRegistry } from "./provider-registry.js";
 import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -342,7 +343,7 @@ import {
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
-import { createPiModelTools, piModelOperationUsage } from "./pi-model-tools.js";
+import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -1482,11 +1483,13 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
+    const operationProviders = [runtime.provider, ...await configStore.listProviders()];
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
       tools: createPiModelTools({
         models: runtime.models,
+        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         onImage: displayImageRuntime.presentGeneratedImage,
@@ -1497,7 +1500,7 @@ async function prepareGeneration(
           await usageStore.record({
             source: options.usageSource ?? "chat",
             providerId: record.provider,
-            providerLabel: record.provider === runtime.provider.id ? runtime.provider.label : record.provider,
+            providerLabel: record.providerLabel,
             modelId: record.model, modelLabel: record.modelLabel, local, status: record.status,
             tokens: reportedTokens(record.usage),
             costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
@@ -3033,6 +3036,18 @@ export const llmClient = {
                             context.args as Record<string, unknown>,
                           )
                         : summarizeToolCall(context.toolCall.name, context.args);
+          }
+          if (context.toolCall.name === "classify") {
+            try {
+              const providerId = (context.args as { provider?: unknown }).provider;
+              const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
+              approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
+              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Classification inputs could not be reviewed." };
+            }
           }
           if (context.toolCall.name === "generate_image") {
             try { summary += await modelImageReferences.disclosure(context.args, signal); }

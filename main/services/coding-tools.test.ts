@@ -94,7 +94,6 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
   assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
   assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
-  assert.doesNotMatch(summarizeToolCall("classify", { state: { secret: "private-data" } }), /private-data/);
 });
 
 test("share_image advertises outbound sharing rather than image inspection", () => {

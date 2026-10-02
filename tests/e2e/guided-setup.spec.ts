@@ -80,3 +80,60 @@ test("Create a bot submits limited access in two steps and retains a failed draf
   await editor.getByRole("button", { name: "Back", exact: true }).click();
   await expect(editor.getByPlaceholder("Release reviewer")).toHaveValue("Writing bot");
 });
+
+test("feature tour explains image and classifier disclosure on rendered cards", async ({ aiden }) => {
+  const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  const images = onboarding.getByRole("article", { name: /Generate or edit attached images/u });
+  await images.hover();
+  await expect(images.getByText(/approving the prompt, reference images, and possible provider charges/u)).toBeVisible();
+  const models = onboarding.getByRole("article", { name: /^Model Freedom/u });
+  await models.hover();
+  await expect(models.getByText(/classifiers.*approve sending it.*provider charges/u)).toBeVisible();
+});
+
+test("classifier approval lets users inspect late payload fields before denying", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  const state = JSON.stringify({ early: "x".repeat(20_000), late: "PRIVATE-LATE-FIELD" });
+  const questions = JSON.stringify({ verdict: { type: "bool", instructions: "Inspect every field", criteria: { true: "Accept", false: "Reject" } } });
+  await aiden.app.evaluate(({ ipcMain }, payload) => {
+    ipcMain.removeHandler("chat:start");
+    ipcMain.removeHandler("chat:approve");
+    ipcMain.handle("chat:start", (event, streamId: string) => {
+      (globalThis as unknown as { classifierStreamId: string }).classifierStreamId = streamId;
+      event.sender.send("chat:approval", { streamId, approvalId: "classifier-inspection", toolCallId: "classify-1", toolName: "classify", summary: "Classify structured data", details: {
+        kind: "model-classification", providerId: "research", providerLabel: "Research team", modelId: "judge",
+        stateJson: payload.state, questionsJson: payload.questions, stateBytes: Buffer.byteLength(payload.state), questionsBytes: Buffer.byteLength(payload.questions), payloadComplete: true,
+      } });
+      return { streamId };
+    });
+    ipcMain.handle("chat:approve", (_event, _id: string, decision: string) => {
+      (globalThis as unknown as { classifierDecision: string }).classifierDecision = decision;
+    });
+  }, { state, questions });
+  const composer = aiden.page.locator("textarea").first();
+  await composer.fill("Inspect classification inputs");
+  await composer.press("Enter");
+  await expect(aiden.page.getByText(/Send the state and questions below to Research team/u)).toBeVisible();
+  await aiden.page.getByText(/^State ·/u).click();
+  const inspector = aiden.page.getByLabel("Complete classification state", { exact: true });
+  await expect(inspector).toHaveText(state);
+  await inspector.focus();
+  await inspector.press("ControlOrMeta+End");
+  await expect(inspector).toBeFocused();
+  await aiden.page.getByText(/^Questions ·/u).click();
+  await expect(aiden.page.getByLabel("Complete classification questions", { exact: true })).toHaveText(questions);
+  await aiden.page.getByRole("button", { name: "Deny", exact: true }).click();
+  expect(await aiden.app.evaluate(() => (globalThis as unknown as { classifierDecision: string }).classifierDecision)).toBe("deny");
+  await aiden.app.evaluate(({ BrowserWindow }) => {
+    const streamId = (globalThis as unknown as { classifierStreamId: string }).classifierStreamId;
+    BrowserWindow.getAllWindows()[0]!.webContents.send("chat:approval", { streamId, approvalId: "missing-classifier-inputs", toolCallId: "classify-2", toolName: "classify", summary: "Inputs omitted" });
+  });
+  await expect(aiden.page.getByText("This malformed privileged action cannot be allowed. Deny it to continue.")).toBeVisible();
+  await expect(aiden.page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
+  await expect(aiden.page.getByRole("button", { name: "Deny", exact: true })).toBeEnabled();
+});

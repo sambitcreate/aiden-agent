@@ -1,3 +1,5 @@
+import { ClassifierApproval } from "../components/classifier-approval";
+import { classifierApprovalState } from "../shared/classifier-approval";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -2176,7 +2178,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingFormFill =
     pending && isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
   const invalidPendingFormFill = pendingFormFillClaim && pendingFormFill === undefined;
+  const pendingClassifier = classifierApprovalState(pending?.toolName ?? "", pendingDetails);
   const invalidPendingPrivilegedApproval =
+    pendingClassifier.invalid ||
     invalidPendingWorkspaceWrite ||
     invalidPendingMcpMutation ||
     invalidPendingShell ||
@@ -2190,7 +2194,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
-    pending && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+    pending && !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
@@ -2471,6 +2475,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                         Aiden cannot safely authorize this action from this view. Deny it here or
                         review the exact action on the device that owns this chat.
                       </Text>
+                    ) : pendingClassifier.details ? (
+                      <ClassifierApproval details={pendingClassifier.details} descriptionId={`approval-summary-${pending.approvalId}`} />
                     ) : pendingWorkspaceWrite ? (
                       <SubagentWorkspaceWriteApproval
                         details={pendingWorkspaceWrite}
