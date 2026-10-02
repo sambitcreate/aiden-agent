@@ -340,6 +340,7 @@
         "main/services/gemini-live/protocol.test.ts",
         "main/services/gemini-live/sdk-contract.test.ts",
         "main/services/gemini-live/service.test.ts",
+        "main/services/host-run-registry.test.ts",
         "main/services/mcp-credential-cleanup-core.test.ts",
         "main/services/mcp-fetch-policy.test.ts",
         "main/services/mcp-oauth-operation.test.ts",
