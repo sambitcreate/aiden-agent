@@ -137,3 +137,35 @@ test("classifier approval lets users inspect late payload fields before denying"
   await expect(aiden.page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
   await expect(aiden.page.getByRole("button", { name: "Deny", exact: true })).toBeEnabled();
 });
+
+for (const platform of ["linux", "darwin"] as const) {
+  test(`Model Freedom renders platform-accurate providers and classifier disclosures on ${platform}`, async ({ aiden }) => {
+    // Only platform capability IPC is substituted: the real onboarding data,
+    // filtering, gallery card and accessible description are rendered unchanged.
+    await aiden.app.evaluate(({ ipcMain }, hostPlatform) => {
+      ipcMain.removeHandler("app:getInfo");
+      ipcMain.handle("app:getInfo", () => ({
+        name: "Aiden", version: "e2e", environment: "test",
+        capabilities: { platform: hostPlatform, appleFoundationModels: hostPlatform === "darwin" },
+      }));
+    }, platform);
+    await aiden.page.reload();
+    const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
+    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
+    await card.hover();
+    const description = card.getByText(/^Choose from/u);
+    await expect(description).toBeVisible();
+    await expect(description).toContainText("30+ Pi providers, ChatGPT sign-in");
+    await expect(description).toContainText("approve sending it; provider charges may apply");
+    await expect(description).toContainText("custom endpoints");
+    if (platform === "darwin") await expect(description).toContainText("Apple models");
+    else {
+      await expect(description).not.toContainText("Apple");
+      await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
+    }
+  });
+}

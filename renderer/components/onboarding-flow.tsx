@@ -53,6 +53,8 @@ import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
+  visibleOnboardingFeatures,
+  onboardingModelDescription,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
 import {
@@ -279,8 +281,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints. Configured classifiers can evaluate structured data after you approve sending it; provider charges may apply.",
+    description: onboardingModelDescription("other"),
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -501,21 +502,10 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
-  const visibleFeatureBentos = React.useMemo(() => {
-    const visible: FeatureBento[] = [];
-    for (const feature of featureBentos) {
-      if (!capabilities.computerUse && feature.id === "computerUse") continue;
-      if (!capabilities.bots && feature.id === "bots") continue;
-      visible.push(
-        feature.id === "commands" && capabilities.platform === "linux"
-          ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
-          : feature.id === "models" && capabilities.platform === "linux"
-            ? { ...feature, description: "Choose from 30+ Pi providers, ChatGPT sign-in, or local and private endpoints." }
-            : feature,
-      );
-    }
-    return visible;
-  }, [capabilities.bots, capabilities.computerUse, capabilities.platform]);
+  const visibleFeatureBentos = React.useMemo(
+    () => visibleOnboardingFeatures(featureBentos, { bots: capabilities.bots, computerUse: capabilities.computerUse, platform: capabilities.platform }),
+    [capabilities.bots, capabilities.computerUse, capabilities.platform],
+  );
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
   // Main-owned state is authoritative. Block the workbench until it has been
