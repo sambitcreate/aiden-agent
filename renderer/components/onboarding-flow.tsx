@@ -1073,7 +1073,7 @@ export function OnboardingFlow() {
                       }}
                     />
                     <details className="mt-3">
-                      <summary className="cursor-pointer rounded-control text-sm text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+                      <summary className="cursor-pointer rounded-control text-small text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
                         Existing Codex connection
                       </summary>
                       <CodexProviderSettings layer="onboarding" />
