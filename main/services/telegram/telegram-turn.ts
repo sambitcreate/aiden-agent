@@ -241,7 +241,16 @@ export async function sendTelegramTurn(
   workspace?: TelegramWorkspaceResolution,
   attachments?: readonly Attachment[],
   observer?: (channel: NotificationChannel, payload: unknown) => void,
-  options?: { binding?: TelegramBotBindingSnapshot; skillInvocation?: TelegramSkillInvocation; signal?: AbortSignal },
+  options?: {
+    binding?: TelegramBotBindingSnapshot;
+    skillInvocation?: TelegramSkillInvocation;
+    signal?: AbortSignal;
+    /**
+     * Reports the run's stream and owner once this turn holds the chat, so
+     * `/steer` can address main's run-input admission for exactly this run.
+     */
+    onStream?(stream: { streamId: string; ownerDocumentId: string }): void;
+  },
 ): Promise<TelegramTurnResult> {
   const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
   if (resolvedWorkspace.kind === "stale") {
@@ -310,6 +319,7 @@ export async function sendTelegramTurn(
   if (!turn) {
     return { content: "", error: "The Telegram chat already has a turn in progress.", ok: false };
   }
+  options?.onStream?.({ streamId, ownerDocumentId: background.owner.documentId });
 
   try {
     try {

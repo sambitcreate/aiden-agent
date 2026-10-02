@@ -33,6 +33,8 @@ import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
+import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
+import type { Chat } from "./types.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -2293,6 +2295,97 @@ test("Stop before Pi emits accepted steering reports it as undelivered", async (
     ),
     false,
   );
+});
+
+/**
+ * Wires the shared run-input admission service to a real managed harness and a
+ * chat store whose `beforeQueuedUser` projection mirrors llm-client: every
+ * emitted queued user that lacks a committed id is appended as a new message.
+ */
+async function admittedInputFixture(responses: Parameters<typeof managedTestHarness>[0]) {
+  const { tool, atTool, release } = steerWaitTool();
+  const visibleChat: Array<{ id: string; role: string; content: string }> = [];
+  let projectedIds = 0;
+  const { harness, session } = await managedTestHarness(responses, {
+    tools: [tool],
+    beforeQueuedUser: async (message) => {
+      const id = `projected-${++projectedIds}`;
+      visibleChat.push({ id, role: "user", content: String(message.role === "user" ? message.content : "") });
+      return id;
+    },
+  });
+  const generation = {
+    chatId: "chat-1",
+    owner: { documentId: "doc-1" },
+    cancelRequested: false,
+    agent: harness,
+  };
+  const admission = createChatRunInputAdmission({
+    active: new Map([["stream-1", generation]]),
+    isChatDeleting: () => false,
+    appendMessage: async (chatId, message) => {
+      visibleChat.push({ id: message.id!, role: message.role, content: String(message.content) });
+      return { id: chatId, messages: [] } as unknown as Chat;
+    },
+    readChat: async () => null,
+    newMessageId: () => "committed-steer",
+  });
+  return { harness, session, admission, visibleChat, atTool, release };
+}
+
+test("admitted steering appears once in the visible chat and journals its committed id", async () => {
+  const fixture = await admittedInputFixture([
+    fauxAssistantMessage([fauxToolCall("wait_for_steer", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("steered"),
+  ]);
+  const running = fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await fixture.atTool;
+  assert.deepEqual(
+    await fixture.admission.admit({ streamId: "stream-1", mode: "steer", text: "shorter please" }),
+    { admitted: true, queue: "steer", committed: true, messageId: "committed-steer" },
+  );
+  fixture.release();
+  assert.equal((await running).kind, "completed");
+  assert.deepEqual(
+    fixture.visibleChat.filter((message) => message.content === "shorter please").map(({ id }) => id),
+    ["committed-steer"],
+  );
+  assert.deepEqual(
+    (await fixture.session.buildContext()).messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content),
+    ["start", "shorter please"],
+  );
+  assert.equal(
+    (await fixture.session.getBranch()).some((entry) =>
+      entry.type === "custom" && entry.customType === "aiden.chat-message.v1" &&
+      (entry.data as { chatMessageId?: string }).chatMessageId === "committed-steer"),
+    true,
+  );
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+test("Stop before Pi reads admitted steering keeps it as history, not undelivered guidance", async () => {
+  const fixture = await admittedInputFixture([
+    fauxAssistantMessage([fauxToolCall("wait_for_steer", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("never reached"),
+  ]);
+  const running = fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await fixture.atTool;
+  assert.equal(
+    (await fixture.admission.admit({ streamId: "stream-1", mode: "steer", text: "committed early" })).admitted,
+    true,
+  );
+  await fixture.harness.cancelAndSettle();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
 });
 
 test("a failed visible projection of queued input is a managed session failure with recovery", async () => {

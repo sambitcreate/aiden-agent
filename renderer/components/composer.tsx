@@ -967,7 +967,6 @@ export function Composer({
             ? { visualize: payload.visualize, btw: payload.btw }
             : undefined,
         );
-        if (payload.mode === "steer") toast.info("Guidance queued. Aiden will read it at the next step.");
         if (payload.mode === "queue") {
           toast.info(
             payload.afterCompaction
