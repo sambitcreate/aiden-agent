@@ -37,13 +37,19 @@ function fixture(t: test.TestContext) {
   let key = "fresh-key";
   let hold = false;
   let resolutionBarrier: Promise<void> | undefined;
+  let completeHeld: (reason: "stop" | "aborted") => void = () => {};
   const runtime = (): ResolvedModelRuntime => ({
     model: runtimeModel, provider: { id: "fixture", label: "Fixture", kind: "openai", models: ["priced"], baseUrl: model.baseUrl, needsKey: true },
     models: undefined as never, apiKey: key, headers: { Authorization: `Bearer ${key}` },
     streams: { streamSimple: (_model, context, options) => {
       requests.push(options); contexts.push(context);
       const stream = createAssistantMessageEventStream();
-      if (!hold) { const message = usageMessage(); stream.push({ type: "done", reason: "stop", message }); stream.end(message); }
+      completeHeld = (reason) => { const message = { ...usageMessage(), stopReason: reason };
+        if (reason === "aborted") stream.push({ type: "error", reason: "aborted", error: message });
+        else stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+      };
+      if (!hold) completeHeld("stop");
       return stream;
     } },
   });
@@ -55,7 +61,7 @@ function fixture(t: test.TestContext) {
     response(usageMessage());
     return context;
   };
-  return { warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
+  return { warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: "stop" | "aborted") => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
 }
 
 test("warming waits for real usage, snapshots the prefix and resolves fresh credentials at dispatch", async (t) => {
@@ -204,5 +210,25 @@ test("settings changes and cancellation are checked again after asynchronous cre
     release();
     await h.clock.advance(0);
     assert.equal(h.requests.length, 0, action);
+  }
+});
+
+
+test("provider usage arriving after cancellation is recorded once without restarting warming", async (t) => {
+  for (const reason of ["stop", "aborted"] as const) {
+    const h = fixture(t);
+    h.setHold();
+    h.start();
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1);
+    h.signal.abort();
+    assert.equal(h.requests[0]?.signal?.aborted, true);
+    h.completeHeld(reason);
+    await h.clock.advance(0);
+    assert.equal(h.recorded.length, 1, reason);
+    assert.equal(h.clock.timers.size, 0, reason);
+    await h.clock.advance(300_000);
+    assert.equal(h.requests.length, 1, reason);
+    assert.equal(h.recorded.length, 1, reason);
   }
 });
