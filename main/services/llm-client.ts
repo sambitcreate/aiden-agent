@@ -1,10 +1,11 @@
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
+import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -127,6 +128,7 @@ import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admissio
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
+  isLocalModelProvider,
   reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
@@ -1049,6 +1051,7 @@ async function prepareGeneration(
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
+          compactionModelOverrides: settings.compactionModelOverrides,
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1594,6 +1597,8 @@ async function prepareGeneration(
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
+    compactionModelOverrides: settings.compactionModelOverrides,
+    cacheWarmingEnabled: settings.cacheWarmingEnabled === true,
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -1922,6 +1927,8 @@ export const llmClient = {
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
+      compactionModelOverrides,
+      cacheWarmingEnabled,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -2082,6 +2089,7 @@ export const llmClient = {
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
+    let cacheWarmer: PiCacheWarmer | undefined;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
@@ -2389,7 +2397,9 @@ export const llmClient = {
         tools: declared,
       };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
+        compactionReserveTokens: compactionBudget?.reserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2398,13 +2408,10 @@ export const llmClient = {
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
-      assertGenerationContextCapacity({
-        contextWindow: model.contextWindow,
-        systemPrompt,
-        tools: runtimeTools,
-      });
+      assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
+          cacheWarmer?.stop();
           activeCompactionStepId = timeline.compactionStarted();
           logger.info("pi", `Started ${event.reason} compaction for stream ${streamId}.`, {
             model: model.id,
@@ -2449,6 +2456,7 @@ export const llmClient = {
         thinkingLevel,
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
+          ...compactionBudget,
           enabled: piUpgradeCompactionEnabled,
         },
         signal: initialization.controller.signal,
@@ -2559,6 +2567,19 @@ export const llmClient = {
       });
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
+      const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      if (cacheWarmingEnabled && !isLocalModelProvider(runtime.provider) && !preparedBotContext && !options.usageSource && owner.id !== 0 && authoritativeMode !== "assistant-automation") {
+        cacheWarmer = new PiCacheWarmer({
+          signal: initialization.controller.signal,
+          enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
+          recordUsage: async (message, freshRuntime) => {
+            await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
+          },
+        });
+      }
+      const realStream = agentRuntimeOptions.streamFn!;
+      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       candidate = new PiAgentRuntimeHarness({
         contributions: runtimeContributions,
         deferredTools,
@@ -2588,7 +2609,8 @@ export const llmClient = {
             pressure: chatContextPressureFromProjection(projection, projectionOptions),
           });
         },
-        ...buildAgentRuntimeOptions(params.chatId, runtime),
+        ...agentRuntimeOptions,
+        streamFn: observedStream,
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
         runtime.apiKey &&
@@ -2618,6 +2640,7 @@ export const llmClient = {
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
+          compactionReserveTokens: compactionBudget?.reserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {
@@ -3145,6 +3168,9 @@ export const llmClient = {
 
       candidate.subscribe(async (event) => {
         switch (event.type) {
+          case "agent_end":
+            cacheWarmer?.dispose();
+            break;
           case "message_start":
             if (event.message.role === "assistant") {
               requestUsage.started();
@@ -3345,6 +3371,7 @@ export const llmClient = {
         }
       });
     } catch (error) {
+      cacheWarmer?.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3578,6 +3605,7 @@ export const llmClient = {
           error,
         );
       });
+      cacheWarmer?.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -3804,6 +3832,7 @@ export const llmClient = {
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
+          cacheWarmer?.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
