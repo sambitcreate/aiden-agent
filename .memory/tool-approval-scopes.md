@@ -1,6 +1,6 @@
 # Tool approval scopes — 2026-09-27
 
-- Branch `feature/approval-scopes`, based on `origin/main` at `a9baa4aa3`. Plan: `docs/plans/tool-approval-scopes-plan.md`.
+- Branch `feature/approval-scopes`, based on `origin/main` at `a9baa4aa3`. Plan: `docs/plans/completed/tool-approval-scopes-plan.md`.
 - Shared types and helpers live in `renderer/shared/tool-approval-scope.ts`. The rule book and its persistence are in `main/services/tool-approval-rules.ts` (a DataStore `tool-approval-rules.json`), and the singleton is in `tool-approval-rules-main.ts`.
 - `llm-client.ts` computes `toolApprovalRuleTarget(...)` for non-Bot `APPROVAL_TOOL_NAMES` calls in Ask workspaces.
   - A remembered match (chat or always) skips the prompt.
@@ -33,3 +33,5 @@ Remembered file targets preserve leading/trailing whitespace, so distinct filesy
 - Follow-up review: reject raw parent-path segments before normalization; command rules permit tab/newline/carriage-return whitespace but reject other ASCII controls before trimming. Regression covers leading and embedded control characters and parent segments.
 
 Independent review also identified Windows backslash parent segments; raw parent validation now covers both separator forms and mixed separators, with regression coverage.
+
+Status (2026-10-01): merged in PR #273 as contract revision 17 (on main after 0.51.0); plan moved to `docs/plans/completed/`.

@@ -1,6 +1,6 @@
 # Live subagent context window
 
-Status: In review (desktop). Source: pi-subagents #2448, reusing the #187 context meter's formatting and 80% warning threshold.
+Status: Complete (desktop) — merged in [PR #271](https://github.com/sambitcreate/aiden-agent/pull/271) on 2026-09-29 and shipped in 0.51.0. Remote, iOS and Android live context remain a follow-up. Source: pi-subagents #2448, reusing the #187 context meter's formatting and 80% warning threshold.
 
 ## Goal
 

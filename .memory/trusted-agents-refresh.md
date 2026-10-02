@@ -7,3 +7,5 @@ Loader7 including native UTF-8/provider-scope fence, runtime/context81, Bots447,
 PR232 review hardening: trusted AGENTS metadata preflight requires exactly one link. Native read-html enforces exclusive regular-file identity at open and after reading, rejecting hard-linked content and concurrent link changes. Regression coverage exercises preexisting links, a pre-open hard-link swap and post-open link creation. This also makes shared HTML reads fail closed for multiply-linked files; no protocol or native-client DTO changes.
 
 Hard-link correction validation: AGENTS7, native file-mutator27, shared reader IO14, generative UI42 plus artifact2 and browser containment5 pass; type-check and lint pass. No mobile DTO or transcript changes; physical iOS remains untouched.
+
+Status (2026-09-27 plan refresh): PR #232 merged 2026-09-23 and shipped in 0.43.0; plan moved to docs/plans/completed/.
