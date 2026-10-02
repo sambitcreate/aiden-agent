@@ -9,3 +9,5 @@ Pullfrog identified that pinned SDK1.30.0 concatenates multi-variable expression
 
 ## Constrained template syntax correction
 A follow-up review found SDK1.30 also misinterprets single-variable operators/modifiers. Discovery now rejects every form except plain {name} expressions with ASCII identifier names, before any inventory handles are published. Operators, prefix/explode modifiers, comma-separated names, dotted/percent-encoded names and malformed braces fail closed. Accepted plain scalar values use strict RFC6570 percent encoding (including !'()*), without SDK expansion. Repeated separate expressions still work. An unsupported template makes that inventory fail closed; no partial inventory is presented as complete. MCP97 covers the requested single-variable forms, unpublished-handle denial and Unicode/reserved encoding.
+
+Status (2026-09-27 plan refresh): PR #230 merged 2026-09-23 and shipped in 0.43.0; plan moved to docs/plans/completed/.

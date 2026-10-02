@@ -1,6 +1,6 @@
 # Durable chat pull requests
 
-Status: Implemented and independently reviewed; hosted CI acceptance is tracked on PR #184.
+Status: Complete — merged in [PR #184](https://github.com/sambitcreate/aiden-agent/pull/184) on 2026-09-23 and shipped in 0.43.0.
 
 ## Scope
 

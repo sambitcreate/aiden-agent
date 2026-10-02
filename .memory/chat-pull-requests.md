@@ -4,7 +4,7 @@ Work continues on existing PR #184 (`devin/1789864248-chat-pull-requests`), isol
 
 Never normalize a supplied malformed expectedHeadSha to omission. Unknown creates remain pending even after an empty lookup; absence from a list does not establish that a mutation failed. Save link + settle intent atomically. Recovery uses the durable host/repository, independent of chat workspace changes. Same-target pending intents block repeat creates. Post-push identity comes from the frozen endpoint used by Git, never gh's inferred default repository. Unlink dismissal is durable and suppresses current-PR rediscovery until explicit relink.
 
-Two requested Sol medium reviews identified empty-list retries, split link/intent publication, selected-remote routing, and source IPC mismatch; all remediated with focused coverage. Final verification tracked in docs/plans/chat-pull-requests-plan.md and PR #184.
+Two requested Sol medium reviews identified empty-list retries, split link/intent publication, selected-remote routing, and source IPC mismatch; all remediated with focused coverage. Final verification tracked in docs/plans/completed/chat-pull-requests-plan.md and PR #184.
 
 Follow-up review fixes: store settlement checks that the operation is still pending inside the serialized write, preventing stale completions from undoing unlink. Unknown/retargeted/advanced-head attempts can be explicitly cleared only after a confirmation to check GitHub first. Within-repository create destination is named in the dialog; cross-fork upstream creation remains manual.
 
@@ -19,3 +19,5 @@ Failed-recovery deletion follow-up: after fencing admission and draining loads/w
 Dotted-ID recovery isolation follow-up: DataStore recovery and PR deletion share a complete-basename matcher with the fixed hash/operation/suffix fields, preventing chat-1 from consuming chat-1.json recovery files. Cached and cold deletion regressions cover both directions and both artifact suffixes; startup recovery also preserves sibling bytes. Validation: 98 focused PR tests, 255 portable-config/storage tests, 103 service-boundary tests, TypeScript and Electron build pass. Both independent Sol reviews are clean; current-head hosted checks remain pending.
 
 Recovery-token follow-up: artifact ownership also requires the lowercase UUIDv4 operation token emitted by randomUUID. Non-UUID, wrong-version and wrong-variant lookalikes remain untouched during recovery and deletion. Existing recovery fixtures now use generated-format UUIDs. Validation: 99 focused PR tests, 255 portable-config/storage tests, TypeScript and Electron build pass.
+
+Status (2026-09-27 plan refresh): PR #184 merged 2026-09-23 and shipped in 0.43.0; plan moved to docs/plans/completed/.

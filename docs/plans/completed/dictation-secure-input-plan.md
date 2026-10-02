@@ -1,6 +1,6 @@
 # Dictation Secure Input Warning
 
-Status: Implemented for review (`feature/dictation-secure-input`).
+Status: Complete — merged in [PR #267](https://github.com/sambitcreate/aiden-agent/pull/267) on 2026-09-30; on main after 0.51.0, not yet released.
 
 Source: Handy parity tracker, P0 — "dictation paste silently fails while macOS
 Secure Event Input is active".

@@ -8,6 +8,10 @@ complete. The 2026-09-01 foreground failure remediation is also complete. The
 2026-09-01 V1-to-V2 checkpoint repair makes persisted migration verification
 content-addressed across macOS volume remounts while retaining native generation
 checks for same-process writes. Phase 7B coordinator activation is next.
+Implementer run grants merged in PR #247 (0.50.0). Desktop pending-question
+display for `needs_attention` children (#266) and the live child context window
+(#271) shipped in 0.51.0; Remote stop of a single child agent (#275, contract
+revision 16) is on main after 0.51.0.
 
 Spec date: 2026-08-05.
 

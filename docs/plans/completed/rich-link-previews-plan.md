@@ -1,6 +1,6 @@
 # Rich link previews for Chats and Bots
 
-Status: Implemented for review
+Status: Complete — the renderer-only slice merged in [PR #253](https://github.com/sambitcreate/aiden-agent/pull/253) on 2026-09-26 and shipped in 0.50.0. The optional authenticated metadata phase below has not started and needs its own plan.
 
 Baseline: `origin/main` at `7a4d9d0bde09d9dbe81b38d2611ac29dc848ee62` on 2026-09-25.
 

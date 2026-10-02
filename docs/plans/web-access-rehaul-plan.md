@@ -389,7 +389,7 @@ route and requires a user choice rather than silently changing recipients.
 Pool-capable providers (Tavily first) add the `webSearch:keyPool:*` channels
 (`get`, `add`, `remove`, `reorder`, `setStrategy`, `resetCooldown`). They return
 only the redacted pool projection. See the
-[Web Search API key pool plan](web-search-key-pool-plan.md).
+[Web Search API key pool plan](completed/web-search-key-pool-plan.md).
 
 ## UI plan
 
