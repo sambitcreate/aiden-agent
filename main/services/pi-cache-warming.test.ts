@@ -2,7 +2,9 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, Type, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { PiCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
+import { desktopChatExecutionOptions } from "./chat-generation-start.js";
+import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
+import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
 class Clock implements CacheWarmingClock {
@@ -32,6 +34,8 @@ function fixture(t: test.TestContext) {
   const contexts: unknown[] = [];
   const recorded: unknown[] = [];
   let enabled = true;
+  let current = true;
+  let warmCost = 0.10003;
   let resolutions = 0;
   let runtimeModel = model;
   let key = "fresh-key";
@@ -44,7 +48,11 @@ function fixture(t: test.TestContext) {
     streams: { streamSimple: (_model, context, options) => {
       requests.push(options); contexts.push(context);
       const stream = createAssistantMessageEventStream();
-      completeHeld = (reason) => { const message = { ...usageMessage(), stopReason: reason };
+      completeHeld = (reason) => { const response = usageMessage();
+        const message = { ...response, stopReason: reason, usage: {
+          input: 0, output: 1, cacheRead: 100_000, cacheWrite: 0, totalTokens: 100_001,
+          cost: { input: 0, output: 0.00003, cacheRead: warmCost - 0.00003, cacheWrite: 0, total: warmCost },
+        } };
         if (reason === "aborted") stream.push({ type: "error", reason: "aborted", error: message });
         else stream.push({ type: "done", reason: "stop", message });
         stream.end(message);
@@ -53,7 +61,7 @@ function fixture(t: test.TestContext) {
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message) => { recorded.push(message); } });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message) => { recorded.push(message); } });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model) => {
     const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
@@ -61,7 +69,7 @@ function fixture(t: test.TestContext) {
     response(usageMessage());
     return context;
   };
-  return { warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: "stop" | "aborted") => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
+  return { setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: "stop" | "aborted") => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
 }
 
 test("warming waits for real usage, snapshots the prefix and resolves fresh credentials at dispatch", async (t) => {
@@ -134,7 +142,10 @@ test("request abort, endpoint change and fixed one-hour horizon stop warming", a
   await changed.clock.advance(270_000);
   assert.equal(changed.requests.length, 0);
   const capped = fixture(t);
-  capped.start();
+  const inexpensive = { ...model, cost: { ...model.cost, cacheRead: 0.01 } };
+  capped.setWarmCost(0.00103);
+  capped.setModel(inexpensive);
+  capped.start({}, inexpensive);
   for (let i = 0; i < 14; i++) await capped.clock.advance(270_000);
   assert.equal(capped.requests.length, 13);
   assert.equal(capped.clock.timers.size, 0);
@@ -231,4 +242,62 @@ test("provider usage arriving after cancellation is recorded once without restar
     assert.equal(h.requests.length, 1, reason);
     assert.equal(h.recorded.length, 1, reason);
   }
+});
+
+
+test("ordinary desktop chat policy admits warming but remote and background accounting does not grant authority", async (t) => {
+  const desktop = desktopChatExecutionOptions("turn-1", () => {});
+  const owner = { id: 17, isDestroyed: () => false };
+  const policy = { enabled: true, local: false, bot: false, owner, ...desktop };
+  const h = fixture(t);
+  if (canWarmForegroundChat(policy)) h.start();
+  await h.clock.advance(270_000);
+  assert.equal(h.requests.length, 1, "the actual desktop caller's chat source must reach the warmer");
+  const remote = createRemoteChatGenerationOwner({ deviceId: "paired", streamId: "remote-1", publish: () => {} });
+  assert.equal(canWarmForegroundChat({ ...policy, owner: remote.owner }), false);
+  for (const excluded of [
+    { enabled: false }, { local: true }, { bot: true },
+    { owner: { id: 0, isDestroyed: () => false } },
+    { owner: { id: 17, isDestroyed: () => true } },
+    { owner: { id: 17, kind: "remote" as const, isDestroyed: () => false } },
+    { usageSource: "scheduled" as const }, { usageSource: "subagent" as const },
+    { usageSource: "telegram" as const }, { interactionSurface: "telegram" as const },
+    { mode: "assistant-automation" as const },
+  ]) assert.equal(canWarmForegroundChat({ ...policy, ...excluded }), false);
+});
+
+test("repeated refreshes share the savings from one future cache hit", async (t) => {
+  const h = fixture(t); h.start();
+  for (let i = 0; i < 14; i++) await h.clock.advance(270_000);
+  const spent = h.requests.length * 0.10003;
+  const oneAvoidedMiss = 1.25 - 0.10;
+  assert.equal(h.requests.length, 10);
+  assert.ok(oneAvoidedMiss - spent >= 0.05);
+  assert.ok(oneAvoidedMiss - spent - 0.10003 < 0.05, "one more refresh loses the minimum remaining savings");
+  assert.equal(h.clock.timers.size, 0);
+  // A new real provider request establishes a new prefix and savings opportunity.
+  h.start(); await h.clock.advance(270_000);
+  assert.equal(h.requests.length, 11);
+});
+
+test("higher provider-reported charges consume the remaining refresh budget", async (t) => {
+  const h = fixture(t); h.setWarmCost(1.05); h.start();
+  await h.clock.advance(270_000);
+  await h.clock.advance(270_000);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.recorded.length, 1);
+  assert.equal(h.clock.timers.size, 0);
+});
+
+test("lost foreground ownership fences refreshes before and after asynchronous auth resolution", async (t) => {
+  const detached = fixture(t); detached.start(); detached.setCurrent(false);
+  await detached.clock.advance(270_000);
+  assert.equal(detached.resolutions(), 0);
+  assert.equal(detached.requests.length, 0);
+  const pending = fixture(t); let release!: () => void;
+  pending.setResolutionBarrier(new Promise<void>((resolve) => { release = resolve; }));
+  pending.start(); await pending.clock.advance(270_000);
+  pending.setCurrent(false); release(); await pending.clock.advance(0);
+  assert.equal(pending.requests.length, 0);
+  assert.equal(pending.clock.timers.size, 0);
 });

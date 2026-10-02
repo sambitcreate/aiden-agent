@@ -1,4 +1,4 @@
-import { PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
@@ -448,6 +448,7 @@ interface ActiveGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
@@ -469,6 +470,7 @@ const initializing = new Map<
     chatId: string;
     owner: ChatGenerationOwner;
     removeOwnerInvalidation: () => void;
+    stopCacheWarming?: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
@@ -1645,6 +1647,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
+      stopCacheWarming: undefined as (() => void) | undefined,
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
@@ -2554,16 +2557,30 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
-      if (cacheWarmingEnabled && !isLocalModelProvider(runtime.provider) && !preparedBotContext && !options.usageSource && owner.id !== 0 && authoritativeMode !== "assistant-automation") {
+      if (canWarmForegroundChat({
+        enabled: cacheWarmingEnabled,
+        local: isLocalModelProvider(runtime.provider),
+        bot: Boolean(preparedBotContext),
+        owner,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        mode: authoritativeMode,
+      })) {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          isCurrent: () => {
+            const generation = active.get(streamId) ?? initializing.get(streamId);
+            return !!generation && generation.owner === owner && !generation.cancelRequested &&
+              !generation.rendererDetached && !owner.isDestroyed();
+          },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
         });
       }
+      initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       candidate = new PiAgentRuntimeHarness({
@@ -3557,6 +3574,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
+      stopCacheWarming: initialization.stopCacheWarming,
       workspaceId: initialization.workspaceId,
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
@@ -3888,6 +3906,7 @@ export const llmClient = {
     if (generation) generation.rendererDetached = true;
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
+    runtimeOwner.stopCacheWarming?.();
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
