@@ -451,7 +451,7 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
     maxTokens: 2_048,
   };
 
-  for (const stopReason of ["toolUse", "error", "aborted"] as const) {
+  for (const stopReason of ["toolUse", "error", "length", "aborted"] as const) {
     const message: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -473,12 +473,12 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
   }
 
   const summary = await store.summary("7d");
-  assert.equal(summary.totals.requests, 3);
+  assert.equal(summary.totals.requests, 4);
   assert.equal(summary.totals.completedRequests, 1);
-  assert.equal(summary.totals.failedRequests, 1);
+  assert.equal(summary.totals.failedRequests, 2);
   assert.equal(summary.totals.cancelledRequests, 1);
-  assert.equal(summary.totals.unmeteredRequests, 3);
-  assert.equal(summary.totals.costedRequests, 3);
+  assert.equal(summary.totals.unmeteredRequests, 4);
+  assert.equal(summary.totals.costedRequests, 4);
 });
 
 test("ignores impossible persisted dates and recovers with a valid record", async () => {
