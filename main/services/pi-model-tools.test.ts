@@ -6,7 +6,11 @@ import type {
   ImageContent,
   Usage,
 } from "@earendil-works/pi-ai";
-import { createPiModelTools, type PiModelToolsHost } from "./pi-model-tools.js";
+import {
+  createPiModelTools,
+  piModelOperationUsage,
+  type PiModelToolsHost,
+} from "./pi-model-tools.js";
 
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -462,8 +466,15 @@ test("real codemode nested paid calls retain host disclosure admission and bill 
           : { block: true, reason: "User declined disclosure" };
       },
     });
+    let countedTokens = 0;
+    harness.subscribe((event) => {
+      if (event.type === "tool_execution_end")
+        countedTokens +=
+          piModelOperationUsage(event.toolName, event.result)?.totalTokens ?? 0;
+    });
     try {
       await harness.prompt("run");
+      assert.equal(countedTokens, allow ? 15 : 0);
       assert.equal(prompts, 1);
       assert.equal(controls.imageCalls, allow ? 1 : 0);
       assert.equal(charged, allow ? 1 : 0);

@@ -11,6 +11,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { validateDisplayImageDimensions } from "./display-image-extension.js";
 
+/** Parent codemode results aggregate child usage; only provider operations add turn totals. */
+export function piModelOperationUsage(
+  toolName: string,
+  result: { usage?: Usage } | undefined,
+): Usage | undefined {
+  return toolName === "generate_image" || toolName === "classify"
+    ? result?.usage
+    : undefined;
+}
+
 export interface PiModelToolsHost {
   models: Pick<
     Models,

@@ -340,7 +340,7 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
-import { createPiModelTools } from "./pi-model-tools.js";
+import { createPiModelTools, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -3320,6 +3320,9 @@ export const llmClient = {
             timeline.toolRunning(event.toolCallId);
             break;
           case "tool_execution_end": {
+            // Nested calls emit their own events; the enclosing codemode usage
+            // includes these again, so only the actual paid operation counts.
+            turnUsage = addTurnUsage(turnUsage, reportedTokens(piModelOperationUsage(event.toolName, event.result)));
             const denied = deniedToolCalls.delete(event.toolCallId);
             const terminalStatus = generationCancelRequested()
               ? "cancelled"
