@@ -1,3 +1,4 @@
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
@@ -390,6 +391,7 @@ function hasSensitiveProviderUrl(value: unknown): boolean {
 export function isPortableProvider(value: unknown): value is PortableProvider {
   if (!isRecord(value)) return false;
   const provider = value as Partial<PortableProvider>;
+  try { validateLocalClassifierPreference(provider); } catch { return false; }
   if (provider.customModelOptions !== undefined) {
     if (!isRecord(provider.customModelOptions)) return false;
     try {

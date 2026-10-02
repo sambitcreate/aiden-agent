@@ -2928,3 +2928,17 @@ test("custom model overrides survive restart and reset through the config store"
   assert.equal(reset?.modelMetadata?.["qwen3-8b"].overrides, undefined);
   assert.equal(reset?.customModelOptions, undefined);
 });
+
+test("local classifier opt-in persists independently of cached models and can be disabled", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider({ ...provider, llamaCppClassifierEnabled: true });
+  const restarted = createConfigStore(h.stores, h.secrets.port);
+  assert.equal((await restarted.getProvider(provider.id))?.llamaCppClassifierEnabled, true);
+  const portable = await readJson<{ providers: StoredProvider[] }>(h.portableFile);
+  assert.equal(portable.providers[0].llamaCppClassifierEnabled, true);
+  assert.equal("models" in portable.providers[0], false);
+  await restarted.saveProvider({ ...provider, llamaCppClassifierEnabled: false });
+  assert.equal((await h.store.getProvider(provider.id))?.llamaCppClassifierEnabled, false);
+  await assert.rejects(restarted.saveProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: true }), /custom local/);
+  assert.equal((await h.store.getProvider(provider.id))?.deployment, "local");
+});

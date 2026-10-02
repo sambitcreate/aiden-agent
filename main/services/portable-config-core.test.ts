@@ -1422,3 +1422,13 @@ test("portable MCP OAuth metadata validates authority without requiring new fiel
   assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "http://identity.test/metadata" }), false);
   assert.equal(isMcpServer({ ...server, oauth: false, authServerMetadataUrl: "https://identity.test/metadata" }), false);
 });
+
+test("portable classifier capability accepts explicit local custom intent only", () => {
+  const provider = { id: "custom:llama", kind: "openai", label: "llama", baseUrl: "http://localhost:8080/v1", needsKey: false };
+  assert.equal(isPortableProvider(provider), true);
+  assert.equal(isPortableProvider({ ...provider, llamaCppClassifierEnabled: true }), true);
+  assert.equal(isPortableProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: false }), true);
+  for (const change of [{ llamaCppClassifierEnabled: "yes" }, { llamaCppClassifierEnabled: true, deployment: "hosted" }, { llamaCppClassifierEnabled: true, kind: "anthropic" }, { llamaCppClassifierEnabled: true, id: "openai" }, { llamaCppClassifierEnabled: true, isBuiltin: true }]) {
+    assert.equal(isPortableProvider({ ...provider, ...change }), false);
+  }
+});

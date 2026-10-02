@@ -68,6 +68,8 @@ export interface StoredProvider {
    * treat them as local even off localhost.
    */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   /** Legacy marker retained only for persisted custom-connection migration. */
   isPreset?: boolean;
   /**

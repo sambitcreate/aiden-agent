@@ -1,3 +1,5 @@
+import { providerRegistry } from "./provider-registry.js";
+import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
@@ -1480,18 +1482,24 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
+    const localClassifierModels = createLocalClassifierModels({
+      models: providerRegistry.models,
+      providers: await configStore.listProviders(),
+      getProvider: (id) => configStore.getProvider(id),
+      resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
+    });
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
       tools: createPiModelTools({
-        models: runtime.models,
+        models: localClassifierModels.models,
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
           const cost = record.usage?.cost.total;
-          const local = record.provider === runtime.provider.id && isLocalModelProvider(runtime.provider);
+          const local = localClassifierModels.isLocalProvider(record.provider) || (record.provider === runtime.provider.id && isLocalModelProvider(runtime.provider));
           await usageStore.record({
             source: options.usageSource ?? "chat",
             providerId: record.provider,

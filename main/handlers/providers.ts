@@ -1,3 +1,4 @@
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
@@ -174,11 +175,13 @@ function parseProvider(value: unknown): StoredProvider {
     defaultModel,
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
     deployment,
+    llamaCppClassifierEnabled: p.llamaCppClassifierEnabled as boolean | undefined,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
     // Built-in status is derived exclusively from Pi's registry, never from
     // a renderer payload that could redirect native credentials.
     isBuiltin: false,
   };
+  validateLocalClassifierPreference(provider);
   if (provider.id === "custom:onboarding-tailscale") {
     assertOnboardingTailnetBaseUrl(provider.baseUrl);
   }

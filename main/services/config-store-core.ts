@@ -1,3 +1,4 @@
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
@@ -709,6 +710,7 @@ export function createConfigStore(
       provider: StoredProvider,
       isCurrent: () => boolean = () => true,
     ): Promise<Provider> {
+      validateLocalClassifierPreference(provider);
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
