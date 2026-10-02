@@ -1,3 +1,4 @@
+import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -128,6 +129,7 @@ import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
   isLocalModelProvider,
+  modelOperationUsageRecord,
   reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
@@ -342,6 +344,8 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
+import { createPiModelImageReferences } from "./pi-model-image-references.js";
+import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -707,6 +711,19 @@ async function prepareGeneration(
   const displayedHtmlIds = new Set<string>();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
+  const modelImageReferences = createPiModelImageReferences({
+    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    generated: responseImages,
+    readCurrent: async (referenceSignal) => {
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      const current = await chatStore.get(params.chatId);
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
+      return current.messages.flatMap((message) => message.attachments ?? []);
+    },
+  });
   const shareImage = (attachment: Attachment) => {
     const existing = responseImages();
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
@@ -1407,7 +1424,7 @@ async function prepareGeneration(
       assistantMode,
       workspaceRoot: folderPath,
       permission,
-      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+      excluded: false,
     })
   ) {
     const artifactStoreAvailability = displayImageArtifactStore.availability();
@@ -1467,7 +1484,26 @@ async function prepareGeneration(
         return true;
       },
     });
-    generationExtensions.push(displayImageRuntime.extension);
+    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+      generationExtensions.push(displayImageRuntime.extension);
+    }
+    const operationProviders = [runtime.provider, ...await configStore.listProviders()];
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      tools: createPiModelTools({
+        models: runtime.models,
+        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
+        listImages: modelImageReferences.listImages,
+        resolveImage: modelImageReferences.resolveImage,
+        onImage: displayImageRuntime.presentGeneratedImage,
+        // Account at the provider-call boundary, not at nested/parent tool events.
+        onUsage: async (record) => {
+          await usageStore.record(modelOperationUsageRecord(record, operationProviders, options.usageSource ?? "chat"));
+        },
+      })
+        .filter((tool) => !options.excludeToolNames?.has(tool.name)),
+    });
   }
   if (
     !botContext &&
@@ -1577,6 +1613,7 @@ async function prepareGeneration(
     git,
     tools,
     generationExtensions,
+    modelImageReferences,
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
@@ -1907,6 +1944,7 @@ export const llmClient = {
       git,
       tools,
       generationExtensions,
+      modelImageReferences,
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
@@ -2997,6 +3035,26 @@ export const llmClient = {
                           )
                         : summarizeToolCall(context.toolCall.name, context.args);
           }
+          if (context.toolCall.name === "classify") {
+            try {
+              const providerId = (context.args as { provider?: unknown }).provider;
+              const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
+              approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
+              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Classification inputs could not be reviewed." };
+            }
+          }
+          if (context.toolCall.name === "generate_image") {
+            try { summary += await modelImageReferences.disclosure(context.args, signal); }
+            catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Reference images could not be verified." };
+            }
+          }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
           }
@@ -3326,6 +3384,9 @@ export const llmClient = {
             timeline.toolRunning(event.toolCallId);
             break;
           case "tool_execution_end": {
+            // Nested calls emit their own events; the enclosing codemode usage
+            // includes these again, so only the actual paid operation counts.
+            turnUsage = addTurnUsage(turnUsage, reportedTokens(piModelOperationUsage(event.toolName, event.result)));
             const denied = deniedToolCalls.delete(event.toolCallId);
             const terminalStatus = generationCancelRequested()
               ? "cancelled"

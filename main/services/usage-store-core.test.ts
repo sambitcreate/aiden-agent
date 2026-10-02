@@ -6,6 +6,7 @@ import {
   assistantUsageRecord,
   geminiTranscriptionTokens,
   isLocalModelProvider,
+  modelOperationUsageRecord,
   openAITranscriptionTokens,
   reportedTokens,
 } from "./usage-accounting.js";
@@ -606,4 +607,37 @@ test("cache warming charges survive reload and are included in user-visible usag
   assert.equal(summary.totals.requests, 1);
   assert.equal(summary.totals.hostedCostUsd, 0.10003);
   assert.equal(persistence.read().buckets[0]?.source, "cache-warm");
+});
+
+
+test("operation usage follows the selected provider deployment rather than the chat provider", async () => {
+  const hostedChat = { id: "hosted-chat", label: "Hosted chat", baseUrl: "https://chat.example/v1", deployment: "hosted" as const, needsKey: true };
+  const localOperation = { id: "local-images", label: "Local images", baseUrl: "http://127.0.0.1:9090/v1", needsKey: false };
+  const hostedOperation = { id: "hosted-classifier", label: "Hosted classifier", deployment: "hosted" as const, baseUrl: "http://localhost:9000/proxy", needsKey: true };
+  const store = createUsageStore(memoryPersistence(), () => NOW);
+  const operation = (provider: string) => ({ provider, providerLabel: provider, model: "operation-model", modelLabel: "Operation model", status: "completed" as const });
+  for (const model of ["image-model", "classifier-model"]) {
+    const local = modelOperationUsageRecord({ ...operation(localOperation.id), model }, [hostedChat, localOperation], "chat");
+    assert.equal(local.local, true);
+    assert.equal(local.costStatus, "not-applicable");
+    await store.record(local);
+  }
+  const hosted = modelOperationUsageRecord({ ...operation(hostedOperation.id), usage: {
+    input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+    cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+  } }, [localOperation, hostedOperation], "chat");
+  assert.equal(hosted.local, false, "explicit hosted deployment wins even for a loopback proxy and local chat");
+  assert.equal(hosted.costStatus, "reported");
+  await store.record(hosted);
+  const unknown = modelOperationUsageRecord(operation("unknown-provider"), [localOperation], "chat");
+  assert.equal(unknown.local, false, "a local chat does not grant unknown operations local accounting");
+  await store.record(unknown);
+  const summary = await store.summary("1y");
+  assert.equal(summary.totals.requests, 4);
+  assert.equal(summary.totals.localRequests, 2);
+  assert.equal(summary.totals.unpricedHostedRequests, 1);
+  assert.equal(summary.totals.hostedCostUsd, 0.3);
+  const freshFacade = modelOperationUsageRecord(operation(hostedOperation.id), [hostedOperation], "chat", true);
+  assert.equal(freshFacade.local, true, "a host facade can supply its newer authoritative deployment snapshot");
+  assert.equal(freshFacade.costStatus, "not-applicable");
 });
