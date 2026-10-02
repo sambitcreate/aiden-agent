@@ -73143,9 +73143,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.39,
-          "output": 13,
-          "cache_read": 0.8
+          "input": 1,
+          "output": 11.357,
+          "cache_read": 0.29
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -74548,13 +74548,12 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 131072,
-          "output": 65536
+          "context": 163840,
+          "output": 147456
         },
         "cost": {
-          "input": 0.3,
-          "output": 1,
-          "cache_read": 0.135
+          "input": 0.27,
+          "output": 1
         }
       },
       "deepseek/deepseek-chat": {
@@ -75222,9 +75221,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.74,
-          "output": 2.22,
-          "cache_read": 0.037
+          "input": 0.83,
+          "output": 2.5,
+          "cache_read": 0.04
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -77319,7 +77318,7 @@
         },
         "cost": {
           "input": 0.02625,
-          "output": 0.6,
+          "output": 0.928749,
           "cache_read": 0.01125
         }
       },
@@ -78456,9 +78455,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.02,
-          "output": 0.6,
-          "cache_read": 0.02
+          "input": 0.015,
+          "output": 0.676999,
+          "cache_read": 0.002115
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -78540,9 +78539,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0115,
+          "input": 0.0051,
           "output": 1.28,
-          "cache_read": 0.0115
+          "cache_read": 0.0051
         }
       },
       "~x-ai/grok-latest": {
@@ -81030,7 +81029,7 @@
         "open_weights": false,
         "limit": {
           "context": 262144,
-          "output": 235929
+          "output": 32768
         },
         "cost": {
           "input": 0.075,
@@ -81157,12 +81156,11 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 98304
+          "output": 235929
         },
         "cost": {
           "input": 0.6,
-          "output": 2.5,
-          "cache_read": 0.15
+          "output": 2.5
         },
         "canonical_model_id": "moonshotai/kimi-k2-thinking"
       },
@@ -81872,8 +81870,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 202800,
-          "output": 182520
+          "context": 262144,
+          "output": 16384
         },
         "cost": {
           "input": 0.5,
@@ -82255,9 +82253,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.07,
+          "input": 0.12,
           "output": 0.28,
-          "cache_read": 0.002
+          "cache_read": 0.0028
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -110458,9 +110456,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.39,
-          "output": 13,
-          "cache_read": 0.8
+          "input": 1,
+          "output": 11.357,
+          "cache_read": 0.29
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -111803,9 +111801,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0115,
+          "input": 0.0051,
           "output": 1.28,
-          "cache_read": 0.0115
+          "cache_read": 0.0051
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -111850,9 +111848,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.02,
-          "output": 0.6,
-          "cache_read": 0.02
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -111931,12 +111929,11 @@
         "open_weights": true,
         "limit": {
           "context": 163840,
-          "output": 65536
+          "output": 147456
         },
         "cost": {
-          "input": 0.3,
-          "output": 1,
-          "cache_read": 0.135
+          "input": 0.27,
+          "output": 1
         }
       },
       "deepseek/deepseek-chat": {
@@ -113563,7 +113560,7 @@
         "cost": {
           "input": 0.41,
           "output": 3.99,
-          "cache_read": 0.32
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -114734,7 +114731,7 @@
         },
         "cost": {
           "input": 0.02625,
-          "output": 0.6,
+          "output": 0.928749,
           "cache_read": 0.01125
         }
       },
@@ -116042,9 +116039,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.02,
-          "output": 0.6,
-          "cache_read": 0.02
+          "input": 0.015,
+          "output": 0.676999,
+          "cache_read": 0.002115
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -116130,9 +116127,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0115,
+          "input": 0.0051,
           "output": 1.28,
-          "cache_read": 0.0115
+          "cache_read": 0.0051
         }
       },
       "~x-ai/grok-latest": {
@@ -118779,12 +118776,12 @@
         "open_weights": false,
         "limit": {
           "context": 262144,
-          "output": 235929
+          "output": 32768
         },
         "cost": {
-          "input": 0.06,
-          "output": 0.18,
-          "cache_read": 0.012
+          "input": 0.042,
+          "output": 0.1232,
+          "cache_read": 0.0084
         }
       },
       "moonshotai/kimi-k3": {
@@ -118904,12 +118901,11 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 98304
+          "output": 235929
         },
         "cost": {
           "input": 0.6,
-          "output": 2.5,
-          "cache_read": 0.15
+          "output": 2.5
         },
         "canonical_model_id": "moonshotai/kimi-k2-thinking"
       },
@@ -119433,12 +119429,12 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 182520
+          "output": 16384
         },
         "cost": {
-          "input": 0.6,
-          "output": 2.4,
-          "cache_read": 0.12
+          "input": 0.5,
+          "output": 2.2,
+          "cache_read": 0.1
         },
         "canonical_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
       },
