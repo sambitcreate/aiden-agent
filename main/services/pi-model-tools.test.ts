@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createPiModelImageReferences } from "./pi-model-image-references.js";
+import type { Attachment } from "./types.js";
 import test from "node:test";
 import type {
   AssistantImages,
@@ -9,6 +11,7 @@ import type {
 import {
   createPiModelTools,
   piModelOperationUsage,
+  resolvePiModelImageInputs,
   type PiModelToolsHost,
 } from "./pi-model-tools.js";
 
@@ -44,6 +47,7 @@ function fixture() {
   const catalog = [
     {
       type: "image",
+      input: ["text", "image"],
       provider: "fixture",
       id: "image",
       name: "Image",
@@ -67,6 +71,7 @@ function fixture() {
     classifyCalls: 0,
     listed: 0,
     imageSignal: undefined as AbortSignal | undefined,
+    imageContext: undefined as unknown,
     classifierSignal: undefined as AbortSignal | undefined,
     imageEffect: undefined as (() => void) | undefined,
     imageResult: {
@@ -118,6 +123,7 @@ function fixture() {
     ) => {
       controls.imageCalls++;
       controls.imageSignal = options.signal;
+      controls.imageContext = _context;
       controls.imageEffect?.();
       return controls.imageResult;
     },
@@ -158,7 +164,13 @@ test("operation inventory includes only projected image/classifier metadata, nev
   const result = await get("list_operation_models").execute("list", {});
   assert.deepEqual(result.structuredContent, {
     models: [
-      { provider: "fixture", model: "image", label: "Image", type: "image" },
+      {
+        provider: "fixture",
+        model: "image",
+        label: "Image",
+        type: "image",
+        acceptsReferenceImages: true,
+      },
       {
         provider: "fixture",
         model: "classifier",
@@ -516,4 +528,172 @@ test("accounting failures cannot erase paid result usage or mask provider errors
     tools[2]!.execute("failed", classifierRequest),
     /original provider failure/,
   );
+});
+
+function referenceAttachment(id = "chat-image"): Attachment {
+  return {
+    id,
+    name: "Original.png",
+    kind: "image",
+    mimeType: "image/png",
+    size: Buffer.from(PNG, "base64").length,
+    data: PNG,
+  };
+}
+
+test("image references list metadata only and edit with current-chat images after explicit disclosure", async () => {
+  const attachment = referenceAttachment();
+  const generated = referenceAttachment("generated-image");
+  let current = [attachment];
+  const references = createPiModelImageReferences({
+    snapshot: current,
+    readCurrent: async () => current,
+    generated: () => [generated],
+  });
+  const { models, controls } = fixture();
+  let accounted = 0;
+  const tools = createPiModelTools({
+    models,
+    ...references,
+    onUsage: async () => {
+      accounted++;
+    },
+    onImage: async () => {},
+  });
+  const listed = await tools
+    .find((tool) => tool.name === "list_image_references")!
+    .execute("list", {});
+  assert.deepEqual(
+    (listed.structuredContent as { images: { id: string }[] }).images.map(
+      (item) => item.id,
+    ),
+    ["chat-image", "generated-image"],
+  );
+  assert.doesNotMatch(JSON.stringify(listed), /iVBOR/);
+  const args = {
+    ...imageRequest,
+    referenceImageIds: ["chat-image", "generated-image"],
+  };
+  const summary = await references.disclosure(args);
+  assert.match(summary, /2 reference images \(140 bytes total\)/);
+  assert.match(summary, /Original.png \[chat-image\]/);
+  const result = await tools[1]!.execute("edit", args);
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(controls.imageContext, {
+    input: [{ type: "text", text: imageRequest.prompt }, image, image],
+  });
+  assert.equal(accounted, 1);
+  current = [];
+  await assert.rejects(
+    tools[1]!.execute("removed-after-approval", args),
+    /missing, changed/,
+  );
+  assert.equal(controls.imageCalls, 1);
+  assert.equal(accounted, 1);
+});
+
+test("reference authority rejects foreign, changed, ambiguous or malformed images before paid dispatch", async () => {
+  const original = referenceAttachment();
+  let current = [original];
+  const references = createPiModelImageReferences({
+    snapshot: current,
+    readCurrent: async () => current,
+    generated: () => [],
+  });
+  const { models, controls } = fixture();
+  const tool = createPiModelTools({
+    models,
+    ...references,
+    onImage: async () => {},
+  })[1]!;
+  for (const referenceImageIds of [
+    ["other-chat"],
+    ["file:///secret.png"],
+    ["chat-image", "chat-image"],
+    Array.from({ length: 5 }, (_, i) => `image-${i}`),
+  ]) {
+    await assert.rejects(
+      tool.execute("invalid", { ...imageRequest, referenceImageIds }),
+    );
+  }
+  current = [{ ...original, data: "AAAA" }];
+  await assert.rejects(
+    references.resolveImage(original.id),
+    /missing, changed/,
+  );
+  current = [original, { ...original, data: "AAAA" }];
+  assert.deepEqual(await references.listImages(), []);
+  const malformed = createPiModelTools({
+    models,
+    resolveImage: async () => ({
+      name: "broken.png",
+      image: { ...image, data: "!!!!" },
+    }),
+    onImage: async () => {},
+  })[1]!;
+  await assert.rejects(
+    malformed.execute("malformed", {
+      ...imageRequest,
+      referenceImageIds: ["known"],
+    }),
+    /Invalid generated image/,
+  );
+  assert.equal(controls.imageCalls, 0);
+});
+
+test("reference decoding, aggregate pixels, cancellation and model input capability are checked before requests", async () => {
+  const { models, controls } = fixture();
+  const bytes = Buffer.from(PNG, "base64");
+  bytes.writeUInt32BE(4000, 16);
+  bytes.writeUInt32BE(5000, 20);
+  const large = { ...image, data: bytes.toString("base64") };
+  await assert.rejects(
+    resolvePiModelImageInputs(
+      { resolveImage: async () => ({ name: "large.png", image: large }) },
+      ["a", "b", "c"],
+    ),
+    /decoded-pixel limit/,
+  );
+  const tooBig = {
+    ...image,
+    data: Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64"),
+  };
+  await assert.rejects(
+    resolvePiModelImageInputs(
+      { resolveImage: async () => ({ name: "huge.png", image: tooBig }) },
+      ["large"],
+    ),
+    /image/,
+  );
+  const controller = new AbortController();
+  const aborting = createPiModelTools({
+    models,
+    resolveImage: async () => {
+      controller.abort();
+      return { name: "input.png", image };
+    },
+    onImage: async () => {},
+  })[1]!;
+  await assert.rejects(
+    aborting.execute(
+      "abort",
+      { ...imageRequest, referenceImageIds: ["one"] },
+      controller.signal,
+    ),
+    /abort/i,
+  );
+  (controls.catalog[0] as { input?: string[] }).input = ["text"];
+  const textOnly = createPiModelTools({
+    models,
+    resolveImage: async () => ({ name: "input.png", image }),
+    onImage: async () => {},
+  })[1]!;
+  await assert.rejects(
+    textOnly.execute("text-only", {
+      ...imageRequest,
+      referenceImageIds: ["one"],
+    }),
+    /does not support reference images/,
+  );
+  assert.equal(controls.imageCalls, 0);
 });

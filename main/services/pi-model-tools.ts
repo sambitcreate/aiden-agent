@@ -21,7 +21,19 @@ export function piModelOperationUsage(
     : undefined;
 }
 
+export interface PiModelImageReference {
+  id: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+}
+
 export interface PiModelToolsHost {
+  listImages?(signal?: AbortSignal): Promise<readonly PiModelImageReference[]>;
+  resolveImage?(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<{ name: string; image: ImageContent }>;
   models: Pick<
     Models,
     "getAvailableOfType" | "getModelOfType" | "generateImages" | "classify"
@@ -249,6 +261,56 @@ function validImages(output: unknown): {
     throw new Error("The model returned no generated images.");
   return { images, description };
 }
+/** Resolve only host-owned current-chat IDs, and validate the whole batch before dispatch. */
+export async function resolvePiModelImageInputs(
+  host: Pick<PiModelToolsHost, "resolveImage">,
+  value: unknown,
+  signal?: AbortSignal,
+): Promise<{ images: ImageContent[]; references: PiModelImageReference[] }> {
+  if (value === undefined) return { images: [], references: [] };
+  if (!Array.isArray(value) || value.length > MAX_IMAGES)
+    throw new Error("Use at most 4 reference image IDs.");
+  const ids = value.map((id) => text(id, 128, "reference image ID"));
+  if (new Set(ids).size !== ids.length)
+    throw new Error("Reference image IDs must be unique.");
+  if (!ids.length) return { images: [], references: [] };
+  if (!host.resolveImage)
+    throw new Error("Reference images are unavailable in this chat.");
+  const resolved: { id: string; name: string; image: ImageContent }[] = [];
+  for (const id of ids) {
+    signal?.throwIfAborted();
+    const result = await host.resolveImage(id, signal);
+    signal?.throwIfAborted();
+    resolved.push({
+      id,
+      name: text(result.name, 256, "reference image name"),
+      image: result.image,
+    });
+  }
+  const { images } = validImages(resolved.map((item) => item.image));
+  const pixels = images.reduce((sum, item) => {
+    const size = validateDisplayImageDimensions(
+      Buffer.from(item.data, "base64"),
+      item.mimeType,
+      "Reference image",
+    );
+    return sum + size.width * size.height;
+  }, 0);
+  if (pixels > 40_000_000)
+    throw new Error(
+      "Reference images exceed the 40-million decoded-pixel limit.",
+    );
+  return {
+    images,
+    references: images.map((image, index) => ({
+      id: resolved[index]!.id,
+      name: resolved[index]!.name,
+      mimeType: image.mimeType,
+      bytes: Buffer.from(image.data, "base64").length,
+    })),
+  };
+}
+
 function validAnswers(
   value: unknown,
   requested: Record<string, ClassifierQuestion>,
@@ -438,6 +500,9 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
             model: text(model.id, 256, "model"),
             label: text(model.name, 512, "model name"),
             type,
+            ...(model.type === "image"
+              ? { acceptsReferenceImages: model.input.includes("image") }
+              : {}),
           });
         }
       }
@@ -453,16 +518,25 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     name: "generate_image",
     label: "Generate image",
     description:
-      "Send a prompt to a configured image-generation model and display its generated images. Uses that provider's credentials and may incur charges. Use list_operation_models to choose an image model.",
+      "Send a prompt to a configured image-generation model and display its generated images. Uses that provider's credentials and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted.",
     parameters: Type.Object(
-      { ...identity, prompt: Type.String({ minLength: 1, maxLength: 16_384 }) },
+      {
+        ...identity,
+        prompt: Type.String({ minLength: 1, maxLength: 16_384 }),
+        referenceImageIds: Type.Optional(
+          Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+            maxItems: MAX_IMAGES,
+            uniqueItems: true,
+          }),
+        ),
+      },
       { additionalProperties: false },
     ),
     async execute(id, args, signal) {
       signal?.throwIfAborted();
       const input = fields(
         args,
-        ["provider", "model", "prompt"],
+        ["provider", "model", "prompt", "referenceImageIds"],
         "image request",
       );
       const provider = text(input.provider, 128, "provider"),
@@ -478,10 +552,18 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         throw new Error(
           "Unknown image model. Use list_operation_models to find a configured image model.",
         );
+      const { images: references } = await resolvePiModelImageInputs(
+        host,
+        input.referenceImageIds,
+        signal,
+      );
+      if (references.length && !model.input.includes("image"))
+        throw new Error("This image model does not support reference images.");
+      signal?.throwIfAborted();
       const result = await request(model, signal, () =>
         host.models.generateImages(
           model,
-          { input: [{ type: "text", text: prompt }] },
+          { input: [{ type: "text", text: prompt }, ...references] },
           { signal },
         ),
       );
@@ -589,10 +671,47 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       }
     },
   };
+  const referenceTools: AgentTool[] = host.listImages
+    ? [
+        {
+          name: "list_image_references",
+          label: "List reference images",
+          description:
+            "List IDs, names, MIME types and byte counts of images attached to this chat for generate_image editing or reference input. Does not send images to a provider.",
+          parameters: Type.Object({}, { additionalProperties: false }),
+          async execute(_id, args, signal) {
+            fields(args, [], "reference image list");
+            signal?.throwIfAborted();
+            const available = await host.listImages!(signal);
+            signal?.throwIfAborted();
+            const references = available.slice(0, 100).map((item) => ({
+              id: text(item.id, 128, "image ID"),
+              name: text(item.name, 256, "image name"),
+              mimeType: text(item.mimeType, 128, "image MIME type"),
+              bytes: item.bytes,
+            }));
+            const structuredContent = {
+              images: references,
+              truncated: available.length > 100,
+            };
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(structuredContent) },
+              ],
+              structuredContent,
+              details: null,
+            };
+          },
+        },
+      ]
+    : [];
   return [
     Object.assign(list, { codemode: true, replay: "safe" as const }),
     ...[generate, classify].map((tool) =>
       Object.assign(tool, { codemode: true, replay: "never" as const }),
+    ),
+    ...referenceTools.map((tool) =>
+      Object.assign(tool, { codemode: true, replay: "safe" as const }),
     ),
   ];
 }

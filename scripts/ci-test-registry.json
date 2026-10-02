@@ -348,6 +348,7 @@
         "main/services/mcp-tool-result.test.ts",
         "main/services/peer-host-registry.test.ts",
         "main/services/peer-transport.test.ts",
+        "main/services/pi-model-tools.test.ts",
         "main/services/schedule-guard.test.ts",
         "main/services/scheduled-settings-core.test.ts",
         "main/services/scheduled-task-application-service.test.ts",

@@ -319,7 +319,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Attachments & Vision",
     description:
-      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline. Generate images with configured image models after approving the prompt and possible provider charges.",
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline. Generate or edit attached images with configured image models after approving the prompt, reference images, and possible provider charges.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
