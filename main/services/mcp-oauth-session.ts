@@ -138,6 +138,7 @@ export class McpOAuthAuthorizationFlow {
     const scopes = [...new Set([grantedScope, result.searchParams.get("scope")].filter(Boolean).join(" ").split(/\s+/u).filter(Boolean))];
     this.requestedScope = scopes.join(" ") || undefined;
     if (this.requestedScope) result.searchParams.set("scope", this.requestedScope);
+    if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
     this.issuerRequired = metadata !== undefined && "authorization_response_iss_parameter_supported" in metadata &&

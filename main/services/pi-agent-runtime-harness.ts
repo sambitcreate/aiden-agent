@@ -1,4 +1,4 @@
-import { Agent, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
+import { Agent, runToolCall, type AgentToolCallOutcome, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
   getCurrentSystemPrompt,
@@ -9,6 +9,8 @@ import {
   type Models,
   type ProviderResponse,
   type SimpleStreamOptions,
+  type NestedToolCalls,
+  type JsonObject,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import {
@@ -33,7 +35,7 @@ import {
 } from "./pi-runtime-effect-core.js";
 import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
-import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+import { isPiCodemodeCallable, piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { providerFailureDiagnosticFields, providerFailureFromTerminalOutcome } from "./provider-failure.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
@@ -673,14 +675,19 @@ function applyAfterToolPatch(
   context: AfterToolCallContext,
   patch: AfterToolCallResult,
 ): AfterToolCallContext {
+  const structuredContent = patch.structuredContent ?? (patch.content ? undefined : context.result.structuredContent);
+  const result = {
+    ...context.result,
+    ...(patch.content === undefined ? {} : { content: patch.content }),
+    ...(patch.details === undefined ? {} : { details: patch.details }),
+    ...(patch.usage === undefined ? {} : { usage: patch.usage }),
+    ...(patch.terminate === undefined ? {} : { terminate: patch.terminate }),
+  };
+  if (structuredContent === undefined) delete result.structuredContent;
+  else result.structuredContent = structuredContent;
   return {
     ...context,
-    result: {
-      ...context.result,
-      ...(patch.content === undefined ? {} : { content: patch.content }),
-      ...(patch.details === undefined ? {} : { details: patch.details }),
-      ...(patch.terminate === undefined ? {} : { terminate: patch.terminate }),
-    },
+    result,
     isError: patch.isError ?? context.isError,
   };
 }
@@ -757,6 +764,11 @@ async function waitForManagedPromise<T>(
 export class PiAgentRuntimeHarness {
   private static readonly MAX_ACCEPTED_QUEUE_MESSAGES = 32;
   private readonly agent: Agent;
+  private readonly agentListeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
+  private readonly activeTools = new Map<string, string>();
+  private readonly nestedCalls = new Map<string, NestedToolCalls>();
+  private readonly terminatedNestedParents = new Set<string>();
+  private nestedToolQueue: Promise<unknown> = Promise.resolve();
   private readonly onFault: (fault: PiHarnessFault) => void;
   private readonly durability?: PiRuntimeSessionBinding;
   private readonly identity: PiRuntimeIdentity;
@@ -1230,6 +1242,8 @@ export class PiAgentRuntimeHarness {
                 : {
                     content: current.result.content,
                     details: current.result.details,
+                    structuredContent: current.result.structuredContent,
+                    usage: current.result.usage,
                     isError: current.isError,
                     terminate: current.result.terminate,
                   };
@@ -1237,7 +1251,17 @@ export class PiAgentRuntimeHarness {
           : undefined,
     });
 
-    this.agent.subscribe((event) => {
+    this.subscribeAgent((event) => {
+      if (event.type === "tool_execution_start") this.activeTools.set(event.toolCallId, event.toolName);
+      else if (event.type === "tool_execution_end") this.activeTools.delete(event.toolCallId);
+      else if (event.type === "message_end" && event.message.role === "toolResult") {
+        const calls = this.nestedCalls.get(event.message.toolCallId);
+        if (calls) {
+          event.message.nestedCalls = structuredClone(calls);
+          this.nestedCalls.delete(event.message.toolCallId);
+          this.terminatedNestedParents.delete(event.message.toolCallId);
+        }
+      }
       if (event.type === "agent_start" && this.managedRunning && !this.appCancelRequested) {
         this.managedQueueOpen = true;
       } else if (
@@ -1252,13 +1276,16 @@ export class PiAgentRuntimeHarness {
         this.managedQueueOpen = false;
       } else if (event.type === "agent_end") {
         this.managedQueueOpen = false;
+        this.activeTools.clear();
+        this.nestedCalls.clear();
+        this.terminatedNestedParents.clear();
       }
     });
 
     for (const extension of extensions) {
       const observer = extension.onEvent;
       if (!observer) continue;
-      this.agent.subscribe((event) => {
+      this.subscribeAgent((event) => {
         let snapshot: AgentEvent;
         try {
           snapshot = structuredClone(event) as AgentEvent;
@@ -1280,7 +1307,7 @@ export class PiAgentRuntimeHarness {
     }
 
     if (durability) {
-      this.agent.subscribe(async (event) => {
+      this.subscribeAgent(async (event) => {
         if (event.type === "tool_execution_start") {
           this.turnHadToolExecution = true;
           return;
@@ -1462,7 +1489,7 @@ export class PiAgentRuntimeHarness {
         }
       };
     }
-    this.agent.subscribe((event) => {
+    this.subscribeAgent((event) => {
       const privateFailure =
         event.type === "message_end" && event.message.role === "assistant"
           ? piRuntimePrivateFailure(event.message)
@@ -1477,6 +1504,83 @@ export class PiAgentRuntimeHarness {
 
   get state(): AgentState {
     return this.agent.state;
+  }
+
+  private subscribeAgent(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
+    this.agentListeners.add(listener);
+    const unsubscribe = this.agent.subscribe(listener);
+    return () => { unsubscribe(); this.agentListeners.delete(listener); };
+  }
+
+  private async emitNestedEvent(event: AgentEvent, signal: AbortSignal): Promise<void> {
+    for (const listener of [...this.agentListeners]) await listener(event, signal);
+  }
+
+  /** Programmatic calls use the same approvals, effects and observers as model-issued calls. */
+  executeNestedToolCall(parentToolCallId: string, name: string, args: unknown, signal?: AbortSignal): Promise<AgentToolCallOutcome> {
+    const operation = this.nestedToolQueue.then(async () => {
+      this.assertUsable();
+      if (!this.running || this.activeTools.get(parentToolCallId) !== "codemode") throw new Error("No active codemode tool owns this call.");
+      if (this.criticalFault || this.policyFault || this.managedHostFault || this.terminatedNestedParents.has(parentToolCallId)) throw new Error("The nested tool runtime has stopped.");
+      const activeSignal = this.agent.signal;
+      if (!activeSignal) throw new Error("The tool runtime is not active.");
+      const callSignal = signal ? AbortSignal.any([signal, activeSignal]) : activeSignal;
+      callSignal.throwIfAborted();
+      const tools = this.agent.state.tools;
+      const tool = tools.find((item) => item.name === name && isPiCodemodeCallable(item));
+      if (!tool) throw new Error("This tool is not available to codemode.");
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
+      const serialized = JSON.stringify(args);
+      if (Buffer.byteLength(serialized) > 32_768) throw new Error("Nested tool arguments exceed 32 KiB.");
+      const assistantMessage = [...this.agent.state.messages].reverse().find((message): message is AssistantMessage =>
+        message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === parentToolCallId));
+      if (!assistantMessage) throw new Error("The parent tool's durable assistant plan is unavailable.");
+      const records = this.nestedCalls.get(parentToolCallId) ?? { calls: [], complete: true };
+      if (records.calls.length >= 128) throw new Error("Codemode is limited to 128 nested calls per script.");
+      this.nestedCalls.set(parentToolCallId, records);
+      const id = `${parentToolCallId}/${records.calls.length + 1}`;
+      const argumentsSnapshot = JSON.parse(serialized) as JsonObject;
+      const argumentsBytes = Buffer.byteLength(serialized);
+      const retainedBytes = records.calls.reduce((total, entry) => total + (entry.arguments ? Buffer.byteLength(JSON.stringify(entry.arguments)) : 0), 0);
+      const retain = argumentsBytes <= 8192 && retainedBytes + argumentsBytes <= 32_768;
+      const record: NestedToolCalls["calls"][number] = {
+        id, name, status: "unfinished",
+        ...(retain ? { arguments: argumentsSnapshot as NonNullable<NestedToolCalls["calls"][number]["arguments"]> } : { argumentsBytes }),
+      };
+      if (!retain) records.complete = false;
+      records.calls.push(record);
+      const started = Date.now();
+      const toolCall = { type: "toolCall" as const, id, name, arguments: argumentsSnapshot };
+      try {
+        await this.emitNestedEvent({ type: "tool_execution_start", toolCallId: id, toolName: name, args: argumentsSnapshot }, callSignal);
+        const outcome = await runToolCall(toolCall, {
+          tools, assistantMessage, context: { messages: this.agent.state.messages, tools }, signal: callSignal,
+          beforeToolCall: async (context, hookSignal) => {
+            callSignal.throwIfAborted();
+            const result = await this.agent.beforeToolCall?.(context, hookSignal);
+            callSignal.throwIfAborted();
+            return result;
+          },
+          afterToolCall: this.agent.afterToolCall,
+          onUpdate: (partialResult) => this.emitNestedEvent({ type: "tool_execution_update", toolCallId: id, toolName: name, args: argumentsSnapshot, partialResult }, callSignal),
+        });
+        record.status = outcome.isError ? "error" : "ok";
+        if (outcome.result.terminate) this.terminatedNestedParents.add(parentToolCallId);
+        record.durationMs = Date.now() - started;
+        await this.emitNestedEvent({ type: "tool_execution_end", toolCallId: id, toolName: name, result: outcome.result, isError: outcome.isError }, callSignal);
+        return outcome;
+      } catch (error) {
+        records.complete = false;
+        this.criticalFault ??= toError(error);
+        if (this.managedRunning) this.managedHostFault ??= "lifecycle";
+        this.agent.abort();
+        throw error;
+      } finally {
+        this.activeTools.delete(id);
+      }
+    });
+    this.nestedToolQueue = operation.catch(() => undefined);
+    return operation;
   }
 
   get signal(): AbortSignal | undefined {
@@ -1512,7 +1616,7 @@ export class PiAgentRuntimeHarness {
   subscribe(
     listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void,
   ): () => void {
-    return this.agent.subscribe(async (event, signal) => {
+    return this.subscribeAgent(async (event, signal) => {
       try {
         await listener(event, signal);
       } catch (error) {

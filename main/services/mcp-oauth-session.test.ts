@@ -227,6 +227,9 @@ test("step-up authorization retains granted scopes only for the same protected-r
   const flow = new McpOAuthAuthorizationFlow();
   const request = flow.authorizationUrl(new URL(`https://accounts.example.test/authorize?state=${flow.state}&scope=files.write%20files.read`), fresh.grantedScope);
   assert.equal(request.searchParams.get("scope"), "files.read offline_access files.write");
+  assert.equal(request.searchParams.get("prompt"), "consent");
+  const explicit = new McpOAuthAuthorizationFlow();
+  assert.equal(explicit.authorizationUrl(new URL(`https://accounts.example.test/authorize?state=${explicit.state}&prompt=login`), "offline_access").searchParams.get("prompt"), "login");
   assert.deepEqual(sessionForFreshMcpAuthorization(session, "https://mcp.example.test/mcp?tenant=two"), {
     authorizationBinding: "https://mcp.example.test/mcp?tenant=two",
   });

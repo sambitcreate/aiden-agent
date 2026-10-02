@@ -7,6 +7,15 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testWorkspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() throws {
+        let data = Data(#"{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"#.utf8)
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: data)
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(timeline.steps.map(\.toolCallId), ["call-1", "call-2"])
+        XCTAssertEqual(timeline.steps.map(\.toolName), ["codemode", "read_file"])
+        XCTAssertEqual(Set(timeline.steps.map(\.id)).count, 2)
+    }
+
     func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
             let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
