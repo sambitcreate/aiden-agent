@@ -1339,19 +1339,14 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
 /**
  * Shared foreground admission for mid-flight input. Same Mac-owned boundary
  * as Remote `POST /streams/{id}/inputs`; the renderer document must own the
- * generation. Desktop callers keep their local queue UX — this surface exists
- * for parity tests and future steer/queue work.
+ * generation. Desktop Steer (composer and queued rows) uses it; desktop
+ * follow-ups keep their local queue UX.
  */
 export function admitChatRunInput(
   streamId: string,
   input: { mode: ChatRunInputMode; text: string },
 ): Promise<ChatRunInputAdmissionResult> {
   return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
-}
-
-export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
-  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
-  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };

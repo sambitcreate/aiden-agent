@@ -1,6 +1,11 @@
-import type { Attachment } from "./types";
+import type { Attachment, ChatMessage } from "./types";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
+import {
+  MAX_RUN_INPUT_TEXT,
+  type ChatRunInputAdmissionResult,
+  type ChatRunInputRejectionReason,
+} from "../shared/chat-run-input";
 
 export interface QueuedChatMessage {
   id: string;
@@ -161,6 +166,18 @@ export class ChatMessageQueue {
     this.publish({ ...this.snapshot, sendingId: message.id });
     return message;
   }
+  /**
+   * Claim one specific message for an explicit user action (Steer). Unlike
+   * `claim()`, a paused or compaction-held queue does not block it, because
+   * the user chose this message; an open edit or another in-flight send does.
+   */
+  claimById(id: string): QueuedChatMessage | undefined {
+    if (this.snapshot.sendingId || this.snapshot.editingId === id) return;
+    const message = this.snapshot.messages.find((item) => item.id === id);
+    if (!message) return;
+    this.publish({ ...this.snapshot, sendingId: message.id });
+    return message;
+  }
   settle(id: string, outcome: "sent" | "failed" | "deferred") {
     if (this.snapshot.sendingId !== id) return;
     this.publish({
@@ -226,4 +243,96 @@ export async function deliverQueuedMessage(input: {
     }
     input.onError(error);
   }
+}
+
+/** Steering carries plain text only; attachments, skills and visualize need a full turn. */
+export function canSteerQueuedMessage(message: QueuedChatMessage): boolean {
+  return (
+    message.text.trim().length > 0 &&
+    message.text.length <= MAX_RUN_INPUT_TEXT &&
+    message.attachments.length === 0 &&
+    !message.skillInvocation &&
+    !message.options?.visualize
+  );
+}
+
+/** User-facing copy for a steer that main did not write to the transcript. */
+export function steerRejectionMessage(reason: ChatRunInputRejectionReason | undefined): string {
+  switch (reason) {
+    case "cancelled":
+      return "Aiden is stopping this response, so it can't take guidance.";
+    case "capacity":
+      return "This response already has the maximum pending guidance. Queue it instead.";
+    case "invalid":
+      return "Steer accepts plain text only.";
+    default:
+      return "The current response has ended. Send your message normally.";
+  }
+}
+
+export type SteerQueuedMessageOutcome =
+  /** Pi accepted the guidance; the transcript already shows it. */
+  | { kind: "admitted" }
+  /** Saved as conversation history, but the run ended before Pi accepted it. */
+  | { kind: "committed"; reason?: ChatRunInputRejectionReason }
+  /** Nothing was written; the message stays queued. */
+  | { kind: "rejected"; reason?: ChatRunInputRejectionReason }
+  /** The outcome is unknown; the message stays queued and the queue pauses. */
+  | { kind: "unknown"; error: unknown }
+  /** The message cannot be steered, or the queue is busy with it. */
+  | { kind: "unavailable" };
+
+/**
+ * Send one queued message into the active run through main's run-input
+ * admission. A committed receipt always removes the row, because main already
+ * holds the message as history. An uncommitted rejection keeps it queued for
+ * the normal follow-up path. An unknown outcome keeps it but pauses the queue,
+ * so it is never auto-sent as a possible duplicate turn.
+ */
+export async function steerQueuedMessage(input: {
+  queue: ChatMessageQueue;
+  id: string;
+  admit: (text: string) => Promise<ChatRunInputAdmissionResult>;
+}): Promise<SteerQueuedMessageOutcome> {
+  const candidate = input.queue.getSnapshot().messages.find((item) => item.id === input.id);
+  if (!candidate || !canSteerQueuedMessage(candidate)) return { kind: "unavailable" };
+  const message = input.queue.claimById(input.id);
+  if (!message) return { kind: "unavailable" };
+  let receipt: ChatRunInputAdmissionResult;
+  try {
+    receipt = await input.admit(message.text);
+  } catch (error) {
+    input.queue.settle(message.id, "failed");
+    return { kind: "unknown", error };
+  }
+  if (receipt.committed) {
+    input.queue.settle(message.id, "sent");
+    return receipt.admitted ? { kind: "admitted" } : { kind: "committed", reason: receipt.reason };
+  }
+  input.queue.settle(message.id, "deferred");
+  return { kind: "rejected", reason: receipt.reason };
+}
+
+/**
+ * Show run input main already committed in the open chat right away, instead
+ * of waiting for the running response to finish and reload the transcript.
+ * Keyed by the committed message id, so a later reload never duplicates it.
+ */
+export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
+  chat: T,
+  committed: { messageId: string; text: string; createdAt: number },
+): T {
+  if (chat.messages.some((message) => message.id === committed.messageId)) return chat;
+  return {
+    ...chat,
+    messages: [
+      ...chat.messages,
+      {
+        id: committed.messageId,
+        role: "user",
+        content: committed.text,
+        createdAt: committed.createdAt,
+      },
+    ],
+  };
 }
