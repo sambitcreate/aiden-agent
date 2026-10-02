@@ -1,6 +1,6 @@
 # Mobile transcript polish (Hermex Tier 1)
 
-Status: Implemented for review. Hosted CI and physical-device visual acceptance are still open.
+Status: Complete — merged in [PR #277](https://github.com/sambitcreate/aiden-agent/pull/277) on 2026-09-29 and shipped in 0.51.0. Physical-device visual acceptance remains a follow-up.
 
 ## Goal
 

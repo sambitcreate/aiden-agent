@@ -1,6 +1,6 @@
 # Linux macOS parity reconciliation
 
-Status: Active — phases 1–3c implemented and reviewed; phase 4 hosted validation running; main 0.43.0 reconciliation merge in progress; Fedora Computer Use prerequisites in progress.
+Status: Active — phases 1–3c implemented and reviewed; the main reconciliation merged to main in [PR #71](https://github.com/sambitcreate/aiden-agent/pull/71) on 2026-09-26 and shipped in 0.50.0; Fedora Computer Use prerequisites in progress.
 
 Baseline: Linux `4747cf95`, macOS main `origin/main` (0.43.0).
 

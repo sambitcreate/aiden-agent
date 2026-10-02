@@ -1,6 +1,6 @@
 # Tool approval scopes: once, this chat, always
 
-Status: Implemented for review (branch `feature/approval-scopes`).
+Status: Complete — merged in [PR #273](https://github.com/sambitcreate/aiden-agent/pull/273) on 2026-09-30 as Aiden Remote contract revision 17; on main after 0.51.0, not yet released.
 
 ## Goal
 
