@@ -1,6 +1,6 @@
 # Timed ask-user waits with late-reply handling
 
-Status: Implemented for review.
+Status: Complete — merged in [PR #270](https://github.com/sambitcreate/aiden-agent/pull/270) on 2026-09-29 and shipped in 0.51.0. CLI timeout policy and native late-answer prefill remain follow-ups.
 
 Source: the DeepSeek harness comparison page and the 2026-09-24..27 digests. They point out that an `ask_user_question` wait can block an unattended run forever, and that an answer arriving after the agent has moved on is silently dropped.
 

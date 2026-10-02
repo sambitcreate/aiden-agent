@@ -11,3 +11,5 @@ Onboarding's existing MCP tile now discloses service-provided tool guidance with
 Validation: MCP90, onboarding56, Bot447, scheduled151 passed. Full type-check, ESLint and whitespace checks passed after test-fixture fixes. New mcp-server-instructions.test.ts is registered in test:mcp. Both requested independent GPT-5.6 Sol medium reviews (blast radius; adversarial/edge cases) clear. Reviewers confirmed exact tool/server identity, final filtering, immutable lifetime, context budget and fail-closed bounds. Hosted checks and review remain PR follow-through gates.
 
 Original scope remains partial: scoped MCP resource operations and trusted AGENTS loading/request-boundary prompt refresh remain concrete deliverables. Capability status is separate #226, skill policy #214, result spills another owner's work. This change claims no resource access, provider upgrade or native acceptance.
+
+Status (2026-09-27 plan refresh): PR #229 merged 2026-09-23 (0.43.0). The resources and trusted AGENTS deliverables listed above as remaining also merged (#230, #232), so the original assignment is complete; plan and audit are in docs/plans/completed/.

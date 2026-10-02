@@ -1,7 +1,7 @@
 # Skill and MCP session context — remaining-scope audit
 
 Date: 2026-09-22. Baseline: origin/main `c8c09e0d239dd596a68b7a5d5719d543399d077b`.
-Status: Partial. This audit accounts for the original assignment; it does not claim the whole program is complete.
+Status: Complete (updated 2026-09-27). Every deliverable this audit classified merged to main on 2026-09-23 and shipped in 0.43.0: skill invocation policy ([#214](https://github.com/sambitcreate/aiden-agent/pull/214)), advertised capability status ([#226](https://github.com/sambitcreate/aiden-agent/pull/226)), scoped server instructions ([#229](https://github.com/sambitcreate/aiden-agent/pull/229)), scoped resources ([#230](https://github.com/sambitcreate/aiden-agent/pull/230)) and trusted AGENTS refresh ([#232](https://github.com/sambitcreate/aiden-agent/pull/232)). The table below is the original 2026-09-22 classification.
 
 | Item | Classification | Evidence and completion boundary |
 | --- | --- | --- |

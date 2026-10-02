@@ -1,6 +1,6 @@
 # Durable tool output and produced files
 
-Status: Implemented — local checks and independent reviews passed; physical iOS execution and hosted PR checks pending.
+Status: Complete — merged in [PR #219](https://github.com/sambitcreate/aiden-agent/pull/219) on 2026-09-23 and shipped in 0.43.0. Physical iOS execution remains a device-acceptance follow-up.
 
 ## Confirmed scope
 

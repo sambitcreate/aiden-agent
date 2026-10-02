@@ -1,6 +1,6 @@
 # Dictation: Parakeet lifecycle, activation modes, and custom dictionary
 
-Status: Implemented for review (branch `feature/dictation-parakeet-modes`).
+Status: Complete — merged in [PR #279](https://github.com/sambitcreate/aiden-agent/pull/279) on 2026-09-30; on main after 0.51.0, not yet released. VAD, history and mute remain later work; real-hardware acceptance is still pending.
 
 This is the first slice of the Handy-inspired P1 dictation work. VAD, dictation history, and mute-while-recording come later.
 
