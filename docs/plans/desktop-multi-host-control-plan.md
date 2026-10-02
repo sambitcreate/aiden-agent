@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. Implementation of the nine-PR sequence below has not started.
+Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in progress.
 Date: 2026-09-09; revised 2026-10-02.
 Source baseline: `d724ff76d` (origin/main, 2026-10-02). Remote contract revision 18.
 
@@ -150,8 +150,8 @@ Revoking a controller drains its subscriptions and in-flight controls without ca
 
 ### 3. Host backend
 
-- **Run observer bus.** `llm-client.ts` keeps one generation owner, but every generation event is also appended to a `HostRunRegistry`. This covers local renderer, remote device, Bot, schedule, Telegram and child-run origins. The registry owns a per-run append-only journal with `runId`, epoch, sequence and bounded retention. The existing device stream journal becomes a view over it, preserving the current wire format for mobile.
-- **Persistence fix (blocker d).** Use per-run append-only segments plus a debounced checkpoint, and flush durably at terminal and control boundaries. If text batching is used, the amount of RAM-only text that can be lost is bounded and documented. Wake-then-read delivery means slow subscribers read from the journal rather than growing their own buffers.
+- **Run observer bus.** `llm-client.ts` keeps one generation owner, but every generation event is also appended to a `HostRunRegistry`. This covers local renderer, remote device, Bot, schedule, Telegram and child-run origins. The registry owns an in-memory, per-run journal with `runId`, a per-process epoch, contiguous sequences and bounded retention: 4,096 events or 4 MiB per run, 32 MiB in total, 128 runs, and 10 minutes after a run ends. A host restart changes the epoch, which tells observers to take a fresh snapshot. Both journals produce events through one shared content projection (`run-event-projection.ts`), so the durable device stream journal keeps its current mobile wire format. Making the device journal a view over the registry is deferred to PR 2, where the `/runs/*` routes need it.
+- **Persistence fix (blocker d).** PR 1 coalesces non-boundary stream-journal writes (deltas, timeline, tool progress) into at most one write per 250 ms, and writes immediately at terminal, approval, question, cancel, snapshot and state-change boundaries. Per-run append-only segments remain an option if measurements in PR 9 show the coalesced checkpoint is still too costly. If text batching is used, the amount of RAM-only text that can be lost is bounded and documented. Wake-then-read delivery means slow subscribers read from the journal rather than growing their own buffers.
 - **Host feed.** `GET /host/events` (SSE, `host:events`) emits:
   - `snapshot {epoch, sequence, summaries, workspaces, bots}`
   - upserts and removals for `chat`, `workspace` and `bot`
@@ -244,7 +244,7 @@ Nine PRs, each mergeable on its own, with the narrow suites green locally before
 
 | # | PR | Scope | Exit criteria |
 | --- | --- | --- | --- |
-| 1 | Run observer bus + persistence | `HostRunRegistry`, fan-out from `llm-client`, per-run append-only journal, device-stream view over it, fix for blocker d | Local renderer behaviour unchanged. Mobile stream fixtures pass. Disk bytes per streamed event are flat in run length. |
+| 1 | Run observer bus + persistence ([task plan](desktop-multi-host-pr1-run-observer-bus.md)) | `HostRunRegistry`, fan-out from `llm-client`, shared content projection, coalesced stream-journal persistence (blocker d) | Local renderer behaviour unchanged. Mobile stream tests pass unmodified. Streaming no longer rewrites the journal on every token. |
 | 2 | Contract rev 19 — host feed, run streams, control, paging | `/host/events`, `/runs/*`, `/chats/{id}/messages`, `/health` descriptor fields, repository identity, new grants, first-responder approvals with full details, Bot host-owner audience; docs + OpenAPI + fixtures; iOS/Android decoder tests | Two controllers racing an approval resolve once. Mobile isolation unchanged. Swift and Kotlin suites pass. |
 | 3 | Controller supervisor + stream IPC | `PeerHostManager`, keep-alive agent, feed and run subscriptions over IPC, expanded operations, capability refresh, subscription budgets | Colliding-ID two-host fixture. A pin mismatch blocks the host. 5-minute cap crossed without loss. Late responses after a switch are fenced. |
 | 4 | Pairing + Connections UI | Tailscale/Bonjour discovery, request/approve routes and sheet, match code, setup-code bootstrap client, Tailscale re-pin rule, Connections settings | Real two-Mac tailnet pairing in one click. Deny, expiry and rate-limit paths. Self-pair rejected. Credentials never reach the renderer. |
