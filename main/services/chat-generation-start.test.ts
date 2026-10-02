@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isExplicitUserStop } from "./chat-cancel.js";
-import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
+import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatStartParams } from "./types.js";
 
@@ -174,11 +174,12 @@ test("rapid A to B to A navigation cannot append a newer user turn while A drain
   assert.ok(admission.tryBegin("chat-a", "turn-4", "scheduler", false));
 });
 
-test("turn lease hands off only to the exact owner after generation is registered", () => {
+test("desktop execution options hand off the appended turn only for its exact owner", () => {
   const admission = new ChatTurnAdmission();
   const lease = admission.tryBegin("chat-a", "turn-1", "renderer-document-1", false);
   assert.ok(lease);
   const events: string[] = [];
+  const options = desktopChatExecutionOptions("turn-1", () => events.push("accepted"));
   lease.settleAsyncWork();
 
   assert.equal(
@@ -188,10 +189,14 @@ test("turn lease hands off only to the exact owner after generation is registere
     false,
   );
   assert.equal(admission.releaseMatching("chat-a", "turn-1", "renderer-document-2"), false);
+  assert.equal(admission.handoff("chat-a", options.turnId, "renderer-document-2", () => {
+    events.push("stolen");
+  }), false);
+  assert.deepEqual(events, []);
   assert.equal(admission.isAdmitted("chat-a"), true);
 
   assert.equal(
-    admission.handoff("chat-a", "turn-1", "renderer-document-1", () => {
+    admission.handoff("chat-a", options.turnId, "renderer-document-1", () => {
       assert.equal(admission.isAdmitted("chat-a"), true);
       events.push("generation-registered");
     }),
@@ -199,6 +204,8 @@ test("turn lease hands off only to the exact owner after generation is registere
   );
   assert.deepEqual(events, ["generation-registered"]);
   assert.equal(admission.isAdmitted("chat-a"), false);
+  options.onTurnAccepted();
+  assert.deepEqual(events, ["generation-registered", "accepted"]);
 });
 
 test("renderer and scheduler turns cannot interleave or orphan their transcript order", () => {
