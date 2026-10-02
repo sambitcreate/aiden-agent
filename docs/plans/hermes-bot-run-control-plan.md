@@ -11,6 +11,13 @@ the durable, idempotent foreground admission boundary below: accepted Steer
 can still be lost if the Mac exits before Pi emits it. Remote API v1 and both
 native composers remain send/cancel only. The audited gap table is in
 `docs/chat-composer-busy-controls.md`.
+
+October 1 update (`feature/desktop-telegram-steer`): the September 23
+in-memory Steer path is gone. Desktop composer Steer, a new Steer action on
+queued text rows, and Telegram `/steer <text>` all use the Slice 2
+`chat:admitRunInput` / `llmClient.admitChatRunInput` admission, so accepted
+guidance is in the transcript before Pi reads it and appears once. No Remote
+contract change; legacy `chat:steer` was removed.
 Owner: Hermes runtime task; native consumers coordinated with the Bot mobile task.
 
 ## Evidence and scope
@@ -55,7 +62,8 @@ semantics. Implement a main-owned admission boundary before adding consumers:
 > Android DTOs + client methods. The busy iOS/Android composer now offers
 > Steer | Queue alongside Stop with confirm-gated Redirect when the server
 > advertises the feature (old servers keep Stop-only). Deliberate boundary:
-> the desktop renderer keeps its existing queue-while-busy/mid-run-steer UX —
+> the desktop renderer keeps its existing queue-while-busy UX (its Steer moved
+> onto this admission on October 1) —
 > the remote path deliberately goes through the same main-owned
 > persistence-plus-Pi-admission semantics via `chat:admitRunInput`, so no
 > consumer bypasses the host transcript boundary. The capability stays

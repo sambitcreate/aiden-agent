@@ -9,7 +9,13 @@ import {
   updateChatDraft,
 } from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
-import { chatMessageQueue } from "../lib/chat-message-queue";
+import {
+  chatMessageQueue,
+  steerQueuedMessage,
+  steerRejectionMessage,
+  withCommittedRunInput,
+} from "../lib/chat-message-queue";
+import { MAX_RUN_INPUT_TEXT } from "../shared/chat-run-input";
 import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 // The active chat: transcript (ScrollArea) + composer. Generation runs inline
 // against a concrete chatId in the active workspace, streams tokens via
@@ -64,7 +70,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
-  steerGeneration,
+  admitChatRunInput,
   stopDetachedGeneration,
   gitApi,
   workspacesApi,
@@ -1590,18 +1596,85 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [messageQueue],
   );
 
+  /** Admit run input and show what main committed without waiting for the run to end. */
+  const admitSteer = React.useCallback(
+    async (streamId: string, text: string) => {
+      const receipt = await admitChatRunInput(streamId, { mode: "steer", text });
+      if (receipt.committed && receipt.messageId) {
+        const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
+        qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
+          current ? withCommittedRunInput(current, committed) : current,
+        );
+      }
+      return receipt;
+    },
+    [chatId, qc],
+  );
+
   const steerMessage = React.useCallback(
     async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
       if (!text.trim() || attachments.length > 0 || skillInvocation) {
         throw new Error("Steer requires text without attachments or a skill.");
       }
+      if (text.length > MAX_RUN_INPUT_TEXT) {
+        throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
+      }
       const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
       if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         throw new Error("The current response has ended. Send your message normally.");
       }
-      await steerGeneration(streamId, text);
+      // The same main-owned admission as Remote and Telegram: the guidance is
+      // durable in the transcript before Pi reads it.
+      let receipt;
+      try {
+        receipt = await admitSteer(streamId, text);
+      } catch {
+        throw new Error(
+          "Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
+        );
+      }
+      if (receipt.admitted) {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (receipt.committed) {
+        // Main already saved it; resolving consumes the draft so it is not resent.
+        toast.info("The response ended first, so your guidance was saved to the conversation.");
+      } else {
+        throw new Error(steerRejectionMessage(receipt.reason));
+      }
     },
-    [isStoppingGeneration, visibleDetachedProjection],
+    [admitSteer, isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const canSteerQueued =
+    !draft &&
+    (canStopGeneration || Boolean(visibleDetachedProjection)) &&
+    !isStoppingGeneration;
+
+  const steerQueued = React.useCallback(
+    async (id: string) => {
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
+        toast.error("The current response has ended. The message stays queued.");
+        return;
+      }
+      const outcome = await steerQueuedMessage({
+        queue: messageQueue,
+        id,
+        admit: (text) => admitSteer(streamId, text),
+      });
+      if (outcome.kind === "admitted") {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (outcome.kind === "committed") {
+        toast.info("The response ended first, so the message was saved to the conversation.");
+      } else if (outcome.kind === "rejected") {
+        toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
+      } else if (outcome.kind === "unknown") {
+        toast.error(
+          "Aiden couldn't confirm the guidance. The queue is paused; check the conversation before resuming.",
+        );
+      }
+    },
+    [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const redirectMessage = React.useCallback(
@@ -2642,6 +2715,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
+                    canSteer={canSteerQueued}
+                    onSteer={steerQueued}
                     returnFocus={() => composerRef.current}
                   />
                 }
