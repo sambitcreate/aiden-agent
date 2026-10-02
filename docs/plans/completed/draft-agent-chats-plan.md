@@ -1,6 +1,6 @@
 # Draft agent chats
 
-Status: Implemented; pull-request CI and merge pending.
+Status: Complete — merged in [PR #103](https://github.com/sambitcreate/aiden-agent/pull/103) on 2026-09-11.
 
 Ordinary desktop workspace chats stay transient until the first user message is durably saved. Opening New Agent, entering an empty workspace, or opening a fresh worktree must not install an empty chat or sidebar history entry. Leaving an unsent draft discards it. A committed message remains saved even if generation fails.
 

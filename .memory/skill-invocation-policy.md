@@ -6,7 +6,7 @@ Implemented independent `modelInvocable`/`userInvocable` policies for discovered
 
 Bot automatic skill eligibility uses model policy through existing available flags. Eligible entries sort ahead of unavailable entries before the 256 limit. iOS/Android use the existing availability field for catalog validation and tools/editor selections; no native wire changes. Onboarding Skills copy explains automatic/explicit use using the existing artwork.
 
-Research checked: dated Notion DeepSeek→Aiden and September 11/15 digests against current Aiden and primary `deepseek-ai/deepseek-harness` docs/subsystems/skills.md and packages/skill/skill/src/index.ts (HEAD observed c36a83ff6bb95e3f82cf79f9be7c724270a8aa61). Original implementation, no source copied. Bodies already load lazily into model context; bounded disk reads retained for validation/fingerprints. MCP advertised capabilities, scoped resources, server instructions and safe request-boundary refresh remain deferred in docs/plans/skill-mcp-session-context-plan.md. MCP spills and provider upgrades outside scope.
+Research checked: dated Notion DeepSeek→Aiden and September 11/15 digests against current Aiden and primary `deepseek-ai/deepseek-harness` docs/subsystems/skills.md and packages/skill/skill/src/index.ts (HEAD observed c36a83ff6bb95e3f82cf79f9be7c724270a8aa61). Original implementation, no source copied. Bodies already load lazily into model context; bounded disk reads retained for validation/fingerprints. MCP advertised capabilities, scoped resources, server instructions and safe request-boundary refresh remain deferred in docs/plans/completed/skill-mcp-session-context-plan.md. MCP spills and provider upgrades outside scope.
 
 ## Validation
 

@@ -1,7 +1,7 @@
 # Scheduled-Task Provider Recovery and Pi Rollout Generation Fix
 
-Status: Implemented (2026-09-09) — Phases A, B2, and C are coded and green in
-worktree `.worktrees/prod-error-recovery` (branch `fix/scheduled-provider-and-pi-rollout`);
+Status: Implemented (2026-09-09) — Phases A, B2, and C merged in
+[PR #105](https://github.com/sambitcreate/aiden-agent/pull/105) on 2026-09-11 (branch `fix/scheduled-provider-and-pi-rollout`);
 B1 (operator stage advance) and machine remediation remain release-owner steps.
 Originated from installed production diagnostics on 2026-09-09
 (app v0.39.0, `~/Library/Application Support/Aiden Agent`).

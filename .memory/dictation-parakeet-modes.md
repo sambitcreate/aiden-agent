@@ -1,6 +1,6 @@
 # Dictation Parakeet lifecycle, modes, and dictionary — 2026-09-27
 
-- Branch `feature/dictation-parakeet-modes`. Plan: `docs/plans/dictation-parakeet-modes-plan.md`.
+- Branch `feature/dictation-parakeet-modes`. Plan: `docs/plans/completed/dictation-parakeet-modes-plan.md`.
 - **Shared, pure modules:**
   - `renderer/shared/dictation-preferences.ts` holds the mode resolution, idle-minute validation, and `parseDictationPreferencePatch`, which `settings:set` uses.
   - `renderer/shared/dictation-dictionary.ts` holds parse, apply, and add-entry.
@@ -34,3 +34,5 @@
 - Added shortcut/dictionary regressions; 44 focused tests, CI policy suite, desktop typecheck, and CLI build/typecheck pass. New suites are assigned to CI lanes.
 
 Independent review corrected the dictionary settings row keys to use the same locale-independent lowercase identity as parser deduplication; a Turkish-casing regression verifies distinct I/dotless-ı entries keep distinct React keys.
+
+Status (2026-10-01): merged in PR #279 (on main after 0.51.0); plan moved to `docs/plans/completed/`.

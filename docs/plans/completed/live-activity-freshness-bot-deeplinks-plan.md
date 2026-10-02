@@ -1,6 +1,6 @@
 # Live Activity freshness chips and Bot deep links
 
-Status: Implemented for review. This is the Hermex 1.7 parity slice for Aiden On The Go.
+Status: Complete — merged in [PR #276](https://github.com/sambitcreate/aiden-agent/pull/276) on 2026-09-30; on main after 0.51.0, not yet released. Android notification chips and physical-device acceptance remain follow-ups. This is the Hermex 1.7 parity slice for Aiden On The Go.
 
 ## Goal
 
