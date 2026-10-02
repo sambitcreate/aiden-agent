@@ -316,6 +316,7 @@ interface MockTurnOptions {
 
 /** Minimal owner surface the turn shim drives back through send(). */
 interface TurnOwner {
+  documentId: string;
   send(channel: string, payload: unknown): void;
 }
 
@@ -335,6 +336,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     mode?: string;
     content?: string;
   }> = [];
+  const startedStreams: Array<{ streamId: string; ownerDocumentId: string }> = [];
   const llmClient = {
     beginChatTurn() {
       if (opts.busy) return null;
@@ -359,6 +361,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
       _options: unknown,
     ): Promise<boolean> {
       startedParams.push({ ..._params, content: _params.messages?.[0]?.content });
+      startedStreams.push({ streamId, ownerDocumentId: owner.documentId });
       startCalls += 1;
       if (opts.pending) {
         pendingOwner = owner;
@@ -446,6 +449,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     createCalls: () => createCalls,
     createdChats: () => createdChats,
     startedParams: () => startedParams,
+    startedStreams: () => startedStreams,
     releasedLeases: () => releasedLeases,
     completePendingTurn: () => {
       pendingOwner?.send("chat:done", { streamId: "pending-turn", content: "Mock reply" });
@@ -529,6 +533,7 @@ interface HarnessOptions {
   ) => Promise<void>;
   compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
+  admitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["admitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
@@ -596,6 +601,7 @@ function harness(o: HarnessOptions = {}) {
     applyModelSelection: o.applyModelSelection,
     compactChat: o.compactChat,
     abortChat: o.abortChat,
+    admitRunInput: o.admitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
@@ -1977,6 +1983,106 @@ test("Interrupt runs an accepted replacement after the active turn settles", asy
   assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "replacement"]);
   h.turnMock.completePendingTurn();
   h.service.stop();
+});
+
+type SteerAdmission = Parameters<NonNullable<HarnessOptions["admitRunInput"]>>[0];
+
+test("/steer admits guidance into this route's running turn without stopping or queueing it", async () => {
+  const owner = person(42);
+  const admissions: SteerAdmission[] = [];
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/steer  keep it short"))]],
+    abortChat: async () => assert.fail("/steer must never abort the active turn"),
+    admitRunInput: async (input) => {
+      admissions.push(input);
+      return { admitted: true, queue: "steer", committed: true, messageId: "m-1" };
+    },
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Guidance accepted")));
+  const [started] = h.turnMock.startedStreams();
+  assert.deepEqual(admissions, [{
+    streamId: started.streamId,
+    chatId: h.turnMock.startedParams()[0].chatId,
+    mode: "steer",
+    text: "keep it short",
+    ownerDocumentId: started.ownerDocumentId,
+  }]);
+  assert.equal(h.service.queueSize, 0);
+  assert.equal(h.turnMock.startCalls(), 1);
+  h.turnMock.completePendingTurn();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(h.turnMock.startCalls(), 1, "steered guidance is never replayed as its own turn");
+  h.service.stop();
+});
+
+const steerReceipts: Array<{ name: string; receipt?: Awaited<ReturnType<NonNullable<HarnessOptions["admitRunInput"]>>>; reply: RegExp }> = [
+  { name: "a committed receipt after the run ended", receipt: { admitted: false, reason: "run_not_active", committed: true, messageId: "m" }, reply: /saved to the conversation/u },
+  { name: "a capacity rejection", receipt: { admitted: false, reason: "capacity", committed: false }, reply: /maximum pending guidance\. Use \/queue/u },
+  { name: "a cancelled rejection", receipt: { admitted: false, reason: "cancelled", committed: false }, reply: /stopping, so it can't take guidance/u },
+  { name: "an unknown outcome", reply: /couldn't confirm the guidance/u },
+];
+for (const { name, receipt, reply } of steerReceipts) {
+  test(`/steer reports ${name} once and never queues or retries it`, async () => {
+    const owner = person(42);
+    let calls = 0;
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/steer use tables"))]],
+      admitRunInput: async () => {
+        calls++;
+        if (!receipt) throw new Error("operation outcome requires reconciliation");
+        return receipt;
+      },
+    });
+    await h.service.start();
+    await waitFor(() => h.api.sentMessages.some(({ text }) => reply.test(text)));
+    assert.equal(calls, 1);
+    assert.equal(h.api.sentMessages.filter(({ text }) => reply.test(text)).length, 1);
+    assert.equal(h.service.queueSize, 0);
+    h.turnMock.completePendingTurn();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(h.turnMock.startCalls(), 1);
+    h.service.stop();
+  });
+}
+
+test("/steer without a running turn on this route never reaches admission", async () => {
+  const owner = person(42);
+  const topic = (id: number, thread: number, text: string) => makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
+  let calls = 0;
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "/steer nothing is running"))], [topic(2, 10, "active")], [topic(3, 20, "/steer other topic"), topic(4, 10, "/steer")]],
+    admitRunInput: async () => {
+      calls++;
+      return { admitted: true, committed: true };
+    },
+  });
+  await h.service.start();
+  await waitFor(() => h.config.persistOffsetCalls() === 4);
+  assert.equal(calls, 0);
+  assert.equal(h.api.sentMessages.filter(({ text }) => text.startsWith("No response here is accepting guidance")).length, 2);
+  assert.equal(h.api.sentMessages.filter(({ text }) => text === "Use /steer followed by guidance for the running response.").length, 1);
+  assert.equal(h.service.queueSize, 0);
+  h.service.stop();
+  h.turnMock.completePendingTurn();
+});
+
+test("an edited /steer is never sent as guidance", async () => {
+  const owner = person(42);
+  let calls = 0;
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [{ update_id: 2, edited_message: makeMessage(1, owner, "/steer edited") }]],
+    admitRunInput: async () => {
+      calls++;
+      return { admitted: true, committed: true };
+    },
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.startsWith("Edited /steer commands are not sent")));
+  assert.equal(calls, 0);
+  assert.equal(h.service.queueSize, 0);
+  h.service.stop();
+  h.turnMock.completePendingTurn();
 });
 
 test("unbound topic Stop cannot clear or abort another topic", async () => {

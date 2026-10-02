@@ -22,7 +22,8 @@ export interface ChatRunInputAdmissionResult {
   messageId?: string;
 }
 
-const MAX_RUN_INPUT_TEXT = 200_000;
+/** Largest run input (UTF-16 code units) the admission boundary accepts. */
+export const MAX_RUN_INPUT_TEXT = 200_000;
 
 /** Validate a desktop IPC run-input payload ({mode, text}). */
 export function parseChatRunInput(value: unknown): { mode: ChatRunInputMode; text: string } {
