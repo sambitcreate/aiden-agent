@@ -14,7 +14,6 @@ export {
   TODO_CONTEXT,
   branchTip,
   calculateContextTokens,
-  compact,
   convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
@@ -62,4 +61,34 @@ declare module "@earendil-works/pi-agent-core" {
     branchSummary: BranchSummaryMessage;
     compactionSummary: CompactionSummaryMessage;
   }
+}
+
+import { compact as legacyCompact } from "@aiden/pi-legacy-harness";
+import type { Models } from "@earendil-works/pi-ai";
+
+type LegacyCompactArguments = Parameters<typeof legacyCompact>;
+
+/**
+ * The old summarizer uses only completeSimple. Its broad Models parameter also
+ * includes provider stream methods with a package-private TranscriptContext
+ * brand, which cannot cross installations. Expose only the actual call seam:
+ * current Models keeps normalization, credentials and request dispatch owned
+ * by Pi 1.0; no old provider registry or stream is admitted here.
+ */
+export function compact(
+  preparation: LegacyCompactArguments[0],
+  models: Pick<Models, "completeSimple">,
+  ...args: [
+    model: LegacyCompactArguments[2],
+    customInstructions: LegacyCompactArguments[3],
+    thinkingLevel: LegacyCompactArguments[4],
+    retry: LegacyCompactArguments[5],
+    callbacks: LegacyCompactArguments[6],
+    context: LegacyCompactArguments[7],
+  ]
+): ReturnType<typeof legacyCompact> {
+  const summaryModels = {
+    completeSimple: (...request: Parameters<Models["completeSimple"]>) => models.completeSimple(...request),
+  };
+  return legacyCompact(preparation, summaryModels as unknown as LegacyCompactArguments[1], ...args);
 }
