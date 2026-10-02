@@ -219,6 +219,8 @@ export interface PiRuntimeSessionBinding {
   session: PiSessionPort | Promise<PiSessionPort>;
   initialMessages?: readonly AgentMessage[];
   compaction: Omit<PiCompactionCoordinatorOptions, "session">;
+  /** Explicit model override; omitted to preserve the default request safety budget. */
+  compactionReserveTokens?: number;
   appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[], visibleChatMessageId?: string) => Promise<void>;
   /** Host adapter for atomically journaling a visible user plus its sync marker. */
   appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
@@ -868,6 +870,7 @@ export class PiAgentRuntimeHarness {
     };
     if (initialState.model) {
       this.contextProjectionOptions = {
+        compactionReserveTokens: this.durability?.compactionReserveTokens,
         contextWindow: initialState.model.contextWindow,
         systemPrompt: getCurrentSystemPrompt(initialState.messages ?? []) || initialState.systemPrompt || "",
         tools: initialState.tools ?? [],

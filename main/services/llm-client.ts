@@ -3,7 +3,7 @@ import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -1045,6 +1045,7 @@ async function prepareGeneration(
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
+          compactionModelOverrides: settings.compactionModelOverrides,
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1581,6 +1582,7 @@ async function prepareGeneration(
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
+    compactionModelOverrides: settings.compactionModelOverrides,
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -1909,6 +1911,7 @@ export const llmClient = {
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
+      compactionModelOverrides,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -2351,7 +2354,9 @@ export const llmClient = {
       );
       const runtimeContributions = modelContributions;
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
+        compactionReserveTokens: compactionBudget?.reserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2360,11 +2365,7 @@ export const llmClient = {
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
-      assertGenerationContextCapacity({
-        contextWindow: model.contextWindow,
-        systemPrompt,
-        tools: runtimeTools,
-      });
+      assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
           activeCompactionStepId = timeline.compactionStarted();
@@ -2411,6 +2412,7 @@ export const llmClient = {
         thinkingLevel,
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
+          ...compactionBudget,
           enabled: piUpgradeCompactionEnabled,
         },
         signal: initialization.controller.signal,
@@ -2579,6 +2581,7 @@ export const llmClient = {
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
+          compactionReserveTokens: compactionBudget?.reserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {

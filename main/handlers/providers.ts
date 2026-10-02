@@ -1,5 +1,5 @@
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -533,6 +533,7 @@ export function registerProviderHandlers(): void {
       if (!isCompactionEngine(p.compactionEngine)) throw new Error("Invalid compaction engine.");
       next.compactionEngine = p.compactionEngine;
     }
+    if (p.compactionModelOverrides !== undefined) next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");

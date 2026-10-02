@@ -1,5 +1,5 @@
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import type { CompactionEngine } from "../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -647,6 +647,7 @@ export interface AssistantConfigSnapshot {
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
