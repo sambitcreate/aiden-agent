@@ -705,6 +705,18 @@ export function createConfigStore(
       );
     },
 
+    /**
+     * Configured providers without credential presence. Callers that only need
+     * labels or deployment shape use this so a turn never walks the keychain.
+     */
+    async listStoredProviders(): Promise<StoredProvider[]> {
+      const config = await readPortable();
+      const cache = await readModelCache();
+      return config.providers.map((intent) =>
+        composeStoredProvider(intent, ownRecordEntry(cache.byProvider, intent.id)),
+      );
+    },
+
     async getProvider(id: string): Promise<StoredProvider | undefined> {
       const config = await readPortable();
       const intent = config.providers.find((p) => p.id === id);

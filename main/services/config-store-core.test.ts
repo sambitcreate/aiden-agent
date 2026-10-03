@@ -201,6 +201,22 @@ test("getProvider recombines intent with this machine's cache", async (t) => {
   assert.equal(await h.store.getProvider("nope"), undefined);
 });
 
+test("listStoredProviders returns composed providers without consulting the keychain", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  h.secrets.keys[provider.id] = "ciphertext";
+  await h.store.listProviders(); // settle seeding and secret migration first
+  let keychainReads = 0;
+  const { hasKey, getProviderKey } = h.secrets.port;
+  h.secrets.port.hasKey = async (id) => { keychainReads += 1; return hasKey(id); };
+  h.secrets.port.getProviderKey = async (id, binding) => { keychainReads += 1; return getProviderKey!(id, binding); };
+
+  assert.deepEqual(await h.store.listStoredProviders(), [provider]);
+  assert.equal(keychainReads, 0);
+  await h.store.listProviders();
+  assert.ok(keychainReads > 0, "the full listing still reports key presence");
+});
+
 // A provider carried to a new machine has intent but no cache and no key. It must
 // still list, with an empty model list, rather than break the picker.
 test("a provider with no local cache lists with an empty model list", async (t) => {

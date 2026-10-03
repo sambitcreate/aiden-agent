@@ -1487,7 +1487,8 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
-    const operationProviders = [runtime.provider, ...await configStore.listProviders()];
+    // Labels and local/remote accounting need provider shape only, not keychain presence.
+    const operationProviders = [runtime.provider, ...await configStore.listStoredProviders()];
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
