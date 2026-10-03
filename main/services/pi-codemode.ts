@@ -110,6 +110,7 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
         let imageBytes = 0;
         let imageCount = 0;
         let invalidImage = false;
+        let limitNoticed = false;
         for (const item of result.output) {
           if (item.type === "image") {
             imageBytes += item.data.length;
@@ -122,7 +123,10 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
                 content.push({ type: "text", text: "Codemode image omitted: malformed or oversized raster data." });
               }
             }
-            else if (imageCount === 5 || imageBytes - item.data.length <= 8 * 1024 * 1024) content.push({ type: "text", text: "Additional codemode images omitted: output limit." });
+            else if (!limitNoticed) {
+              limitNoticed = true;
+              content.push({ type: "text", text: "Additional codemode images omitted: output limit." });
+            }
           } else if (remaining > 0) {
             const text = item.text.slice(0, remaining);
             content.push({ type: "text", text });
