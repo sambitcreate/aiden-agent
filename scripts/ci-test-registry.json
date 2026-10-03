@@ -610,6 +610,7 @@
         "renderer/shared/voice-models.test.ts",
         "scripts/aiden-remote-lan-transport-spike.test.mjs",
         "scripts/apple-developer-tools.test.mjs",
+        "scripts/build-electron.test.mjs",
         "scripts/check-macos-release.test.mjs",
         "scripts/computer-use-packaged-acceptance.test.mjs",
         "scripts/configure-electron-fuses.test.mjs",
