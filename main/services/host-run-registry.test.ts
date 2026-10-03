@@ -396,8 +396,9 @@ test("approval scopes and details are copied into the journal", () => {
 });
 
 test("an oversized approval detail cannot push retained events past the byte budgets", () => {
+  // Each detail fits the default allowance but not these smaller budgets.
   const { registry } = harness({ maxEventBytesPerRun: 32 * 1_024, maxTotalEventBytes: 64 * 1_024 });
-  const workspaceLabel = "w".repeat(1_024 * 1_024);
+  const workspaceLabel = "w".repeat(40 * 1_024);
   for (const runId of ["run-1", "run-2", "run-3", "run-4"]) {
     registry.begin({ runId, chatId: `chat-${runId}`, origin: "renderer" });
     registry.publish(runId, "chat:approval", {
