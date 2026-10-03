@@ -88,7 +88,11 @@ const local = {
   chats: localSidebarChats(localWorkspaces, localChats, () => "none"),
 };
 
-function organize(projects: SidebarProjectSummary[], chats: SidebarChatSummary[], view: SidebarView = "projects") {
+function organize<P extends SidebarProjectSummary, C extends SidebarChatSummary>(
+  projects: P[],
+  chats: C[],
+  view: SidebarView = "projects",
+) {
   return organizeSidebar({
     projects,
     chats,

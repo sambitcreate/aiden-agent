@@ -70,3 +70,42 @@ test("sort groups appear only for the views they affect", () => {
     [["View", ["Needs attention"]]],
   );
 });
+
+const machines = {
+  hosts: [
+    { id: "studio", label: "Studio" },
+    { id: "laptop", label: "Laptop" },
+  ],
+  filter: "host:laptop" as const,
+  grouping: "repository" as const,
+  onFilterChange: noop,
+  onGroupingChange: noop,
+};
+
+test("with paired hosts the menu offers a machine filter and, for workspaces, cross-machine grouping", () => {
+  const groups = renderMenu({ machines });
+  assert.deepEqual(groups.slice(3), [
+    {
+      label: "Machines",
+      options: ["All machines", "This Mac", "Studio", "Laptop"],
+      checked: ["Laptop"],
+    },
+    {
+      label: "Group across machines",
+      options: ["Keep separate", "Same repository", "Same repository and path"],
+      checked: ["Same repository"],
+    },
+  ]);
+  // Grouping applies to workspaces only; the machine filter stays for every view.
+  assert.deepEqual(
+    renderMenu({ view: "attention", machines }).map((group) => group.label),
+    ["View", "Machines"],
+  );
+});
+
+test("without paired hosts the menu has no machine choices", () => {
+  assert.deepEqual(
+    renderMenu({ machines: { ...machines, hosts: [] } }).map((group) => group.label),
+    ["View", "Sort chats", "Sort workspaces"],
+  );
+});
