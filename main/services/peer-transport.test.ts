@@ -137,6 +137,11 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   });
   let redirected = 0;
   let liveResponse: ServerResponse | undefined;
+  let slowResponse: ServerResponse | undefined;
+  let slowArrived!: () => void;
+  const slowRequested = new Promise<void>((resolve) => {
+    slowArrived = resolve;
+  });
   const server = https.createServer(
     { key: identity.privateKey, cert: identity.certificateChain },
     (request, response) => {
@@ -153,6 +158,12 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return;
       }
       if (request.url === "/target") redirected++;
+      if (request.url?.endsWith("/slow-open")) {
+        // Headers wait until the test sends them.
+        slowResponse = response;
+        slowArrived();
+        return;
+      }
       if (request.url?.endsWith("/live")) {
         liveResponse = response;
         response.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -333,6 +344,27 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     liveResponse!.write("data: partial");
     t.mock.timers.tick(30_000);
     await stalledRejected;
+    // A slow connect does not eat into the quiet time allowed before the first frame.
+    let slowOpened!: () => void;
+    const openedNow = new Promise<void>((resolve) => {
+      slowOpened = resolve;
+    });
+    nextFrame = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const slow = client.events({ path: "/slow-open", onOpen: () => slowOpened() }, () => received());
+    // An early abort surfaces as the stream's rejection rather than a hang.
+    const unlessEnded = (step: Promise<void>) => Promise.race([step, slow.then(() => {})]);
+    await slowRequested;
+    t.mock.timers.tick(25_000);
+    slowResponse!.writeHead(200, { "Content-Type": "text/event-stream" });
+    slowResponse!.flushHeaders();
+    await unlessEnded(openedNow);
+    t.mock.timers.tick(20_000);
+    slowResponse!.write("data: first\n\n");
+    await unlessEnded(nextFrame);
+    slowResponse!.end();
+    assert.deepEqual(await slow, { reason: "eof" });
     t.mock.timers.reset();
   } finally {
     server.closeAllConnections();

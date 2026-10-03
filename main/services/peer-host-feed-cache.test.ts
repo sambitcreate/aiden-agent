@@ -140,6 +140,10 @@ test("a chunked snapshot applies only when complete and then mirrors the host's 
     assert.equal(reset?.type, "reset");
     assert.equal(cache.cursor(), "epoch_a:0");
     assert.deepEqual(ids(cache.snapshot().summaries), ids(state.current.summaries));
+    feed.noteRun(run("run-0", "chat-3", "done"), false);
+    await feed.refresh();
+    feedInto(cache, wire.drain());
+    assert.equal(cache.run("run-0")?.chatId, "chat-3");
 
     state.current = {
       ...state.current,
@@ -162,7 +166,9 @@ test("a chunked snapshot applies only when complete and then mirrors the host's 
     assert.deepEqual(ids(view.summaries), ids(state.current.summaries));
     assert.equal(view.summaries.find((item) => item.id === "chat-1")?.title, "Renamed");
     assert.deepEqual(view.workspaces, []);
+    // The removed chat's run goes with it.
     assert.deepEqual(view.runs, [{ chatId: "chat-1", runId: "run-1", state: "working", unread: false }]);
+    assert.equal(cache.runForChat("chat-3"), undefined);
     assert.equal(cache.runForChat("chat-1")?.runId, "run-1");
     assert.equal(cache.cursor(), `epoch_a:${feed.sequence}`);
 
@@ -244,6 +250,10 @@ test("the cache keeps the newest 2,000 chats and evicts the least recently updat
     assert.equal(kept.length, PEER_FEED_MAX_CHATS);
     assert.ok(!kept.some((item) => item.id === "chat-49"), "the oldest chats are not retained");
     assert.ok(kept.some((item) => item.id === "chat-50"));
+    feed.noteRun(run("run-50", "chat-50", "done"), false);
+    await feed.refresh();
+    feedInto(cache, wire.drain());
+    assert.equal(cache.run("run-50")?.chatId, "chat-50");
 
     state.current = { ...state.current, summaries: [...many, summary("fresh", 99_999)] };
     feed.invalidate();
@@ -254,6 +264,7 @@ test("the cache keeps the newest 2,000 chats and evicts the least recently updat
       { type: "chat.remove", id: "chat-50" },
     ]);
     assert.equal(cache.snapshot().summaries.length, PEER_FEED_MAX_CHATS);
+    assert.deepEqual(cache.snapshot().runs, [], "an evicted chat's run is not kept");
   } finally {
     feed.close();
   }

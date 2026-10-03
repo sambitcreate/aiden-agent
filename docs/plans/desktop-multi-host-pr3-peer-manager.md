@@ -172,6 +172,12 @@ endpoints.
 23. **The first status reply waits for the host list.** `remote:peerHostStatuses` and
     `remote:peerHostFeed` await the lazily built manager's first registry read, so a
     snapshot-then-notification consumer sees every paired host, disabled ones included.
+24. **Run states follow their chat.** The feed has no run removal, so a chat removed by the host
+    or evicted by the 2,000-chat cap drops its run states from the cache. Renderers applying
+    `chat.remove` should drop that chat's runs the same way.
+25. **A stream's frame deadline starts on acceptance.** The 30 s quiet-time deadline is re-armed
+    when a stream's response headers are accepted, so connect time does not shorten the wait for
+    the first frame.
 
 ## Exit criteria (tests)
 
