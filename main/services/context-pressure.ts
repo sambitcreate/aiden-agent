@@ -1,4 +1,4 @@
-import { resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
+import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 // Composer context meter: exposes the runtime's own next-request projection
 // (projectChatContextUsage over the Pi journal + the generation's static
 // context) as a renderer-safe snapshot. Nothing here invents a second token
@@ -260,7 +260,7 @@ export async function chatContextPressure(
     overrides,
   });
   const settings = await configStore.getSettings();
-  options.compactionReserveTokens = resolveCompactionModelBudget(settings.compactionModelOverrides, model, settings.compactionEngine)?.reserveTokens;
+  options.compactionReserveTokens = configuredCompactionReserveTokens(settings.compactionModelOverrides, model, settings.compactionEngine);
   const hasDraft =
     (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
     (draft?.attachments?.length ?? 0) > 0;

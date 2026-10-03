@@ -3,7 +3,7 @@ import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -2384,8 +2384,9 @@ export const llmClient = {
       };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
+      const compactionInputReserveTokens = configuredCompactionReserveTokens(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
-        compactionReserveTokens: compactionBudget?.reserveTokens,
+        compactionReserveTokens: compactionInputReserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2606,7 +2607,7 @@ export const llmClient = {
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
-          compactionReserveTokens: compactionBudget?.reserveTokens,
+          compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {
