@@ -422,6 +422,23 @@ test("an oversized approval detail cannot push retained events past the byte bud
   assert.ok(retainedBytes <= 64 * 1_024, `retained ${retainedBytes} bytes`);
 });
 
+test("approval details are counted with the rest of the prompt against the allowance", () => {
+  // An 8 KiB run budget leaves a 4 KiB allowance for the whole prompt.
+  const details = { kind: "subagent-shell", workspaceLabel: "w".repeat(2_500) };
+  const published = (summary: string) => {
+    const { registry } = harness({ maxEventBytesPerRun: 8 * 1_024, maxRuns: 1 });
+    registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+    registry.publish("run-1", "chat:approval", { ...approval("approval-1"), summary, details });
+    return last(events(registry.read("run-1", 0))).payload;
+  };
+
+  assert.deepEqual(published("Run npm test").details, details);
+  const crowded = published("s".repeat(2_000));
+  assert.equal("details" in crowded, false);
+  assert.equal(crowded.detailsOmitted, true);
+  assert.equal(crowded.summary, "s".repeat(2_000));
+});
+
 test("returned events and summaries are copies", () => {
   const { registry } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });

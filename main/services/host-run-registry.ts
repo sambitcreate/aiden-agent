@@ -46,6 +46,13 @@ export interface HostRunRegistryOptions {
   now(): number;
   epoch?: string;
   maxEventsPerRun?: number;
+  /**
+   * A run always keeps its newest event, and a pending prompt is never
+   * dropped. Prompts are bounded by their parsers, but a maximal question set
+   * can serialize to roughly 150 KiB, so budgets below that per run (or below
+   * `maxRuns` times that in total) can be exceeded by a run's sole prompt.
+   * The defaults hold every bounded prompt.
+   */
   maxEventBytesPerRun?: number;
   maxTotalEventBytes?: number;
   maxRuns?: number;
@@ -86,9 +93,10 @@ const DEFAULT_TERMINAL_RETENTION_MS = 10 * 60_000;
 const MAX_PROMPT_ID_LENGTH = 128;
 // Approval details carry caller-supplied text (workspace names, commands) that
 // nothing upstream bounds. A prompt can be a run's only retained event, which
-// retention never trims, so the allowance is also derived from the configured
-// budgets: half a run's budget, and half an equal share of the total.
-const MAX_APPROVAL_DETAILS_BYTES = 64 * 1_024;
+// retention never trims, so details are kept only while the whole prompt fits
+// an allowance derived from the configured budgets: half a run's budget, and
+// half an equal share of the total.
+const MAX_APPROVAL_PAYLOAD_BYTES = 64 * 1_024;
 
 function isTerminalState(state: HostRunState): boolean {
   return state === "done" || state === "failed" || state === "cancelled";
@@ -123,37 +131,32 @@ function knownScopes(value: unknown): string[] | undefined {
   return scopes.length > 0 ? scopes : undefined;
 }
 
-function boundedDetails(value: unknown, maximumBytes: number): { details?: Record<string, unknown>; omitted: boolean } {
-  const record = ownRecord(value);
-  if (!record) return { omitted: false };
-  const details = cloneOrUndefined(record);
-  if (!details) return { omitted: false };
-  try {
-    if (Buffer.byteLength(JSON.stringify(details)) <= maximumBytes) return { details, omitted: false };
-  } catch {
-    // Unserializable details are treated like oversized ones.
-  }
-  return { omitted: true };
-}
-
 function approvalEvent(
   payload: Record<string, unknown>,
   approvalId: string,
-  maximumDetailsBytes: number,
+  maximumPayloadBytes: number,
 ): PendingEvent {
   const scopes = knownScopes(payload.scopes);
-  const { details, omitted } = boundedDetails(payload.details, maximumDetailsBytes);
+  const prompt: Record<string, unknown> = {
+    approvalId,
+    summary: boundedText(payload.summary, 2_000) || "Aiden needs approval.",
+    toolCallId: boundedText(payload.toolCallId, 128),
+    toolName: boundedText(payload.toolName, 120) || "Tool",
+    ...(scopes ? { scopes } : {}),
+  };
+  const detailsRecord = ownRecord(payload.details);
+  const details = detailsRecord ? cloneOrUndefined(detailsRecord) : undefined;
+  if (!details) return { type: "approval_required", payload: prompt, terminal: false };
+  const withDetails = { ...prompt, details };
+  let fits = false;
+  try {
+    fits = Buffer.byteLength(JSON.stringify(withDetails)) <= maximumPayloadBytes;
+  } catch {
+    // Unserializable details are treated like oversized ones.
+  }
   return {
     type: "approval_required",
-    payload: {
-      approvalId,
-      summary: boundedText(payload.summary, 2_000) || "Aiden needs approval.",
-      toolCallId: boundedText(payload.toolCallId, 128),
-      toolName: boundedText(payload.toolName, 120) || "Tool",
-      ...(scopes ? { scopes } : {}),
-      ...(details ? { details } : {}),
-      ...(omitted ? { detailsOmitted: true } : {}),
-    },
+    payload: fits ? withDetails : { ...prompt, detailsOmitted: true },
     terminal: false,
   };
 }
@@ -192,7 +195,7 @@ export class HostRunRegistry {
   private readonly maxTotalEventBytes: number;
   private readonly maxRuns: number;
   private readonly terminalRetentionMs: number;
-  private readonly maxApprovalDetailsBytes: number;
+  private readonly maxApprovalPayloadBytes: number;
 
   constructor(private readonly options: HostRunRegistryOptions) {
     this.epoch = options.epoch ?? randomUUID();
@@ -201,8 +204,8 @@ export class HostRunRegistry {
     this.maxTotalEventBytes = options.maxTotalEventBytes ?? DEFAULT_MAX_TOTAL_EVENT_BYTES;
     this.maxRuns = options.maxRuns ?? DEFAULT_MAX_RUNS;
     this.terminalRetentionMs = options.terminalRetentionMs ?? DEFAULT_TERMINAL_RETENTION_MS;
-    this.maxApprovalDetailsBytes = Math.min(
-      MAX_APPROVAL_DETAILS_BYTES,
+    this.maxApprovalPayloadBytes = Math.min(
+      MAX_APPROVAL_PAYLOAD_BYTES,
       Math.floor(this.maxEventBytesPerRun / 2),
       Math.floor(this.maxTotalEventBytes / (2 * this.maxRuns)),
     );
@@ -253,7 +256,7 @@ export class HostRunRegistry {
       if (channel === "chat:approval") {
         approvalId = promptId(payload.approvalId);
         if (!approvalId || this.promptRuns.has(approvalId)) return;
-        pending = approvalEvent(payload, approvalId, this.maxApprovalDetailsBytes);
+        pending = approvalEvent(payload, approvalId, this.maxApprovalPayloadBytes);
       } else if (channel === "chat:questionnaire") {
         questionId = promptId(payload.promptId);
         if (!questionId || this.promptRuns.has(questionId)) return;
