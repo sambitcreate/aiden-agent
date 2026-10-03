@@ -58,3 +58,27 @@ merging `origin/main` into #299 and cascading each parent into its child.
 - Not done (by instruction): splitting #302. Suggested split: (a) codemode +
   tool discovery + nested calls, (b) MCP OAuth + MCP image results,
   (c) OpenAI provider login + its onboarding tile.
+
+## #301 `codex/pi-1-compaction`
+
+- **PR-301-1:** `renderer/shared/compaction.ts` exports
+  `DEFAULT_COMPACTION_RESERVE_TOKENS` / `DEFAULT_COMPACTION_KEEP_RECENT_TOKENS`
+  (the renderer cannot import pi); `pi-compaction-core.test.ts` asserts they
+  equal pi's `DEFAULT_COMPACTION_SETTINGS`. Settings copy/placeholders use them.
+- **PR-301-2 (verified real):** a keepRecent-only override resolved a reserve of
+  16,384, which replaced the model-derived request reserve (≈8k on a 32k
+  window) and shrank the input budget. `configuredCompactionReserveTokens`
+  returns the bounded reserve only when `reserveTokens` is set; llm-client,
+  child-agent-runtime and context-pressure use it for the input budget, while
+  pi's compaction settings still get the full resolved budget.
+- **PR-301-4:** `configStore.getCompactionSettings()` memoizes the parsed
+  engine + overrides on the settings DataStore's cached-document identity (the
+  store replaces that object on every write/reload). Context pressure uses it.
+- **PR-301-5:** `settings:setCompactionModelBudget` merges/clears one model
+  inside the settings mutation (no get→set lost update; refuses to overwrite an
+  invalid hand-edited map). Memory page reads Codex models from the query cache
+  (`enabled: false`) instead of a focus-refetching auth-status query, and
+  memoizes suggestions.
+- **Deferred PR-301-6 / X-7** ("Context & caching" section + model picker):
+  spans #301 and #304's prompt-cache controls, needs a new settings nav entry,
+  e2e navigation updates and a picker component — not a contained change.
