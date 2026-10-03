@@ -2008,10 +2008,13 @@ if (!ownsSingleInstanceLock) {
       // The active profile's portable config is user-editable, so pick
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
-      app.on(
-        "browser-window-focus",
+      // Focus can fire repeatedly while switching windows; a throttle keeps
+      // that to one re-read per interval plus one trailing pass.
+      const focusConfigRefresh = createThrottledTrigger(
         () => void portableConfigWatcher.refresh(),
+        2_000,
       );
+      app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {
