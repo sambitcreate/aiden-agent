@@ -319,7 +319,8 @@ function validateExtensions(extensions: readonly PiAgentRuntimeExtension[]): voi
 }
 
 function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeExtension {
-  const tools = extension.tools?.map(snapshotAgentTool);
+  const seen = new Map<object, object>();
+  const tools = extension.tools?.map((tool) => snapshotAgentTool(tool, seen));
   return Object.freeze({
     id: extension.id.trim(),
     ...(extension.systemPrompt === undefined ? {} : { systemPrompt: extension.systemPrompt }),
@@ -352,12 +353,13 @@ function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeEx
   });
 }
 
-function snapshotAgentTool(tool: AgentTool): AgentTool {
+/** `seen` is shared across one inventory so tools that reference one server's discovery record keep sharing one frozen copy. */
+function snapshotAgentTool(tool: AgentTool, seen: Map<object, object>): AgentTool {
   const discovery = (tool as AgentTool & { discovery?: unknown }).discovery;
   return Object.freeze({
     ...tool,
-    parameters: cloneAndDeepFreeze(tool.parameters),
-    ...(discovery === undefined ? {} : { discovery: cloneAndDeepFreeze(discovery) }),
+    parameters: cloneAndDeepFreeze(tool.parameters, seen),
+    ...(discovery === undefined ? {} : { discovery: cloneAndDeepFreeze(discovery, seen) }),
   });
 }
 
@@ -403,9 +405,10 @@ function composeTools(
   baseTools: readonly AgentTool[],
   extensions: readonly PiAgentRuntimeExtension[],
 ): AgentTool[] {
+  const seen = new Map<object, object>();
   const tools = [
-    ...baseTools.map(snapshotAgentTool),
-    ...extensions.flatMap((extension) => extension.tools?.map(snapshotAgentTool) ?? []),
+    ...baseTools.map((tool) => snapshotAgentTool(tool, seen)),
+    ...extensions.flatMap((extension) => extension.tools?.map((tool) => snapshotAgentTool(tool, seen)) ?? []),
   ];
   const names = new Set<string>();
   for (const tool of tools) {
@@ -901,10 +904,11 @@ export class PiAgentRuntimeHarness {
         : composeTools(baseState.tools ?? [], extensions),
     };
     const names = new Set(initialState.tools.map((tool) => tool.name));
+    const snapshots = new Map<object, object>();
     this.deferredTools = Object.freeze(deferredTools.map((tool) => {
       if (!tool.name || names.has(tool.name) || !isPiCodemodeCallable(tool)) throw new Error("Deferred tools must have unique admitted callable identities.");
       names.add(tool.name);
-      return snapshotAgentTool(tool);
+      return snapshotAgentTool(tool, snapshots);
     }));
     if (initialState.model) {
       this.contextProjectionOptions = {

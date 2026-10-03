@@ -67,16 +67,29 @@ function copySchema(value: unknown): JsonObject | undefined {
   } catch { return undefined; }
 }
 
+/** Validated records for frozen (immutable) discovery objects, which servers share across their tools. */
+const validatedMetadata = new WeakMap<object, PiToolDiscoveryMetadata>();
+
+function sameMetadata(left: PiToolDiscoveryMetadata, right: PiToolDiscoveryMetadata): boolean {
+  return left === right || (left.namespace === right.namespace && left.label === right.label &&
+    left.description === right.description && left.instructions === right.instructions);
+}
+
 function namespaceMetadata(value: PiToolDiscoveryMetadata | undefined): PiToolDiscoveryMetadata | undefined {
   if (!value) return undefined;
+  const cached = validatedMetadata.get(value);
+  if (cached) return cached;
   const namespace = boundedString(value.namespace, 128, "tool namespace");
   if (!/^[a-zA-Z][a-zA-Z0-9_.:-]*$/u.test(namespace)) throw new Error("Invalid tool namespace.");
   const label = boundedString(value.label, 256, "namespace label");
   if (!label.trim()) throw new Error("Invalid namespace label.");
-  return { namespace, label,
+  const metadata: PiToolDiscoveryMetadata = Object.freeze({ namespace, label,
     ...(value.description === undefined ? {} : { description: boundedString(value.description, 1024, "namespace description") }),
     ...(value.instructions === undefined ? {} : { instructions: boundedString(value.instructions, 8192, "namespace instructions") }),
-  };
+  });
+  // Every field is a primitive, so a frozen source cannot change after validation.
+  if (Object.isFrozen(value)) validatedMetadata.set(value, metadata);
+  return metadata;
 }
 
 export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
@@ -91,7 +104,7 @@ export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
       const metadata = namespaceMetadata((tool as PiDiscoverableTool).discovery);
       if (metadata) {
         const existing = namespaces.get(metadata.namespace);
-        if (existing && JSON.stringify(existing) !== JSON.stringify(metadata)) throw new Error("Tool discovery namespace collision.");
+        if (existing && !sameMetadata(existing, metadata)) throw new Error("Tool discovery namespace collision.");
         namespaces.set(metadata.namespace, metadata);
       }
       return { tool, metadata };
