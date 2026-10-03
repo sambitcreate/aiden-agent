@@ -379,6 +379,7 @@ jobs:
           :app:testDebugUnitTest
           :app:lintDebug
           :app:compileDebugAndroidTestKotlin
+          --build-cache
           --stacktrace
 
       - name: Run Android Compose UI tests
@@ -391,11 +392,11 @@ jobs:
           working-directory: ./android
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           disable-animations: true
-          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+          script: ./gradlew :app:connectedDebugAndroidTest --build-cache --stacktrace
 
       - name: Assemble installable debug APK
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --build-cache --stacktrace
 
       - name: Record APK checksum
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
