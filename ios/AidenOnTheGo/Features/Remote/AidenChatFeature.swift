@@ -4084,6 +4084,8 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
+    @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
+    @State private var chatLoadEpoch = 0
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
@@ -4184,11 +4186,10 @@ struct AidenChatDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else {
-                model.stopProgressObservation()
-                return
-            }
+        .task(id: chatLoadEpoch) {
+            // Loads on appear and after each return from the background. A
+            // newer epoch cancels an older load still in flight.
+            guard scenePhase != .background else { return }
             await model.load(observeProgress: true)
         }
         .task(id: coordinator?.server?.serverTime) {
@@ -4240,17 +4241,26 @@ struct AidenChatDetailView: View {
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
             model.setSceneActive(scenePhase == .active)
+            if scenePhase == .background { _ = sceneRefreshGate.transition(to: .background) }
         }
         .onChange(of: model.readAloudCandidateID) { _, candidate in
             if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
         }
         .onChange(of: scenePhase) { _, phase in
             model.setSceneActive(phase == .active)
-            if phase == .active {
-                model.startProgressObservation()
-            } else {
+            if phase != .active {
                 model.readAloud.stop()
+            }
+            switch sceneRefreshGate.transition(to: phase) {
+            case .refresh:
+                chatLoadEpoch &+= 1
+            case .resume:
+                model.startProgressObservation()
+            case .suspend:
                 model.stopProgressObservation()
+            case .none:
+                // `.inactive` is transient; progress keeps streaming.
+                break
             }
         }
         .onDisappear {

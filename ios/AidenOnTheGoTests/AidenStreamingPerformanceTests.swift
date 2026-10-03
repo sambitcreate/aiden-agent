@@ -217,6 +217,36 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertEqual(cache.parsedCharacterCount - parsedBefore, "Tail.\n".utf8.count)
     }
 
+    // MARK: - Scene refresh
+
+    func testTransientInactiveBouncesNeverRefetchButBackgroundReturnsDo() {
+        var gate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
+        // Control Center, the app switcher, and system prompts.
+        for _ in 0..<5 {
+            XCTAssertEqual(gate.transition(to: .inactive), .none)
+            XCTAssertEqual(gate.transition(to: .active), .resume)
+        }
+        XCTAssertEqual(gate.transition(to: .inactive), .none)
+        XCTAssertEqual(gate.transition(to: .background), .suspend)
+        XCTAssertEqual(gate.transition(to: .inactive), .none)
+        XCTAssertEqual(gate.transition(to: .active), .refresh)
+        XCTAssertEqual(gate.transition(to: .active), .resume, "One return refreshes once.")
+
+        // Repeated background trips before activation still refresh once.
+        _ = gate.transition(to: .background)
+        _ = gate.transition(to: .background)
+        XCTAssertEqual(gate.transition(to: .active), .refresh)
+        XCTAssertEqual(gate.transition(to: .active), .resume)
+    }
+
+    func testAGateThatOwnsTheInitialLoadRefreshesOnFirstActivation() {
+        var gate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
+        XCTAssertEqual(gate.transition(to: .inactive), .none)
+        XCTAssertEqual(gate.transition(to: .active), .refresh)
+        XCTAssertEqual(gate.transition(to: .inactive), .none)
+        XCTAssertEqual(gate.transition(to: .active), .resume)
+    }
+
     // MARK: - SSE line decoding
 
     private func decodeLines(_ text: String) async throws -> [String] {

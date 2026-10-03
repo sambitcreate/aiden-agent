@@ -21,6 +21,7 @@
 		A0D700000000000000000002 /* AidenSSEParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000012 /* AidenSSEParser.swift */; };
 		A0D700000000000000000003 /* AidenChatCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000013 /* AidenChatCache.swift */; };
 		A0D700000000000000000004 /* AidenChatFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000014 /* AidenChatFeature.swift */; };
+		A0F100000000000000000041 /* AidenSceneRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000040 /* AidenSceneRefreshGate.swift */; };
 		A0F100000000000000000031 /* AidenMarkdownContentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000030 /* AidenMarkdownContentCache.swift */; };
 		A0D700000000000000000005 /* AidenChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000015 /* AidenChatTests.swift */; };
 		A0F100000000000000000021 /* AidenStreamingPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000020 /* AidenStreamingPerformanceTests.swift */; };
@@ -147,6 +148,7 @@
 		A0D700000000000000000012 /* AidenSSEParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSSEParser.swift; sourceTree = "<group>"; };
 		A0D700000000000000000013 /* AidenChatCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatCache.swift; sourceTree = "<group>"; };
 		A0F100000000000000000030 /* AidenMarkdownContentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMarkdownContentCache.swift; sourceTree = "<group>"; };
+		A0F100000000000000000040 /* AidenSceneRefreshGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSceneRefreshGate.swift; sourceTree = "<group>"; };
 		A0D700000000000000000014 /* AidenChatFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatFeature.swift; sourceTree = "<group>"; };
 		A0F100000000000000000020 /* AidenStreamingPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenStreamingPerformanceTests.swift; sourceTree = "<group>"; };
 		A0D700000000000000000015 /* AidenChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatTests.swift; sourceTree = "<group>"; };
@@ -411,6 +413,7 @@
 				A0D600000000000000000015 /* AidenPairingView.swift */,
 				A0D600000000000000000016 /* AidenWorkspaceShellView.swift */,
 				A0D700000000000000000014 /* AidenChatFeature.swift */,
+				A0F100000000000000000040 /* AidenSceneRefreshGate.swift */,
 				A0F100000000000000000030 /* AidenMarkdownContentCache.swift */,
 			);
 			path = Remote;
@@ -765,6 +768,7 @@
 				A0D700000000000000000002 /* AidenSSEParser.swift in Sources */,
 				A0D700000000000000000003 /* AidenChatCache.swift in Sources */,
 				A0D700000000000000000004 /* AidenChatFeature.swift in Sources */,
+				A0F100000000000000000041 /* AidenSceneRefreshGate.swift in Sources */,
 				A0F100000000000000000031 /* AidenMarkdownContentCache.swift in Sources */,
 				A0D800000000000000000001 /* AidenAppearance.swift in Sources */,
 				A0D800000000000000000003 /* AidenVoiceInput.swift in Sources */,
