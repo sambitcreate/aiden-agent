@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in progress.
+Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in review. PR 2 (contract revision 19: host feed, run streams, control and paging) is in progress.
 Date: 2026-09-09; revised 2026-10-02.
 Source baseline: `d724ff76d` (origin/main, 2026-10-02). Remote contract revision 18.
 
@@ -245,7 +245,7 @@ Nine PRs, each mergeable on its own, with the narrow suites green locally before
 | # | PR | Scope | Exit criteria |
 | --- | --- | --- | --- |
 | 1 | Run observer bus + persistence ([task plan](desktop-multi-host-pr1-run-observer-bus.md)) | `HostRunRegistry`, fan-out from `llm-client`, shared content projection, coalesced stream-journal persistence (blocker d) | Local renderer behaviour unchanged. Mobile stream tests pass unmodified. Streaming no longer rewrites the journal on every token. |
-| 2 | Contract rev 19 — host feed, run streams, control, paging | `/host/events`, `/runs/*`, `/chats/{id}/messages`, `/health` descriptor fields, repository identity, new grants, first-responder approvals with full details, Bot host-owner audience; docs + OpenAPI + fixtures; iOS/Android decoder tests | Two controllers racing an approval resolve once. Mobile isolation unchanged. Swift and Kotlin suites pass. |
+| 2 | Contract rev 19 — host feed, run streams, control, paging ([task plan](desktop-multi-host-pr2-host-contract.md)) | `/host/events`, `/runs/*`, `/chats/{id}/messages`, `/health` descriptor fields, repository identity, new grants, first-responder approvals with full details, Bot host-owner audience; docs + OpenAPI + fixtures; iOS/Android decoder tests | Two controllers racing an approval resolve once. Mobile isolation unchanged. Swift and Kotlin suites pass. |
 | 3 | Controller supervisor + stream IPC | `PeerHostManager`, keep-alive agent, feed and run subscriptions over IPC, expanded operations, capability refresh, subscription budgets | Colliding-ID two-host fixture. A pin mismatch blocks the host. 5-minute cap crossed without loss. Late responses after a switch are fenced. |
 | 4 | Pairing + Connections UI | Tailscale/Bonjour discovery, request/approve routes and sheet, match code, setup-code bootstrap client, Tailscale re-pin rule, Connections settings | Real two-Mac tailnet pairing in one click. Deny, expiry and rate-limit paths. Self-pair rejected. Credentials never reach the renderer. |
 | 5 | Sidebar | Remote rows from the feed, machine filter, globe marker, the three views, sorts, cross-machine grouping, offline/stale state | Behavioural tests on the pure projection, with fixtures for identical names and IDs across hosts. `renderToStaticMarkup` for the menu and states. |
