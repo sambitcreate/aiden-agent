@@ -1,7 +1,13 @@
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import { normalizeAidenManualPairingCode } from "./aiden-remote-pairing.js";
 import { parseAidenRemoteJson } from "./aiden-remote-protocol.js";
-import { hkdfSha256, openAesGcm } from "./aiden-remote-sealed-envelope.js";
+import type { KeyObject } from "node:crypto";
+import {
+  AIDEN_PAIRING_GRANT_KIND,
+  hkdfSha256,
+  openAesGcm,
+  openPairingRequestEnvelope,
+} from "./aiden-remote-sealed-envelope.js";
 import { validatePeerTrust, type PeerTrust } from "./peer-transport.js";
 
 export function peerRecord(value: unknown): Record<string, unknown> {
@@ -130,5 +136,79 @@ export function decryptPeerPairing(
     return pairing;
   } finally {
     key.fill(0);
+  }
+}
+
+/** A credential delivered by an approved connection request, with the trust to reach it. */
+export interface PeerPairingRequestGrant extends PeerTrust {
+  instanceId: string;
+  deviceId: string;
+  credential: string;
+  capabilities: string[];
+  displayName?: string;
+}
+
+/**
+ * Open the sealed grant from an approved connection request. The requester
+ * must pass the endpoint it polled and the SPKI it observed on that TLS
+ * connection (the same SPKI its match code covered); a grant naming any other
+ * identity is refused.
+ */
+export function openPeerPairingRequestGrant(
+  envelope: unknown,
+  expected: {
+    requestId: string;
+    publicKey: string;
+    privateKey: KeyObject;
+    endpoint: string;
+    serverSpkiSha256: string;
+  },
+): PeerPairingRequestGrant {
+  const plaintext = openPairingRequestEnvelope(envelope, expected);
+  try {
+    const grant = peerRecord(
+      parseAidenRemoteJson(plaintext.toString("utf8"), "pairing grant"),
+    );
+    const trust = peerRecord(grant.trust);
+    const exchange = peerRecord(grant.exchange);
+    if (
+      grant.kind !== AIDEN_PAIRING_GRANT_KIND ||
+      grant.requestId !== expected.requestId ||
+      (trust.mode !== "private-ca" && trust.mode !== "system") ||
+      exchange.protocolVersion !== 1
+    )
+      throw new Error("Invalid pairing grant.");
+    const credential = peerText(exchange.credential, 43);
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(credential))
+      throw new Error("Invalid pairing grant.");
+    const validated = validatePeerTrust({
+      endpoint: peerText(exchange.endpoint, 2048),
+      serverSpkiSha256: peerText(exchange.serverSpkiSha256, 51),
+      ...(trust.mode === "private-ca"
+        ? {
+            caCertificateDerBase64: peerText(
+              trust.caCertificateDerBase64,
+              8192,
+            ),
+          }
+        : {}),
+    });
+    if (
+      validated.endpoint !== expected.endpoint ||
+      validated.serverSpkiSha256 !== expected.serverSpkiSha256
+    )
+      throw new Error("The pairing identity did not match.");
+    return {
+      ...validated,
+      instanceId: hostIdentifier(exchange.instanceId),
+      deviceId: hostIdentifier(exchange.deviceId),
+      credential,
+      capabilities: peerStrings(exchange.capabilities),
+      ...(exchange.displayName !== undefined
+        ? { displayName: peerText(exchange.displayName, 80) }
+        : {}),
+    };
+  } finally {
+    plaintext.fill(0);
   }
 }
