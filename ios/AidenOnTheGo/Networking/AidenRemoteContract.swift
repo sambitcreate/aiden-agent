@@ -740,7 +740,9 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "handle_capacity"),
         Self(rawValue: "turn_already_active"),
         Self(rawValue: "stream_gone"),
+        Self(rawValue: "run_gone"),
         Self(rawValue: "approval_already_resolved"),
+        Self(rawValue: "approval_resolved"),
         Self(rawValue: "approval_expired"),
         Self(rawValue: "question_already_resolved"),
         Self(rawValue: "question_expired"),
@@ -776,6 +778,14 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
         let minimumClientVersion: String?
         let limit: Int?
         let field: String?
+        /// The winning decision a run-control loser receives with `approval_resolved`.
+        let decision: String?
+        /// The winning outcome a run-control loser receives with `question_already_resolved`.
+        let outcome: String?
+        let resolvedAt: Date?
+
+        private static let decisions: Set<String> = ["allow", "deny", "expired", "cancelled"]
+        private static let outcomes: Set<String> = ["answered", "expired", "cancelled"]
 
         init(from decoder: Decoder) throws {
             let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
@@ -821,10 +831,20 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
                 maxLength: 120,
                 field: "field"
             )
+            decision = try decodeOptionalNonNull(values, String.self, forKey: .decision)
+            if let decision, !Self.decisions.contains(decision) {
+                throw AidenRemoteContractError.unsafePayloadField("decision")
+            }
+            outcome = try decodeOptionalNonNull(values, String.self, forKey: .outcome)
+            if let outcome, !Self.outcomes.contains(outcome) {
+                throw AidenRemoteContractError.unsafePayloadField("outcome")
+            }
+            resolvedAt = try decodeOptionalNonNull(values, Date.self, forKey: .resolvedAt)
         }
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
             case currentRevision, retryAfterSeconds, chatId, minimumClientVersion, limit, field
+            case decision, outcome, resolvedAt
         }
     }
 
@@ -2857,6 +2877,9 @@ struct AidenRemoteContractFixture: Decodable {
     let speechTranscription: AidenSpeechTranscription
     let scheduleRunNotification: AidenScheduledRunNotification
     let error: AidenRemoteErrorEnvelope
+    /// Revision 19: a desktop run-control loser's error. Phones never call run routes,
+    /// but the shared envelope decoder must accept every published code.
+    let runControlError: AidenRemoteErrorEnvelope?
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -2936,6 +2959,7 @@ struct AidenRemoteContractFixture: Decodable {
             forKey: .scheduleRunNotification
         )
         error = try values.decode(AidenRemoteErrorEnvelope.self, forKey: .error)
+        runControlError = try values.decodeIfPresent(AidenRemoteErrorEnvelope.self, forKey: .runControlError)
 
         let botSummaryTimestamps = try values.decode(
             BotTimestampProjection.self,
@@ -3140,7 +3164,7 @@ struct AidenRemoteContractFixture: Decodable {
         case legacyNonNegotiating
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
-        case scheduleRunNotification, error
+        case scheduleRunNotification, error, runControlError
     }
 }
 
