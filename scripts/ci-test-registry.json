@@ -249,6 +249,7 @@
         "main/services/aiden-remote-operation-contract.test.ts",
         "main/services/aiden-remote-pairing.test.ts",
         "main/services/aiden-remote-pairing-requests.test.ts",
+        "main/services/aiden-remote-pairing-requests-router.test.ts",
         "main/services/aiden-remote-ports.test.ts",
         "main/services/aiden-remote-protocol.test.ts",
         "main/services/aiden-remote-revocation.test.ts",

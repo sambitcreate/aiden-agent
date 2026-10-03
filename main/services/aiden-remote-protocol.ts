@@ -189,6 +189,12 @@ export const AIDEN_REMOTE_HOST_EVENTS_FEATURE = "host-events-v1" as const;
 export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
 /** Server feature token for the `/runs/{runId}/*` control routes (`runs:control`). */
 export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
+/**
+ * Server feature token for unauthenticated desktop connection requests
+ * (`/pairing/requests*`). A requester without a credential discovers support
+ * through `/health?detail=host` `pairingRequests` instead.
+ */
+export const AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE = "pairing-requests-v1" as const;
 
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
