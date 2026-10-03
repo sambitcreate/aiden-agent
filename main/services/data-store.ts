@@ -1,7 +1,8 @@
 // Generic JSON file store rooted in a caller-chosen directory.
 // Machine-local app data belongs in the operating system's user-data directory,
 // which is the default root. Stores whose file is the user's to hand-edit pass
-// their own root (see aiden-config-dir.ts) and set `preserveCorruptFile`.
+// their own root (see aiden-config-dir.ts). Every store keeps a rescue copy of
+// an unreadable file before replacing it unless it opts out as a pure cache.
 
 import * as fs from "fs/promises";
 import * as path from "path";
@@ -28,9 +29,10 @@ export interface DataStoreOptions<T> {
   /** POSIX mode applied to every atomically staged replacement. */
   fileMode?: number;
   /**
-   * Copy an unparseable file aside before a write replaces it. Set this for any
-   * file the user maintains by hand: a JSON typo must cost them a restart, not
-   * the file. Left off for regenerable caches, which would only litter.
+   * Keep an unparseable or unreadable file aside before a write replaces it, so
+   * a JSON typo, a torn write, or a permission problem costs a restart rather
+   * than the data. On by default; only pure regenerable caches should pass
+   * `false`, since for them a rescue copy would only litter.
    */
   preserveCorruptFile?: boolean;
   /** Normalize valid JSON whose runtime shape does not match the typed store. */
@@ -223,20 +225,43 @@ export class DataStore<T> {
   }
 
   /**
-   * Park an unparseable file beside itself so replacing it is never destructive.
-   * Best effort by design: if the copy fails there is nothing worth preserving,
-   * and it must not block the write the user actually asked for.
+   * Park an unparseable or unreadable file beside itself so replacing it is
+   * never destructive. A hard link keeps the exact bytes without needing read
+   * permission on the file; a copy covers filesystems without hard links; a
+   * rename aside is the last resort. When the destination still exists and
+   * none of those worked, the write fails closed instead of replacing it.
    */
   private async preserveCorrupt(destination: string): Promise<void> {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    // The random suffix makes the name ours alone, so cleaning up a failed
+    // attempt can never remove an earlier rescue copy.
+    const rescue = `${destination}.invalid-${stamp}-${randomUUID().slice(0, 8)}`;
+    let info: Awaited<ReturnType<typeof fs.lstat>>;
     try {
-      const contents = await readRegularFile(destination, this.options.maxBytes);
-      await fs.writeFile(`${destination}.invalid-${stamp}`, contents, {
-        flag: "wx",
-      });
-    } catch {
-      // Unreadable or already gone — fall through to the write.
+      info = await fs.lstat(destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
+    // Publishing over a directory fails on its own and replaces nothing.
+    if (info.isDirectory()) return;
+    const attempts: Array<() => Promise<void>> = [];
+    // link() may follow a symlink on some platforms; keep the link itself.
+    if (!info.isSymbolicLink()) attempts.push(() => fs.link(destination, rescue));
+    if (info.isFile()) {
+      attempts.push(() => fs.copyFile(destination, rescue, fs.constants.COPYFILE_EXCL));
+    }
+    attempts.push(() => fs.rename(destination, rescue));
+    for (const attempt of attempts) {
+      try {
+        await attempt();
+        await this.syncDirectory(path.dirname(destination)).catch(() => undefined);
+        return;
+      } catch {
+        await fs.rm(rescue, { force: true }).catch(() => undefined);
+      }
+    }
+    throw new DataStoreCorruptWriteError();
   }
 
   private async syncDirectory(directory: string): Promise<void> {
@@ -469,7 +494,7 @@ export class DataStore<T> {
       throw new DataStoreUnsafeWriteError();
     }
     const destination = await this.getFilePath();
-    if (this.options.preserveCorruptFile) {
+    if (this.options.preserveCorruptFile !== false) {
       // `corrupt` is only assessed by load(). update() always loads first, but a
       // bare save() need not have, and overwriting an unread file is precisely
       // when the user's data is at risk. Assess it before replacing it.
