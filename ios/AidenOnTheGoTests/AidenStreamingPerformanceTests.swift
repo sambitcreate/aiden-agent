@@ -1,4 +1,5 @@
 import XCTest
+import MarkdownUI
 @testable import AidenOnTheGo
 
 /// Behavioral coverage for the streaming hot paths: Live Activity update
@@ -105,6 +106,115 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertLessThanOrEqual(harness.delivered.count, 52)
         XCTAssertGreaterThanOrEqual(harness.delivered.count, 40)
         XCTAssertEqual(harness.delivered.last, "complete")
+    }
+
+    // MARK: - Markdown prefix reuse
+
+    private static let markdownFixtures: [String] = [
+        """
+        # Plan
+
+        First paragraph with **bold** and `code`.
+        It continues on a second line.
+
+        - item one
+        - item two
+
+          nested paragraph in item two
+
+        - item three
+        1. ordered
+        2. list
+
+        Paragraph after the list.
+
+        ```swift
+        let a = 1
+
+        let b = 2
+        ```
+
+        ~~~
+        tilde fence
+        ~~~
+
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        > quote line
+
+        > another quote
+
+            indented code
+
+        Setext heading
+        ==============
+
+        * * *
+
+        Final words.
+
+        """,
+        "Line one\r\n\r\nLine two\r\n\r\n- a\r\n\r\n  b\r\n\r\nEnd\r\n",
+        "See [the docs][docs].\n\nMore text.\n\n[docs]: https://example.invalid\n",
+        "Intro\n\n<!-- note\n\nstill comment -->\n\nAfter.\n",
+        "Unclosed fence\n\n```\ncode\n\nmore code\n\nstill code\n",
+        "````\n```\n\nnot closed by a shorter fence\n````\n\nAfter.\n",
+    ]
+
+    @MainActor
+    func testChunkedParseMatchesAFullParseForEveryStreamedPrefix() {
+        for fixture in Self.markdownFixtures {
+            let cache = AidenMarkdownContentCache()
+            var prefix = ""
+            for character in fixture {
+                prefix.append(character)
+                XCTAssertEqual(
+                    cache.content(for: prefix),
+                    MarkdownContent(prefix),
+                    "Chunked parse diverged at prefix: \(prefix.debugDescription)"
+                )
+            }
+        }
+    }
+
+    @MainActor
+    func testStreamingALongReplyParsesRoughlyLinearCharacters() {
+        let paragraphs = (0..<200).map { "Paragraph \($0) with some **markdown** text to render." }
+        let reply = paragraphs.joined(separator: "\n\n")
+        let cache = AidenMarkdownContentCache()
+        var prefix = ""
+        var updates = 0
+        for word in reply.split(separator: " ", omittingEmptySubsequences: false) {
+            prefix += prefix.isEmpty ? String(word) : " " + word
+            _ = cache.content(for: prefix)
+            updates += 1
+        }
+        // A full reparse per update would hand the parser about
+        // updates * reply.count / 2 characters; chunk reuse keeps it to the
+        // settled chunks once plus a short tail per update.
+        let quadratic = updates * reply.utf8.count / 2
+        XCTAssertLessThan(cache.parsedCharacterCount, quadratic / 20)
+        XCTAssertEqual(cache.content(for: reply), MarkdownContent(reply))
+    }
+
+    @MainActor
+    func testMarkdownCacheStaysWithinItsEntryAndCharacterBudgets() {
+        let cache = AidenMarkdownContentCache(maximumEntries: 8, maximumCharacters: 400)
+        for message in 0..<50 {
+            let text = (0..<4).map { "Message \(message) paragraph \($0)." }.joined(separator: "\n\n")
+            XCTAssertEqual(cache.content(for: text), MarkdownContent(text))
+            XCTAssertLessThanOrEqual(cache.entryCount, 8)
+        }
+
+        // A recently used message keeps its settled chunks: rendering it
+        // again parses only the final block, which may still be growing.
+        let recent = "Recent one.\n\nRecent two.\n\nTail.\n"
+        _ = cache.content(for: recent)
+        let parsedBefore = cache.parsedCharacterCount
+        XCTAssertEqual(cache.content(for: recent), MarkdownContent(recent))
+        XCTAssertEqual(cache.parsedCharacterCount - parsedBefore, "Tail.\n".utf8.count)
     }
 }
 

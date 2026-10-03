@@ -6050,7 +6050,7 @@ struct AidenMarkdownView: View {
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                MarkdownUI.Markdown(content)
+                MarkdownUI.Markdown(AidenMarkdownContentCache.shared.content(for: content))
                     .markdownTheme(.aidenChat(colorScheme: colorScheme))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
                     .markdownCodeSyntaxHighlighter(.plainText)
@@ -6116,10 +6116,6 @@ private struct AidenLiveResponseView: View {
         )
     }
 
-    private var visibleText: String {
-        botReply?.finalText ?? model.liveText
-    }
-
     private var reasoningActive: Bool {
         guard model.isStreaming else { return false }
         if AidenAgentActivityPresentation.hasActiveThinkingStep(model.activityTimeline) {
@@ -6170,6 +6166,12 @@ private struct AidenLiveResponseView: View {
     }
 
     var body: some View {
+        // Each projection walks the whole live transcript, so evaluate them
+        // once per render rather than once per reference.
+        let botReply = botReply
+        let chronologicalRows = chronologicalRows
+        let visibleText = botReply?.finalText ?? model.liveText
+        let visibleActivitySteps = chronologicalRows == nil ? visibleActivitySteps : []
         VStack(alignment: .leading, spacing: 12) {
             if model.isStreaming,
                let start = AidenTurnElapsed.liveStart(
@@ -6179,6 +6181,7 @@ private struct AidenLiveResponseView: View {
                 AidenLiveElapsedLabel(start: start)
             }
             if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
+                let activity = activity
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
                     Text(activity.label)
