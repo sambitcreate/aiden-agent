@@ -49,6 +49,9 @@ export function nextPairingRequest(
   };
 }
 
+/** How long a newly shown request keeps Allow off, so it needs a fresh, deliberate press. */
+const PAIRING_ALLOW_ARM_MS = 1_000;
+
 function formatCountdown(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
@@ -99,7 +102,8 @@ export function PairingRequestSheetBody({
 
 /**
  * App-wide approval sheet for desktop connection requests. Deny is the safe
- * default: it takes initial focus, and dismissing the sheet denies the request.
+ * default: it takes focus whenever a request is shown, and dismissing the sheet
+ * denies the request.
  */
 export function PairingRequestSheet() {
   const capabilities = useAppCapabilities();
@@ -113,7 +117,12 @@ export function PairingRequestSheet() {
   });
   const [answered, setAnswered] = React.useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = React.useState(() => Date.now());
-  const [pending, setPending] = React.useState<string | null>(null);
+  const [pending, setPending] = React.useState<
+    { requestId: string; decision: "allow" | "deny" } | null
+  >(null);
+  // The request whose Allow is live. A newly shown request starts unarmed.
+  const [armedFor, setArmedFor] = React.useState<string | null>(null);
+  const denyRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => aidenRemoteApi.onPairingRequestsChanged(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
@@ -121,7 +130,25 @@ export function PairingRequestSheet() {
   }), [queryClient]);
 
   const prompts = requests.data ?? [];
-  const { current, waiting, busy } = nextPairingRequest(prompts, answered, now, pending);
+  const { current, waiting, busy } = nextPairingRequest(
+    prompts,
+    answered,
+    now,
+    pending?.requestId ?? null,
+  );
+  const currentId = current?.requestId ?? null;
+
+  // Whenever a different device takes over the sheet (the shown one was
+  // cancelled, expired or answered), go back to the safe default before the
+  // next key press lands: Deny takes focus, and Allow stays off for a moment so
+  // a press meant for the previous device cannot approve this one.
+  React.useLayoutEffect(() => {
+    setArmedFor(null);
+    if (currentId === null) return;
+    denyRef.current?.focus();
+    const timer = window.setTimeout(() => setArmedFor(currentId), PAIRING_ALLOW_ARM_MS);
+    return () => window.clearTimeout(timer);
+  }, [currentId]);
 
   React.useEffect(() => {
     if (!current) return;
@@ -141,8 +168,9 @@ export function PairingRequestSheet() {
 
   const respond = async (decision: "allow" | "deny") => {
     if (!current || pending !== null) return;
+    if (decision === "allow" && armedFor !== current.requestId) return;
     const request = current;
-    setPending(request.requestId);
+    setPending({ requestId: request.requestId, decision });
     try {
       const result = await aidenRemoteApi.respondPairingRequest(request.requestId, decision);
       if (decision === "allow") {
@@ -169,10 +197,13 @@ export function PairingRequestSheet() {
   if (current) lastShown.current = current;
   const shown = current ?? lastShown.current;
   if (!shown) return null;
-  const busyAllowing = current !== null && busy;
+  const busyAllowing = current !== null && busy && pending?.decision !== "deny";
   return (
     <Dialog
       open={current !== null}
+      cancelRef={denyRef}
+      busy={current !== null && busy}
+      confirmDisabled={current === null || armedFor !== current.requestId}
       onOpenChange={(open) => {
         if (!open) void respond("deny");
       }}
@@ -184,7 +215,6 @@ export function PairingRequestSheet() {
       description={`Allow only if ${shown.deviceName} shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Remote Access settings.`}
       cancelLabel="Deny"
       confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
-      busy={busyAllowing}
       onConfirm={() => respond("allow")}
     >
       <PairingRequestSheetBody
