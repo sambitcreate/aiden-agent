@@ -39,6 +39,7 @@ import { reloadPortableConfig } from "./services/portable-config.js";
 import {
   createLastSafeSnapshotReload,
   createPortableConfigWatcher,
+  createThrottledTrigger,
 } from "./services/portable-config-watch-core.js";
 import { setPortableCredentialSnapshotListener } from "./services/portable-credential-snapshot.js";
 import {
@@ -2033,6 +2034,15 @@ if (!ownsSingleInstanceLock) {
         return;
       }
       try {
+        // Hold the startup catch-up burst while the screen is locked, and
+        // re-check it whenever the machine wakes or unlocks.
+        scheduleService.setCatchUpDeferPolicy(
+          () => powerMonitor.getSystemIdleState(1) === "locked",
+        );
+        powerMonitor.on("resume", () => scheduleService.reevaluateCatchUp());
+        powerMonitor.on("unlock-screen", () =>
+          scheduleService.reevaluateCatchUp(),
+        );
         await scheduleService.start();
       } catch (error) {
         logger.error(
