@@ -617,6 +617,7 @@
         "scripts/gemini-live-electron-spike-core.test.mjs",
         "scripts/gemini-live-google-acceptance.test.mjs",
         "scripts/hide-dmg-support-files.test.mjs",
+        "scripts/main-runtime-dependencies.test.mjs",
         "scripts/model-snapshot-core.test.mjs",
         "scripts/native-helpers.test.mjs",
         "scripts/prepare-macos-dev-runtime.test.mjs",

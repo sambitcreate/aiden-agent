@@ -21,6 +21,7 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertSlimPackagedEntries,
   assertPackagedSubagentInferenceWorkerEntries,
   assertPackagedParakeetWorkerEntries,
   assertPackagedNodePtyHelperEntries,
@@ -31,6 +32,7 @@ import {
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
   verifyPackagedParakeetWorker,
   verifyPackagedVccWorker,
@@ -182,6 +184,65 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test("package verifier rejects source maps, declarations, esbuild, and lockfile dev-only packages", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-slim-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const lockfilePath = path.join(root, "package-lock.json");
+  const lockfile = {
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "fixture" },
+      "node_modules/yaml": { version: "2.0.0" },
+      "node_modules/react": { version: "19.0.0", dev: true },
+      // A dev-only top-level copy and a production nested copy of one name:
+      // electron-builder may hoist the production copy to the top.
+      "node_modules/semver": { version: "7.8.5", dev: true },
+      "node_modules/electron-updater/node_modules/semver": { version: "7.7.4" },
+    },
+  };
+  const manifest = (name, version) => `${JSON.stringify({ name, version })}\n`;
+  const write = async (relative, contents = "{}\n") => {
+    await mkdir(path.dirname(path.join(source, relative)), { recursive: true });
+    await writeFile(path.join(source, relative), contents, "utf8");
+  };
+  try {
+    await writeFile(lockfilePath, JSON.stringify(lockfile), "utf8");
+    await write("build/main/index.js", "export {};\n");
+    await write("node_modules/yaml/package.json", manifest("yaml", "2.0.0"));
+    await write("node_modules/yaml/dist/esm/package.json", '{"type":"module"}\n');
+    await write("node_modules/semver/package.json", manifest("semver", "7.7.4"));
+    const accepted = path.join(root, "accepted.asar");
+    await createPackage(source, accepted);
+    await assert.doesNotReject(verifyPackagedSlimness(accepted, lockfilePath));
+
+    const rejections = [
+      ["build/main/index.js.map", "{}\n", /source map \/build\/main\/index\.js\.map/u],
+      ["node_modules/yaml/dist/index.d.ts", "{}\n", /type declaration/u],
+      ["node_modules/esbuild/package.json", manifest("esbuild", "0.28.2"), /esbuild toolchain/u],
+      ["node_modules/@esbuild/darwin-arm64/bin/esbuild", "{}\n", /esbuild toolchain/u],
+      ["node_modules/react/package.json", manifest("react", "19.0.0"), /development-only package react@19\.0\.0/u],
+    ];
+    for (const [index, [relative, contents, expected]] of rejections.entries()) {
+      await write(relative, contents);
+      const rejected = path.join(root, `rejected-${index}.asar`);
+      await createPackage(source, rejected);
+      await assert.rejects(verifyPackagedSlimness(rejected, lockfilePath), expected, relative);
+      await rm(path.join(source, relative));
+    }
+
+    await write("node_modules/semver/package.json", manifest("semver", "7.8.5"));
+    const devSemver = path.join(root, "dev-semver.asar");
+    await createPackage(source, devSemver);
+    await assert.rejects(verifyPackagedSlimness(devSemver, lockfilePath), /semver@7\.8\.5/u);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+
+  const many = Array.from({ length: 8 }, (_, index) => `/build/renderer/chunk-${index}.js.map`);
+  assert.throws(() => assertSlimPackagedEntries(many), /and 3 more/u);
 });
 
 test("package verifier requires a bounded packed subagent inference worker", async () => {

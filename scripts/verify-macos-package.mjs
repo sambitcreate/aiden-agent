@@ -128,6 +128,75 @@ export async function verifyPackagedGenerativeUiLibraries(appPath) {
   }
 }
 
+const PACKAGE_ROOT_MANIFEST = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\/package\.json$/u;
+
+/**
+ * Returns `name@version` for every package the lockfile installs for
+ * production. electron-builder may hoist a nested production copy to the top
+ * of app.asar, so packages are compared by identity rather than install path.
+ */
+export function productionLockfilePackages(lockfile) {
+  const packages = new Set();
+  for (const [key, metadata] of Object.entries(lockfile?.packages ?? {})) {
+    if (!key.includes("node_modules/") || metadata?.dev === true || metadata?.link === true) continue;
+    const name = metadata.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
+    packages.add(`${name}@${metadata.version}`);
+  }
+  return packages;
+}
+
+/**
+ * Rejects app.asar entries that only help development: source maps (kept as
+ * release symbols instead), type declarations, the esbuild toolchain that the
+ * main process never loads, and any package the lockfile installs only for
+ * development, such as renderer libraries that Vite already bundled.
+ *
+ * `manifests` lists each packaged package root as `{ entry, name, version }`.
+ */
+export function assertSlimPackagedEntries(entries, { manifests = [], productionPackages } = {}) {
+  const problems = [];
+  for (const raw of entries) {
+    const entry = raw.replaceAll("\\", "/");
+    if (entry.endsWith(".map")) problems.push(`source map ${entry}`);
+    else if (/\.d\.[cm]?ts$/u.test(entry)) problems.push(`type declaration ${entry}`);
+    else if (/\/node_modules\/(?:esbuild|@esbuild\/[^/]+)(?:\/|$)/u.test(entry)) problems.push(`esbuild toolchain ${entry}`);
+  }
+  if (productionPackages) {
+    for (const { entry, name, version } of manifests) {
+      if (!productionPackages.has(`${name}@${version}`)) {
+        problems.push(`development-only package ${name}@${version} at ${entry}`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    const shown = problems.slice(0, 5).join("; ");
+    const more = problems.length > 5 ? `; and ${problems.length - 5} more` : "";
+    throw new Error(`Packaged app.asar ships development-only files: ${shown}${more}`);
+  }
+}
+
+export async function verifyPackagedSlimness(
+  appAsar,
+  lockfilePath = path.join(repositoryRoot, "package-lock.json"),
+) {
+  await assertRegularFile(appAsar);
+  const lockfile = JSON.parse(await readFile(lockfilePath, "utf8"));
+  const entries = listPackage(appAsar, { isPack: false });
+  const manifests = [];
+  for (const raw of entries) {
+    const entry = raw.replaceAll("\\", "/");
+    if (!PACKAGE_ROOT_MANIFEST.test(entry)) continue;
+    const manifest = JSON.parse(extractFile(appAsar, entry.slice(1)).toString("utf8"));
+    if (typeof manifest.name === "string" && typeof manifest.version === "string") {
+      manifests.push({ entry, name: manifest.name, version: manifest.version });
+    }
+  }
+  assertSlimPackagedEntries(entries, {
+    manifests,
+    productionPackages: productionLockfilePackages(lockfile),
+  });
+}
+
 export function assertPackagedModelCatalogEntries(entries) {
   const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
   if (!normalized.has("/resources/model-capabilities.json")) {
@@ -732,6 +801,7 @@ export async function verifyMacPackage(appPath) {
     await assertRegularFile(file);
   }
   await verifyPackagedModelCatalogResources(appAsar);
+  await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedParakeetWorker(appAsar);
   await verifyPackagedVccWorker(appAsar);
