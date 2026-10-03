@@ -212,11 +212,14 @@ import {
   type DeviceToolchainState,
 } from "../shared/devices";
 import type {
+  PeerDiscoveryState,
   PeerHostFeedMessage,
   PeerHostFeedSnapshot,
   PeerHostStatus,
   PeerHostView,
   PeerOperationOutcome,
+  PeerPairingProgress,
+  PeerPairingResult,
   PeerRunFrameMessage,
   PeerRunSubscription,
   PeerRunTarget,
@@ -266,6 +269,26 @@ export const peerHostsApi = {
     onNotification<PeerRunFrameMessage>("remote:peer-run-frame", handler),
   onHostState: (handler: (status: PeerHostStatus) => void) =>
     onNotification<PeerHostStatus>("remote:peer-host-state", handler),
+  rename: (id: string, name: string) => invoke<PeerHostView>("remote:peersRename", id, name),
+  reconnect: (id: string) => invoke<void>("remote:peersReconnect", id),
+  /** Search for other desktops while the Add device sheet is open. */
+  discoveryStart: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryStart"),
+  discoveryRefresh: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryRefresh"),
+  discoveryStop: () => invoke<void>("remote:peerDiscoveryStop"),
+  onDiscovery: (handler: (state: PeerDiscoveryState) => void) =>
+    onNotification<PeerDiscoveryState>("remote:peer-discovery", handler),
+  pairRequest: (attemptId: string, deviceId: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairRequest", attemptId, deviceId, replaceHostId),
+  pairSetupCode: (
+    attemptId: string,
+    input: { deviceId: string; code: string } | { address: string; code: string },
+    replaceHostId?: string,
+  ) => invoke<PeerPairingResult>("remote:peerPairSetupCode", attemptId, input, replaceHostId),
+  pairLink: (attemptId: string, link: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairLink", attemptId, link, replaceHostId),
+  pairCancel: (attemptId: string) => invoke<boolean>("remote:peerPairCancel", attemptId),
+  onPairingProgress: (handler: (progress: PeerPairingProgress) => void) =>
+    onNotification<PeerPairingProgress>("remote:peer-pairing-progress", handler),
 };
 
 export const appApi = {
