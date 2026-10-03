@@ -1,6 +1,6 @@
 # Desktop multi-host PR 3 — controller supervisor and stream IPC
 
-Status: In progress.
+Status: Implemented; in review.
 Parent plan: [Desktop multi-host control](desktop-multi-host-control-plan.md), delivery row 3.
 Stack: PR 1 (#310) ← PR 2 (#313, contract revision 19) ← this PR.
 
@@ -44,10 +44,11 @@ endpoints.
     `remote:host-feed {hostId, epoch, sequence, change}`, so windows share one subscription.
 - Live runs:
   - `remote:peerRunSubscribe(hostId, target, afterSequence)` takes a target of `{chatId}` or
-    `{runId}`. `remote:peerRunUnsubscribe(hostId, subscriptionId)` releases it.
+    `{runId}`. `remote:peerRunUnsubscribe(subscriptionId)` releases it.
   - Streams are shared and reference-counted per renderer document. A stream with no viewers is
     evicted after 5 minutes.
-  - Frames are broadcast as `remote:peer-run-frame {hostId, runId, chatId, event}`.
+  - Frames are broadcast as `remote:peer-run-frame`: `{kind: "event", hostId, key, runId, chatId,
+    event}` or `{kind: "state", hostId, key, runId, chatId, state}`.
   - A chat-targeted stream learns its `runId` and resumes on `/runs/{runId}/events` with
     `Last-Event-ID` after the 5-minute cap.
   - Events are deduplicated by sequence. The terminal `run.ended` repeats the last sequence and is
@@ -138,7 +139,30 @@ endpoints.
     `PeerHostStatus`, served by `remote:peerHostStatuses` and broadcast on
     `remote:peer-host-state`.
 13. **Run subscriptions are owned per document.** A renderer document's references are released
-    when it navigates or is destroyed, so a crashed window cannot pin streams.
+    when it navigates or is destroyed, so a crashed window cannot pin streams. A subscription that
+    resolves after its document went away is released at once and the call rejects.
+14. **Supervision starts on first use.** `getPeerHostManager()` is created lazily by the first
+    device IPC call, so a launch that never opens device UI makes no peer traffic. Pairing alone
+    does not start it.
+15. **Two operation surfaces.** `remote:peerOperation` keeps its throwing contract for existing
+    callers but now runs through the supervisor, so a blocked host fails fast with no traffic.
+    `remote:peerCall` returns a typed `PeerOperationOutcome` (including `outcome_unknown` with its
+    reconciled state) instead of throwing.
+16. **Feed sequence jumps are accepted.** The host may coalesce changes; a sequence that skips
+    ahead is applied, while one that does not advance is ignored. An epoch change resets.
+17. **Chat targets replay their current run.** A `{chatId}` target ignores `afterSequence` (the
+    caller cannot know which run it names) and replays the current run's buffer. It parks as
+    `idle` after the run ends and probes again when the feed announces a newer run for the chat
+    or the host reconnects.
+18. **The feed is the liveness signal.** A run-stream network error retries that stream with
+    backoff but never fails the host; only `/server` and the feed move the supervisor.
+19. **Disabling drops the cache.** A disabled or removed host's rows and streams are dropped
+    (streams report `gone`); an offline but enabled host keeps its rows marked `stale`.
+20. **A silently resumed feed is live on open.** The feed is marked `live` when its resumed
+    connection opens, not only when a new event arrives.
+21. **The SSE budget is rolling.** The peer event-frame byte and frame budget bounds what arrives
+    between two frames that carry an SSE `id` (heartbeats and partial snapshot chunks). A committed
+    frame releases it, so a long-lived feed is limited by its session cap, not its lifetime volume.
 
 ## Exit criteria (tests)
 
@@ -154,9 +178,10 @@ endpoints.
 
 ## Status
 
-- [ ] Transport upgrades
-- [ ] Feed cache and run subscriptions
-- [ ] Supervisor and budgets
-- [ ] Expanded operations, capability refresh and negotiation
-- [ ] IPC, preload and renderer API
-- [ ] Tests registered; local suites green; PR open; CI green
+- [x] Transport upgrades
+- [x] Feed cache and run subscriptions
+- [x] Supervisor and budgets
+- [x] Expanded operations, capability refresh and negotiation
+- [x] IPC, preload and renderer API
+- [x] Tests registered; local suites green
+- [ ] PR open; CI green
