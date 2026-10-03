@@ -70,6 +70,7 @@
         "main/services/dictation-key-state.test.ts",
         "main/services/dictation-keycode.test.ts",
         "main/services/dictation-paste.test.ts",
+        "main/services/durable-fs.test.ts",
         "main/services/durable-jobs/service.test.ts",
         "main/services/durable-jobs/store.test.ts",
         "main/services/external-editors.test.ts",
