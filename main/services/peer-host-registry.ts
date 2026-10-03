@@ -11,13 +11,26 @@ import {
   peerText,
   type PeerPairing,
 } from "./peer-pairing.js";
+import type https from "node:https";
 import {
+  createPeerAgent,
   PeerTransport,
   PeerTransportError,
   validatePeerTrust,
+  type PeerBinary,
   type PeerRequest,
+  type PeerStreamEnd,
   type PeerTrust,
 } from "./peer-transport.js";
+import {
+  AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
+  AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
+  AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
+  AIDEN_REMOTE_CHAT_TASKS_FEATURE,
+  AIDEN_REMOTE_HOST_EVENTS_FEATURE,
+  AIDEN_REMOTE_RUN_CONTROL_FEATURE,
+  AIDEN_REMOTE_RUN_STREAMS_FEATURE,
+} from "./aiden-remote-protocol.js";
 
 export interface StoredPeerHost extends PeerTrust {
   id: string;
@@ -36,7 +49,45 @@ export interface PeerHostStorage {
 
 export interface PeerClient {
   json(input: PeerRequest): Promise<unknown>;
-  events(input: PeerRequest, onFrame: (frame: string) => void): Promise<void>;
+  /** Resolves when the stream ends cleanly; `void` means the server ended it (`eof`). */
+  events(
+    input: PeerRequest,
+    onFrame: (frame: string) => void,
+  ): Promise<PeerStreamEnd | void>;
+  binary?(input: PeerRequest): Promise<PeerBinary>;
+}
+
+/**
+ * Grants a desktop controller asks for after pairing, each gated by the
+ * feature that proves the host serves it. Bot grants stay pairing-bound
+ * (contract revision 19) and are never negotiated.
+ */
+const NEGOTIATED_GRANTS: ReadonlyArray<readonly [string, string]> = [
+  ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
+  ["agents:read", AIDEN_REMOTE_CHAT_AGENTS_FEATURE],
+  ["questions:respond", AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE],
+  ["skills:invoke", AIDEN_REMOTE_CHAT_SKILLS_FEATURE],
+  ["host:events", AIDEN_REMOTE_HOST_EVENTS_FEATURE],
+  ["runs:observe", AIDEN_REMOTE_RUN_STREAMS_FEATURE],
+  ["runs:control", AIDEN_REMOTE_RUN_CONTROL_FEATURE],
+];
+
+/** Unary requests and streams (feed plus live runs) have separate budgets. */
+export const PEER_UNARY_PER_HOST = 8;
+export const PEER_UNARY_TOTAL = 32;
+export const PEER_STREAMS_PER_HOST = 17;
+export const PEER_STREAMS_TOTAL = 64;
+
+export type PeerRequestPartition = "unary" | "stream";
+
+function sameStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    [...left].sort().join("\n") === [...right].sort().join("\n")
+  );
 }
 
 export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
@@ -80,11 +131,25 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
   });
 }
 
+interface Admitted {
+  host: StoredPeerHost;
+  epoch: number;
+  controller: AbortController;
+  pool: Map<string, Set<AbortController>>;
+}
+
 /** No mutable global target: each request captures one authenticated installation. */
 export class PeerHostRegistry {
   private hosts: StoredPeerHost[] | undefined;
   private tail: Promise<unknown> = Promise.resolve();
   private active = new Map<string, Set<AbortController>>();
+  private streams = new Map<string, Set<AbortController>>();
+  private agents = new Map<string, https.Agent>();
+  private negotiated = new Set<string>();
+  private listeners = new Set<() => void>();
+  private stateOverride:
+    | ((id: string) => PeerHostView["state"] | undefined)
+    | undefined;
   private states = new Map<string, PeerHostView["state"]>();
   private epochs = new Map<string, number>();
   private verified = new Set<string>();
@@ -125,14 +190,51 @@ export class PeerHostRegistry {
       this.hosts = parseStoredPeerHosts(await this.options.storage.load());
     return this.hosts;
   }
-  private client(trust: PeerTrust): PeerClient {
-    return this.options.client?.(trust) ?? new PeerTransport(trust);
+  private client(trust: PeerTrust, hostId?: string): PeerClient {
+    const injected = this.options.client?.(trust);
+    if (injected) return injected;
+    // Pairing runs before a host exists and keeps a single-use connection.
+    if (hostId === undefined) return new PeerTransport(trust);
+    let agent = this.agents.get(hostId);
+    if (!agent) {
+      agent = createPeerAgent(trust);
+      this.agents.set(hostId, agent);
+    }
+    return new PeerTransport(trust, { agent });
   }
   private invalidate(id: string): void {
     this.verified.delete(id);
+    this.negotiated.delete(id);
     this.epochs.set(id, (this.epochs.get(id) ?? 0) + 1);
     for (const controller of this.active.get(id) ?? []) controller.abort();
+    for (const controller of this.streams.get(id) ?? []) controller.abort();
     this.active.delete(id);
+    this.streams.delete(id);
+    this.agents.get(id)?.destroy();
+    this.agents.delete(id);
+  }
+  private notify(): void {
+    this.options.changed?.();
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch {
+        // One observer must not break host bookkeeping.
+      }
+    }
+  }
+  /** Observe pairing, enablement, removal and refreshed grants. */
+  onChanged(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+  /** Once a supervisor is attached, it owns each enabled host's coarse state. */
+  attachConnectionState(
+    state: (id: string) => PeerHostView["state"] | undefined,
+  ): void {
+    this.stateOverride = state;
   }
 
   private async verify(
@@ -151,13 +253,72 @@ export class PeerHostRegistry {
       }),
     );
     if (!current()) throw new Error("Device operation was superseded.");
-    if (server.protocolVersion !== 1 || server.instanceId !== host.id)
-      throw new Error(
-        "The paired server identity changed. Pair this device again.",
-      );
-    peerStrings(server.capabilities);
-    peerStrings(server.features ?? [], 32);
+    if (server.protocolVersion !== 1)
+      throw new PeerTransportError("unsupported_protocol");
+    if (server.instanceId !== host.id)
+      throw new PeerTransportError("identity_changed");
+    const capabilities = peerStrings(server.capabilities);
+    const features = peerStrings(server.features ?? [], 32);
+    const advertised = Array.isArray(server.serverCapabilities)
+      ? peerStrings(server.serverCapabilities)
+      : undefined;
+    await this.refreshGrants(host.id, capabilities, features, current);
     this.verified.add(host.id);
+    if (this.negotiated.has(host.id)) return;
+    this.negotiated.add(host.id);
+    const missing = NEGOTIATED_GRANTS.filter(
+      ([grant, feature]) =>
+        !capabilities.includes(grant) &&
+        features.includes(feature) &&
+        (advertised === undefined || advertised.includes(grant)),
+    ).map(([grant]) => grant);
+    if (missing.length === 0) return;
+    try {
+      const upgraded = peerRecord(
+        await client.json({
+          method: "POST",
+          path: "/device/capabilities",
+          credential: host.credential,
+          signal,
+          body: { accepts: missing },
+        }),
+      );
+      if (current())
+        await this.refreshGrants(
+          host.id,
+          peerStrings(upgraded.capabilities),
+          features,
+          current,
+        );
+    } catch {
+      // An older host without the route, or a refusal, leaves the existing grants in place.
+    }
+  }
+  /** Persist the grants and features a host reports, so views and gates stay current. */
+  private async refreshGrants(
+    id: string,
+    capabilities: string[],
+    features: string[],
+    current: () => boolean,
+  ): Promise<void> {
+    const stored = this.hosts?.find((entry) => entry.id === id);
+    if (
+      !stored ||
+      (sameStrings(stored.capabilities, capabilities) &&
+        sameStrings(stored.features, features))
+    )
+      return;
+    await this.locked(async () => {
+      if (!current()) return;
+      const hosts = await this.load();
+      if (!hosts.some((entry) => entry.id === id)) return;
+      const next = hosts.map((entry) =>
+        entry.id === id ? { ...entry, capabilities, features } : entry,
+      );
+      await this.options.storage.save(next, current);
+      this.hosts = next;
+      this.notify();
+    });
   }
   private view(host: StoredPeerHost): PeerHostView {
     return {
@@ -165,7 +326,9 @@ export class PeerHostRegistry {
       name: host.name,
       enabled: host.enabled,
       state: host.enabled
-        ? (this.states.get(host.id) ?? "disconnected")
+        ? (this.stateOverride?.(host.id) ??
+          this.states.get(host.id) ??
+          "disconnected")
         : "disabled",
       features: [...host.features],
       capabilities: [...host.capabilities],
@@ -286,7 +449,7 @@ export class PeerHostRegistry {
         await this.options.storage.save([...hosts, host], current);
         this.hosts = [...hosts, host];
         this.states.set(host.id, "connected");
-        this.options.changed?.();
+        this.notify();
         return this.view(host);
       });
     } finally {
@@ -307,7 +470,7 @@ export class PeerHostRegistry {
       this.hosts = next;
       this.invalidate(id);
       this.states.set(id, "disconnected");
-      this.options.changed?.();
+      this.notify();
     });
   }
   remove(id: string): Promise<void> {
@@ -318,59 +481,76 @@ export class PeerHostRegistry {
       this.invalidate(id);
       this.states.delete(id);
       this.epochs.delete(id);
-      this.options.changed?.();
+      this.notify();
     });
   }
 
-  async request(
-    id: string,
-    input: Omit<PeerRequest, "credential">,
-    onFrame?: (frame: string) => void,
-  ): Promise<unknown> {
-    const { host, epoch, controller } = await this.locked(async () => {
+  /**
+   * Verify one enabled host now: identity, protocol, refreshed grants and one
+   * negotiation attempt per session. This is the supervisor's connect step.
+   */
+  async connect(id: string, signal?: AbortSignal): Promise<PeerHostView> {
+    const admitted = await this.admit(id, "unary");
+    this.verified.delete(id);
+    await this.run(id, admitted, signal, async () => undefined);
+    const host = this.hosts?.find((entry) => entry.id === id);
+    if (!host?.enabled)
+      throw new Error("This device is disabled or unavailable.");
+    return this.view(host);
+  }
+
+  private admit(id: string, partition: PeerRequestPartition): Promise<Admitted> {
+    return this.locked(async () => {
       const found = (await this.load()).find(
         (candidate) => candidate.id === hostIdentifier(id),
       );
       if (this.closed) throw new Error("Device connections are closed.");
       if (!found?.enabled)
         throw new Error("This device is disabled or unavailable.");
-      const pending = this.active.get(id) ?? new Set<AbortController>();
-      if (
-        pending.size >= 8 ||
-        [...this.active.values()].reduce((sum, set) => sum + set.size, 0) >= 32
-      )
-        throw new Error("Too many pending device operations.");
+      const pool = partition === "stream" ? this.streams : this.active;
+      const pending = pool.get(id) ?? new Set<AbortController>();
+      const total = [...pool.values()].reduce((sum, set) => sum + set.size, 0);
+      const full =
+        partition === "stream"
+          ? pending.size >= PEER_STREAMS_PER_HOST || total >= PEER_STREAMS_TOTAL
+          : pending.size >= PEER_UNARY_PER_HOST || total >= PEER_UNARY_TOTAL;
+      if (full) throw new Error("Too many pending device operations.");
       const controller = new AbortController();
       pending.add(controller);
-      this.active.set(id, pending);
+      pool.set(id, pending);
       return {
         host: { ...found },
         epoch: this.epochs.get(id) ?? 0,
         controller,
+        pool,
       };
     });
+  }
+
+  private async run<T>(
+    id: string,
+    admitted: Admitted,
+    signal: AbortSignal | undefined,
+    work: (
+      host: StoredPeerHost,
+      client: PeerClient,
+      current: () => boolean,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const { host, epoch, controller, pool } = admitted;
     const abort = () => controller.abort();
-    if (input.signal?.aborted) abort();
-    input.signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    signal?.addEventListener("abort", abort, { once: true });
     const current = () =>
       !this.closed &&
       !controller.signal.aborted &&
       (this.epochs.get(id) ?? 0) === epoch;
     try {
       if (!current()) throw new Error("Device operation was superseded.");
-      const client = this.client(host);
+      const client = this.client(host, host.id);
       await this.verify(host, client, controller.signal, current);
       if (!current()) throw new Error("Device operation was superseded.");
-      const request = {
-        ...input,
-        credential: host.credential,
-        signal: controller.signal,
-      };
-      const result = onFrame
-        ? await client.events(request, (frame) => {
-            if (current()) onFrame(frame);
-          })
-        : await client.json(request);
+      const result = await work(host, client, current);
       if (!current()) throw new Error("Device operation was superseded.");
       this.states.set(id, "connected");
       return result;
@@ -391,10 +571,47 @@ export class PeerHostRegistry {
       }
       throw error;
     } finally {
-      input.signal?.removeEventListener("abort", abort);
-      this.active.get(id)?.delete(controller);
-      if (this.active.get(id)?.size === 0) this.active.delete(id);
+      signal?.removeEventListener("abort", abort);
+      pool.get(id)?.delete(controller);
+      if (pool.get(id)?.size === 0) pool.delete(id);
     }
+  }
+
+  /**
+   * One authenticated request to an enabled host. With `onFrame` it is a
+   * stream and resolves with how the stream ended; streams normally use the
+   * `stream` partition so they never starve unary operations.
+   */
+  async request(
+    id: string,
+    input: Omit<PeerRequest, "credential">,
+    onFrame?: (frame: string) => void,
+    options: { partition?: PeerRequestPartition; binary?: boolean } = {},
+  ): Promise<unknown> {
+    const admitted = await this.admit(id, options.partition ?? "unary");
+    return this.run(
+      id,
+      admitted,
+      input.signal,
+      async (host, client, current) => {
+        const request = {
+          ...input,
+          credential: host.credential,
+          signal: admitted.controller.signal,
+        };
+        if (onFrame) {
+          const end = await client.events(request, (frame) => {
+            if (current()) onFrame(frame);
+          });
+          return end ?? ({ reason: "eof" } satisfies PeerStreamEnd);
+        }
+        if (options.binary) {
+          if (!client.binary) throw new PeerTransportError("invalid_response");
+          return client.binary(request);
+        }
+        return client.json(request);
+      },
+    );
   }
 
   /**
@@ -423,6 +640,11 @@ export class PeerHostRegistry {
   close(): void {
     this.closed = true;
     for (const controller of this.pairings.values()) controller.abort();
-    for (const id of this.active.keys()) this.invalidate(id);
+    for (const id of new Set([
+      ...this.active.keys(),
+      ...this.streams.keys(),
+      ...this.agents.keys(),
+    ]))
+      this.invalidate(id);
   }
 }
