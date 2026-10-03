@@ -1,6 +1,7 @@
 /* global console, process */
 
 import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -26,6 +27,10 @@ function usage() {
 Unit lanes:
   --lane <name>       Run one unit lane (repeatable); core/runtime/renderer are aliases
 
+Execution:
+  --parallel          Run the selected unit lanes concurrently after their
+                      prerequisites, then the preserved commands one at a time
+
 Preserved modes:
   --preserved         Run all preserved commands (lane selection includes its assigned modes)
   --preserved=<id>    Run one preserved command (repeatable)
@@ -38,13 +43,14 @@ Inspection:
   --help              Show this help`);
 }
 
-function parseArguments(argumentsList) {
+export function parseArguments(argumentsList) {
   const result = {
     lanes: [],
     preserved: [],
     allPreserved: false,
     list: false,
     dryRun: false,
+    parallel: false,
     summary: false,
     json: false,
   };
@@ -60,6 +66,10 @@ function parseArguments(argumentsList) {
     }
     if (argument === "--dry-run") {
       result.dryRun = true;
+      continue;
+    }
+    if (argument === "--parallel") {
+      result.parallel = true;
       continue;
     }
     if (argument === "--summary") {
@@ -122,18 +132,20 @@ function resolveCommand(command) {
   return command;
 }
 
-function unitCommands(lane) {
+function unitCommands(lane, options) {
   // Some .mjs tests import TypeScript with .js specifiers. Preserve the tsx
   // resolver used by the original npm test graph for the whole ordinary lane.
   return [{
     id: `${lane.name}:tests`,
     lane: lane.name,
     files: lane.files,
-    command: [nodeExecutable, tsxCli, "--test", ...lane.files],
+    // Concurrent lanes pipe their output, which would switch Node to the
+    // verbose TAP reporter.
+    command: [nodeExecutable, tsxCli, ...(options.parallel ? ["--test-reporter=spec"] : []), "--test", ...lane.files],
   }];
 }
 
-function buildPlan(registry, options) {
+export function buildPlan(registry, options) {
   const lanesByName = new Map((registry.lanes ?? []).map((lane) => [lane.name, lane]));
   const preservedById = new Map((registry.preserved ?? []).map((entry) => [entry.id, entry]));
   const laneNames = options.lanes.length > 0
@@ -168,7 +180,7 @@ function buildPlan(registry, options) {
     lanes: selectedLanes,
     preserved: selectedPreserved,
     prerequisites,
-    unitCommands: selectedLanes.flatMap(unitCommands),
+    unitCommands: selectedLanes.map((lane) => unitCommands(lane, options)).flat(),
   };
 }
 
@@ -222,54 +234,79 @@ function printPlan(plan, options, validation) {
   }
 }
 
-function runCommand(command, label) {
+function prefixLines(stream, prefix, target) {
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  lines.on("line", (line) => target.write(`${prefix} ${line}\n`));
+  return new Promise((resolve) => lines.once("close", resolve));
+}
+
+function runCommand(command, label, { prefix } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command[0], command.slice(1), {
       cwd: PROJECT_ROOT,
       env: process.env,
-      stdio: "inherit",
+      stdio: prefix ? ["ignore", "pipe", "pipe"] : "inherit",
       shell: false,
     });
+    // Concurrent lanes share one terminal, so each output line names its lane.
+    const drained = prefix
+      ? Promise.all([prefixLines(child.stdout, prefix, process.stdout), prefixLines(child.stderr, prefix, process.stderr)])
+      : Promise.resolve();
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (signal) reject(new Error(`${label} terminated by ${signal}`));
-      else if (code !== 0) reject(new Error(`${label} exited with status ${code}`));
-      else resolve();
+      drained.then(() => {
+        if (signal) reject(new Error(`${label} terminated by ${signal}`));
+        else if (code !== 0) reject(new Error(`${label} exited with status ${code}`));
+        else resolve();
+      });
     });
   });
 }
 
-async function executePlan(plan, options) {
-  const timings = [];
-  const commands = [
-    ...plan.prerequisites.map((entry) => ({
-      id: `prerequisite:${entry.id}`,
-      lane: "prerequisite",
-      files: [],
-      command: resolveCommand(entry.command),
-    })),
-    ...plan.unitCommands,
-    ...plan.preserved.map((entry) => ({
-      id: `preserved:${entry.id}`,
-      lane: `preserved:${entry.kind ?? "command"}`,
-      files: [],
-      command: resolveCommand(entry.command),
-    })),
-  ];
-  for (const command of commands) {
-    console.log(`\n[ci] ${command.id}: ${commandText(command.command)}`);
-    if (options.dryRun) continue;
-    const started = Date.now();
-    try {
-      await runCommand(command.command, command.id);
-      timings.push({ id: command.id, lane: command.lane, files: command.files.length, seconds: (Date.now() - started) / 1000, status: "passed" });
-    } catch (error) {
-      timings.push({ id: command.id, lane: command.lane, files: command.files.length, seconds: (Date.now() - started) / 1000, status: "failed" });
-      if (options.summary) printTimingSummary(timings);
-      throw error;
-    }
+async function timedRun(command, options, timings, runOptions) {
+  console.log(`\n[ci] ${command.id}: ${commandText(command.command)}`);
+  if (options.dryRun) return;
+  const started = Date.now();
+  const record = (status) => timings.push({ id: command.id, lane: command.lane, files: command.files.length, seconds: (Date.now() - started) / 1000, status });
+  try {
+    await runCommand(command.command, command.id, runOptions);
+    record("passed");
+  } catch (error) {
+    record("failed");
+    throw error;
   }
-  if (options.summary) printTimingSummary(timings);
+}
+
+export async function executePlan(plan, options) {
+  const timings = [];
+  const prerequisites = plan.prerequisites.map((entry) => ({
+    id: `prerequisite:${entry.id}`,
+    lane: "prerequisite",
+    files: [],
+    command: resolveCommand(entry.command),
+  }));
+  const preserved = plan.preserved.map((entry) => ({
+    id: `preserved:${entry.id}`,
+    lane: `preserved:${entry.kind ?? "command"}`,
+    files: [],
+    command: resolveCommand(entry.command),
+  }));
+  try {
+    for (const command of prerequisites) await timedRun(command, options, timings);
+    if (options.parallel) {
+      // Lanes share no build step, so they can overlap. Preserved commands
+      // (browsers, coverage thresholds, Rust, the CLI package) stay serial.
+      const results = await Promise.allSettled(plan.unitCommands.map((command) =>
+        timedRun(command, options, timings, { prefix: `[${command.lane}]` })));
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) throw new Error(failures.map((failure) => failure.reason.message).join("; "));
+    } else {
+      for (const command of plan.unitCommands) await timedRun(command, options, timings);
+    }
+    for (const command of preserved) await timedRun(command, options, timings);
+  } finally {
+    if (options.summary) printTimingSummary(timings);
+  }
   return timings;
 }
 
