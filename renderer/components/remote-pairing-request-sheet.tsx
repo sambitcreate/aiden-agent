@@ -22,15 +22,31 @@ export function pairingRequestSecondsLeft(expiresAt: string, now: number): numbe
  * The request to show next: the oldest live one the person has not already
  * answered. Requests whose countdown has run out are never offered, even if the
  * host's refresh has not arrived yet.
+ *
+ * While the person's answer to a request is still being applied (`pending`),
+ * that request stays on screen and is the only one shown as busy, so the sheet
+ * neither closes early nor carries "Allowing…" over to the next request.
  */
 export function nextPairingRequest(
   prompts: readonly AidenRemotePairingRequestPrompt[],
   answered: ReadonlySet<string>,
   now: number,
-): { current: AidenRemotePairingRequestPrompt | null; waiting: number } {
+  pending: string | null = null,
+): { current: AidenRemotePairingRequestPrompt | null; waiting: number; busy: boolean } {
+  const inFlight = pending === null
+    ? undefined
+    : prompts.find((prompt) => prompt.requestId === pending);
   const live = prompts.filter((prompt) =>
-    !answered.has(prompt.requestId) && pairingRequestSecondsLeft(prompt.expiresAt, now) > 0);
-  return { current: live[0] ?? null, waiting: Math.max(0, live.length - 1) };
+    prompt !== inFlight
+    && !answered.has(prompt.requestId)
+    && pairingRequestSecondsLeft(prompt.expiresAt, now) > 0);
+  if (inFlight) return { current: inFlight, waiting: live.length, busy: true };
+  const current = live[0] ?? null;
+  return {
+    current,
+    waiting: Math.max(0, live.length - 1),
+    busy: current?.approving ?? false,
+  };
 }
 
 function formatCountdown(seconds: number): string {
@@ -97,7 +113,7 @@ export function PairingRequestSheet() {
   });
   const [answered, setAnswered] = React.useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = React.useState(() => Date.now());
-  const [busy, setBusy] = React.useState(false);
+  const [pending, setPending] = React.useState<string | null>(null);
 
   React.useEffect(() => aidenRemoteApi.onPairingRequestsChanged(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
@@ -105,7 +121,7 @@ export function PairingRequestSheet() {
   }), [queryClient]);
 
   const prompts = requests.data ?? [];
-  const { current, waiting } = nextPairingRequest(prompts, answered, now);
+  const { current, waiting, busy } = nextPairingRequest(prompts, answered, now, pending);
 
   React.useEffect(() => {
     if (!current) return;
@@ -124,10 +140,9 @@ export function PairingRequestSheet() {
   }, [prompts]);
 
   const respond = async (decision: "allow" | "deny") => {
-    if (!current || busy) return;
+    if (!current || pending !== null) return;
     const request = current;
-    setBusy(true);
-    setAnswered((previous) => new Set(previous).add(request.requestId));
+    setPending(request.requestId);
     try {
       const result = await aidenRemoteApi.respondPairingRequest(request.requestId, decision);
       if (decision === "allow") {
@@ -142,7 +157,9 @@ export function PairingRequestSheet() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Aiden couldn't answer this connection request.");
     } finally {
-      setBusy(false);
+      // Only now move on, so the sheet stays on this request until it settles.
+      setAnswered((previous) => new Set(previous).add(request.requestId));
+      setPending(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
     }
   };
@@ -152,7 +169,7 @@ export function PairingRequestSheet() {
   if (current) lastShown.current = current;
   const shown = current ?? lastShown.current;
   if (!shown) return null;
-  const busyAllowing = Boolean(current) && (busy || shown.approving);
+  const busyAllowing = current !== null && busy;
   return (
     <Dialog
       open={current !== null}
