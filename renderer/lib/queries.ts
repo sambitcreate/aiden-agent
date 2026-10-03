@@ -499,6 +499,7 @@ export function useDiscoveredSkills(workspaceId: string | undefined) {
     queryFn: () => skillsApi.catalog(workspaceId as string),
     enabled: Boolean(workspaceId),
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -507,6 +508,9 @@ export function useChat(id: string | undefined) {
     queryKey: id ? queryKeys.chat(id) : ["chat", "none"],
     queryFn: () => (id ? chatsApi.get(id) : Promise.resolve(null)),
     enabled: Boolean(id),
+    // Revisiting a chat re-reads it (the streaming and settlement paths keep
+    // the open chat current; focus no longer resends it).
+    staleTime: 0,
   });
 }
 
@@ -583,6 +587,9 @@ export function useUsageSummary(range: UsageDateRange) {
   return useQuery({
     queryKey: queryKeys.usage(range),
     queryFn: () => usageApi.summary(range),
+    // Usage grows with every generation and has no push event.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -596,12 +603,22 @@ export function useFoundationModelsConnection(enabled = true) {
   });
 }
 
+// Skill files and MCP server state can change outside the app with no push
+// event, so these re-read on focus once stale.
 export function useSkills() {
-  return useQuery({ queryKey: queryKeys.skills, queryFn: skillsApi.list });
+  return useQuery({
+    queryKey: queryKeys.skills,
+    queryFn: skillsApi.list,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useMcpServers() {
-  return useQuery({ queryKey: queryKeys.mcpServers, queryFn: mcpApi.list });
+  return useQuery({
+    queryKey: queryKeys.mcpServers,
+    queryFn: mcpApi.list,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useMcpPresets() {
@@ -635,7 +652,12 @@ export function useAidenRemoteSettings() {
 }
 
 export function useEngineStatus(enabled = true) {
-  return useQuery({ queryKey: queryKeys.engineStatus, queryFn: localVoiceApi.status, enabled });
+  return useQuery({
+    queryKey: queryKeys.engineStatus,
+    queryFn: localVoiceApi.status,
+    enabled,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useLocalModels(enabled = true) {

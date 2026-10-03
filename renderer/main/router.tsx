@@ -10,7 +10,8 @@ import * as React from "react";
 import { RootView } from "./root-view";
 import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
-import { QueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -160,7 +161,7 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
 ]);
 
-const queryClient = new QueryClient();
+const queryClient = createAppQueryClient();
 
 const router = createRouter({
   routeTree,
