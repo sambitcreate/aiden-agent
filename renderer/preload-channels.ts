@@ -100,6 +100,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:changed",
   "remote:peers-changed",
   "remote:approval-changed",
+  "remote:pairing-requests-changed",
   "schedule:updated",
   "settings:appearance-changed",
   "shortcut:changed",
