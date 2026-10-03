@@ -782,6 +782,8 @@ export class PiAgentRuntimeHarness {
   private readonly agentListeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
   private readonly activeTools = new Map<string, string>();
   private readonly nestedCalls = new Map<string, NestedToolCalls>();
+  /** Running UTF-8 total of retained nested arguments per parent, so admission stays O(1) per call. */
+  private readonly nestedRetainedBytes = new Map<string, number>();
   private readonly terminatedNestedParents = new Set<string>();
   private nestedToolQueue: Promise<unknown> = Promise.resolve();
   private readonly onFault: (fault: PiHarnessFault) => void;
@@ -1285,6 +1287,7 @@ export class PiAgentRuntimeHarness {
         if (calls) {
           event.message.nestedCalls = structuredClone(calls);
           this.nestedCalls.delete(event.message.toolCallId);
+          this.nestedRetainedBytes.delete(event.message.toolCallId);
           this.terminatedNestedParents.delete(event.message.toolCallId);
         }
       }
@@ -1304,6 +1307,7 @@ export class PiAgentRuntimeHarness {
         this.managedQueueOpen = false;
         this.activeTools.clear();
         this.nestedCalls.clear();
+        this.nestedRetainedBytes.clear();
         this.terminatedNestedParents.clear();
       }
     });
@@ -1577,14 +1581,18 @@ export class PiAgentRuntimeHarness {
       if (!activeSignal) throw new Error("The tool runtime is not active.");
       const callSignal = signal ? AbortSignal.any([signal, activeSignal]) : activeSignal;
       callSignal.throwIfAborted();
-      const tools = [...this.getCallableTools()];
+      const tools = this.getCallableTools();
       const tool = tools.find((item) => item.name === name && isPiCodemodeCallable(item));
       if (!tool) throw new Error("This tool is not available to codemode.");
       if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
       const serialized = JSON.stringify(args);
       if (Buffer.byteLength(serialized) > 32_768) throw new Error("Nested tool arguments exceed 32 KiB.");
-      const assistantMessage = [...this.agent.state.messages].reverse().find((message): message is AssistantMessage =>
-        message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === parentToolCallId));
+      const messages = this.agent.state.messages;
+      let assistantMessage: AssistantMessage | undefined;
+      for (let index = messages.length - 1; index >= 0 && !assistantMessage; index -= 1) {
+        const message = messages[index]!;
+        if (message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === parentToolCallId)) assistantMessage = message;
+      }
       if (!assistantMessage) throw new Error("The parent tool's durable assistant plan is unavailable.");
       const records = this.nestedCalls.get(parentToolCallId) ?? { calls: [], complete: true };
       if (records.calls.length >= 128) throw new Error("Codemode is limited to 128 nested calls per script.");
@@ -1592,8 +1600,9 @@ export class PiAgentRuntimeHarness {
       const id = `${parentToolCallId}/${records.calls.length + 1}`;
       const argumentsSnapshot = JSON.parse(serialized) as JsonObject;
       const argumentsBytes = Buffer.byteLength(serialized);
-      const retainedBytes = records.calls.reduce((total, entry) => total + (entry.arguments ? Buffer.byteLength(JSON.stringify(entry.arguments)) : 0), 0);
+      const retainedBytes = this.nestedRetainedBytes.get(parentToolCallId) ?? 0;
       const retain = argumentsBytes <= 8192 && retainedBytes + argumentsBytes <= 32_768;
+      if (retain) this.nestedRetainedBytes.set(parentToolCallId, retainedBytes + argumentsBytes);
       const record: NestedToolCalls["calls"][number] = {
         id, name, status: "unfinished",
         ...(retain ? { arguments: argumentsSnapshot as NonNullable<NestedToolCalls["calls"][number]["arguments"]> } : { argumentsBytes }),
