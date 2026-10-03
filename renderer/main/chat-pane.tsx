@@ -25,6 +25,9 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
+import { localHostAdapter } from "../lib/hosts/local-host-adapter";
+import { useChatSession } from "../lib/hosts/use-chat-session";
+import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
@@ -70,8 +73,6 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
-  admitChatRunInput,
-  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -213,6 +214,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(chatId));
   const persistedChat = useChat(draft ? undefined : chatId);
+  // Control (rename, stop, approvals, questions, steer) goes through the same
+  // session the remote pane uses; local turns still stream through startGeneration.
+  const { control: chatControl } = useChatSession(localHostAdapter, { hostId: LOCAL_HOST_ID, chatId });
   // Draft projection stays out of the query cache and every persisted chat list.
   const chat = draft
     ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
@@ -839,13 +843,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         updateChatDraft(chatId, { title });
         return;
       }
-      await chatsApi.rename(chatId, title);
+      await chatControl.rename(title);
       qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
         current ? { ...current, title } : current,
       );
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
-    [chatId, qc],
+    [chatControl, chatId, qc],
   );
 
   const copyChat = React.useCallback(
@@ -1512,7 +1516,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
       const { streamId } = visibleDetachedProjection;
       setIsStoppingGeneration(true);
-      void stopDetachedGeneration(streamId).then((cancelled) => {
+      void chatControl.cancel(streamId).then((cancelled) => {
         if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
       }).catch((error: unknown) => {
         if (chatIdRef.current === chatId) {
@@ -1527,7 +1531,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
     return true;
-  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
+  }, [canStopGeneration, chatControl, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
     // Detached Stop has no pane-owned terminal callback. The shell clears its
@@ -1599,7 +1603,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
     async (streamId: string, text: string) => {
-      const receipt = await admitChatRunInput(streamId, { mode: "steer", text });
+      const receipt = await chatControl.submitInput(streamId, "steer", text);
       if (receipt.committed && receipt.messageId) {
         const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
@@ -1608,7 +1612,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       return receipt;
     },
-    [chatId, qc],
+    [chatControl, chatId, qc],
   );
 
   const steerMessage = React.useCallback(
@@ -1749,16 +1753,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
       decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
-        if (prompt.source === "remote") {
-          await aidenRemoteApi.respondApproval(
-            chatId,
-            prompt.approvalId,
-            decision,
-            decision === "allow" ? options?.scope : undefined,
-          );
-        } else {
-          await chatsApi.approve(prompt.approvalId, decision, options);
-        }
+        await chatControl.respondApproval({
+          approvalId: prompt.approvalId,
+          decision,
+          ...(options?.formFillExcludedOrders !== undefined
+            ? { formFillExcludedOrders: options.formFillExcludedOrders }
+            : {}),
+          ...(options?.scope !== undefined ? { scope: options.scope } : {}),
+          ...(prompt.source === "remote" ? { source: "remote" as const } : {}),
+        });
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
@@ -1782,7 +1785,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatId],
+    [chatControl, chatId],
   );
 
   React.useEffect(() => {
@@ -1807,7 +1810,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const status =
           expiredQuestionnaireId === prompt.promptId
             ? "expired"
-            : (await chatsApi.answerQuestionnaire(prompt.promptId, response))?.status;
+            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response }))?.status;
         if (chatIdRef.current !== chatId) return;
         setQuestionnaire(null);
         if (status === "expired") {
@@ -1826,7 +1829,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
       }
     },
-    [chatId, expiredQuestionnaireId, questionnaire, questionnaireSubmitting],
+    [chatControl, chatId, expiredQuestionnaireId, questionnaire, questionnaireSubmitting],
   );
 
   const sendLateQuestionnaireAnswer = React.useCallback(async () => {
