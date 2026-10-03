@@ -25,6 +25,7 @@ import {
   type SidebarHost,
 } from "./sidebar-remote-groups";
 import { localSidebarChats, localSidebarProjects } from "./sidebar-workspace-groups";
+import { applyPeerHostFeedMessage, FEED_RESYNC } from "./hosts/peer-host-feed-state";
 import type { ChatMeta, Workspace } from "./types";
 
 const T0 = Date.UTC(2026, 5, 1);
@@ -325,6 +326,32 @@ test("run state and row hints drive attention, and the open chat is never unread
   assert.deepEqual(
     sections.map((section) => section.id),
     ["needs_approval", "needs_input", "working", "unread", "none"],
+  );
+});
+
+test("reading a chat on its host clears the unread left by its finished run", () => {
+  const studio = host("studio", "Studio");
+  const unreadFeed = snapshot("studio", {
+    sequence: 4,
+    workspaces: [workspaceRow("w", "api")],
+    summaries: [summaryRow("done", "w", { unread: true })],
+    runs: [{ chatId: "done", runId: "r1", state: "done", unread: true }],
+  });
+  const before = remoteSidebarRows(studio, unreadFeed).chats[0];
+  assert.equal(before?.attention, "unread");
+
+  const read = applyPeerHostFeedMessage(unreadFeed, {
+    hostId: "studio",
+    epoch: "e1",
+    sequence: 5,
+    change: { type: "chat.upsert", row: summaryRow("done", "w", { unread: false, revision: "r2" }) },
+  });
+  if (read === FEED_RESYNC) assert.fail("the read marker should apply in sequence");
+  const after = remoteSidebarRows(studio, read);
+  assert.equal(after.chats[0]?.unread, false);
+  assert.deepEqual(
+    organize(after.projects, after.chats, "attention").chatSections.map((section) => section.id),
+    ["none"],
   );
 });
 

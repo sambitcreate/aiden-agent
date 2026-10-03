@@ -191,7 +191,10 @@ export function remoteSidebarRows(
     let rowState = moreUrgent(runState, summaryState);
     // A stale host cannot confirm a run is still going; a waiting prompt stays visible.
     if (stale && rowState === "working") rowState = "idle";
-    const unread = !isOpen(host.id, row.id) && (row.unread === true || run?.unread === true);
+    // The summary carries the host's current read marker, so it outranks the
+    // run's hint, which only stands in when a summary has no read state.
+    const hostUnread = typeof row.unread === "boolean" ? row.unread : run?.unread === true;
+    const unread = !isOpen(host.id, row.id) && hostUnread;
     return [
       {
         key: projectOrderKey(host.id, row.id),
