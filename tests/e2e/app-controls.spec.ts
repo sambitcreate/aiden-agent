@@ -80,4 +80,17 @@ test("owned help and inert settings cards work with no workspace file access; cl
       .getByRole("switch", { name: "Memory — This desktop", exact: true }),
   ).not.toBeChecked();
   expect(persisted.appearance.mode).toBe("dark");
+  const navigationPrompt = "App control test: open my provider settings.";
+  const navigation = lmStudio.enqueueToolScenario!({
+    prompt: navigationPrompt,
+    calls: [{ name: "aiden_open", arguments: { destination: "providers" } }],
+    finalText: "Opened provider settings.",
+  });
+  await aiden.page.locator("textarea").first().fill(navigationPrompt);
+  await aiden.page.getByRole("button", { name: "Send message" }).click();
+  await expect(aiden.page.getByRole("heading", { name: "Providers", exact: true })).toBeVisible();
+  await expect.poll(() => navigation.completed).toBe(true);
+  expect(navigation.error).toBeUndefined();
+  expect(JSON.stringify(navigation.results)).toContain("opened");
+  expect(JSON.stringify(navigation.results)).not.toContain("unavailable");
 });
