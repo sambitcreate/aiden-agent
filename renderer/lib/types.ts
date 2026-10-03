@@ -1,5 +1,5 @@
 import type { CustomModelOptions } from "../shared/custom-model-options";
-import type { CompactionEngine } from "../shared/compaction";
+import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
@@ -875,6 +875,7 @@ export interface AssistantConfigSnapshot {
 
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

@@ -453,3 +453,40 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
     }
   }
 });
+
+
+test("model compaction budgets validate, survive relaunch and reset to defaults", async ({ aiden }) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+  };
+  await openMemory();
+  await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
+  await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
+  await page.getByRole("button", { name: "Save budget", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("whole numbers");
+  await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("8192");
+  await page.getByRole("spinbutton", { name: "Compaction recent tokens" }).fill("0");
+  const modelKey = page.getByRole("combobox", { name: "Model for compaction budget" });
+  await modelKey.fill("fixture/exact");
+  await modelKey.pressSequentially("-model");
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
+  await page.getByRole("button", { name: "Save budget", exact: true }).click();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
+  await aiden.relaunch();
+  page = aiden.page;
+  await openMemory();
+  await page.getByRole("button", { name: "fixture/exact-model", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
+  await page.getByRole("button", { name: "Reset model", exact: true }).click();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("");
+  await page.reload();
+  await openMemory();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
+});

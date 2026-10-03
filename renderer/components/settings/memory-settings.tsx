@@ -1,15 +1,18 @@
-import { compactionEngineFrom, type CompactionEngine } from "../../shared/compaction";
+import { CompactionBudgetSettings } from "./compaction-budget-settings";
+import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
 import { settingsApi, workspacesApi } from "../../lib/ipc";
-import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
+import { queryKeys, useSettings, useWorkspaces, useProviders, useCodexProviderStatus } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
 
 export function MemorySettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const workspaces = useWorkspaces();
+  const providers = useProviders();
+  const codex = useCodexProviderStatus();
   const [compactionSaving, setCompactionSaving] = React.useState(false);
   const [globalSaving, setGlobalSaving] = React.useState(false);
   const [workspaceSaving, setWorkspaceSaving] = React.useState<Set<string>>(() => new Set());
@@ -111,6 +114,23 @@ export function MemorySettings() {
           conversation continues. Current-chat recall works independently of memory below.
         </Text>
       </FieldSet>
+
+      <CompactionBudgetSettings
+        overrides={settings.data?.compactionModelOverrides ?? {}}
+        modelKeys={[
+          ...(providers.data ?? []).flatMap((provider) => provider.models.map((model) => `${provider.id}/${model}`)),
+          ...(codex.data?.models ?? []).map((model) => `openai-codex/${model.id}`),
+        ]}
+        disabled={settings.isLoading}
+        onSave={async (modelKey: string, budget: CompactionModelBudget | undefined) => {
+          const current = await settingsApi.get();
+          const overrides = { ...current.compactionModelOverrides };
+          if (budget) overrides[modelKey] = budget;
+          else delete overrides[modelKey];
+          const saved = await settingsApi.set({ compactionModelOverrides: overrides });
+          queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
+        }}
+      />
 
       <FieldSet title="Memory controls">
         <Field

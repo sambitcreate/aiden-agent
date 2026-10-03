@@ -24,6 +24,7 @@ import {
   isSkillList,
   isPortableProvider,
   splitStoredProvider,
+  runtimeSettingsFrom,
 } from "./portable-config-core.js";
 import { CONFIGURED_SKILL_LIMITS } from "./skill-config-limits.js";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
@@ -1414,6 +1415,18 @@ test("pre-marker unsafe workspaces defer migration without consuming the local s
   assert.equal(await missing(r.portableFile), true);
 });
 
+
+test("invalid stored compaction budgets fall back without rewriting the saved preferences", () => {
+  const settings = { compactionModelOverrides: { "provider/model": { reserveTokens: -1 } }, profileName: "Local user" };
+  const runtime = runtimeSettingsFrom(settings);
+  assert.equal(runtime.compactionModelOverrides, undefined);
+  assert.equal(runtime.profileName, "Local user");
+  assert.equal(settings.compactionModelOverrides["provider/model"].reserveTokens, -1);
+  settings.compactionModelOverrides["provider/model"].reserveTokens = 8_192;
+  const valid = runtimeSettingsFrom(settings);
+  settings.compactionModelOverrides["provider/model"].reserveTokens = 64_000;
+  assert.equal(valid.compactionModelOverrides?.["provider/model"].reserveTokens, 8_192);
+});
 
 test("portable MCP OAuth metadata validates authority without requiring new fields on old configs", () => {
   const server = { id: "custom", name: "Custom", transport: "http", enabled: true, oauth: true, url: "https://service.test/mcp" };

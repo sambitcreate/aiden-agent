@@ -122,9 +122,10 @@ test("unit lanes cannot overlap and preserved modes stay explicit", () => {
   assert.equal(new Set(lanePreserved).size, preserved.size);
 });
 
-test("native helper regression files run in a lane that builds their binaries", () => {
+test("native helper and compaction regression files run in a lane that builds their workers", () => {
   const registry = readRegistry();
   for (const [file, required] of [
+    ["main/services/subagents/agent-compatibility.test.ts", ["vcc-build"]],
     ["scripts/worktree-file-io.test.mjs", ["worktree-file-io-build", "worktree-file-io-test-build"]],
     ["main/services/managed-worktree-lifecycle.test.ts", ["worktree-file-io-build", "worktree-remover-build"]],
     ["scripts/bot-inbox-writer.test.mjs", ["bot-inbox-writer-build", "bot-inbox-writer-test-build"]],
@@ -133,7 +134,12 @@ test("native helper regression files run in a lane that builds their binaries", 
   ]) {
     const lane = registry.lanes.find((candidate) => candidate.files.includes(file));
     assert.ok(lane, file);
-    for (const prerequisite of required) assert.ok(lane.prerequisites.includes(prerequisite), `${file}: ${prerequisite}`);
+    for (const prerequisite of required) {
+      assert.ok(lane.prerequisites.includes(prerequisite), `${file}: ${prerequisite}`);
+      const build = registry.prerequisites.find((entry) => entry.id === prerequisite);
+      assert.ok(build, prerequisite);
+      if (build.for) assert.ok(build.for.includes(lane.name), `${prerequisite} must support ${lane.name}`);
+    }
   }
 });
 
