@@ -8,12 +8,14 @@ import {
   parseChangedAreaDecisions,
 } from "./ci-required.mjs";
 
-const allTrue = { android: true, apple: true, desktop: true, ios: true };
+const allTrue = { android: true, apple: true, catalog: true, cli: true, desktop: true, ios: true, linux: true };
 
 function needsFor(decisions = allTrue, overrides = {}) {
   const needs = {
     android: { result: "success" },
     apple: { result: "success" },
+    build: { result: "success" },
+    catalog: { result: "success" },
     changes: { result: "success" },
     "cli-linux": { result: "success" },
     "cli-playground": { result: "success" },
@@ -39,6 +41,7 @@ test("a conditional job may be skipped only for its explicitly false area", () =
   const decisions = { ...allTrue, desktop: false, android: false };
   const { needs } = needsFor(decisions, {
     android: { result: "skipped" },
+    build: { result: "skipped" },
     e2e: { result: "skipped" },
     unit: { result: "skipped" },
     verify: { result: "skipped" },
@@ -49,6 +52,34 @@ test("a conditional job may be skipped only for its explicitly false area", () =
   const unexpected = evaluateRequiredGate(allAreaNeeds, allTrue);
   assert.equal(unexpected.ok, false);
   assert.deepEqual(unexpected.failures, [{ job: "verify", reason: "unexpected-skip" }]);
+});
+
+test("a job selected by several areas may skip only when all of them are false", () => {
+  // Static checks lint the CLI packages, so a CLI-only change keeps them.
+  const cliOnly = { ...allTrue, desktop: false, apple: false, ios: false, android: false, linux: false, catalog: false };
+  const { needs: cliNeeds } = needsFor(cliOnly, {
+    android: { result: "skipped" },
+    apple: { result: "skipped" },
+    build: { result: "skipped" },
+    catalog: { result: "skipped" },
+    e2e: { result: "skipped" },
+    ios: { result: "skipped" },
+    static: { result: "skipped" },
+    unit: { result: "skipped" },
+    verify: { result: "skipped" },
+  });
+  assert.deepEqual(evaluateRequiredGate(cliNeeds, cliOnly).failures, [{ job: "static", reason: "unexpected-skip" }]);
+
+  // The catalog-only main push skips everything except the catalog contracts.
+  const catalogOnly = Object.fromEntries(Object.keys(allTrue).map((area) => [area, area === "catalog"]));
+  const skipped = Object.fromEntries(
+    Object.keys(REQUIRED_JOB_RULES)
+      .filter((job) => !["changes", "policy", "catalog"].includes(job))
+      .map((job) => [job, { result: "skipped" }]),
+  );
+  assert.equal(evaluateRequiredGate(needsFor(catalogOnly, skipped).needs, catalogOnly).ok, true);
+  const missingCatalog = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, catalog: { result: "skipped" } }).needs, catalogOnly);
+  assert.deepEqual(missingCatalog.failures, [{ job: "catalog", reason: "unexpected-skip" }]);
 });
 
 test("failed, canceled, unknown, and missing results fail the aggregate", () => {
@@ -91,14 +122,16 @@ test("malformed needs entries fail closed instead of authorizing a skip", () => 
 });
 
 test("changes decisions reject malformed or incomplete values", () => {
-  assert.deepEqual(parseChangedAreaDecisions({ outputs: { desktop: "true", apple: "false", ios: true, android: false } }), {
-    desktop: true,
-    apple: false,
-    ios: true,
-    android: false,
-  });
+  assert.deepEqual(
+    parseChangedAreaDecisions({
+      outputs: { desktop: "true", apple: "false", ios: true, android: false, cli: "true", linux: "false", catalog: "true" },
+    }),
+    { desktop: true, apple: false, ios: true, android: false, cli: true, linux: false, catalog: true },
+  );
   assert.throws(() => parseChangedAreaDecisions({ desktop: "maybe" }), /changes-invalid/u);
   assert.throws(() => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true }), /changes-invalid/u);
+  // An older detector that omits the newer areas cannot authorize skips.
+  assert.throws(() => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true, android: true }), /changes-invalid/u);
   assert.throws(() => parseChangedAreaDecisions("[]"), /changes-malformed/u);
 
   const { needs } = needsFor();

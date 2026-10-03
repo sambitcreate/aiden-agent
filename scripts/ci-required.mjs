@@ -2,23 +2,28 @@ import { appendFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { AREA_NAMES } from "./ci-changes.mjs";
 
+// A conditional job may be skipped only when every area that selects it is
+// explicitly false. Linux packaging is deliberately not required.
 export const REQUIRED_JOB_RULES = Object.freeze({
   changes: Object.freeze({ always: true }),
   policy: Object.freeze({ always: true }),
-  static: Object.freeze({ area: "desktop" }),
-  verify: Object.freeze({ area: "desktop" }),
-  unit: Object.freeze({ area: "desktop" }),
-  e2e: Object.freeze({ area: "desktop" }),
-  apple: Object.freeze({ area: "apple" }),
-  ios: Object.freeze({ area: "ios" }),
-  android: Object.freeze({ area: "android" }),
-  "cli-linux": Object.freeze({ area: "desktop" }),
-  "cli-playground": Object.freeze({ area: "desktop" }),
+  static: Object.freeze({ areas: Object.freeze(["desktop", "cli"]) }),
+  build: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  verify: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  catalog: Object.freeze({ areas: Object.freeze(["catalog"]) }),
+  unit: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  e2e: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  apple: Object.freeze({ areas: Object.freeze(["apple"]) }),
+  ios: Object.freeze({ areas: Object.freeze(["ios"]) }),
+  android: Object.freeze({ areas: Object.freeze(["android"]) }),
+  "cli-linux": Object.freeze({ areas: Object.freeze(["cli"]) }),
+  "cli-playground": Object.freeze({ areas: Object.freeze(["cli"]) }),
 });
 
 const REQUIRED_JOB_NAMES = Object.freeze(Object.keys(REQUIRED_JOB_RULES));
-const AREAS = Object.freeze(["desktop", "apple", "ios", "android"]);
+const AREAS = AREA_NAMES;
 const ACCEPTED_RESULTS = Object.freeze(new Set(["success", "skipped"]));
 
 function isRecord(value) {
@@ -121,7 +126,7 @@ export function evaluateRequiredGate(needs, changes) {
       if (result === "success") {
         continue;
       }
-      if (result === "skipped" && rule.area && decisions?.[rule.area] === false) {
+      if (result === "skipped" && rule.areas && decisions && rule.areas.every((area) => decisions[area] === false)) {
         continue;
       }
       if (!ACCEPTED_RESULTS.has(result)) {

@@ -23,6 +23,9 @@ jobs:
       apple: ${{ steps.filter.outputs.apple }}
       ios: ${{ steps.filter.outputs.ios }}
       android: ${{ steps.filter.outputs.android }}
+      cli: ${{ steps.filter.outputs.cli }}
+      linux: ${{ steps.filter.outputs.linux }}
+      catalog: ${{ steps.filter.outputs.catalog }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -132,7 +135,7 @@ jobs:
   static:
     name: Desktop TypeScript and lint
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -170,8 +173,6 @@ jobs:
         run: npm run test:diagnostics
       - name: Verify branding, updater, and release policy
         run: npm run test:branding
-      - name: Verify model catalog contracts
-        run: npm run test:model-catalog
       - name: Download production build
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
@@ -183,6 +184,27 @@ jobs:
         run: npm run test:foreground-file-tools:electron
       - name: Verify production-profile diagnostics support workflow
         run: npm run test:e2e:diagnostics:production:run
+
+  # Desktop selections imply this job. A main push that changes only the bundled
+  # models.dev catalog runs nothing else.
+  catalog:
+    name: Model catalog contracts
+    needs: changes
+    if: ${{ needs.changes.outputs.catalog == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify model catalog contracts
+        run: npm run test:model-catalog
 
   unit:
     name: Desktop tests (${{ matrix.lane }})
@@ -416,7 +438,7 @@ jobs:
   cli-linux:
     name: Headless CLI on Linux
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -430,7 +452,7 @@ jobs:
   cli-playground:
     name: CLI appearance playground
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -455,7 +477,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, verify, unit, e2e, apple, ios, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux, cli-playground]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -493,8 +515,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci-timings.mjs
 
+  # Linux packaging and its E2E gate run for Linux-relevant changes and on
+  # every main push. linux-rpm skips with it.
   linux:
     name: Linux ${{ matrix.arch }}
+    needs: changes
+    if: ${{ needs.changes.outputs.linux == 'true' }}
     strategy:
       fail-fast: false
       matrix:

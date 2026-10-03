@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { AREA_NAMES } from "./ci-changes.mjs";
 import { REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
@@ -39,9 +40,12 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(gate.env.CI_CHANGES_JSON, "${{ toJSON(needs.changes.outputs) }}");
   for (const [name, rule] of Object.entries(REQUIRED_JOB_RULES)) {
     assert.ok(jobs[name], name);
-    if (rule.area) {
-      assert.equal(jobs[name].needs, "changes", name);
-      assert.equal(jobs[name].if, `\${{ needs.changes.outputs.${rule.area} == 'true' }}`, name);
+    if (rule.areas) {
+      // Every area that can select a job must appear in its run condition, so
+      // the aggregate never treats a selected job's skip as intentional.
+      assert.ok([jobs[name].needs].flat().includes("changes"), name);
+      const condition = rule.areas.map((area) => `needs.changes.outputs.${area} == 'true'`).join(" || ");
+      assert.equal(jobs[name].if, `\${{ ${condition} }}`, name);
     } else {
       assert.equal(jobs[name].if, undefined, name);
     }
@@ -50,6 +54,11 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
   assert.equal(filter.env.FORCE_FULL, "${{ github.event_name == 'push' && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
+  assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
+  // Linux packaging is not required, but it must still follow its own area.
+  assert.equal(jobs.linux.if, "${{ needs.changes.outputs.linux == 'true' }}");
+  assert.equal(jobs["linux-rpm"].needs, "linux");
+  assert.ok(jobs.catalog.steps.some((step) => step.run === "npm run test:model-catalog"));
 });
 
 test("Android keeps validation and publishes installable artifacts only on main", async () => {
@@ -203,17 +212,26 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
   const iosBuilds = jobs.ios.steps.filter((step) => step.run?.includes("xcodebuild build-for-testing"));
   assert.ok(iosBuilds.some((step) => step.run.includes("generic/platform=iOS")), "device build must stay covered");
-  const simulator = jobs.ios;
-  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
-  assert.ok(simulator.steps.indexOf(simulatorTest) > simulator.steps.indexOf(iosBuilds.at(-1)));
-  const simulatorResults = simulator.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const simulatorTest = jobs.ios.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
+  const simulatorResults = jobs.ios.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.ok(jobs.ios.steps.indexOf(simulatorTest) > jobs.ios.steps.indexOf(iosBuilds.at(-1)));
   assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
   assert.equal(simulatorTest["continue-on-error"], undefined);
   assert.equal(simulatorResults.if, "failure()");
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
   assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
   assert.equal(simulatorResults.with["retention-days"], 7);
-  assert.equal(jobs.verify.steps.filter((step) => step.run === "npm run build").length, 1);
+  // One job builds the production bundles; E2E shards and verify reuse them.
+  const builders = Object.entries(jobs)
+    .filter(([, job]) => job.steps?.some((step) => step.run === "npm run build"))
+    .map(([name]) => name);
+  assert.deepEqual(builders, ["build"]);
+  const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  for (const consumer of ["e2e", "verify"]) {
+    assert.ok(jobs[consumer].needs.includes("build"), consumer);
+    const download = jobs[consumer].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+    assert.equal(download?.with.name, bundle.with.name, consumer);
+  }
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u);
