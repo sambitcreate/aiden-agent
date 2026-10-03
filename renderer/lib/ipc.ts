@@ -211,7 +211,16 @@ import {
   type DeviceStreamGrant,
   type DeviceToolchainState,
 } from "../shared/devices";
-import type { PeerHostView } from "../shared/peer-host";
+import type {
+  PeerHostFeedMessage,
+  PeerHostFeedSnapshot,
+  PeerHostStatus,
+  PeerHostView,
+  PeerOperationOutcome,
+  PeerRunFrameMessage,
+  PeerRunSubscription,
+  PeerRunTarget,
+} from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
@@ -241,6 +250,22 @@ export const peerHostsApi = {
   operation: (hostId: string, operation: PeerOperation) =>
     invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+  /** Like `operation`, but failures come back as typed outcomes instead of throwing. */
+  call: (hostId: string, operation: PeerOperation) =>
+    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation),
+  statuses: () => invoke<PeerHostStatus[]>("remote:peerHostStatuses"),
+  /** Last-known rows; null when the host is disabled or unknown. */
+  feed: (hostId: string) => invoke<PeerHostFeedSnapshot | null>("remote:peerHostFeed", hostId),
+  runSubscribe: (hostId: string, target: PeerRunTarget, afterSequence = 0) =>
+    invoke<PeerRunSubscription>("remote:peerRunSubscribe", hostId, target, afterSequence),
+  runUnsubscribe: (subscriptionId: string) =>
+    invoke<boolean>("remote:peerRunUnsubscribe", subscriptionId),
+  onHostFeed: (handler: (message: PeerHostFeedMessage) => void) =>
+    onNotification<PeerHostFeedMessage>("remote:host-feed", handler),
+  onRunFrame: (handler: (message: PeerRunFrameMessage) => void) =>
+    onNotification<PeerRunFrameMessage>("remote:peer-run-frame", handler),
+  onHostState: (handler: (status: PeerHostStatus) => void) =>
+    onNotification<PeerHostStatus>("remote:peer-host-state", handler),
 };
 
 export const appApi = {

@@ -7,7 +7,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
-import { PeerTransport, PeerEventFrames } from "./peer-transport.js";
+import {
+  PeerTransport,
+  PeerEventFrames,
+  PeerTransportError,
+} from "./peer-transport.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
@@ -155,6 +159,37 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         response.write("data: start\n\n");
         return;
       }
+      if (request.url?.endsWith("/denied")) {
+        response.writeHead(403, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              code: "capability_denied",
+              message: "No.",
+              retryable: false,
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url?.endsWith("/revoked")) {
+        response.writeHead(403, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              code: "credential_revoked",
+              message: "No.",
+              retryable: false,
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url?.endsWith("/resume")) {
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(`data: ${request.headers["last-event-id"] ?? "none"}\n\n`);
+        return;
+      }
       if (request.url?.endsWith("/events")) {
         response.writeHead(200, { "Content-Type": "text/event-stream" });
         response.write(': hello\n\nid: 1\ndata: {"text":');
@@ -213,11 +248,53 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       assert.ok(issuedCapabilities[0]!.includes(capability), capability);
     }
     registry.close();
+    // A pin mismatch is an identity change, never mere unavailability.
     await assert.rejects(
       new PeerTransport({
         ...trust,
         serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
       }).json({ path: "/server" }),
+      (error: unknown) =>
+        error instanceof PeerTransportError && error.code === "identity_changed",
+    );
+    // Envelope codes separate an answered per-operation refusal from a revoked credential.
+    await assert.rejects(
+      client.json({ path: "/denied", credential: "a".repeat(43) }),
+      (error: unknown) =>
+        error instanceof PeerTransportError &&
+        error.code === "request_failed" &&
+        error.status === 403 &&
+        error.remote?.code === "capability_denied",
+    );
+    await assert.rejects(
+      client.json({ path: "/revoked", credential: "a".repeat(43) }),
+      (error: unknown) =>
+        error instanceof PeerTransportError &&
+        error.code === "authentication_required" &&
+        error.remote?.code === "credential_revoked",
+    );
+    const resumed: string[] = [];
+    const openedAt: number[] = [];
+    assert.deepEqual(
+      await client.events(
+        {
+          path: "/resume",
+          lastEventId: "epoch_1:41",
+          onOpen: () => openedAt.push(resumed.length),
+        },
+        (frame) => resumed.push(frame),
+      ),
+      { reason: "eof" },
+    );
+    assert.deepEqual(resumed, ["data: epoch_1:41"]);
+    // The accepted-stream signal precedes every frame; a refused stream never opens.
+    assert.deepEqual(openedAt, [0]);
+    await assert.rejects(
+      client.events({ path: "/denied", onOpen: () => openedAt.push(-1) }, () => {}),
+    );
+    assert.deepEqual(openedAt, [0]);
+    await assert.rejects(
+      client.events({ path: "/resume", lastEventId: "bad\nid" }, () => {}),
     );
     await assert.rejects(
       client.json({ path: "/redirect", credential: "a".repeat(43) }),
@@ -233,9 +310,9 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       received = resolve;
     });
     const live = client.events({ path: "/live" }, () => received());
-    const rejected = assert.rejects(live);
     await nextFrame;
-    // Completed frames keep the frame deadline alive, but cannot extend the session cap.
+    // Completed frames keep the frame deadline alive, but cannot extend the session cap;
+    // reaching the cap is a resumable outcome, not an error.
     for (let i = 0; i < 14; i++) {
       t.mock.timers.tick(20_000);
       nextFrame = new Promise<void>((resolve) => {
@@ -245,7 +322,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       await nextFrame;
     }
     t.mock.timers.tick(20_000);
-    await rejected;
+    assert.deepEqual(await live, { reason: "capped" });
     // Even a peer that has sent headers and one valid frame must finish its next frame.
     nextFrame = new Promise<void>((resolve) => {
       received = resolve;
@@ -301,6 +378,29 @@ test(
       /budget/,
     );
     assert.equal(boundaries, 16_384);
+    // A long-lived feed keeps going: committed frames release the rolling budget.
+    const feed = new PeerEventFrames();
+    const committed = Buffer.from(
+      `id: e:1\ndata: ${"x".repeat(1000)}\n\n`.repeat(1024),
+    );
+    let delivered = 0;
+    for (let round = 0; round < 24; round++)
+      feed.push(
+        committed,
+        () => delivered++,
+        () => {},
+      );
+    assert.equal(delivered, 24 * 1024);
+    const uncommitted = new PeerEventFrames();
+    assert.throws(
+      () =>
+        uncommitted.push(
+          Buffer.from(`data: ${"x".repeat(1000)}\n\n`.repeat(17 * 1024)),
+          () => {},
+          () => {},
+        ),
+      /budget/,
+    );
     const split = new PeerEventFrames();
     const frames: string[] = [];
     for (const byte of Buffer.from("data: ☃\r\n\r\n"))
