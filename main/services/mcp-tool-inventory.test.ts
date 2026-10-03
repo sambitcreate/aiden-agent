@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -248,4 +248,81 @@ test("public SDK requests preserve errors on every inventory page, envelopes, pr
     await client.close();
     await server.close();
   }
+});
+
+test("inventory cache reuses a watched listChanged client's tools until the server announces a change", async () => {
+  const connect = async (listChanged: boolean, watch: boolean) => {
+    const server = new Server({ name: "cache-fixture", version: "1" }, { capabilities: { tools: listChanged ? { listChanged: true } : {} } });
+    const client = new Client({ name: "test-client", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let names = ["first"];
+    let lists = 0;
+    let failNext = false;
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      lists += 1;
+      if (failNext) { failNext = false; throw new Error("transient list failure"); }
+      return { tools: names.map((name) => ({ name, inputSchema: { type: "object" as const } })) };
+    });
+    const cache = createMcpToolInventoryCache<string[]>();
+    if (watch) cache.watch(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const read = () => cache.load(client, async () => (await listMcpToolInventory({
+      assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+    })).map(({ name }) => name));
+    return {
+      read, lists: () => lists,
+      change: async (next: string[]) => { names = next; await server.sendToolListChanged(); },
+      failNext: () => { failNext = true; },
+      close: async () => { await client.close(); await server.close(); },
+    };
+  };
+
+  const cached = await connect(true, true);
+  try {
+    assert.deepEqual(await Promise.all([cached.read(), cached.read()]), [["first"], ["first"]]);
+    assert.deepEqual(await cached.read(), ["first"]);
+    assert.equal(cached.lists(), 1);
+    await cached.change(["first", "second"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(await cached.read(), ["first", "second"]);
+    assert.equal(cached.lists(), 2);
+    await cached.change(["third"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    cached.failNext();
+    await assert.rejects(cached.read(), /transient list failure/u);
+    assert.deepEqual(await cached.read(), ["third"]);
+    assert.equal(cached.lists(), 4);
+  } finally {
+    await cached.close();
+  }
+
+  for (const [listChanged, watch] of [[false, true], [true, false]] as const) {
+    const uncached = await connect(listChanged, watch);
+    try {
+      await uncached.read();
+      await uncached.read();
+      assert.equal(uncached.lists(), 2);
+    } finally {
+      await uncached.close();
+    }
+  }
+});
+
+test("a cached inventory waiter stops on its own abort without failing the shared read", async () => {
+  const cache = createMcpToolInventoryCache<string>();
+  const client = { setNotificationHandler() {}, getServerCapabilities: () => ({ tools: { listChanged: true } }) };
+  cache.watch(client as never);
+  let release!: (value: string) => void;
+  let reads = 0;
+  const read = () => { reads += 1; return new Promise<string>((resolve) => { release = resolve; }); };
+  const revoked = new AbortController();
+  const abandoned = cache.load(client, read, revoked.signal);
+  const survivor = cache.load(client, read);
+  revoked.abort(new Error("lease revoked"));
+  await assert.rejects(abandoned, /lease revoked/u);
+  release("inventory");
+  assert.equal(await survivor, "inventory");
+  assert.equal(await cache.load(client, read), "inventory");
+  assert.equal(reads, 1);
 });

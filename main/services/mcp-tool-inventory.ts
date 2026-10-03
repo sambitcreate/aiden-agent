@@ -1,7 +1,7 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema, ListToolsResultSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, ListToolsResultSchema, ToolListChangedNotificationSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
@@ -115,6 +115,48 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
       if (record.isError === true) return;
       if (!record.structuredContent) throw new Error("MCP tool has an output schema but did not return structured content.");
       if (record.structuredContent && !validate(record.structuredContent).valid) throw new Error("MCP structured content does not match the tool's output schema.");
+    },
+  };
+}
+
+function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error: unknown) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
+}
+
+/**
+ * Reuse one tool inventory per live client, but only when the server promised
+ * notifications/tools/list_changed and the client was watched before connect.
+ * A change notification drops the entry; failed reads are never retained.
+ * Callers still check their own lease and generation after every load.
+ */
+export function createMcpToolInventoryCache<T>() {
+  const watched = new WeakSet<object>();
+  const entries = new WeakMap<object, Promise<T>>();
+  return {
+    /** Register before connect so a change during initialization is not missed. */
+    watch(client: Pick<Client, "setNotificationHandler">): void {
+      watched.add(client);
+      client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { entries.delete(client); });
+    },
+    load(client: Pick<Client, "getServerCapabilities">, read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      if (!watched.has(client) || client.getServerCapabilities()?.tools?.listChanged !== true) return untilAborted(read(), signal);
+      let pending = entries.get(client);
+      if (!pending) {
+        const loading = read();
+        pending = loading;
+        entries.set(client, loading);
+        loading.catch(() => { if (entries.get(client) === loading) entries.delete(client); });
+      }
+      return untilAborted(pending, signal);
     },
   };
 }

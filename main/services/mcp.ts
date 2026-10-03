@@ -1,7 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
-import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -290,6 +290,10 @@ class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();
   private readonly statusClients =
     new GenerationBoundConnectionAttempts<Client>();
+  private readonly toolInventories = createMcpToolInventoryCache<{
+    tools: McpToolInfo[];
+    guard: ReturnType<typeof createMcpToolCallGuard>;
+  }>();
 
   private async ensureConnected(
     server: McpServer,
@@ -306,6 +310,7 @@ class McpManager {
         // Register before connect: closure during initialization must also
         // prevent a dead client from being published to the cache.
         client.onclose = onClosed;
+        this.toolInventories.watch(client);
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
           makeTransport(
@@ -395,19 +400,32 @@ class McpManager {
     });
     const cachedClient = server.authProvider ? undefined : await this.ensureConnected(server, generation);
     lease.assertCurrent();
-    const inspect = async (client: Client, signal?: AbortSignal) => ({
-      tools: client.getServerCapabilities()?.tools ? await listMcpToolInventory({
-        signal: signal ? AbortSignal.any([lease.signal, signal]) : lease.signal,
-        assertCurrent: () => {
-          lease.assertCurrent();
-          if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
-        },
+    const assertGeneration = () => {
+      if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
+    };
+    const listTools = async (client: Client, assertCurrent: () => void, signal?: AbortSignal) => {
+      const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
+        signal,
+        assertCurrent,
         listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal }),
-      }) as McpToolInfo[] : [],
+      }) as McpToolInfo[] : [];
+      return { tools, guard: createMcpToolCallGuard(tools) };
+    };
+    const describe = (client: Client) => ({
       resources: Boolean(client.getServerCapabilities()?.resources),
       instructions: client.getInstructions(),
     });
-    const metadata = cachedClient ? await inspect(cachedClient) : await scoped(inspect);
+    // A shared cached read is fenced by its connection generation only, so a
+    // caller's own revoked lease cannot fail other callers; each caller then
+    // stops waiting on its own lease and re-checks it below.
+    const metadata = cachedClient ? {
+      ...await this.toolInventories.load(cachedClient, () => listTools(cachedClient, assertGeneration), lease.signal),
+      ...describe(cachedClient),
+    } : await scoped(async (client, signal) => ({
+      ...await listTools(client, () => { lease.assertCurrent(); assertGeneration(); }, AbortSignal.any([lease.signal, signal])),
+      ...describe(client),
+    }));
+    assertGeneration();
     const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
       callTool: (params, _schema, options) => callMcpTool(cachedClient, params, options),
       listResources: cachedClient.listResources.bind(cachedClient),
@@ -419,9 +437,8 @@ class McpManager {
       listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
     };
-    const { tools } = metadata;
+    const { tools, guard: callGuard } = metadata;
     lease.assertCurrent();
-    const callGuard = createMcpToolCallGuard(tools);
     const agentTools = tools.map((t): AgentTool => markToolOutputSource({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
