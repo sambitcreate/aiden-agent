@@ -31,6 +31,12 @@ final class AidenChatTests: XCTestCase {
         cache.remove(first); reads.removeAll()
         await cache.refresh(read: read)
         XCTAssertEqual(reads, [second.id])
+        cache.clearSnapshots() // disconnected/revoked subscriptions cannot present live controls
+        XCTAssertTrue(cache.snapshots.isEmpty)
+        await cache.refresh(read: { _ in throw AidenRemoteClientError.invalidResponse })
+        XCTAssertTrue(cache.snapshots.isEmpty)
+        await cache.refresh(read: read) // foreground reconnect hydrates existing registrations
+        XCTAssertEqual(cache.snapshots[second.id]?.policy, "disabled")
     }
 
     func testChatControlsSharedFixtureAndMalformedAdditiveFallback() throws {

@@ -1869,6 +1869,9 @@ final class AidenChatViewModel {
                     applyProgress(event)
                 }
                 if isCurrentProgressObservation(generation, context: context) {
+                    // Owner consent can close this stream without an HTTP error.
+                    // Until a fresh invalidation arrives, do not show live controls.
+                    appControlsCache.clearSnapshots()
                     isTaskProgressStale = taskProgress != nil
                     isAgentRosterStale = agentRoster != nil
                 }
@@ -1878,8 +1881,8 @@ final class AidenChatViewModel {
                 clearProgressStateIfCredentialRevoked(error)
                 if await coordinator.handleCredentialRevocation(error, context: context) { return }
                 guard isCurrentProgressObservation(generation, context: context) else { return }
+                appControlsCache.clearSnapshots()
                 if isProgressAccessDenied(error) {
-                    appControlsCache.clearSnapshots()
                     clearProgressState()
                     return
                 }

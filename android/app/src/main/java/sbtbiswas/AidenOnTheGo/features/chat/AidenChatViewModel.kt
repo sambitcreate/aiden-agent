@@ -441,6 +441,8 @@ class AidenChatViewModel(
                 }
                 retryAttempt = 0
                 if (progressForeground && progressObservationToken == observationToken) {
+                    // Owner consent can close the stream without an HTTP error.
+                    appControlsCache.clearSnapshots()
                     _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
                         ProgressConnectionState.LAST_KNOWN
                     } else {
@@ -450,6 +452,7 @@ class AidenChatViewModel(
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) return
+                if (isProgressContextCurrent(client, observationToken)) appControlsCache.clearSnapshots()
                 if (isProgressCredentialRevoked(error)) {
                     clearProgressState()
                     if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
@@ -458,7 +461,6 @@ class AidenChatViewModel(
                     return
                 }
                 if (isProgressCapabilityDenied(error)) {
-                    appControlsCache.clearSnapshots()
                     clearProgressState()
                     return
                 }

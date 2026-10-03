@@ -28,6 +28,12 @@ class AidenAppControlsTest {
         assertEquals("Access disabled", cache.snapshots.value.getValue(second.id).rows.single().disabledReason)
         cache.remove(first); reads.clear(); cache.refresh(read)
         assertEquals(listOf(second.id), reads)
+        cache.clearSnapshots() // disconnected/revoked subscriptions cannot present live controls
+        assertTrue(cache.snapshots.value.isEmpty())
+        cache.refresh { error("Host access revoked") }
+        assertTrue(cache.snapshots.value.isEmpty())
+        cache.refresh(read) // foreground reconnect hydrates existing registrations
+        assertEquals("disabled", cache.snapshots.value.getValue(second.id).policy)
     }
 
     private val json = Json { ignoreUnknownKeys = true }
