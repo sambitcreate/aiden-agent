@@ -1,8 +1,8 @@
 # Interactive Aiden controls inside chat
 
-Status: **Bounded profile implemented; local validation complete, PR/hosted validation in progress. Physical release acceptance remains open.**
+Status: **Bounded profile implemented in [open PR #312](https://github.com/sambitcreate/aiden-agent/pull/312); automated acceptance is tracked on the PR. Physical release acceptance remains open.**
 Date: 2026-10-03.
-Implementation update: the bounded MVP described in the [parent plan](aiden-app-knowledge-actions-plan.md#implemented-contract-and-evidence) is implemented. Exact shipped DTOs supersede the proposed names below: assistant `appPanels`, `AppControlPanel` version 1, current host snapshots and four-field typed operations. json-render core/React 0.21.0 renders only the host-assembled desktop template. Native clients and CLI use their existing native controls. PR/hosted validation is in progress; physical release acceptance remains open.
+Implementation update: the bounded MVP described in the [parent plan](aiden-app-knowledge-actions-plan.md#implemented-contract-and-evidence) is implemented. Exact shipped DTOs supersede the proposed names below: assistant `appPanels`, `AppControlPanel` version 1, current host snapshots and four-field typed operations. json-render core/React 0.21.0 renders only the host-assembled desktop template. Native clients and CLI use their existing native controls. Automated acceptance is tracked on PR #312; physical release acceptance remains open.
 
 Parent: [built-in product knowledge and app actions](aiden-app-knowledge-actions-plan.md). This specification expands its MVP to include interactive chat panels on desktop, iOS, Android and the CLI TUI. Mobile controls are required acceptance work, not a future optional integration.
 
