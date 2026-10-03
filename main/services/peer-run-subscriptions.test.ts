@@ -11,6 +11,7 @@ import {
   peerRunTarget,
 } from "./peer-run-subscriptions.js";
 import type { PeerRunEvent } from "../../renderer/shared/peer-host.js";
+import { applyRemoteRunSubscription, initialRemoteRunView } from "../../renderer/lib/hosts/remote-stream-translator.js";
 
 class FakeTimers {
   now = 0;
@@ -184,8 +185,100 @@ test("a gap snapshot or a full buffer tells viewers behind it that history was t
     stream.accept(event("run-1", sequence));
   const recent = stream.view("sub", 39);
   assert.equal(recent.truncated, true);
-  assert.equal(recent.events.length, PEER_RUN_BUFFER_EVENTS);
-  assert.equal(stream.view("sub", recent.events[0]!.sequence - 1).truncated, false);
+  // The buffer stays bounded; a summary of what was dropped leads it.
+  assert.equal(recent.events.length, PEER_RUN_BUFFER_EVENTS + 1);
+  assert.equal(recent.events[0]!.type, "snapshot");
+  assert.equal(stream.view("sub", recent.events[1]!.sequence - 1).truncated, false);
+});
+
+const approval = { approvalId: "ap-1", summary: "Run the release script", toolCallId: "call-1", toolName: "run_shell" };
+const question = {
+  promptId: "q-1",
+  toolCallId: "call-2",
+  questions: [
+    {
+      question: "Which branch should I tag?",
+      header: "Branch",
+      multiSelect: false,
+      options: [
+        { label: "main", description: "The default branch" },
+        { label: "release", description: "The release branch" },
+      ],
+    },
+  ],
+};
+
+/** A stream whose buffer has dropped the given events behind a full run of deltas. */
+function overflowed(head: PeerRunEvent[], tail: PeerRunEvent[] = []) {
+  const stream = new PeerRunStream("host-a", "run:run-1", { runId: "run-1" }, 0);
+  let sequence = 0;
+  const next = () => (sequence += 1);
+  stream.accept(event("run-1", next(), "run.started", { runId: "run-1" }));
+  for (const item of head) stream.accept({ ...item, sequence: next() });
+  for (let count = 0; count < PEER_RUN_BUFFER_EVENTS + 50; count += 1)
+    stream.accept(event("run-1", next(), "message.delta", { text: "x" }));
+  for (const item of tail) stream.accept({ ...item, sequence: next() });
+  return stream;
+}
+
+/** What a viewer joining the stream from its start ends up showing. */
+function joined(stream: PeerRunStream) {
+  const subscription = stream.view("late", 0);
+  return { subscription, view: applyRemoteRunSubscription(initialRemoteRunView(null, "chat-1"), subscription) };
+}
+
+test("a viewer joining after the buffer dropped an approval or question still sees it pending", () => {
+  const { subscription, view } = joined(
+    overflowed([event("run-1", 0, "approval_required", approval), event("run-1", 0, "question_required", question)]),
+  );
+  assert.equal(subscription.truncated, true);
+  assert.ok(subscription.events.length <= PEER_RUN_BUFFER_EVENTS + 1, "retention stays bounded");
+  assert.deepEqual(view.view.approvals.map((entry) => entry.approvalId), ["ap-1"]);
+  assert.deepEqual(view.view.questions.map((entry) => entry.promptId), ["q-1"]);
+  assert.equal(view.view.status, "running");
+  // The lost text is read back from the host.
+  assert.equal(view.refetch, true);
+});
+
+test("a dropped prompt that was later resolved, or a run that settled, leaves nothing pending", () => {
+  const resolvedInDropped = joined(
+    overflowed([
+      event("run-1", 0, "approval_required", approval),
+      event("run-1", 0, "question_required", question),
+      event("run-1", 0, "approval_resolved", { approvalId: "ap-1" }),
+    ]),
+  );
+  assert.deepEqual(resolvedInDropped.view.view.approvals, []);
+  assert.deepEqual(resolvedInDropped.view.view.questions.map((entry) => entry.promptId), ["q-1"]);
+
+  const resolvedAfter = joined(
+    overflowed([event("run-1", 0, "question_required", question)], [event("run-1", 0, "question_resolved", { promptId: "q-1" })]),
+  );
+  assert.deepEqual(resolvedAfter.view.view.questions, []);
+
+  const settled = joined(
+    overflowed(
+      [event("run-1", 0, "approval_required", approval)],
+      [{ ...event("run-1", 0, "done", { messageId: "m-1" }), terminal: true }, event("run-1", 0, "run.ended", { state: "done" })],
+    ),
+  );
+  assert.deepEqual(settled.view.view.approvals, []);
+  assert.equal(settled.view.view.ended, true);
+});
+
+test("a viewer that saw a prompt before resubscribing drops it once the resolution was evicted", () => {
+  const stream = new PeerRunStream("host-a", "run:run-1", { runId: "run-1" }, 0);
+  stream.accept(event("run-1", 1, "run.started", { runId: "run-1" }));
+  stream.accept(event("run-1", 2, "approval_required", approval));
+  const before = applyRemoteRunSubscription(initialRemoteRunView(null, "chat-1"), stream.view("sub", 0)).view;
+  assert.deepEqual(before.approvals.map((entry) => entry.approvalId), ["ap-1"]);
+
+  stream.accept(event("run-1", 3, "approval_resolved", { approvalId: "ap-1" }));
+  for (let sequence = 4; sequence < 4 + PEER_RUN_BUFFER_EVENTS + 10; sequence += 1)
+    stream.accept(event("run-1", sequence, "message.delta", { text: "x" }));
+  const after = applyRemoteRunSubscription(before, stream.view("sub", 2)).view;
+  assert.deepEqual(after.approvals, []);
+  assert.equal(after.status, "running");
 });
 
 test("renderer run targets name exactly one valid chat or run id", () => {

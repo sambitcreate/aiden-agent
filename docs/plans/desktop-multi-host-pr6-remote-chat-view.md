@@ -52,6 +52,7 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
 - **Translator state, not callbacks.** The reducer returns the same values `chat-pane` passes to `MessageList`. That makes it a pure and exhaustively testable function. `useChatSession` in PR 7 can consume the state directly or wrap it in `StreamCallbacks`.
 - **Paging.** The newest 50 messages load first, and Load older fetches 50 more using `before`. A `revision_conflict` on an older page reloads the newest window instead of guessing. The full `chat` operation is never used for the transcript.
 - **Mark read.** Marks are sent through the newest persisted message only while the host is connected and grants `chat-read-state-v1`. A new idempotency key is minted for each mark.
+- **Prompts outlive the shared buffer.** Main keeps each run stream to a bounded buffer (512 events or 1 MiB). As events leave it, `PeerRunStream` folds them into the approvals and questions still pending, and clears them on a resolution or a terminal event. A viewer whose replay starts below the buffer receives that summary first, as the same `gap` snapshot the host sends. So a window that joins, or resubscribes to, a long run still shows an unanswered prompt, and drops one that was answered in the part it missed. Retention stays bounded by the number of open prompts. The snapshot is main to renderer only, so no host or mobile contract changes.
 - **No contract changes.** This PR uses the PR 2 and PR 3 operations and IPC unchanged, so iOS and Android are unaffected.
 
 ## Tests
@@ -61,6 +62,7 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
 - `main/services/peer-remote-chat-view.test.ts`: real PR 2 host services (run registry, run streams, host feed and messages window) behind the real `PeerHostManager` and live IPC handlers, driving the real adapter and session. It covers these cases:
   - A run started on the host's own screen streams to this Mac.
   - A gap is recovered through a snapshot and a window refetch.
+  - A second window joining a run whose shared buffer overflowed still shows the pending approval, and loses it once the host resolves it.
   - A large chat opens one window at a time.
   - Late responses are fenced after a reconnect.
 - `renderer/main/remote-chat-view.test.tsx`: the view states (live, stale or offline, Load older, read-only pending approval), rendered to static markup.

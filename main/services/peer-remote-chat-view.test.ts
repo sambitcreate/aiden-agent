@@ -408,13 +408,27 @@ async function setup(host: FakeHost) {
     const snapshot = session.getSnapshot();
     return { ...snapshot, row: remoteRunTranscript(snapshot.run, snapshot.transcript.messages) };
   };
+  /** A second window opening the same chat over the same main process. */
+  const openAnother = async () => {
+    const other = new RemoteHostAdapter(view!, transport);
+    const otherSession = new RemoteChatSession({ adapter: other, chatId: "chat-1" });
+    otherSession.start();
+    await settle();
+    await otherSession.idle();
+    const read = () => otherSession.getSnapshot();
+    const dispose = () => {
+      otherSession.dispose();
+      other.dispose();
+    };
+    return { session: otherSession, read, dispose };
+  };
   const close = () => {
     session.dispose();
     adapter.dispose();
     manager.close();
     host.close();
   };
-  return { timers, manager, adapter, session, open, transcript, delivered, close };
+  return { timers, manager, adapter, session, open, openAnother, transcript, delivered, close };
 }
 
 test("a run started on the host streams into the open chat and hands off to the persisted reply", async () => {
@@ -516,6 +530,48 @@ test("opening a chat whose run outgrew the host's journal recovers through the g
     assert.equal(view.row.streamingText, null);
     assert.equal(view.error, null);
   } finally {
+    harness.close();
+  }
+});
+
+test("a window joining a run whose shared buffer overflowed still shows the pending approval until it resolves", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  let another: Awaited<ReturnType<typeof harness.openAnother>> | undefined;
+  try {
+    await harness.open();
+    await host.start("run-1");
+    await settle();
+    host.runs.publish("run-1", "chat:approval", {
+      approvalId: "ap-1",
+      summary: "Run the release script",
+      toolCallId: "call-1",
+      toolName: "shell",
+    });
+    // A long reply streams past the approval, well beyond this Mac's shared buffer.
+    for (let index = 0; index < 600; index += 1) host.runs.publish("run-1", "chat:delta", { delta: "x" });
+    await settle();
+    await harness.session.idle();
+    assert.deepEqual(harness.transcript().run.approvals.map((prompt) => prompt.approvalId), ["ap-1"]);
+
+    another = await harness.openAnother();
+    let joined = another.read();
+    assert.equal(joined.run.incomplete, true, "the reply's start is no longer buffered on this Mac");
+    assert.deepEqual(
+      joined.run.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow]),
+      [["ap-1", false]],
+      "the approval the buffer dropped is still shown, read-only",
+    );
+
+    host.runs.resolveAttention("ap-1");
+    await settle();
+    await another.session.idle();
+    await harness.session.idle();
+    joined = another.read();
+    assert.deepEqual(joined.run.approvals, [], "answered on the host, the prompt leaves the joining window");
+    assert.deepEqual(harness.transcript().run.approvals, []);
+  } finally {
+    another?.dispose();
     harness.close();
   }
 });
