@@ -150,6 +150,7 @@ function operationError(error: unknown): PeerOperationError {
       ...(error.remote
         ? { remoteCode: error.remote.code, retryable: error.remote.retryable }
         : {}),
+      ...(error.remote?.details ? { details: { ...error.remote.details } } : {}),
     };
   return {
     code: "failed",

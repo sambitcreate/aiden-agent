@@ -160,6 +160,13 @@ export interface PeerRunSubscription {
   truncated: boolean;
 }
 
+export interface PeerOperationErrorDetails {
+  decision?: "allow" | "deny";
+  outcome?: "answered" | "expired";
+  resolvedAt?: string;
+  currentRevision?: string;
+}
+
 export interface PeerOperationError {
   /** A transport code, `outcome_unknown`, or `failed`. */
   code: string;
@@ -167,6 +174,11 @@ export interface PeerOperationError {
   status?: number;
   remoteCode?: string;
   retryable?: boolean;
+  /**
+   * The host's sanitized error details: the winning decision or outcome of a
+   * run-control race, when it was resolved, and a chat's current revision.
+   */
+  details?: PeerOperationErrorDetails;
   /** For `outcome_unknown`: the state one read-only reconciliation observed, if any. */
   reconciled?: unknown;
 }
