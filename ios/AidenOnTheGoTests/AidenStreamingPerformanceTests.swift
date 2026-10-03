@@ -216,6 +216,81 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertEqual(cache.content(for: recent), MarkdownContent(recent))
         XCTAssertEqual(cache.parsedCharacterCount - parsedBefore, "Tail.\n".utf8.count)
     }
+
+    // MARK: - SSE line decoding
+
+    private func decodeLines(_ text: String) async throws -> [String] {
+        try await decodeLines(Array(text.utf8))
+    }
+
+    private func decodeLines(_ bytes: [UInt8], maximumLineBytes: Int = 1_024) async throws -> [String] {
+        var lines: [String] = []
+        try await AidenSSELineDecoder.forEachLine(
+            in: AsyncStream<UInt8> { continuation in
+                bytes.forEach { continuation.yield($0) }
+                continuation.finish()
+            },
+            maximumLineBytes: maximumLineBytes
+        ) { lines.append($0) }
+        return lines
+    }
+
+    func testSSELineDecoderKeepsBlankDelimitersAndNormalizesCRLF() async throws {
+        let lines = try await decodeLines(": heartbeat\r\n\r\nid: 7\nevent: x\r\ndata: a\ndata: b\n\n")
+        XCTAssertEqual(lines, [": heartbeat", "", "id: 7", "event: x", "data: a", "data: b", ""])
+    }
+
+    func testSSELineDecoderDiscardsAnUnterminatedTailAtEOF() async throws {
+        let lines = try await decodeLines("data: done\n\ndata: partial")
+        XCTAssertEqual(lines, ["data: done", ""])
+        // A multi-byte scalar split by EOF is discarded, not rejected.
+        let truncated = Array("data: ok\n".utf8) + Array("é".utf8).prefix(1)
+        let truncatedLines = try await decodeLines(truncated)
+        XCTAssertEqual(truncatedLines, ["data: ok"])
+    }
+
+    func testSSELineDecoderRejectsInvalidUTF8AndOversizedLines() async throws {
+        do {
+            _ = try await decodeLines(Array("data: ".utf8) + [0xFF, 0x0A])
+            XCTFail("Invalid UTF-8 must be rejected")
+        } catch {
+            guard case .invalidResponse? = error as? AidenRemoteClientError else {
+                return XCTFail("Expected invalidResponse, received \(error)")
+            }
+        }
+        let exact = try await decodeLines(Array(repeating: 0x78, count: 16) + [0x0A], maximumLineBytes: 16)
+        XCTAssertEqual(exact, [String(repeating: "x", count: 16)])
+        do {
+            _ = try await decodeLines(Array(repeating: 0x78, count: 17) + [0x0A], maximumLineBytes: 16)
+            XCTFail("An oversized line must be rejected")
+        } catch {
+            XCTAssertEqual(error as? AidenSSEParserError, .frameTooLarge)
+        }
+    }
+
+    func testSSELineDecoderFeedsTheParserMultiLineDataFrames() async throws {
+        let frame = """
+        : keep-alive\r
+        id: 3\r
+        event: heartbeat\r
+        data: {"protocolVersion":1,"streamId":"stream-1","sequence":3,\r
+        data: "timestamp":"2026-08-19T07:00:00.000Z","type":"heartbeat","terminal":false,"payload":{}}\r
+        \r
+
+        """
+        var parser = AidenSSEParser()
+        var events: [AidenRemoteStreamEvent] = []
+        try await AidenSSELineDecoder.forEachLine(
+            in: AsyncStream<UInt8> { continuation in
+                frame.utf8.forEach { continuation.yield($0) }
+                continuation.finish()
+            }
+        ) { line in
+            if let event = try parser.consume(line: line) { events.append(event) }
+        }
+        XCTAssertEqual(events.map(\.sequence), [3])
+        XCTAssertEqual(events.first?.streamId, "stream-1")
+    }
 }
 
 // MARK: - Test doubles

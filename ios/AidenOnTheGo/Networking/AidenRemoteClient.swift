@@ -1997,24 +1997,9 @@ final class AidenRemoteClient: @unchecked Sendable {
                     }
 
                     var parser = AidenSSEParser()
-                    var lineBytes: [UInt8] = []
-                    lineBytes.reserveCapacity(512)
-                    for try await byte in bytes {
-                        try Task.checkCancellation()
-                        if byte == 0x0A {
-                            if lineBytes.last == 0x0D { lineBytes.removeLast() }
-                            guard let line = String(bytes: lineBytes, encoding: .utf8) else {
-                                throw AidenRemoteClientError.invalidResponse
-                            }
-                            lineBytes.removeAll(keepingCapacity: true)
-                            if let event = try parser.consume(line: line) {
-                                try yield(event)
-                            }
-                        } else {
-                            lineBytes.append(byte)
-                            guard lineBytes.count <= AidenRemoteProtocol.maxSSEFrameBytes else {
-                                throw AidenSSEParserError.frameTooLarge
-                            }
+                    try await AidenSSELineDecoder.forEachLine(in: bytes) { line in
+                        if let event = try parser.consume(line: line) {
+                            try yield(event)
                         }
                     }
                     // EOF is not an SSE frame delimiter. Discard the pending
