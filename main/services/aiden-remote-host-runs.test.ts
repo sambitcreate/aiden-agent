@@ -236,7 +236,7 @@ test("a cursor behind retention gets a gap snapshot carrying every pending promp
     rest.map((frame) => frame.data.sequence),
     rest.map((_, index) => (payload.nextSequence as number) + index),
   );
-  assert.equal(rest.at(-1)!.data.sequence, registry.summary("run-1")!.lastSequence);
+  assert.equal(rest[rest.length - 1]!.data.sequence, registry.summary("run-1")!.lastSequence);
 });
 
 test("an unknown run is run_gone on every run route", async () => {
@@ -428,6 +428,7 @@ test("revocation closes a device's run streams but never cancels the run", () =>
   assert.equal(registry.summary("run-1")!.state, "working");
 
   registry.publish("run-1", "chat:delta", { delta: "still running" });
-  assert.equal(kept.frames().at(-1)!.event, "text_delta");
+  const keptFrames = kept.frames();
+  assert.equal(keptFrames[keptFrames.length - 1]!.event, "text_delta");
   assert.equal(revoked.frames().length, 1);
 });

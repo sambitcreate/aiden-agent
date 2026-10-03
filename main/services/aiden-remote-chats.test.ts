@@ -1962,14 +1962,14 @@ test("the messages window pages backwards from the newest message without gaps",
   ]);
 });
 
-test("the messages window hides tool and system messages and refuses an unknown anchor", () => {
+test("the messages window hides system messages and refuses an unknown anchor", () => {
   const source = conversation(3);
-  source.messages.splice(1, 0, { id: "tool-1", role: "tool", content: "output", createdAt: 2_000 } as Chat["messages"][number]);
+  source.messages.splice(1, 0, { id: "system-1", role: "system", content: "instructions", createdAt: 2_000 });
   const page = projectAidenRemoteChatMessagesWindow(source, { limit: 50 });
   assert.deepEqual(page.messages.map((message) => message.id), ["message-0", "message-1", "message-2"]);
   assert.equal(page.hasOlder, false);
 
-  for (const before of ["tool-1", "message-missing"]) {
+  for (const before of ["system-1", "message-missing"]) {
     assert.throws(
       () => projectAidenRemoteChatMessagesWindow(source, { before, limit: 10 }),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
@@ -1983,8 +1983,8 @@ test("a messages window stays within the JSON budget and reports the trimmed his
   assert.ok(Buffer.byteLength(JSON.stringify(page)) <= AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
   assert.ok(page.messages.length > 0 && page.messages.length < 8);
   // The newest messages are kept and the trimmed older ones stay reachable.
-  assert.equal(page.messages.at(-1)!.id, "message-7");
+  assert.equal(page.messages[page.messages.length - 1]!.id, "message-7");
   assert.equal(page.hasOlder, true);
   const older = projectAidenRemoteChatMessagesWindow(source, { before: page.messages[0]!.id, limit: 8 });
-  assert.equal(older.messages.at(-1)!.id, `message-${8 - page.messages.length - 1}`);
+  assert.equal(older.messages[older.messages.length - 1]!.id, `message-${8 - page.messages.length - 1}`);
 });
