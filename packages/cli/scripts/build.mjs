@@ -15,7 +15,7 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -484,8 +484,14 @@ const exportDir = join(appDir, "src", "core", "export-html");
 mkdirSync(exportDir, { recursive: true });
 cpSync(join(piAgentPkg, "dist", "core", "export-html"), exportDir, { recursive: true });
 
-// pi's auth/model guidance prints absolute paths into these docs.
-cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), { recursive: true });
+// pi's auth/model guidance prints absolute paths into these docs. Their
+// screenshots are only <img> illustrations for a browser and never read by
+// the CLI.
+const piDocsImages = join(piAgentPkg, "docs", "images");
+cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), {
+	recursive: true,
+	filter: (source) => source !== piDocsImages && !source.startsWith(`${piDocsImages}${sep}`),
+});
 
 // Native helpers: prefer checksum-verified prebuilts (AIDEN_NATIVE_PREBUILT_DIR
 // or the repo's prebuilt/native/<target> tree) so installs need no C toolchain;
@@ -557,7 +563,12 @@ if (prebuiltFailure === undefined) {
 await vendorGenerativeUiLibraries(resolve(pkgDir, "../.."));
 cpSync(resolve(pkgDir, "../../THIRD_PARTY_NOTICES.md"), join(appDir, "THIRD_PARTY_NOTICES.md"));
 cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), { recursive: true });
-cpSync(resolve(pkgDir, "../../resources/model-capabilities.json"), join(appDir, "model-capabilities.json"));
+// Read with JSON.parse at runtime; the indentation in the checked-in copy is
+// a third of its size.
+writeFileSync(
+	join(appDir, "model-capabilities.json"),
+	JSON.stringify(JSON.parse(readFileSync(resolve(pkgDir, "../../resources/model-capabilities.json"), "utf8"))),
+);
 
 chmodSync(join(appDir, "cli.js"), 0o755);
 
@@ -570,6 +581,15 @@ await build({
 	splitting: false,
 });
 
-const files = Object.keys(mainResult.metafile.outputs).length;
-const mib = Object.values(mainResult.metafile.outputs).reduce((total, output) => total + output.bytes, 0) / (1024 * 1024);
+// Count everything that ships, not just the bundler's outputs: the copied
+// docs, themes, generative-ui libraries, catalog and native helpers are most
+// of the bytes.
+let files = 0;
+let bytes = 0;
+for (const entry of readdirSync(appDir, { recursive: true, withFileTypes: true })) {
+	if (!entry.isFile()) continue;
+	files += 1;
+	bytes += statSync(join(entry.parentPath, entry.name)).size;
+}
+const mib = bytes / (1024 * 1024);
 console.log(`Built ${relative(pkgDir, appDir)} (${files} files, ${mib.toFixed(1)} MiB)`);
