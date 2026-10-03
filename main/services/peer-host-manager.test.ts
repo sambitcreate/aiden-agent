@@ -335,6 +335,13 @@ function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))
     clientVersion: "1",
     platform: "mac",
     client: (trust) => byId.get((trust as StoredPeerHost).id)!.client(),
+    // No fake host presents a WebPKI-valid renewed key, so a pin mismatch is never re-pinned.
+    bootstrap: () => ({
+      observedSpki: undefined,
+      json: async () => {
+        throw new PeerTransportError("identity_changed");
+      },
+    }),
   });
   const sent: { channel: string; payload: unknown }[] = [];
   const manager = new PeerHostManager({

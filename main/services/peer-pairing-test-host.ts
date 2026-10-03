@@ -9,7 +9,7 @@
  *   fixture CA in place of the system roots.
  */
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +54,7 @@ async function identityIn(
   from?: string,
 ): Promise<AidenRemoteTlsIdentity> {
   if (from) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
     for (const name of ["ca-key.pem", "ca-certificate.pem"])
       await copyFile(path.join(from, name), path.join(directory, name));
   }
