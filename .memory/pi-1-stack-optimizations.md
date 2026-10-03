@@ -119,3 +119,13 @@ merging `origin/main` into #299 and cascading each parent into its child.
   cache without `hasKey`. The model-operation extension uses it for labels and
   usage accounting, so preparing a turn no longer reads the keychain once per
   provider.
+
+## #306 `codex/pi-1-local-classifier`
+
+- **Merge note:** the operation-provider snapshot that feeds
+  `createLocalClassifierModels` now comes from `listStoredProviders()` (#303),
+  so classifier opt-in no longer costs a keychain read per provider.
+- **PR-306-1:** classifier inventory reads each opted-in provider once per
+  `getAvailableOfType` call, in parallel, then checks every model against that
+  record (`stillCurrent`). Dispatch keeps its own before/after-resolution
+  `current()` fences.
