@@ -149,3 +149,29 @@ merging `origin/main` into #299 and cascading each parent into its child.
   normally. Reuse needs a scope lifecycle addition plus a token-refresh policy;
   the PR owner should decide it. 305-3 (collapse the scoped/proxy branches)
   waits on that.
+
+## #307 `codex/pi-1-mcp-inventory`
+
+- **PR-307-1:** `createMcpToolCallGuard` compiles output schemas lazily, on the
+  first `assertCallable` (before dispatch) or `validateResult`, in one Ajv per
+  guard. A schema that declares `$id` anywhere gets its own Ajv: Ajv caches by
+  id per instance, so a shared instance silently validates a second tool
+  against the first tool's schema (probed). An uncompilable schema now blocks
+  only its own tool ("could not be compiled") instead of the whole inventory;
+  a non-object schema is still rejected eagerly. The bot catalog, attended
+  `agentContextFor` and status paths list through `listMcpToolPage` (a raw
+  `tools/list` request) so `Client.listTools` no longer compiles a second copy
+  into the SDK cache. The subagent path stays on `client.listTools`, because it
+  dispatches through the SDK `callTool`, which reads that cache. Benchmark for
+  100 schemas: 48.5 ms per-tool, 22.2 ms shared, 0.2 ms when one tool is used.
+- **PR-307-2:** `createMcpToolInventoryCache` keeps `{tools, guard}` per cached
+  `Client` (WeakMap) only when the client was watched before connect and the
+  server advertises `tools.listChanged`; `notifications/tools/list_changed`
+  drops the entry and failed reads are not retained. A new generation is a new
+  client. Provider-authenticated operations do not use it. The shared read is
+  fenced by generation only; each caller races it against its own lease signal
+  and re-checks lease and generation afterwards.
+- **307-3** is covered by PR-302-3 (one frozen discovery record per server).
+- **307-4 (not done, report only):** this PR rewrites #303's Model Freedom e2e
+  from hover to focus; that churn belongs in #303. Part of the X-6 onboarding
+  consolidation note.
