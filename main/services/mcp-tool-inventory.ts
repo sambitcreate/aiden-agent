@@ -1,7 +1,7 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, ListToolsResultSchema, type CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
@@ -12,6 +12,15 @@ export function callMcpTool(client: Pick<Client, "request">, params: CallToolReq
   // The public request path retains envelope validation, progress, timeout and cancellation.
   // Client.callTool additionally validates errors against the last tools/list page's schema.
   return client.request({ method: "tools/call", params }, CallToolResultSchema, options);
+}
+
+/**
+ * One raw tools/list page. Client.listTools also compiles every page's output
+ * schemas into the SDK's own cache, which only Client.callTool reads; callers
+ * that dispatch through callMcpTool behind createMcpToolCallGuard skip it.
+ */
+export function listMcpToolPage(client: Pick<Client, "request">, cursor: string | undefined, options?: RequestOptions) {
+  return client.request({ method: "tools/list", params: cursor === undefined ? undefined : { cursor } }, ListToolsResultSchema, options);
 }
 
 /** The SDK returns one tools/list page. Publish only a complete, bounded inventory. */
@@ -53,25 +62,52 @@ export async function listMcpToolInventory<T extends { name: string }>(options: 
   throw new Error("MCP tool inventory exceeds the page limit.");
 }
 
-/** SDK listTools replaces its cache per page; retain complete call contracts separately. */
+function declaresSchemaId(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(declaresSchemaId);
+  if (!value || typeof value !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(value, "$id") || Object.values(value).some(declaresSchemaId);
+}
+
+/**
+ * SDK listTools replaces its cache per page; retain complete call contracts separately.
+ *
+ * Output schemas compile on first use, before dispatch, and anonymous schemas
+ * share one Ajv. A schema that declares `$id` gets its own Ajv: Ajv registers
+ * ids per instance, so unrelated tools reusing an id would otherwise collide.
+ */
 export function createMcpToolCallGuard(tools: readonly { name: string; outputSchema?: unknown; execution?: unknown }[]) {
+  const schemas = new Map<string, JsonSchemaType>();
   const validators = new Map<string, JsonSchemaValidator<unknown>>();
   const requiredTasks = new Set<string>();
+  let shared: AjvJsonSchemaValidator | undefined;
   for (const tool of tools) {
     if (tool.execution && typeof tool.execution === "object" &&
         (tool.execution as { taskSupport?: unknown }).taskSupport === "required") requiredTasks.add(tool.name);
     if (tool.outputSchema !== undefined) {
       if (!tool.outputSchema || typeof tool.outputSchema !== "object" || Array.isArray(tool.outputSchema)) throw new Error("Invalid MCP tool output schema.");
-      // Separate providers also prevent schema $id collisions between unrelated tools.
-      validators.set(tool.name, new AjvJsonSchemaValidator().getValidator(tool.outputSchema as JsonSchemaType));
+      schemas.set(tool.name, tool.outputSchema as JsonSchemaType);
     }
   }
+  const validatorFor = (name: string): JsonSchemaValidator<unknown> | undefined => {
+    const compiled = validators.get(name);
+    if (compiled) return compiled;
+    const schema = schemas.get(name);
+    if (!schema) return undefined;
+    const provider = declaresSchemaId(schema) ? new AjvJsonSchemaValidator() : (shared ??= new AjvJsonSchemaValidator());
+    let validator: JsonSchemaValidator<unknown>;
+    try { validator = provider.getValidator(schema); }
+    catch { throw new Error("This MCP tool's output schema could not be compiled."); }
+    validators.set(name, validator);
+    return validator;
+  };
   return {
     assertCallable(name: string): void {
       if (requiredTasks.has(name)) throw new Error("This MCP tool requires unsupported task-based execution.");
+      // Compile before dispatch so an unusable schema cannot follow a side effect.
+      validatorFor(name);
     },
     validateResult(name: string, result: unknown): void {
-      const validate = validators.get(name);
+      const validate = validatorFor(name);
       if (!validate) return;
       const record = result && typeof result === "object" ? result as { structuredContent?: unknown; isError?: unknown } : {};
       // Tool failures may carry diagnostic JSON instead of the successful output shape.

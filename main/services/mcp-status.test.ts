@@ -72,11 +72,11 @@ test("revocation during successful or failed discovery never returns stale metad
     const barrier = new Promise<void>((resolve) => { release = resolve; });
     const pending = inspectInitializedMcpStatus({
       getServerCapabilities: () => ({ tools: {}, extensions: { "private/stale": {} } }),
-      listTools: async () => {
+      request: (async () => {
         await barrier;
         if (fails) throw new Error("discovery failure");
         return { tools: [] };
-      },
+      }) as never,
     }, () => current);
     current = false;
     release();
@@ -94,7 +94,7 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   const stale = attempts.run("server", 0, () => ({ version: 1 }), async () => {},
     (_client, isCurrent) => inspectInitializedMcpStatus({
       getServerCapabilities: () => ({ tools: {}, extensions: { "private/stale": {} } }),
-      listTools: async () => { entered(); await barrier; return { tools: [] }; },
+      request: (async () => { entered(); await barrier; return { tools: [] }; }) as never,
     }, isCurrent), async () => { closes += 1; });
   await started;
   await attempts.disconnect("server");
@@ -102,7 +102,7 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   await assert.rejects(stale, /superseded/u);
   const replacement = await attempts.run("server", attempts.generation("server"), () => ({ version: 2 }), async () => {},
     (_client, isCurrent) => inspectInitializedMcpStatus({
-      getServerCapabilities: () => ({}), listTools: async () => { throw new Error("must not discover"); },
+      getServerCapabilities: () => ({}), request: (async () => { throw new Error("must not discover"); }) as never,
     }, isCurrent), async () => { closes += 1; });
   assert.deepEqual(replacement.serverCapabilities, {});
   assert.ok(closes >= 2);

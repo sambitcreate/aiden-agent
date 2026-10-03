@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -101,6 +101,60 @@ test("complete inventory guards preserve early-page output schemas and task requ
   guard.assertCallable("ordinary");
 });
 
+test("tools that reuse a schema $id each validate against their own output schema", () => {
+  const schema = (field: string, nested: boolean) => nested
+    ? { type: "object", properties: { item: { $id: "https://fixture.test/item", type: "object", required: [field] } }, required: ["item"] }
+    : { $id: "https://fixture.test/out", type: "object", required: [field] };
+  for (const nested of [false, true]) {
+    const guard = createMcpToolCallGuard([
+      { name: "alpha", outputSchema: schema("a", nested) },
+      { name: "beta", outputSchema: schema("b", nested) },
+      { name: "anonymous", outputSchema: { type: "object", required: ["c"] } },
+    ]);
+    const wrap = (value: object) => ({ structuredContent: nested ? { item: value } : value });
+    for (const name of ["alpha", "beta", "anonymous"]) guard.assertCallable(name);
+    guard.validateResult("alpha", wrap({ a: 1 }));
+    assert.throws(() => guard.validateResult("alpha", wrap({ b: 1 })), /output schema/u);
+    guard.validateResult("beta", wrap({ b: 1 }));
+    assert.throws(() => guard.validateResult("beta", wrap({ a: 1 })), /output schema/u);
+    guard.validateResult("anonymous", { structuredContent: { c: 1 } });
+    assert.throws(() => guard.validateResult("anonymous", { structuredContent: { a: 1 } }), /output schema/u);
+  }
+});
+
+test("an uncompilable output schema blocks only its own tool, before dispatch", async () => {
+  const server = new Server({ name: "schema-fixture", version: "1" }, { capabilities: { tools: {} } });
+  const client = new Client({ name: "test-client", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
+    { name: "broken", inputSchema: { type: "object" as const }, outputSchema: { type: "object" as const, properties: { value: { $ref: "#/missing" } } } },
+    { name: "healthy", inputSchema: { type: "object" as const }, outputSchema: { type: "object" as const, required: ["value"] } },
+  ] }));
+  const dispatched: string[] = [];
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+    dispatched.push(params.name);
+    return { content: [], structuredContent: { value: 1 } };
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const guard = createMcpToolCallGuard(await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }));
+    const invoke = async (name: string) => {
+      guard.assertCallable(name);
+      const result = await callMcpTool(client, { name });
+      guard.validateResult(name, result);
+      return result;
+    };
+    await assert.rejects(invoke("broken"), /could not be compiled/u);
+    assert.deepEqual((await invoke("healthy")).structuredContent, { value: 1 });
+    assert.deepEqual(dispatched, ["healthy"]);
+    assert.throws(() => createMcpToolCallGuard([{ name: "array", outputSchema: [] }]), /Invalid MCP tool output schema/u);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("schema guards preserve server error diagnostics while validating successful output", async () => {
   const guard = createMcpToolCallGuard([{ name: "lookup", outputSchema: {
     type: "object", properties: { value: { type: "number" } }, required: ["value"],
@@ -149,7 +203,7 @@ test("public SDK requests preserve errors on every inventory page, envelopes, pr
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const inventory = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => client.listTools(cursor ? { cursor } : undefined, { signal }) });
+    const inventory = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
     const guard = createMcpToolCallGuard(inventory);
     const invoke = async (name: string) => {
       guard.assertCallable(name);

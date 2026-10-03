@@ -1,10 +1,10 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
-import { listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 
 /** Inspect only an initialized, still-owned client. Never consult another connection's cache. */
 export async function inspectInitializedMcpStatus(
-  client: Pick<Client, "getServerCapabilities" | "listTools">,
+  client: Pick<Client, "getServerCapabilities" | "request">,
   isCurrent: () => boolean,
 ): Promise<McpStatus> {
   const assertCurrent = () => {
@@ -20,7 +20,7 @@ export async function inspectInitializedMcpStatus(
     // method they never advertised merely to test their connection.
     const tools = capabilities?.tools === undefined ? [] : await listMcpToolInventory({
       assertCurrent,
-      listPage: (cursor, signal) => client.listTools(cursor === undefined ? undefined : { cursor }, { signal }),
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
     });
     assertCurrent();
     return { connected: true, toolCount: tools.length, tools: tools.map(({ name }) => name), serverCapabilities };

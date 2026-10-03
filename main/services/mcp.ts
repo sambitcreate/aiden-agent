@@ -1,7 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
-import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory } from "./mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -267,7 +267,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
         const tools = await listMcpToolInventory({
           signal: operationSignal,
           assertCurrent: isCurrent,
-          listPage: (cursor, pageSignal) => client.listTools(cursor === undefined ? undefined : { cursor }, botMcpRequestOptions(pageSignal)),
+          listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, botMcpRequestOptions(pageSignal)),
         });
         isCurrent();
         return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
@@ -402,7 +402,7 @@ class McpManager {
           lease.assertCurrent();
           if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
         },
-        listPage: (cursor, pageSignal) => client.listTools(cursor === undefined ? undefined : { cursor }, { signal: pageSignal }),
+        listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal }),
       }) as McpToolInfo[] : [],
       resources: Boolean(client.getServerCapabilities()?.resources),
       instructions: client.getInstructions(),
