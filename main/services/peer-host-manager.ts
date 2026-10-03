@@ -55,8 +55,6 @@ export const PEER_STABLE_MS = 30_000;
 /** Resume, unlock and network changes within this window cause one reconnect. */
 export const PEER_WAKE_COALESCE_MS = 500;
 
-const TERMINAL_RUN_STATES = new Set(["done", "failed", "cancelled"]);
-
 /** The registry surface the manager drives; `PeerHostRegistry` satisfies it. */
 export interface PeerManagerRegistry {
   list(): Promise<PeerHostView[]>;
@@ -188,6 +186,8 @@ export class PeerHostManager {
   private readonly runs: PeerRunSubscriptions;
   private readonly waiters = new Map<PeerRunStream, () => void>();
   private readonly dropped = new WeakSet<PeerRunStream>();
+  /** The newest run the feed announced for a chat stream, kept until it probes. */
+  private readonly announced = new WeakMap<PeerRunStream, string>();
   private readonly now: () => number;
   private readonly random: () => number;
   private readonly timers: PeerRunTimers;
@@ -293,6 +293,8 @@ export class PeerHostManager {
       const code = BLOCKED_CODES[sup.state.reason];
       return { ok: false, error: { code, message: new PeerTransportError(code).message } };
     }
+    // Only the connection that admitted the request may be blocked by its failure.
+    const admitted = sup?.controller;
     const record = operation as Record<string, unknown>;
     let raw: unknown;
     try {
@@ -303,8 +305,14 @@ export class PeerHostManager {
         record.operation === "attachmentContent" ? { binary: true } : {},
       );
     } catch (error) {
-      const current = this.supervisors.get(id);
-      if (current && blockedReason(error)) this.fail(current, current.generation, error);
+      if (
+        sup &&
+        blockedReason(error) &&
+        this.supervisors.get(id) === sup &&
+        sup.controller === admitted &&
+        !admitted.signal.aborted
+      )
+        this.fail(sup, sup.generation, error);
       const ambiguous =
         (request.method ?? "GET") !== "GET" &&
         error instanceof PeerTransportError &&
@@ -675,12 +683,18 @@ export class PeerHostManager {
     }
   }
 
-  /** A chat's newer run wakes its parked chat-target stream. */
+  /**
+   * A chat's other run wakes its parked chat-target stream, even when the feed
+   * first reports that run already finished. The announcement is remembered
+   * so one that lands before the stream parks still makes it probe.
+   */
   private feedRun(hostId: string, run: PeerRunState): void {
-    if (TERMINAL_RUN_STATES.has(run.state)) return;
-    for (const stream of this.runs.forHost(hostId))
-      if ("chatId" in stream.target && stream.chatId === run.chatId && stream.runId !== run.runId)
-        this.wakeStream(stream);
+    for (const stream of this.runs.forHost(hostId)) {
+      if (!("chatId" in stream.target) || stream.chatId !== run.chatId || stream.runId === run.runId)
+        continue;
+      this.announced.set(stream, run.runId);
+      this.wakeStream(stream);
+    }
   }
 
   // Live run streams --------------------------------------------------------
@@ -766,14 +780,19 @@ export class PeerHostManager {
         return;
       }
       if (parked) {
-        this.setStreamState(stream, "idle");
-        await this.wait(stream);
+        const next = this.announced.get(stream);
+        if (next === undefined || next === stream.runId) {
+          this.setStreamState(stream, "idle");
+          await this.wait(stream);
+        }
         parked = false;
         probe = true;
         continue;
       }
       const generation = sup.generation;
       const resume = !probe && stream.runId !== null;
+      // A probe reads the chat's current run, which covers every earlier announcement.
+      if (!resume) this.announced.delete(stream);
       const link = linkedController(sup.controller.signal);
       stream.controller = link.controller;
       let failure: unknown;

@@ -153,6 +153,8 @@ class FakeHost {
   json: (input: PeerRequest) => Promise<unknown> = async () => {
     throw new PeerTransportError("request_failed", 404, { code: "not_found", retryable: false });
   };
+  /** Holds a finished stream's resolution until the returned promise settles. */
+  endGate: ((path: string) => Promise<void> | undefined) | undefined;
   private readonly device = {
     id: "desktop",
     capabilities: new Set<AidenRemoteCapability>(CAPABILITIES as AidenRemoteCapability[]),
@@ -249,8 +251,13 @@ class FakeHost {
           else pending.push(chunk);
         },
         end: () => {
-          if (opened) finish(() => resolve({ reason: "eof" }));
-          else endPending = true;
+          if (!opened) {
+            endPending = true;
+            return;
+          }
+          const gate = this.endGate?.(input.path);
+          if (gate) void gate.then(() => finish(() => resolve({ reason: "eof" })));
+          else finish(() => resolve({ reason: "eof" }));
         },
         destroy: () => finish(() => reject(new PeerTransportError("unavailable"))),
       });
@@ -613,6 +620,30 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     assert.ok(next.length > 0);
     assert.deepEqual(new Set(next.map((event) => event.streamId)), new Set(["run-2"]));
     assert.match(JSON.stringify(next), /second answer/);
+
+    // Repeated terminal updates for the run already shown change nothing.
+    host.runs.publish("run-2", "chat:done", { chat: { messages: [] } });
+    await settle();
+    await host.noteRun("run-2");
+    await settle();
+    assert.equal(streamState(harness.frames("host_a")), "idle");
+    const probes = () => host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length;
+    const probed = probes();
+    const shown = harness.events("host_a").length;
+
+    // A short run can first appear in the feed already finished; it is still followed.
+    host.runs.begin({ runId: "run-3", chatId: "chat-1", origin: "renderer" });
+    host.runs.publish("run-3", "chat:delta", { delta: "third answer" });
+    host.runs.publish("run-3", "chat:done", { chat: { messages: [] } });
+    await host.noteRun("run-3");
+    await settle();
+    assert.equal(probes(), probed + 1);
+    const third = harness.events("host_a").slice(shown);
+    assert.deepEqual(new Set(third.map((event) => event.streamId)), new Set(["run-3"]));
+    assert.match(JSON.stringify(third), /third answer/);
+    assert.equal(last(third)?.type, "run.ended");
+    assert.equal(streamState(harness.frames("host_a")), "idle");
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 2, "no reconnect was needed");
   } finally {
     harness.close();
   }
@@ -765,6 +796,80 @@ test("an ambiguous mutation is reconciled with one read and never replayed", asy
     const invalid = await harness.manager.call("host_a", { operation: "send", resourceId: "../x" });
     assert.equal(!invalid.ok && invalid.error.code, "invalid_request");
     assert.equal(harness.status("host_a").state.kind, "connected", "a failed operation does not drop the host");
+  } finally {
+    harness.close();
+  }
+});
+
+test("a newer run announced while the previous stream is still closing is followed", async () => {
+  const host = new FakeHost("host_a", "Plans");
+  host.runs.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const harness = setup([host]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    await harness.manager.runSubscribe("host_a", { chatId: "chat-1" }, 0, "window-1");
+    await settle();
+    let release!: () => void;
+    host.endGate = (path) =>
+      path === "/chats/chat-1/runs/current/events"
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : undefined;
+    host.runs.publish("run-1", "chat:done", { chat: { messages: [] } });
+    await settle();
+    assert.equal(last(harness.events("host_a"))?.type, "run.ended");
+
+    // Run 2 is announced after run 1's terminal frame, before its request settles.
+    host.endGate = undefined;
+    host.runs.begin({ runId: "run-2", chatId: "chat-1", origin: "renderer" });
+    host.runs.publish("run-2", "chat:delta", { delta: "second answer" });
+    await host.noteRun("run-2");
+    await settle();
+    release();
+    await settle();
+
+    const next = harness.events("host_a").filter((event) => event.streamId === "run-2");
+    assert.match(JSON.stringify(next), /second answer/);
+    assert.equal(streamState(harness.frames("host_a")), "streaming");
+  } finally {
+    harness.close();
+  }
+});
+
+test("a request admitted by a superseded connection cannot block the reconnected host", async () => {
+  const host = new FakeHost("host_a", "Plans");
+  const harness = setup([host]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    let reject!: (error: unknown) => void;
+    host.json = () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      });
+    const held = harness.manager.call("host_a", { operation: "summaries" });
+    await settle();
+
+    harness.manager.wake();
+    await harness.advance(PEER_WAKE_COALESCE_MS);
+    const reconnected = harness.status("host_a");
+    assert.equal(reconnected.state.kind, "connected");
+
+    reject(new PeerTransportError("authentication_required", 401));
+    const outcome = await held;
+    assert.equal(!outcome.ok && outcome.error.code, "authentication_required", "the caller still learns why");
+    await harness.advance(60_000);
+    assert.equal(harness.status("host_a").state.kind, "connected");
+    assert.equal(harness.status("host_a").generation, reconnected.generation);
+
+    // The same failure on the current connection does block it.
+    host.json = async () => {
+      throw new PeerTransportError("authentication_required", 401);
+    };
+    await harness.manager.call("host_a", { operation: "summaries" });
+    assert.deepEqual(harness.status("host_a").state, { kind: "blocked", reason: "auth" });
   } finally {
     harness.close();
   }
