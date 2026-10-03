@@ -10,7 +10,7 @@ import {
   SelectItem,
   Dialog,
 } from "../ui";
-import type { AppControlPolicy } from "../../shared/app-controls";
+import { resolveAppControlPolicy, type AppControlPolicy } from "../../shared/app-controls";
 export function AppControlSettings() {
   const [policy, setPolicy] = React.useState<AppControlPolicy>("safe");
   const [remote, setRemote] = React.useState(false);
@@ -24,10 +24,7 @@ export function AppControlSettings() {
       try {
         const settings = await settingsApi.get();
         if (current) {
-          setPolicy(
-            settings.appControlPolicy ??
-              (settings.assistant?.settingsPermission === "none" ? "disabled" : "safe"),
-          );
+          setPolicy(resolveAppControlPolicy(settings));
           setRemote(settings.remoteAppControlsEnabled === true);
           setReady(true);
         }
@@ -52,7 +49,7 @@ export function AppControlSettings() {
     setError("");
     try {
       const settings = await settingsApi.set(patch);
-      setPolicy(settings.appControlPolicy ?? "safe");
+      setPolicy(resolveAppControlPolicy(settings));
       setRemote(settings.remoteAppControlsEnabled === true);
     } catch {
       setError("App-control settings could not be saved.");
@@ -126,7 +123,7 @@ export function AppControlSettings() {
             onClick={() => {
               void settingsApi.get().then(
                 (settings) => {
-                  setPolicy(settings.appControlPolicy ?? "safe");
+                  setPolicy(resolveAppControlPolicy(settings));
                   setRemote(settings.remoteAppControlsEnabled === true);
                   setReady(true);
                   setError("");

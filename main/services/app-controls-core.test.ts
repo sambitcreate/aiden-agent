@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { DEFAULT_ASSISTANT_CONFIG } from "../handlers/assistant-parse.js";
 import test from "node:test";
 import {
   AppControlsService,
@@ -211,6 +212,15 @@ test("authorization is rechecked after the durable intent and unknown policy fai
   );
   assert.equal(f.commits(), 0);
   assert.equal((await f.service.apply(f.operation(), f.context)).status, "outcome_unknown");
+  const legacy = fixture();
+  legacy.state.settings.assistant = { ...DEFAULT_ASSISTANT_CONFIG, settingsPermission: "none" };
+  assert.equal((await legacy.service.snapshot("memory", legacy.context)).policy, "disabled");
+  legacy.state.settings.remoteAppControlsEnabled = true;
+  assert.equal((await legacy.service.snapshot("memory", legacy.context)).policy, "disabled");
+  await assert.rejects(legacy.service.apply(legacy.operation(), legacy.context), /not authorized/u);
+  assert.equal(legacy.commits(), 0);
+  legacy.state.settings.appControlPolicy = "safe";
+  assert.equal((await legacy.service.snapshot("memory", legacy.context)).policy, "safe");
   const unknown = fixture();
   unknown.state.settings.appControlPolicy = "future-policy" as "safe";
   await assert.rejects(

@@ -14,6 +14,16 @@ export const APP_CONTROL_TOPICS = ["appearance", "memory", "web-search", "skills
 export type AppControlTopic = (typeof APP_CONTROL_TOPICS)[number];
 export type AppControlValue = boolean | string;
 export type AppControlPolicy = "disabled" | "ask" | "safe";
+/** Preserve explicit legacy denial and fail closed for unsupported policy values. */
+export function resolveAppControlPolicy(settings: {
+  appControlPolicy?: unknown;
+  assistant?: { settingsPermission?: unknown };
+}): AppControlPolicy {
+  if (settings.appControlPolicy === undefined && settings.assistant?.settingsPermission === "none")
+    return "disabled";
+  return settings.appControlPolicy === undefined || settings.appControlPolicy === "safe"
+    ? "safe" : settings.appControlPolicy === "ask" ? "ask" : "disabled";
+}
 export interface AppControlPanel {
   version: 1;
   id: string;

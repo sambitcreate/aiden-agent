@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import {
   parseAppControlOperation,
+  resolveAppControlPolicy,
   type AppControlId,
   type AppControlOperation,
   type AppControlPolicy,
@@ -48,13 +49,7 @@ export interface AppControlDependencies {
   onChanged(): void;
 }
 export function appControlPolicy(settings: AppSettings): AppControlPolicy {
-  if (settings.appControlPolicy === undefined && settings.assistant?.settingsPermission === "none")
-    return "disabled";
-  return settings.appControlPolicy === undefined || settings.appControlPolicy === "safe"
-    ? "safe"
-    : settings.appControlPolicy === "ask"
-      ? "ask"
-      : "disabled";
+  return resolveAppControlPolicy(settings);
 }
 export function appControlValue(state: AppControlState, control: AppControlId): AppControlValue {
   const appearance = normalizeAppearanceConfig(state.settings.appearance);
