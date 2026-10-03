@@ -313,3 +313,39 @@ test("disabling through IPC stops supervision and drops the host's rows", async 
     manager.close();
   }
 });
+
+test("the first status and feed replies describe the loaded hosts, not an empty list", async () => {
+  const registry = new FakeRegistry();
+  registry.view = { ...registry.view, enabled: false };
+  let load!: () => void;
+  const loaded = new Promise<void>((resolve) => {
+    load = resolve;
+  });
+  const list = registry.list;
+  registry.list = async () => {
+    await loaded;
+    return list();
+  };
+  let manager: PeerHostManager | undefined;
+  const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();
+  registerPeerHostLiveHandlers<FakeEvent>({
+    handle: (channel, handler) => handlers.set(channel, handler),
+    owner: (event) => event.document!,
+    // Built on first use, as in the app.
+    manager: () =>
+      (manager ??= new PeerHostManager({ registry, broadcast: () => {}, timers: new FakeTimers() })),
+  });
+  try {
+    const window = new FakeDocument("1:main");
+    const statuses = handlers.get("remote:peerHostStatuses")!({ document: window });
+    const feed = handlers.get("remote:peerHostFeed")!({ document: window }, "host_a");
+    load();
+    assert.deepEqual(await statuses, [
+      { hostId: "host_a", generation: 0, state: { kind: "disabled" }, feed: "off", stale: false },
+    ]);
+    assert.equal(await feed, null);
+    assert.equal(registry.streams.length + registry.reads.length, 0, "a disabled host makes no traffic");
+  } finally {
+    manager?.close();
+  }
+});

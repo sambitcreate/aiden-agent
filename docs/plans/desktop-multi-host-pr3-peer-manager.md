@@ -152,8 +152,10 @@ endpoints.
     ahead is applied, while one that does not advance is ignored. An epoch change resets.
 17. **Chat targets replay their current run.** A `{chatId}` target ignores `afterSequence` (the
     caller cannot know which run it names) and replays the current run's buffer. It parks as
-    `idle` after the run ends and probes again when the feed announces a newer run for the chat
-    or the host reconnects.
+    `idle` after the run ends and probes again when the feed announces another run for the chat
+    (even one first reported already finished, since the host coalesces states) or the host
+    reconnects. An announcement that lands while the previous stream is still closing is
+    remembered, so the stream probes instead of parking.
 18. **The feed is the liveness signal.** A run-stream network error retries that stream with
     backoff but never fails the host; only `/server` and the feed move the supervisor.
 19. **Disabling drops the cache.** A disabled or removed host's rows and streams are dropped
@@ -163,6 +165,13 @@ endpoints.
 21. **The SSE budget is rolling.** The peer event-frame byte and frame budget bounds what arrives
     between two frames that carry an SSE `id` (heartbeats and partial snapshot chunks). A committed
     frame releases it, so a long-lived feed is limited by its session cap, not its lifetime volume.
+22. **Unary failures are fenced to their connection.** A blocking error (auth, identity,
+    protocol) from an operation blocks the host only if the connection that admitted the request
+    is still current. A request that outlives a wake or reconnect still reports its error to its
+    caller, but it cannot block the new connection.
+23. **The first status reply waits for the host list.** `remote:peerHostStatuses` and
+    `remote:peerHostFeed` await the lazily built manager's first registry read, so a
+    snapshot-then-notification consumer sees every paired host, disabled ones included.
 
 ## Exit criteria (tests)
 

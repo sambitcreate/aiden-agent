@@ -3,6 +3,7 @@ import type { PeerHostManager } from "../services/peer-host-manager.js";
 
 export type PeerHostLiveManager = Pick<
   PeerHostManager,
+  | "whenReady"
   | "statuses"
   | "feedSnapshot"
   | "call"
@@ -66,14 +67,19 @@ export function registerPeerHostLiveHandlers<Event>(
     return value;
   };
 
-  handle("remote:peerHostStatuses", (event) => {
+  // The first call builds the manager; answer once it has read the paired hosts.
+  handle("remote:peerHostStatuses", async (event) => {
     active(event);
-    return dependencies.manager().statuses();
+    const manager = dependencies.manager();
+    await manager.whenReady();
+    return manager.statuses();
   });
 
-  handle("remote:peerHostFeed", (event, hostId) => {
+  handle("remote:peerHostFeed", async (event, hostId) => {
     active(event);
-    return dependencies.manager().feedSnapshot(hostId);
+    const manager = dependencies.manager();
+    await manager.whenReady();
+    return manager.feedSnapshot(hostId);
   });
 
   handle("remote:peerCall", (event, hostId, operation) => {
