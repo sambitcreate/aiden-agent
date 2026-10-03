@@ -79,6 +79,7 @@
         "main/services/gemini-live-transcription-core.test.ts",
         "main/services/generation-bound-connection-cache.test.ts",
         "main/services/generation-context.test.ts",
+        "main/services/generation-delta-coalescer.test.ts",
         "main/services/generation-git-context.test.ts",
         "main/services/generation-emergency-outcome.test.ts",
         "main/services/generation-initialization-terminal.test.ts",

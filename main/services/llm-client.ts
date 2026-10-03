@@ -383,6 +383,7 @@ import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
+import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -620,6 +621,8 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
 
+const deltaCoalescer = new GenerationDeltaCoalescer();
+
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
   if (chatId && channel === "chat:todo") {
@@ -636,7 +639,17 @@ function sendGeneration(streamId: string, channel: NotificationChannel, payload:
     recordRunNotification(hostRunRegistry, streamId, channel, payload);
   }
   const owner = ownerForStream(streamId);
-  if (!owner || owner.isDestroyed()) return false;
+  if (!owner || owner.isDestroyed()) {
+    deltaCoalescer.discard(streamId);
+    return false;
+  }
+  // Renderer documents receive text and reasoning deltas in short batches;
+  // paired devices and headless owners keep per-delta delivery.
+  if (owner.kind !== "remote" && owner.id !== 0) {
+    if (deltaCoalescer.push(streamId, channel, payload, owner)) return true;
+  }
+  // Every other notification follows the deltas that preceded it.
+  deltaCoalescer.flush(streamId);
   try {
     owner.send(channel, payload);
     return true;
