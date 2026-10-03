@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { crc32 } from "node:zlib";
 import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "./mcp-tool-identity.js";
 import { executeMcpAgentTool, mcpAgentToolResult, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_IMAGES, MAX_MCP_IMAGE_BYTES } from "./mcp-tool-result.js";
 import { projectMessagesForModel } from "./generation-context.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+/** The same PNG with a one-byte ancillary chunk, so its encoding ends in a single "=". */
+const PADDED = (() => {
+  const png = Buffer.from(PNG, "base64");
+  const body = Buffer.from("teXt!", "latin1");
+  const chunk = Buffer.concat([Buffer.from([0, 0, 0, 1]), body, Buffer.alloc(4)]);
+  chunk.writeUInt32BE(crc32(body), 9);
+  return Buffer.concat([png.subarray(0, -12), chunk, png.subarray(-12)]).toString("base64");
+})();
 
 test("MCP structured results retain exact JSON values independently of their text summary", async () => {
   const payload = { answer: 42, nested: [{ enabled: true, label: "x".repeat(3000) }], empty: null };
@@ -30,9 +39,12 @@ test("MCP images are validated, bounded and projected out for text-only models",
   if (projected.role === "toolResult") assert.ok(projected.content.every((part) => part.type === "text"));
   for (const invalid of [{ ...block, data: "!!!!" }, { ...block, mimeType: "image/jpeg" },
     { ...block, data: Buffer.alloc(MAX_MCP_IMAGE_BYTES + 1).toString("base64") },
-    { ...block, data: Buffer.from(PNG, "base64").subarray(0, 24).toString("base64") }]) {
+    { ...block, data: Buffer.from(PNG, "base64").subarray(0, 24).toString("base64") },
+    // Non-canonical padding bits decode to the same bytes but are not the canonical encoding.
+    { ...block, data: `${PNG.slice(0, -3)}h==` }, { ...block, data: `${PADDED.slice(0, -2)}${String.fromCharCode(PADDED.charCodeAt(PADDED.length - 2) + 1)}=` }]) {
     assert.equal(mcpAgentToolResult({ content: [invalid] }).content.length, 1);
   }
+  assert.equal(mcpAgentToolResult({ content: [{ ...block, data: PADDED }] }).content[1]?.type, "image");
   const many = mcpAgentToolResult({ content: Array.from({ length: 10 }, () => ({ ...block })) });
   assert.equal(many.content.filter((part) => part.type === "image").length, MAX_MCP_IMAGES);
   assert.throws(() => mcpAgentToolResult({ content: [block], isError: true }), /image attached/u);

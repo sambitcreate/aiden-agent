@@ -422,7 +422,7 @@ class McpManager {
     const { tools } = metadata;
     lease.assertCurrent();
     const callGuard = createMcpToolCallGuard(tools);
-    const agentTools = tools.map((t): AgentTool => markToolOutputSource(Object.assign<AgentTool, { codemode: boolean }>({
+    const agentTools = tools.map((t): AgentTool => markToolOutputSource({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,
@@ -448,20 +448,20 @@ class McpManager {
           return result;
         });
       },
-    }, { codemode: true })));
+    }));
     if (metadata.resources) {
       agentTools.push(createMcpResourceTool(server, client, lease));
     }
     const instructions = snapshotMcpServerInstructions(server, agentTools, metadata.instructions);
-    for (const tool of agentTools) Object.assign(tool, {
-      codemode: true,
-      discovery: {
-        ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
-        namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
-        label: server.name.slice(0, 64) || "MCP service",
-        ...(instructions ? { instructions: instructions.instructions } : {}),
-      },
+    // One frozen namespace record per server: every tool references it, so the
+    // server's guidance is held and validated once rather than per tool.
+    const discovery = Object.freeze({
+      ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
+      namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
+      label: server.name.slice(0, 64) || "MCP service",
+      ...(instructions ? { instructions: instructions.instructions } : {}),
     });
+    for (const tool of agentTools) Object.assign(tool, { codemode: true, discovery });
     return { tools: agentTools, instructions };
   }
 

@@ -6,11 +6,11 @@ import {
   type ClassifierContext,
   type ImageContent,
   type JsonObject,
-  type JsonValue,
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { validateDisplayImageDimensions } from "./display-image-extension.js";
+import { hasCanonicalBase64Padding, validateDisplayImageDimensions } from "./display-image-extension.js";
+import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Parent codemode results aggregate child usage; only provider operations add turn totals. */
 export function piModelOperationUsage(
@@ -35,6 +35,11 @@ export interface PiModelToolsHost {
     id: string,
     signal?: AbortSignal,
   ): Promise<{ name: string; image: ImageContent }>;
+  /** Resolve several IDs against one inventory read, in request order. */
+  resolveImages?(
+    ids: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<{ name: string; image: ImageContent }[]>;
   models: Pick<
     Models,
     "getAvailableOfType" | "getModelOfType" | "generateImages" | "classify"
@@ -89,63 +94,15 @@ function fields(
   return value;
 }
 function jsonObject(value: unknown, label: string): JsonObject {
-  let nodes = 0,
-    bytes = 0;
-  const seen = new Set<object>();
-  function copy(entry: unknown, depth: number): JsonValue {
-    if (++nodes > 4096 || depth > 16 || bytes > MAX_JSON_BYTES)
-      throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-    if (entry === null || typeof entry === "boolean") {
-      bytes += 5;
-      return entry;
-    }
-    if (typeof entry === "number" && Number.isFinite(entry)) {
-      bytes += 32;
-      return entry;
-    }
-    if (typeof entry === "string") {
-      bytes += Buffer.byteLength(entry, "utf8") + 2;
-      if (bytes > MAX_JSON_BYTES)
-        throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-      return entry;
-    }
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      seen.has(entry) ||
-      (!Array.isArray(entry) &&
-        ![null, Object.prototype].includes(Object.getPrototypeOf(entry)))
-    )
-      throw new Error(`Invalid ${label}: expected plain JSON.`);
-    seen.add(entry);
-    const result: JsonObject | JsonValue[] = Array.isArray(entry)
-      ? []
-      : Object.create(null);
-    for (const key in entry) {
-      if (!own(entry, key)) continue;
-      bytes += Buffer.byteLength(key, "utf8") + 4;
-      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
-      if (!descriptor || !("value" in descriptor))
-        throw new Error(`Invalid ${label}: accessors are not JSON.`);
-      const child = copy(descriptor.value, depth + 1);
-      if (Array.isArray(result)) {
-        if (key !== String(result.length))
-          throw new Error(`Invalid ${label} array.`);
-        result.push(child);
-      } else result[key] = child;
-    }
-    if (Array.isArray(entry) && (result as JsonValue[]).length !== entry.length)
-      throw new Error(`Invalid ${label} sparse array.`);
-    seen.delete(entry);
-    return result;
-  }
-  const output = copy(value, 0);
+  const output = copyBoundedJson(value, { maxNodes: 4096, maxDepth: 16, maxSize: MAX_JSON_BYTES, measure: utf8Size, ordinaryObjects: true });
+  if (output === undefined)
+    throw new Error(`Invalid ${label}: expected plain JSON within its size, depth and node limits.`);
   if (!record(output))
     throw new Error(`Invalid ${label}: expected a JSON object.`);
-  const serialized = JSON.stringify(output);
-  if (Buffer.byteLength(serialized, "utf8") > MAX_JSON_BYTES)
+  // The copy's size charge omits escape expansion; measure the exact encoding.
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_JSON_BYTES)
     throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-  return JSON.parse(serialized) as JsonObject;
+  return output as JsonObject;
 }
 function questions(value: unknown): Record<string, ClassifierQuestion> {
   const input = jsonObject(value, "questions");
@@ -247,13 +204,16 @@ function errorResult(message: string, usage?: Usage): AgentToolResult<null> {
     ...(usage ? { usage } : {}),
   };
 }
-function validImages(output: unknown): {
+/** One decode per image: callers reuse the decoded byte count and pixel area. */
+function validImages(output: unknown, name = "Generated image"): {
   images: ImageContent[];
+  sizes: { bytes: number; pixels: number }[];
   description: string;
 } {
   if (!Array.isArray(output) || output.length > 64)
     throw new Error("Invalid image-generation output.");
   const images: ImageContent[] = [];
+  const sizes: { bytes: number; pixels: number }[] = [];
   let bytes = 0,
     description = "";
   for (const raw of output) {
@@ -277,24 +237,25 @@ function validImages(output: unknown): {
       !/^[A-Za-z0-9+/]+={0,2}$/u.test(raw.data)
     )
       throw new Error("Invalid generated image data.");
+    if (!hasCanonicalBase64Padding(raw.data))
+      throw new Error("Invalid generated image encoding.");
     const data = Buffer.from(raw.data, "base64");
     bytes += data.length;
     if (bytes > MAX_IMAGE_BYTES || images.length >= MAX_IMAGES)
       throw new Error(
         "Generated images exceed the 4-image or 8 MiB output limit.",
       );
-    if (data.toString("base64") !== raw.data)
-      throw new Error("Invalid generated image encoding.");
-    validateDisplayImageDimensions(data, raw.mimeType, "Generated image");
+    const size = validateDisplayImageDimensions(data, raw.mimeType, name);
     images.push({ type: "image", data: raw.data, mimeType: raw.mimeType });
+    sizes.push({ bytes: data.length, pixels: size.width * size.height });
   }
   if (!images.length)
     throw new Error("The model returned no generated images.");
-  return { images, description };
+  return { images, sizes, description };
 }
 /** Resolve only host-owned current-chat IDs, and validate the whole batch before dispatch. */
 export async function resolvePiModelImageInputs(
-  host: Pick<PiModelToolsHost, "resolveImage">,
+  host: Pick<PiModelToolsHost, "resolveImage" | "resolveImages">,
   value: unknown,
   signal?: AbortSignal,
 ): Promise<{ images: ImageContent[]; references: PiModelImageReference[] }> {
@@ -305,28 +266,26 @@ export async function resolvePiModelImageInputs(
   if (new Set(ids).size !== ids.length)
     throw new Error("Reference image IDs must be unique.");
   if (!ids.length) return { images: [], references: [] };
-  if (!host.resolveImage)
+  if (!host.resolveImage && !host.resolveImages)
     throw new Error("Reference images are unavailable in this chat.");
-  const resolved: { id: string; name: string; image: ImageContent }[] = [];
-  for (const id of ids) {
-    signal?.throwIfAborted();
-    const result = await host.resolveImage(id, signal);
-    signal?.throwIfAborted();
-    resolved.push({
-      id,
-      name: text(result.name, 256, "reference image name"),
-      image: result.image,
-    });
-  }
-  const { images } = validImages(resolved.map((item) => item.image));
-  const pixels = images.reduce((sum, item) => {
-    const size = validateDisplayImageDimensions(
-      Buffer.from(item.data, "base64"),
-      item.mimeType,
-      "Reference image",
-    );
-    return sum + size.width * size.height;
-  }, 0);
+  signal?.throwIfAborted();
+  // A batch-capable host reads the chat inventory once for every ID.
+  const results = host.resolveImages
+    ? await host.resolveImages(ids, signal)
+    : await (async () => {
+        const each: { name: string; image: ImageContent }[] = [];
+        for (const id of ids) {
+          signal?.throwIfAborted();
+          each.push(await host.resolveImage!(id, signal));
+        }
+        return each;
+      })();
+  signal?.throwIfAborted();
+  if (results.length !== ids.length)
+    throw new Error("Reference images could not be resolved.");
+  const names = results.map((result) => text(result.name, 256, "reference image name"));
+  const { images, sizes } = validImages(results.map((result) => result.image), "Reference image");
+  const pixels = sizes.reduce((sum, size) => sum + size.pixels, 0);
   if (pixels > 40_000_000)
     throw new Error(
       "Reference images exceed the 40-million decoded-pixel limit.",
@@ -334,10 +293,10 @@ export async function resolvePiModelImageInputs(
   return {
     images,
     references: images.map((image, index) => ({
-      id: resolved[index]!.id,
-      name: resolved[index]!.name,
+      id: ids[index]!,
+      name: names[index]!,
       mimeType: image.mimeType,
-      bytes: Buffer.from(image.data, "base64").length,
+      bytes: sizes[index]!.bytes,
     })),
   };
 }

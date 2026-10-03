@@ -349,6 +349,17 @@ export function displayImageDimensions(
   return undefined;
 }
 
+/**
+ * After the strict alphabet test and a length that is a multiple of four, the
+ * only non-canonical base64 left is a set bit in the unused low bits before
+ * the padding. Checking that one character replaces a full re-encode.
+ */
+export function hasCanonicalBase64Padding(data: string): boolean {
+  if (data.endsWith("==")) return "AQgw".includes(data.charAt(data.length - 3));
+  if (data.endsWith("=")) return "AEIMQUYcgkosw048".includes(data.charAt(data.length - 2));
+  return true;
+}
+
 export function validateDisplayImageDimensions(
   bytes: Buffer,
   mimeType: string,

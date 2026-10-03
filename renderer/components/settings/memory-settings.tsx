@@ -1,10 +1,10 @@
 import { CompactionBudgetSettings } from "./compaction-budget-settings";
 import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
-import { settingsApi, workspacesApi } from "../../lib/ipc";
-import { queryKeys, useSettings, useWorkspaces, useProviders, useCodexProviderStatus } from "../../lib/queries";
+import { providersApi, settingsApi, workspacesApi } from "../../lib/ipc";
+import { queryKeys, useSettings, useWorkspaces, useProviders } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
 
 export function MemorySettings() {
@@ -12,7 +12,20 @@ export function MemorySettings() {
   const settings = useSettings();
   const workspaces = useWorkspaces();
   const providers = useProviders();
-  const codex = useCodexProviderStatus();
+  // Reuse Codex models already in the query cache without triggering an auth
+  // status request just because this page opened or regained focus.
+  const codexModels = useQuery({
+    queryKey: queryKeys.codexProviderStatus,
+    queryFn: () => providersApi.authStatus("openai-codex"),
+    enabled: false,
+  }).data?.models;
+  const budgetModelKeys = React.useMemo(
+    () => [
+      ...(providers.data ?? []).flatMap((provider) => provider.models.map((model) => `${provider.id}/${model}`)),
+      ...(codexModels ?? []).map((model) => `openai-codex/${model.id}`),
+    ],
+    [providers.data, codexModels],
+  );
   const [compactionSaving, setCompactionSaving] = React.useState(false);
   const [warmingSaving, setWarmingSaving] = React.useState(false);
   const warmingSavingRef = React.useRef(false);
@@ -134,17 +147,10 @@ export function MemorySettings() {
 
       <CompactionBudgetSettings
         overrides={settings.data?.compactionModelOverrides ?? {}}
-        modelKeys={[
-          ...(providers.data ?? []).flatMap((provider) => provider.models.map((model) => `${provider.id}/${model}`)),
-          ...(codex.data?.models ?? []).map((model) => `openai-codex/${model.id}`),
-        ]}
+        modelKeys={budgetModelKeys}
         disabled={settings.isLoading}
         onSave={async (modelKey: string, budget: CompactionModelBudget | undefined) => {
-          const current = await settingsApi.get();
-          const overrides = { ...current.compactionModelOverrides };
-          if (budget) overrides[modelKey] = budget;
-          else delete overrides[modelKey];
-          const saved = await settingsApi.set({ compactionModelOverrides: overrides });
+          const saved = await settingsApi.setCompactionModelBudget(modelKey, budget ?? null);
           queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
         }}
       />

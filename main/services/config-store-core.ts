@@ -1,4 +1,4 @@
-import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
@@ -257,6 +257,12 @@ function hasProviderCache(
 }
 
 export type ConfigStore = ReturnType<typeof createConfigStore>;
+
+/** Parsed compaction preferences; invalid stored overrides read as absent, as in `getSettings`. */
+export type CompactionSettingsSnapshot = Readonly<{
+  compactionEngine: CompactionEngine;
+  compactionModelOverrides: CompactionModelOverrides | undefined;
+}>;
 
 export function createConfigStore(
   configStores: PortableConfigStores,
@@ -617,6 +623,8 @@ export function createConfigStore(
     }, isCurrent);
   }
 
+  let compactionSnapshot: { source: SettingsShape; value: CompactionSettingsSnapshot } | undefined;
+
   async function mutateSettings<R>(
     mutation: (draft: SettingsShape) => R | Promise<R>,
     isCurrent: () => boolean = () => true,
@@ -698,6 +706,18 @@ export function createConfigStore(
       );
     },
 
+    /**
+     * Configured providers without credential presence. Callers that only need
+     * labels or deployment shape use this so a turn never walks the keychain.
+     */
+    async listStoredProviders(): Promise<StoredProvider[]> {
+      const config = await readPortable();
+      const cache = await readModelCache();
+      return config.providers.map((intent) =>
+        composeStoredProvider(intent, ownRecordEntry(cache.byProvider, intent.id)),
+      );
+    },
+
     async getProvider(id: string): Promise<StoredProvider | undefined> {
       const config = await readPortable();
       const intent = config.providers.find((p) => p.id === id);
@@ -760,6 +780,29 @@ export function createConfigStore(
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
       return runtimeSettingsFrom((await settingsStore.load()).settings);
+    },
+
+    /**
+     * The compaction preferences alone, for hot read paths such as the
+     * composer's context meter. The settings store replaces its cached document
+     * on every write or external reload, so the parsed snapshot is reused until
+     * the document identity changes instead of cloning all settings per call.
+     */
+    async getCompactionSettings(): Promise<CompactionSettingsSnapshot> {
+      await ensureSeeded();
+      const document = await settingsStore.load();
+      if (compactionSnapshot?.source !== document) {
+        let compactionModelOverrides: CompactionModelOverrides | undefined;
+        if (document.settings.compactionModelOverrides !== undefined) {
+          try { compactionModelOverrides = parseCompactionModelOverrides(document.settings.compactionModelOverrides); }
+          catch { compactionModelOverrides = undefined; }
+        }
+        compactionSnapshot = {
+          source: document,
+          value: Object.freeze({ compactionEngine: compactionEngineFrom(document.settings.compactionEngine), compactionModelOverrides }),
+        };
+      }
+      return compactionSnapshot.value;
     },
 
     /** Read the normalized Web Search document after startup migration. */
@@ -1009,6 +1052,30 @@ export function createConfigStore(
           modelId,
           level,
         );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /**
+     * Atomically set or clear one model's compaction budget against the stored
+     * overrides, so concurrent edits to other models are never lost. Stored
+     * overrides that no longer validate are left for the user to repair.
+     */
+    async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        const stored = config.settings.compactionModelOverrides;
+        let current: CompactionModelOverrides = {};
+        if (stored !== undefined) {
+          try { current = parseCompactionModelOverrides(stored); }
+          catch { throw new Error("Model compaction budgets are invalid; repair settings.json before changing them."); }
+        }
+        const next: Record<string, CompactionModelBudget> = { ...current };
+        if (budget === undefined || Object.keys(budget).length === 0) delete next[modelKey];
+        else next[modelKey] = budget;
+        const parsed = parseCompactionModelOverrides(next);
+        if (Object.keys(parsed).length === 0) delete config.settings.compactionModelOverrides;
+        else config.settings.compactionModelOverrides = parsed;
         return structuredClone(config.settings);
       });
       return runtimeSettingsFrom(saved);

@@ -340,6 +340,10 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
   setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
+  setCompactionModelBudget: (
+    modelKey: string,
+    budget: import("../shared/compaction").CompactionModelBudget | null,
+  ) => invoke<AppSettings>("settings:setCompactionModelBudget", modelKey, budget),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
   setProviderThinking: (

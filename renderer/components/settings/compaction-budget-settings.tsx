@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Button, Field, FieldSet, Input, Text } from "../ui";
-import { parseCompactionModelOverrides, type CompactionModelOverrides } from "../../shared/compaction";
+import { DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_RESERVE_TOKENS, parseCompactionModelOverrides, type CompactionModelOverrides } from "../../shared/compaction";
 
 export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSave }: {
   overrides: CompactionModelOverrides;
@@ -15,6 +15,7 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
   const [error, setError] = React.useState<string>();
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
+  const suggestions = React.useMemo(() => [...new Set([...Object.keys(overrides), ...modelKeys])], [overrides, modelKeys]);
   const choose = (key: string) => {
     setModelKey(key);
     if (Object.prototype.hasOwnProperty.call(overrides, key)) {
@@ -48,13 +49,13 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
     <FieldSet title="Model compaction budgets">
       <Field label="Model" description="Choose or enter an exact provider/model. Models with no override keep automatic defaults.">
         <Input aria-label="Model for compaction budget" list={listId} value={modelKey} onChange={(event) => choose(event.target.value)} placeholder="openai/gpt-6-sol" disabled={disabled || saving} />
-        <datalist id={listId}>{[...new Set([...Object.keys(overrides), ...modelKeys])].map((key) => <option key={key} value={key} />)}</datalist>
+        <datalist id={listId}>{suggestions.map((key) => <option key={key} value={key} />)}</datalist>
       </Field>
-      <Field label="Reserved tokens" description="Space for the compaction summary. Leave blank for 16,384 tokens.">
-        <Input aria-label="Compaction reserved tokens" type="number" min={2} max={10000000} step={1} placeholder="16384" value={reserve} onChange={(event) => setReserve(event.target.value)} disabled={disabled || saving} />
+      <Field label="Reserved tokens" description={`Space for the compaction summary. Leave blank for ${DEFAULT_COMPACTION_RESERVE_TOKENS.toLocaleString("en-US")} tokens.`}>
+        <Input aria-label="Compaction reserved tokens" type="number" min={2} max={10000000} step={1} placeholder={String(DEFAULT_COMPACTION_RESERVE_TOKENS)} value={reserve} onChange={(event) => setReserve(event.target.value)} disabled={disabled || saving} />
       </Field>
-      <Field label="Recent tokens" description="Recent conversation to retain. Leave blank for 20,000 tokens; zero allows summarizing all older context.">
-        <Input aria-label="Compaction recent tokens" type="number" min={0} max={10000000} step={1} placeholder="20000" value={recent} onChange={(event) => setRecent(event.target.value)} disabled={disabled || saving} />
+      <Field label="Recent tokens" description={`Recent conversation to retain. Leave blank for ${DEFAULT_COMPACTION_KEEP_RECENT_TOKENS.toLocaleString("en-US")} tokens; zero allows summarizing all older context.`}>
+        <Input aria-label="Compaction recent tokens" type="number" min={0} max={10000000} step={1} placeholder={String(DEFAULT_COMPACTION_KEEP_RECENT_TOKENS)} value={recent} onChange={(event) => setRecent(event.target.value)} disabled={disabled || saving} />
       </Field>
       <div className="flex flex-col gap-3 px-4 pb-4">
         <Text as="p" variant="small" color="secondary">Applies to new runs and manual compaction, including subagents using this model. Budgets are reduced to fit small model windows. Request safety reserves still apply.</Text>

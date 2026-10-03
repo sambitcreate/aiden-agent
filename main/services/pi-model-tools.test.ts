@@ -549,9 +549,13 @@ test("image references list metadata only and edit with current-chat images afte
   const attachment = referenceAttachment();
   const generated = referenceAttachment("generated-image");
   let current = [attachment];
+  let chatReads = 0;
   const references = createPiModelImageReferences({
     snapshot: current,
-    readCurrent: async () => current,
+    readCurrent: async () => {
+      chatReads++;
+      return current;
+    },
     generated: () => [generated],
   });
   const { models, controls } = fixture();
@@ -578,11 +582,14 @@ test("image references list metadata only and edit with current-chat images afte
     ...imageRequest,
     referenceImageIds: ["chat-image", "generated-image"],
   };
+  chatReads = 0;
   const summary = await references.disclosure(args);
   assert.match(summary, /2 reference images \(140 bytes total\)/);
   assert.match(summary, /Original.png \[chat-image\]/);
+  assert.equal(chatReads, 1, "disclosure reads the chat once for the whole batch");
   const result = await tools[1]!.execute("edit", args);
   assert.equal(result.isError, undefined);
+  assert.equal(chatReads, 2, "execution re-checks authority with one more read");
   assert.deepEqual(controls.imageContext, {
     input: [{ type: "text", text: imageRequest.prompt }, image, image],
   });

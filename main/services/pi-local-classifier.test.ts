@@ -60,6 +60,28 @@ test("only saved opt-in adds classifier inventory without chat pollution or star
   assert.equal(f.resolutions(), 0); assert.equal(f.requests.length, 0);
 });
 
+test("classifier inventory reads each opted-in provider once per listing and still honors revocation", async () => {
+  const second: StoredProvider = { ...provider, id: "custom:other", baseUrl: "http://localhost:9090/v1", models: ["mini"], modelMetadata: undefined };
+  const saved = new Map([provider, second].map((p) => [p.id, { ...structuredClone(p), models: p.id === provider.id ? ["qwen", "phi", "embedding"] : p.models }]));
+  const reads: string[] = [];
+  const facade = createLocalClassifierModels({
+    models: createModels(), providers: [...saved.values()],
+    getProvider: async (id) => { reads.push(id); return saved.get(id); },
+    resolveRuntime: async () => { throw new Error("Listing must not resolve credentials"); },
+  });
+  assert.deepEqual((await facade.models.getAvailableOfType("classifier")).map((m) => `${m.provider}/${m.id}`),
+    ["custom:llama/qwen", "custom:llama/phi", "custom:other/mini"]);
+  assert.deepEqual(reads.sort(), ["custom:llama", "custom:other"]);
+
+  reads.length = 0;
+  assert.deepEqual((await facade.models.getAvailableOfType("classifier", second.id)).map((m) => m.id), ["mini"]);
+  assert.deepEqual(reads, ["custom:other"], "a provider-scoped listing reads only that provider");
+
+  saved.set(provider.id, { ...saved.get(provider.id)!, models: ["qwen"] });
+  saved.set(second.id, { ...saved.get(second.id)!, llamaCppClassifierEnabled: false });
+  assert.deepEqual((await facade.models.getAvailableOfType("classifier")).map((m) => m.id), ["qwen"]);
+});
+
 test("real Pi classifier preserves proxy paths, reads current credentials and produces normalized answers", async () => {
   const f = fixture(); const model = f.model(); f.rotate("rotated-key");
   // A fabricated caller endpoint/header is never authority.
