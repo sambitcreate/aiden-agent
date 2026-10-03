@@ -39,7 +39,7 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
-import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { ConnectionsSettings } from "../components/settings/connections-settings";
 import { SimulatorSettings } from "../components/settings/simulator-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import {
@@ -96,7 +96,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   modelData: ModelDataSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
-  remoteAccess: RemoteAccessSettings,
+  remoteAccess: ConnectionsSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
   approvals: ToolApprovalSettings,
@@ -118,7 +118,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",
-  remoteAccess: "Pair your devices to use Aiden on the go.",
+  remoteAccess: "Use Aiden from your phone or another computer, or control your other computers from here.",
   websearch: "Choose how Aiden searches and reads the web.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",

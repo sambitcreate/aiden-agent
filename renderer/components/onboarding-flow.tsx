@@ -1274,7 +1274,7 @@ export function OnboardingFlow() {
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and tablet access starts off. After setup, choose Connect a device in
-                      Settings → Aiden On The Go; Aiden must stay running, and Tailscale is
+                      Settings → Connections; Aiden must stay running, and Tailscale is
                       optional.
                     </Text>
                   </div>

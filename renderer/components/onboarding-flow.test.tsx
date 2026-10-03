@@ -339,7 +339,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
-  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Connections/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",

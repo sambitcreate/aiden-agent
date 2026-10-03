@@ -50,7 +50,7 @@ test("guided phone setup asks once, enables access, and survives closing the mai
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" })
-    .getByRole("button", { name: "Aiden On The Go", exact: true })
+    .getByRole("button", { name: "Connections", exact: true })
     .click();
 
   const choices = page.getByRole("radiogroup", { name: "Where will you use Aiden?" });
