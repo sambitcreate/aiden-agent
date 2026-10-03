@@ -16,7 +16,7 @@ import { BotsView } from "./bots-view";
 import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
-import { RemoteChatPlaceholder } from "./remote-chat-placeholder";
+import { RemoteChatView } from "./remote-chat-view";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
@@ -124,7 +124,7 @@ const hostChatRoute = createRoute({
   path: "/host/$hostId/chat/$chatId",
   component: function HostChatRoute() {
     const { hostId, chatId } = hostChatRoute.useParams();
-    return <RemoteChatPlaceholder hostId={hostId} chatId={chatId} />;
+    return <RemoteChatView key={`${hostId}/${chatId}`} hostId={hostId} chatId={chatId} />;
   },
   staticData: { title: "Remote chat" },
 });

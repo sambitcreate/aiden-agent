@@ -91,7 +91,7 @@ export interface RemoteHostStatusListProps {
   onManage: () => void;
 }
 
-function RemoteHostStatusRow({
+export function RemoteHostStatusRow({
   host,
   onReconnect,
   onManage,
