@@ -82,3 +82,19 @@ merging `origin/main` into #299 and cascading each parent into its child.
 - **Deferred PR-301-6 / X-7** ("Context & caching" section + model picker):
   spans #301 and #304's prompt-cache controls, needs a new settings nav entry,
   e2e navigation updates and a picker component — not a contained change.
+
+## #304 `codex/pi-1-cache-warming`
+
+- **PR-304-1:** `pi-cache-warming.ts` `requestStarted` keeps only a shallow
+  `messages` snapshot and the live `model.cost` reference. The completion
+  callback checks `cacheWarmingEconomics` first; only then does it deep-clone the
+  context and cost and sha256 the model. `stop()` clears `run.context`, so a
+  cancelled or uneconomic run retains no transcript. Generations with warming
+  off already get no warmer (`canWarmForegroundChat`). The 60-minute
+  `MAX_AGE_MS` horizon is unchanged: a scheduled warm needs the prefix.
+- **PR-304-2 (partial):** removed the duplicate `current()` check in `refresh`.
+  Both `enabled()` reads stay, one on each side of credential resolution: the
+  first avoids a keychain read when warming is off, and the second fences a
+  toggle that lands during resolution.
+- Not done (not in scope): 304-3 (move the lifecycle wiring onto
+  `broadcastChatSettled`), 304-4 (regroup the test), 304-5 (onboarding note).
