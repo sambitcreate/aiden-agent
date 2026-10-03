@@ -706,6 +706,31 @@ test("MCP migration recovers a completed copy and refuses conflicting or invalid
   assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
 });
 
+test("MCP reads stay available while another process owns the Aiden MCP lease", async (t) => {
+  const dir = temporary(t), destination = join(dir, "aiden-mcp.json");
+  const server = { id: "kept", name: "Kept", enabled: true, transport: "stdio", command: "example" };
+  api.atomicJson(destination, [server]);
+  const release = api.acquireLease(destination);
+  try {
+    // CLI startup and `aiden mcp list` both read without anything to migrate,
+    // whether mcp.json is absent or holds native pi configuration.
+    const native = { mcpServers: { native: { command: "native" } } };
+    for (const legacy of [undefined, native]) {
+      if (legacy) api.atomicJson(join(dir, "mcp.json"), legacy);
+      api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+      assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["kept"]);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")), native);
+    // Writers and pending migrations still respect the owner.
+    await assert.rejects(api.mcpCommand(dir, ["remove", "kept"]), /Another Aiden process/);
+    api.atomicJson(join(dir, "mcp.json"), [server]);
+    assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /Another Aiden process/);
+    assert.equal(existsSync(join(dir, "mcp.json")), true);
+  } finally { release(); }
+  api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+});
+
 test("native settings keep Aiden header-only startup and persist one installation identity on demand", async (t) => {
   const dir = temporary(t);
   const settings = api.SettingsManager.create(dir, dir);
