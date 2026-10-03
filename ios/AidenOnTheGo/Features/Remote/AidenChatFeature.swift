@@ -5219,11 +5219,12 @@ private struct AidenActivityStepLine: View {
 
 private struct AidenActivityShimmerModifier: ViewModifier {
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let active: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if active && !reduceMotion {
+        if active && !reduceMotion && !lowPowerMode {
             content.overlay {
                 GeometryReader { proxy in
                     TimelineView(.animation(minimumInterval: 1 / 30)) { context in
