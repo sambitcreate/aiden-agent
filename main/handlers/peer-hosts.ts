@@ -1,8 +1,6 @@
 import { ipcMain } from "../platform.js";
-import {
-  getPeerHostManager,
-  getPeerHostRegistry,
-} from "../services/peer-host-service-main.js";
+import { getPeerHostManager } from "../services/peer-host-manager-main.js";
+import { getPeerHostRegistry } from "../services/peer-host-service-main.js";
 import { parsePeerPairing, peerText } from "../services/peer-pairing.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { registerPeerHostLiveHandlers } from "./peer-host-live.js";
