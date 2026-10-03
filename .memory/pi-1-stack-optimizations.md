@@ -129,3 +129,23 @@ merging `origin/main` into #299 and cascading each parent into its child.
   `getAvailableOfType` call, in parallel, then checks every model against that
   record (`stillCurrent`). Dispatch keeps its own before/after-resolution
   `current()` fences.
+
+## #305 `codex/pi-1-provider-mcp`
+
+- **Merge note:** #302's single frozen `discovery` record per server is kept;
+  #305's `metadata.resources` / `metadata.instructions` (read inside the scoped
+  operation) feed it.
+- **PR-305-2:** `createMcpProviderAuthenticatedFetch` reads the grant on both
+  sides of the *first* credential resolution of its operation, then relies on
+  `assertCurrent` for later requests. That is safe because grant publication
+  (`withMcpConfigurationPublication`) and connection changes
+  (`invalidateChangedMcpConfigurationLeases`) invalidate the lease, which aborts
+  the operation signal and fails `scope.isCurrent`. Tokens are still resolved
+  per request so rotation applies. A new fetch (next operation) re-reads.
+- **Deferred PR-305-1** (reuse one provider-authenticated client per
+  generation): the PR's stated invariant is that no provider-credential
+  connection outlives one attended operation, and `McpProviderExecutionScope`
+  has no settle hook to close a shared connection when a generation completes
+  normally. Reuse needs a scope lifecycle addition plus a token-refresh policy;
+  the PR owner should decide it. 305-3 (collapse the scoped/proxy branches)
+  waits on that.
