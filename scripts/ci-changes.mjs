@@ -24,8 +24,6 @@ const SAFE_MEMORY_DOCUMENT = /^\.memory\/.+\.md$/u;
 // Documents that tests or packaging read. Editing them must run their readers.
 const DESKTOP_CONSUMED_DOCUMENTS = new Set(["AGENTS.md", "docs/design-guide.md"]);
 const PACKAGED_DOCUMENTS = new Set(["THIRD_PARTY_NOTICES.md"]);
-// Lint covers JavaScript and TypeScript anywhere under docs/.
-const LINTED_SOURCE = /\.(?:[cm]?[jt]sx?)$/u;
 const LINUX_SPECIFIC = /(?:^|[/._-])linux(?:$|[/._-])/iu;
 // The Remote server is the only main/ code whose behavior native clients
 // consume. Its wire contract is also pinned by protocol/ fixtures.
