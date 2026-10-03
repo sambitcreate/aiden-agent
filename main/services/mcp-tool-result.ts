@@ -3,6 +3,7 @@ import type { ImageContent, JsonValue } from "@earendil-works/pi-ai";
 import { boundedToolOutput } from "./tool-output-context.js";
 import { MAX_STORED_TOOL_OUTPUT_CHARS } from "./tool-output-store.js";
 import { validateDisplayImageDimensions } from "./display-image-extension.js";
+import { copyBoundedJson, worstCaseJsonSize } from "./bounded-json.js";
 
 export const MAX_MCP_RESULT_TEXT_CHARS = 32_000;
 const MAX_PARTS = 64;
@@ -13,40 +14,7 @@ export const MAX_MCP_STRUCTURED_CHARS = 128 * 1024;
 
 /** Preserve complete JSON for programmatic callers, or omit it rather than silently alter values. */
 function structuredContent(value: unknown): JsonValue | undefined {
-  let remaining = MAX_MCP_STRUCTURED_CHARS;
-  let nodes = 0;
-  const seen = new Set<object>();
-  function clone(entry: unknown, depth: number): JsonValue {
-    if (++nodes > 4096 || depth > 32 || remaining <= 0) throw new Error("limit");
-    if (entry === null || typeof entry === "boolean") { remaining -= 5; return entry; }
-    if (typeof entry === "number" && Number.isFinite(entry)) { remaining -= 32; return entry; }
-    if (typeof entry === "string") {
-      remaining -= entry.length * 6 + 2;
-      if (remaining < 0) throw new Error("limit");
-      return entry;
-    }
-    if (!entry || typeof entry !== "object" || seen.has(entry)) throw new Error("invalid JSON");
-    const proto = Object.getPrototypeOf(entry);
-    if (!Array.isArray(entry) && proto !== Object.prototype && proto !== null) throw new Error("invalid object");
-    seen.add(entry);
-    remaining -= 2;
-    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry) ? [] : Object.create(null);
-    for (const key in entry) {
-      if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
-      remaining -= key.length * 6 + 4;
-      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
-      if (!descriptor || !("value" in descriptor)) throw new Error("accessor");
-      const next = clone(descriptor.value, depth + 1);
-      if (Array.isArray(output)) {
-        if (key !== String(output.length)) throw new Error("non-JSON array");
-        output.push(next);
-      } else output[key] = next;
-    }
-    if (Array.isArray(entry) && (output as JsonValue[]).length !== entry.length) throw new Error("sparse array");
-    seen.delete(entry);
-    return output;
-  }
-  try { return clone(value, 0); } catch { return undefined; }
+  return copyBoundedJson(value, { maxNodes: 4096, maxDepth: 32, maxSize: MAX_MCP_STRUCTURED_CHARS, measure: worstCaseJsonSize });
 }
 
 function imagesFor(result: unknown): Map<unknown, ImageContent> {
