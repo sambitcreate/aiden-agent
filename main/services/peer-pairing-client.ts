@@ -81,6 +81,7 @@ export function peerPairingFailure(error: unknown): PeerPairingFailure {
             : {}),
         };
       case "pairing_closed":
+      case "capability_denied":
         return { status: "closed" };
       case "pairing_expired":
         return { status: "expired" };

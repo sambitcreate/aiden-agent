@@ -9,6 +9,7 @@ import {
   decryptPeerPairing,
   peerRecord,
   peerStrings,
+  peerDisplayName,
   peerText,
   type PeerPairing,
 } from "./peer-pairing.js";
@@ -41,6 +42,18 @@ import {
   AIDEN_REMOTE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
 } from "./aiden-remote-protocol.js";
+
+
+/**
+ * A saved name: the host's own name or one chosen locally. Both are bounded
+ * to 80 Unicode characters; a local name may keep format characters such as
+ * the joiners inside an emoji.
+ */
+function storedPeerName(value: unknown): string {
+  if (typeof value !== "string" || !value.length || [...value].length > 80 || /\p{Cc}/u.test(value))
+    throw new Error("Invalid peer text.");
+  return value;
+}
 
 export interface StoredPeerHost extends PeerTrust {
   id: string;
@@ -152,7 +165,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
       id,
       credential,
       enabled: record.enabled,
-      name: peerText(record.name, 80),
+      name: storedPeerName(record.name),
       deviceId: hostIdentifier(record.deviceId),
       capabilities: peerStrings(record.capabilities),
       features: peerStrings(record.features, 32),
@@ -468,7 +481,7 @@ export class PeerHostRegistry {
     const paired = parseStoredPeerHosts([
       {
         id: input.instanceId,
-        name: peerText(server.name, 80),
+        name: peerDisplayName(server.name),
         deviceId: input.deviceId,
         credential: input.credential,
         enabled: true,
@@ -678,7 +691,7 @@ export class PeerHostRegistry {
   /** Rename a paired host on this device only. */
   rename(id: string, name: string): Promise<PeerHostView> {
     const trimmed = name.replace(/\s+/gu, " ").trim();
-    if (!trimmed || trimmed.length > 80 || /\p{Cc}/u.test(trimmed))
+    if (!trimmed || [...trimmed].length > 80 || /\p{Cc}/u.test(trimmed))
       return Promise.reject(new Error("Enter a name of up to 80 characters."));
     return this.locked(async () => {
       const hosts = await this.load();

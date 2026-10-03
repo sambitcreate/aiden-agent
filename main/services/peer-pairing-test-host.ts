@@ -10,6 +10,7 @@
  */
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import type { IncomingHttpHeaders } from "node:http";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +40,8 @@ export interface PeerTestHost {
   devices: AidenRemoteStateRegistry;
   /** Paths each listener served, in order. */
   seen: string[];
+  /** Each request line as received, query included, with its headers. */
+  received: { line: string; headers: IncomingHttpHeaders }[];
   setAccepting(value: boolean): void;
   /** Open a setup-code window for one route and return its code. */
   openSetupCode(route: "lan" | "tailscale"): string;
@@ -123,6 +126,7 @@ export async function startPeerTestHost(
     () => true,
   );
   const seen: string[] = [];
+  const received: PeerTestHost["received"] = [];
   const handler = (acceptStrippedBasePath: boolean) => {
     const route = createAidenRemoteRequestHandler({
       instanceId,
@@ -139,6 +143,7 @@ export async function startPeerTestHost(
     });
     return (request: Parameters<typeof route>[0], response: Parameters<typeof route>[1]) => {
       seen.push(`${request.method} ${request.url?.split("?")[0]}`);
+      received.push({ line: `${request.method} ${request.url}`, headers: { ...request.headers } });
       void route(request, response);
     };
   };
@@ -176,6 +181,7 @@ export async function startPeerTestHost(
     pairing,
     devices,
     seen,
+    received,
     setAccepting: (value) => {
       accepting = value;
     },

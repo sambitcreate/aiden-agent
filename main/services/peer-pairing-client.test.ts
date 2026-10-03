@@ -8,7 +8,7 @@ import {
   requestPeerPairing,
   type PeerPairingFailure,
 } from "./peer-pairing-client.js";
-import { PeerTransportError } from "./peer-transport.js";
+import { peerStatusError, PeerTransportError } from "./peer-transport.js";
 
 const REQUEST_ID = `pairreq_${"A".repeat(32)}`;
 const SPKI = `sha256/${"B".repeat(43)}=`;
@@ -140,6 +140,15 @@ test("refusals before a request exists are typed and leave nothing to withdraw",
 
   const older = scriptedHost([], { create: new PeerTransportError("unavailable", 404) });
   assert.deepEqual(await outcome(run(older).pending), { status: "unsupported" });
+
+  // A host that turned requests off, or whose profile forbids them, reads as closed.
+  for (const code of ["pairing_closed", "capability_denied"]) {
+    const closed = scriptedHost([], {
+      create: peerStatusError(403, { code, retryable: false }),
+    });
+    assert.deepEqual(await outcome(run(closed).pending), { status: "closed" });
+    assert.equal(deleted(closed), 0);
+  }
 });
 
 test("cancelling while waiting withdraws the request", async () => {

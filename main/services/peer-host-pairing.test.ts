@@ -263,3 +263,26 @@ test("a LAN host stays strictly pinned and re-pairing replaces its key but keeps
   const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
   assert.equal(server.instanceId, host.instanceId);
 });
+
+test("names are bounded by Unicode characters, as the host counts them", async (t) => {
+  // 80 characters outside the Basic Multilingual Plane are 160 UTF-16 units.
+  const wide = "\u{1F5A5}".repeat(80);
+  const host = await startPeerTestHost({ displayName: wide });
+  t.after(() => host.close());
+  const { registry, saved } = registryFor(host);
+  const view = await registry.pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+    answer(host, "allow"),
+  );
+  assert.equal(view.name, wide);
+  assert.equal(saved()[0]?.name, wide);
+
+  // A local name may keep the joiners inside an emoji; 81 characters is too long.
+  const coder = "\u{1F469}‍\u{1F4BB}";
+  assert.equal((await registry.rename(host.instanceId, `${coder} desk`)).name, `${coder} desk`);
+  await assert.rejects(registry.rename(host.instanceId, "\u{1F5A5}".repeat(81)), /up to 80 characters/u);
+  assert.deepEqual(
+    (await registry.list()).map((entry) => entry.name),
+    [`${coder} desk`],
+  );
+});

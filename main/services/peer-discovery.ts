@@ -309,9 +309,13 @@ export class PeerDiscovery {
     if (id === (await session.self) || this.session !== session) return true;
     const existing = session.found.get(id);
     if (existing && (existing.route === "tailscale" || route === "lan")) return true;
+    // Bounded by Unicode characters, as the host counts them, so a cut never
+    // splits a surrogate pair.
     const name =
       typeof health.displayName === "string"
-        ? health.displayName.replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/gu, " ").trim().slice(0, 80)
+        ? [...health.displayName.replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/gu, " ").trim()]
+            .slice(0, 80)
+            .join("")
         : "";
     session.found.set(id, {
       id,

@@ -96,6 +96,21 @@ test("pairing routes receive the poll secret, and refusals keep their code and r
   }
   assert.equal(limited?.remote?.code, "rate_limited");
   assert.ok((limited?.remote?.details?.retryAfterSeconds ?? 0) >= 1);
+
+  // Request routes take no query, browser origin or protocol version; the
+  // poll secret travels only in its header.
+  const requestRoutes = host.received.filter(({ line }) => line.includes("/pairing/requests"));
+  assert.ok(requestRoutes.length >= 3);
+  for (const { line, headers } of requestRoutes) {
+    assert.doesNotMatch(line, /\?/u);
+    assert.equal(headers.origin, undefined);
+    assert.equal(headers["aiden-protocol-version"], undefined);
+    assert.doesNotMatch(line, new RegExp(created.pollSecret, "u"));
+  }
+  assert.equal(
+    requestRoutes.filter(({ headers }) => headers["aiden-pairing-secret"] === created.pollSecret).length,
+    1,
+  );
 });
 
 test("an aborted request settles at once", async (t) => {

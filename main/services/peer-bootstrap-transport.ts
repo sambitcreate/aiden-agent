@@ -65,7 +65,9 @@ function bootstrapHeaders(
   body: Buffer | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "Aiden-Protocol-Version": "1",
+    // Connection-request routes are versioned by their path and feature, and
+    // take no protocol header.
+    ...(/^\/pairing\/requests(?:\/|$)/u.test(input.path) ? {} : { "Aiden-Protocol-Version": "1" }),
     Accept: "application/json",
     "Accept-Encoding": "identity",
   };
