@@ -362,6 +362,18 @@ function chatRevision(chat: Chat): string {
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }
 
+/** Newest first, then by id, exactly as `/chat-summaries` orders them. */
+function safeSummaryRows(metadata: readonly Readonly<ChatMeta>[]): SafeSummaryRow[] {
+  return metadata
+    .map(safeSummaryMetadata)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => {
+      const byUpdatedAt = right.updatedAt.localeCompare(left.updatedAt);
+      if (byUpdatedAt !== 0) return byUpdatedAt;
+      return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    });
+}
+
 function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
   const workspaceId = persistedChatWorkspaceId(meta.workspaceId);
   if (
@@ -1118,16 +1130,7 @@ export class AidenRemoteChatService {
     if (cursor !== undefined) {
       ({ snapshot, offset } = this.decodeSummaryCursor(cursor));
     } else {
-      const summaries = await this.freezeSummaryPage(
-        (await listSummaryMetadata())
-          .map(safeSummaryMetadata)
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-          .sort((left, right) => {
-            const byUpdatedAt = right.updatedAt.localeCompare(left.updatedAt);
-            if (byUpdatedAt !== 0) return byUpdatedAt;
-            return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
-          }),
-      );
+      const summaries = await this.freezeSummaryPage(safeSummaryRows(await listSummaryMetadata()));
       const now = this.summaryNow();
       snapshot = {
         id: randomBytes(18).toString("base64url"),
@@ -1192,6 +1195,33 @@ export class AidenRemoteChatService {
       );
     }
     return result;
+  }
+
+  /**
+   * Every non-Bot summary plus the ids of Bot-owned chats, for the host feed.
+   * Transcript-free: one read of the summary index, never a chat body.
+   */
+  async hostFeedChats(): Promise<{
+    summaries: AidenRemoteChatSummaryProjection[];
+    botChatIds: Set<string>;
+  }> {
+    const listSummaryMetadata = this.options.application.listSummaryMetadata;
+    if (!listSummaryMetadata) {
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "The transcript-free chat summary index is unavailable.",
+        500,
+      );
+    }
+    const metadata = await listSummaryMetadata();
+    return {
+      summaries: await this.freezeSummaryPage(safeSummaryRows(metadata)),
+      botChatIds: new Set(
+        metadata
+          .filter((meta) => meta.botId !== undefined && SAFE_ID.test(meta.id))
+          .map((meta) => meta.id),
+      ),
+    };
   }
 
   /**
