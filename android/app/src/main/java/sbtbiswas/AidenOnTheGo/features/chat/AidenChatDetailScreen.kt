@@ -214,7 +214,10 @@ fun AidenChatDetailScreen(
                 Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
                 Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
                 Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(true)
-                Lifecycle.Event.ON_PAUSE -> viewModel.setChatForegrounded(false)
+                Lifecycle.Event.ON_PAUSE -> {
+                    viewModel.setChatForegrounded(false)
+                    viewModel.flushDraft()
+                }
                 else -> Unit
             }
         }
@@ -229,6 +232,7 @@ fun AidenChatDetailScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setChatForegrounded(false)
             viewModel.stopProgressObservation()
+            viewModel.flushDraft()
         }
     }
 
