@@ -186,6 +186,48 @@ test("a connection request that replaces the one on screen starts back on Deny",
   expect(outcome.body).not.toHaveProperty("envelope");
 });
 
+test("adding another computer by setup code reports an unreachable address and returns to the form", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Connections", exact: true })
+    .click();
+
+  const segments = page.getByRole("tablist", { name: "Connections" });
+  const thisDevice = segments.getByRole("tab", { name: "Control this device", exact: true });
+  await expect(thisDevice).toHaveAttribute("aria-selected", "true");
+  await thisDevice.focus();
+  await page.keyboard.press("ArrowRight");
+  const otherDevices = segments.getByRole("tab", { name: "Control other devices", exact: true });
+  await expect(otherDevices).toBeFocused();
+  await expect(otherDevices).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add device", exact: true }).click();
+  const sheet = page.getByRole("dialog", { name: "Add device" });
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "Enter setup code", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "Enter setup code" });
+  const address = form.getByRole("textbox", { name: "Desktop address" });
+  await expect(address).toBeFocused();
+  const pair = form.getByRole("button", { name: "Pair", exact: true });
+  await expect(pair).toBeDisabled();
+
+  // Nothing listens on port 1, so the attempt fails without leaving this machine.
+  await address.fill("127.0.0.1:1");
+  await form.getByRole("textbox", { name: "Setup code" }).fill("ABCD-EFGH-JKLM");
+  await pair.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await dialog.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Enter setup code" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
+});
+
 function assertHealth(result: { status: number; body: unknown }): void {
   expect(result.status).toBe(200);
   expect(result.body).toEqual({ ok: true, protocolVersion: 1 });
