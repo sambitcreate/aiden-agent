@@ -1,6 +1,5 @@
 import os from "node:os";
-import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import { app, ipcMain, powerMonitor, safeStorage } from "../platform.js";
+import { app, ipcMain, safeStorage } from "../platform.js";
 import { DataStore } from "./data-store.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import {
@@ -8,14 +7,9 @@ import {
   type PeerEncryptedDocument,
 } from "./peer-host-storage.js";
 import { PeerHostRegistry } from "./peer-host-registry.js";
-import { PeerHostManager, peerNetworkFingerprint } from "./peer-host-manager.js";
 import { getAidenRemoteRuntime } from "./aiden-remote-service-main.js";
 
 let registry: PeerHostRegistry | undefined;
-let manager: PeerHostManager | undefined;
-
-/** How often the network fingerprint is compared while any host is supervised. */
-const NETWORK_CHECK_MS = 15_000;
 
 export function getPeerHostRegistry(): PeerHostRegistry {
   if (registry) return registry;
@@ -78,37 +72,4 @@ export function getPeerHostRegistry(): PeerHostRegistry {
   });
   app.once("before-quit", () => registry?.close());
   return registry;
-}
-
-/**
- * The connection supervisor, started on first use so a launch with no device
- * UI makes no peer traffic. Sleep/resume, unlock and network changes wake it.
- */
-export function getPeerHostManager(): PeerHostManager {
-  if (manager) return manager;
-  const current = new PeerHostManager({
-    registry: getPeerHostRegistry(),
-    broadcast: (channel, payload) =>
-      ipcMain.broadcast(channel as NotificationChannel, payload),
-  });
-  manager = current;
-  const wake = (): void => current.wake();
-  powerMonitor.on("resume", wake);
-  powerMonitor.on("unlock-screen", wake);
-  let network = peerNetworkFingerprint(os.networkInterfaces());
-  const watcher = setInterval(() => {
-    if (current.supervising === 0) return;
-    const next = peerNetworkFingerprint(os.networkInterfaces());
-    if (next === network) return;
-    network = next;
-    current.wake();
-  }, NETWORK_CHECK_MS);
-  watcher.unref?.();
-  app.once("before-quit", () => {
-    clearInterval(watcher);
-    powerMonitor.removeListener("resume", wake);
-    powerMonitor.removeListener("unlock-screen", wake);
-    current.close();
-  });
-  return current;
 }
