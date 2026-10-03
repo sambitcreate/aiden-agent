@@ -53,7 +53,8 @@ superseded. Runner capacity can still cause queueing.
   flags and root `pretest`/`posttest` hooks fail the inventory check rather than
   silently dropping or duplicating coverage.
 - `npm test` runs `scripts/run-ci-tests.mjs --parallel`: prerequisites first, the
-  three lanes concurrently with prefixed output, then the preserved commands.
+  three lanes concurrently with prefixed output (sharing one machine-sized pool
+  of Node test workers), then the preserved commands.
   Each registered file runs once. `npm run test:serial` keeps the original chain,
   which runs some files more than once, for comparison.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
