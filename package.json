@@ -313,7 +313,8 @@
       "resources/model-capabilities.json",
       "THIRD_PARTY_NOTICES.md",
       "package.json",
-      "main/services/browser/PLAYWRIGHT-LICENSE"
+      "main/services/browser/PLAYWRIGHT-LICENSE",
+      "!**/*.map"
     ],
     "extraResources": [
       {
