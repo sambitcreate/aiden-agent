@@ -1,6 +1,7 @@
 /* global console, process */
 
 import { appendFileSync } from "node:fs";
+import os from "node:os";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -132,16 +133,28 @@ function resolveCommand(command) {
   return command;
 }
 
-function unitCommands(lane, options) {
+function parallelTestFlags(laneCount) {
+  // Concurrent lanes pipe their output, which would switch Node to the verbose
+  // TAP reporter. They also share one machine: split Node's default per-process
+  // file concurrency between them so wall-clock budget tests are not starved.
+  const workers = Math.max(1, Math.floor((os.availableParallelism() - 1) / Math.max(1, laneCount)));
+  return ["--test-reporter=spec", `--test-concurrency=${workers}`];
+}
+
+function unitCommands(lane, options, laneCount) {
   // Some .mjs tests import TypeScript with .js specifiers. Preserve the tsx
   // resolver used by the original npm test graph for the whole ordinary lane.
   return [{
     id: `${lane.name}:tests`,
     lane: lane.name,
     files: lane.files,
-    // Concurrent lanes pipe their output, which would switch Node to the
-    // verbose TAP reporter.
-    command: [nodeExecutable, tsxCli, ...(options.parallel ? ["--test-reporter=spec"] : []), "--test", ...lane.files],
+    command: [
+      nodeExecutable,
+      tsxCli,
+      ...(options.parallel ? parallelTestFlags(laneCount) : []),
+      "--test",
+      ...lane.files,
+    ],
   }];
 }
 
@@ -180,7 +193,7 @@ export function buildPlan(registry, options) {
     lanes: selectedLanes,
     preserved: selectedPreserved,
     prerequisites,
-    unitCommands: selectedLanes.map((lane) => unitCommands(lane, options)).flat(),
+    unitCommands: selectedLanes.map((lane) => unitCommands(lane, options, selectedLanes.length)).flat(),
   };
 }
 
