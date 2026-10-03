@@ -395,6 +395,32 @@ test("approval scopes and details are copied into the journal", () => {
   assert.deepEqual(payload.details, { kind: "scheduled-task", task: { name: "Nightly" } });
 });
 
+test("an oversized approval detail cannot push retained events past the byte budgets", () => {
+  const { registry } = harness({ maxEventBytesPerRun: 32 * 1_024, maxTotalEventBytes: 64 * 1_024 });
+  const workspaceLabel = "w".repeat(1_024 * 1_024);
+  for (const runId of ["run-1", "run-2", "run-3", "run-4"]) {
+    registry.begin({ runId, chatId: `chat-${runId}`, origin: "renderer" });
+    registry.publish(runId, "chat:approval", {
+      ...approval(`approval-${runId}`),
+      details: { kind: "subagent-shell", workspaceLabel, command: "npm test" },
+    });
+  }
+
+  let retainedBytes = 0;
+  for (const runId of ["run-1", "run-2", "run-3", "run-4"]) {
+    assert.equal(registry.summary(runId)?.state, "needs_approval");
+    assert.deepEqual(registry.summary(runId)?.pendingApprovalIds, [`approval-${runId}`]);
+    const retained = events(registry.read(runId, 0));
+    const required = last(retained);
+    assert.equal(required.type, "approval_required");
+    assert.equal(required.payload.approvalId, `approval-${runId}`);
+    assert.equal("details" in required.payload, false);
+    assert.equal(required.payload.detailsOmitted, true);
+    for (const event of retained) retainedBytes += Buffer.byteLength(JSON.stringify(event));
+  }
+  assert.ok(retainedBytes <= 64 * 1_024, `retained ${retainedBytes} bytes`);
+});
+
 test("returned events and summaries are copies", () => {
   const { registry } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });

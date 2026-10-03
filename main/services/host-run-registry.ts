@@ -84,6 +84,10 @@ const DEFAULT_MAX_TOTAL_EVENT_BYTES = 32 * 1_024 * 1_024;
 const DEFAULT_MAX_RUNS = 128;
 const DEFAULT_TERMINAL_RETENTION_MS = 10 * 60_000;
 const MAX_PROMPT_ID_LENGTH = 128;
+// Approval details carry caller-supplied text (workspace names, commands) that
+// nothing upstream bounds. Capping them keeps a prompt that is a run's only
+// retained event, which retention never trims, far inside every byte budget.
+const MAX_APPROVAL_DETAILS_BYTES = 64 * 1_024;
 
 function isTerminalState(state: HostRunState): boolean {
   return state === "done" || state === "failed" || state === "cancelled";
@@ -118,10 +122,22 @@ function knownScopes(value: unknown): string[] | undefined {
   return scopes.length > 0 ? scopes : undefined;
 }
 
+function boundedDetails(value: unknown): { details?: Record<string, unknown>; omitted: boolean } {
+  const record = ownRecord(value);
+  if (!record) return { omitted: false };
+  const details = cloneOrUndefined(record);
+  if (!details) return { omitted: false };
+  try {
+    if (Buffer.byteLength(JSON.stringify(details)) <= MAX_APPROVAL_DETAILS_BYTES) return { details, omitted: false };
+  } catch {
+    // Unserializable details are treated like oversized ones.
+  }
+  return { omitted: true };
+}
+
 function approvalEvent(payload: Record<string, unknown>, approvalId: string): PendingEvent {
   const scopes = knownScopes(payload.scopes);
-  const detailsRecord = ownRecord(payload.details);
-  const details = detailsRecord ? cloneOrUndefined(detailsRecord) : undefined;
+  const { details, omitted } = boundedDetails(payload.details);
   return {
     type: "approval_required",
     payload: {
@@ -131,6 +147,7 @@ function approvalEvent(payload: Record<string, unknown>, approvalId: string): Pe
       toolName: boundedText(payload.toolName, 120) || "Tool",
       ...(scopes ? { scopes } : {}),
       ...(details ? { details } : {}),
+      ...(omitted ? { detailsOmitted: true } : {}),
     },
     terminal: false,
   };
