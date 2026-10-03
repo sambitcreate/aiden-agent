@@ -10,6 +10,12 @@ export interface JsonCopyBounds {
   maxSize: number;
   /** Size of a string or key, before quoting. */
   measure: (text: string) => number;
+  /**
+   * Build objects with `Object.prototype` (as `JSON.parse` would) instead of a
+   * null prototype. Keys, `__proto__` included, are still defined as own data
+   * properties, so input cannot reach a prototype.
+   */
+  ordinaryObjects?: boolean;
 }
 
 /** Exact UTF-8 size, for budgets stated in bytes. */
@@ -18,7 +24,8 @@ export const utf8Size = (text: string): number => Buffer.byteLength(text, "utf8"
 export const worstCaseJsonSize = (text: string): number => text.length * 6;
 
 /**
- * Copy plain JSON (null-prototype objects in the result) or return undefined.
+ * Copy plain JSON (null-prototype objects in the result unless
+ * `ordinaryObjects`) or return undefined.
  * Accessors never run, cycles, sparse arrays, class instances and non-JSON
  * values are rejected, and work stops as soon as a bound is exceeded, so a
  * hostile value cannot force unbounded allocation. Repeated (acyclic)
@@ -42,7 +49,7 @@ export function copyBoundedJson(value: unknown, bounds: JsonCopyBounds): JsonVal
     if (!Array.isArray(entry) && prototype !== Object.prototype && prototype !== null) throw new Error("invalid object");
     ancestors.add(entry);
     remaining -= 2;
-    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry) ? [] : Object.create(null);
+    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry) ? [] : bounds.ordinaryObjects ? {} : Object.create(null);
     for (const key in entry) {
       if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
       remaining -= bounds.measure(key) + 4;
@@ -52,7 +59,7 @@ export function copyBoundedJson(value: unknown, bounds: JsonCopyBounds): JsonVal
       if (Array.isArray(output)) {
         if (key !== String(output.length)) throw new Error("non-JSON array");
         output.push(next);
-      } else output[key] = next;
+      } else Object.defineProperty(output, key, { value: next, enumerable: true, writable: true, configurable: true });
     }
     if (Array.isArray(entry) && (output as JsonValue[]).length !== entry.length) throw new Error("sparse array");
     ancestors.delete(entry);

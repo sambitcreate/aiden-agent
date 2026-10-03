@@ -6,11 +6,11 @@ import {
   type ClassifierContext,
   type ImageContent,
   type JsonObject,
-  type JsonValue,
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
 import { validateDisplayImageDimensions } from "./display-image-extension.js";
+import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Parent codemode results aggregate child usage; only provider operations add turn totals. */
 export function piModelOperationUsage(
@@ -89,63 +89,15 @@ function fields(
   return value;
 }
 function jsonObject(value: unknown, label: string): JsonObject {
-  let nodes = 0,
-    bytes = 0;
-  const seen = new Set<object>();
-  function copy(entry: unknown, depth: number): JsonValue {
-    if (++nodes > 4096 || depth > 16 || bytes > MAX_JSON_BYTES)
-      throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-    if (entry === null || typeof entry === "boolean") {
-      bytes += 5;
-      return entry;
-    }
-    if (typeof entry === "number" && Number.isFinite(entry)) {
-      bytes += 32;
-      return entry;
-    }
-    if (typeof entry === "string") {
-      bytes += Buffer.byteLength(entry, "utf8") + 2;
-      if (bytes > MAX_JSON_BYTES)
-        throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-      return entry;
-    }
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      seen.has(entry) ||
-      (!Array.isArray(entry) &&
-        ![null, Object.prototype].includes(Object.getPrototypeOf(entry)))
-    )
-      throw new Error(`Invalid ${label}: expected plain JSON.`);
-    seen.add(entry);
-    const result: JsonObject | JsonValue[] = Array.isArray(entry)
-      ? []
-      : Object.create(null);
-    for (const key in entry) {
-      if (!own(entry, key)) continue;
-      bytes += Buffer.byteLength(key, "utf8") + 4;
-      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
-      if (!descriptor || !("value" in descriptor))
-        throw new Error(`Invalid ${label}: accessors are not JSON.`);
-      const child = copy(descriptor.value, depth + 1);
-      if (Array.isArray(result)) {
-        if (key !== String(result.length))
-          throw new Error(`Invalid ${label} array.`);
-        result.push(child);
-      } else result[key] = child;
-    }
-    if (Array.isArray(entry) && (result as JsonValue[]).length !== entry.length)
-      throw new Error(`Invalid ${label} sparse array.`);
-    seen.delete(entry);
-    return result;
-  }
-  const output = copy(value, 0);
+  const output = copyBoundedJson(value, { maxNodes: 4096, maxDepth: 16, maxSize: MAX_JSON_BYTES, measure: utf8Size, ordinaryObjects: true });
+  if (output === undefined)
+    throw new Error(`Invalid ${label}: expected plain JSON within its size, depth and node limits.`);
   if (!record(output))
     throw new Error(`Invalid ${label}: expected a JSON object.`);
-  const serialized = JSON.stringify(output);
-  if (Buffer.byteLength(serialized, "utf8") > MAX_JSON_BYTES)
+  // The copy's size charge omits escape expansion; measure the exact encoding.
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_JSON_BYTES)
     throw new Error(`Invalid ${label}: JSON limits exceeded.`);
-  return JSON.parse(serialized) as JsonObject;
+  return output as JsonObject;
 }
 function questions(value: unknown): Record<string, ClassifierQuestion> {
   const input = jsonObject(value, "questions");

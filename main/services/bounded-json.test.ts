@@ -59,3 +59,14 @@ test("the string measure decides the size budget", () => {
   assert.equal(copyBoundedJson({ [accented]: 1 }, { ...roomy, maxSize: 2004 }), undefined);
   assert.notEqual(copyBoundedJson({ [accented]: 1 }, { ...roomy, maxSize: 2050 }), undefined);
 });
+
+test("ordinary objects keep Object.prototype while __proto__ stays an own key", () => {
+  const source = JSON.parse('{"__proto__": {"polluted": true}, "nested": {"value": 1}}') as Record<string, unknown>;
+  const copy = copyBoundedJson(source, { ...roomy, ordinaryObjects: true }) as Record<string, unknown>;
+  assert.equal(Object.getPrototypeOf(copy), Object.prototype);
+  assert.equal(Object.getPrototypeOf(copy.nested), Object.prototype);
+  assert.equal((copy as { polluted?: unknown }).polluted, undefined);
+  assert.equal(({} as { polluted?: unknown }).polluted, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(copy)), { ["__proto__"]: { polluted: true }, nested: { value: 1 } });
+  assert.deepStrictEqual(copyBoundedJson({ a: [1, { b: "c" }] }, { ...roomy, ordinaryObjects: true }), { a: [1, { b: "c" }] });
+});
