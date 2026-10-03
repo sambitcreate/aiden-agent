@@ -1,6 +1,6 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
-// Unified workspace/chat sidebar with alternate workspace-grouped and recent
-// projections, route-driven selection, and workspace/chat management actions.
+// Unified workspace/chat sidebar with workspace-grouped, recent, and
+// needs-attention views, route-driven selection, and workspace/chat actions.
 
 import * as React from "react";
 import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
@@ -18,10 +18,8 @@ import {
   ContextMenuTrigger,
   Dialog,
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   EmptyState,
@@ -50,10 +48,8 @@ import {
   FolderPlus,
   FolderGit2,
   GitPullRequest,
-  ListTree,
   Loader2,
   MoreHorizontal,
-  Rows3,
   Settings,
   SquarePen,
   UserRound,
@@ -90,10 +86,26 @@ import { ChatRowStatus } from "./chat-row-status";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
-  parseSidebarPreferences,
-  projectSidebarWorkspaces,
-  type SidebarOrganization,
+  localSidebarChats,
+  localSidebarProjects,
+  type LocalSidebarProject,
 } from "../lib/sidebar-workspace-groups";
+import {
+  canMoveProjectKey,
+  displayedSidebarChats,
+  mergeProjectOrder,
+  moveProjectKey,
+  moveProjectKeyTo,
+  organizeSidebar,
+  parseSidebarPreferences,
+  serializeSidebarPreferences,
+  sidebarAttention,
+  visibleProjectChats,
+  type SidebarChatSort,
+  type SidebarProjectSort,
+  type SidebarView,
+} from "../lib/sidebar-organization";
+import { SidebarOrganizeMenuItems } from "./sidebar-organize-menu";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const SIDEBAR_PREFERENCES_KEY = "aiden-agent.sidebar.v1";
@@ -649,58 +661,6 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-const DAY_MS = 86_400_000;
-
-function startOfDay(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-/** Time bucket for a chat, e.g. "Recent", "Yesterday", "June", "Older". */
-function bucketLabel(ts: number): string {
-  const today = startOfDay(Date.now());
-  const day = startOfDay(ts);
-  if (day >= today) return "Recent";
-  if (day >= today - DAY_MS) return "Yesterday";
-  const d = new Date(ts);
-  if (d.getFullYear() === new Date().getFullYear()) return MONTHS[d.getMonth()];
-  return "Older";
-}
-
-/** Group chats into ordered time buckets, newest first. */
-function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
-  const sorted = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
-  const groups: { label: string; chats: ChatMeta[] }[] = [];
-  const byLabel = new Map<string, ChatMeta[]>();
-  for (const chat of sorted) {
-    const label = bucketLabel(chat.updatedAt);
-    let arr = byLabel.get(label);
-    if (!arr) {
-      arr = [];
-      byLabel.set(label, arr);
-      groups.push({ label, chats: arr });
-    }
-    arr.push(chat);
-  }
-  return groups;
-}
-
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
@@ -719,9 +679,19 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     () => parseSidebarPreferences(localStorage.getItem(SIDEBAR_PREFERENCES_KEY)),
     [],
   );
-  const [organization, setOrganization] = React.useState<SidebarOrganization>(
-    initialPreferences.organization,
+  const [view, setView] = React.useState<SidebarView>(initialPreferences.view);
+  const [chatSort, setChatSort] = React.useState<SidebarChatSort>(initialPreferences.chatSort);
+  const [projectSort, setProjectSort] = React.useState<SidebarProjectSort>(
+    initialPreferences.projectSort,
   );
+  const [projectOrder, setProjectOrder] = React.useState<string[]>(
+    initialPreferences.projectOrder,
+  );
+  const [draggedProjectKey, setDraggedProjectKey] = React.useState<string | null>(null);
+  const [projectDropTarget, setProjectDropTarget] = React.useState<{
+    key: string;
+    placement: "before" | "after";
+  } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState(
     () => new Set(initialPreferences.expandedWorkspaceIds),
   );
@@ -738,21 +708,54 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
   const [deletingWorktreeBusy, setDeletingWorktreeBusy] = React.useState(false);
 
-  const projection = React.useMemo(
-    () => projectSidebarWorkspaces(workspaces, chats.data ?? [], search),
-    [chats.data, search, workspaces],
+  const searching = Boolean(search.trim());
+  const busyChatId = environmentPanel.agentBusy ? activeChatId : undefined;
+  const sidebarProjects = React.useMemo(() => localSidebarProjects(workspaces), [workspaces]);
+  const sidebarChats = React.useMemo(
+    () =>
+      localSidebarChats(workspaces, chats.data ?? [], (chat) =>
+        sidebarAttention(
+          chatRowStateFor(chatActivity, chat.id, chat.id === busyChatId),
+          // The open chat is being viewed, so its own output never reads as unread.
+          chat.id !== activeChatId &&
+            isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence),
+        ),
+      ),
+    [activeChatId, busyChatId, chatActivity, chats.data, readMarkers, workspaces],
   );
-  const renderedChats = React.useMemo(() => {
-    if (organization === "recent") return projection.recents;
-    return projection.groups.flatMap((group) => {
-      const expanded = Boolean(search.trim()) || expandedWorkspaceIds.has(group.workspace.id);
-      if (!expanded) return [];
-      const revealAll = Boolean(search.trim()) || fullyRevealedWorkspaceIds.has(group.workspace.id);
-      return revealAll ? group.chats : group.chats.slice(0, COLLAPSED_WORKSPACE_CHAT_LIMIT);
-    });
-  }, [expandedWorkspaceIds, fullyRevealedWorkspaceIds, organization, projection, search]);
-  const recentGroups = React.useMemo(() => groupChats(projection.recents), [projection.recents]);
-  const shortcutGroups = React.useMemo(() => groupChats(renderedChats), [renderedChats]);
+  const organized = React.useMemo(
+    () =>
+      organizeSidebar({
+        projects: sidebarProjects,
+        chats: sidebarChats,
+        search,
+        view,
+        chatSort,
+        projectSort,
+        projectOrder,
+        now: Date.now(),
+      }),
+    [chatSort, projectOrder, projectSort, search, sidebarChats, sidebarProjects, view],
+  );
+  const chatViewTitle = view === "attention" ? "Needs attention" : "Recents";
+  const manualReorderEnabled = view === "projects" && projectSort === "manual" && !searching;
+  const displayOptions = React.useMemo(
+    () => ({
+      search,
+      isExpanded: (project: LocalSidebarProject) => expandedWorkspaceIds.has(project.workspace.id),
+      isFullyRevealed: (project: LocalSidebarProject) =>
+        fullyRevealedWorkspaceIds.has(project.workspace.id),
+      collapsedChatLimit: COLLAPSED_WORKSPACE_CHAT_LIMIT,
+    }),
+    [expandedWorkspaceIds, fullyRevealedWorkspaceIds, search],
+  );
+  const shortcutGroups = React.useMemo(
+    () =>
+      displayedSidebarChats(organized, view, displayOptions).map((section) => ({
+        chats: section.chats.map((summary) => summary.chat),
+      })),
+    [displayOptions, organized, view],
+  );
   const shortcutAssignments = React.useMemo(
     () => createSidebarChatShortcutAssignments(shortcutGroups),
     [shortcutGroups],
@@ -858,14 +861,25 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   React.useEffect(() => {
     if (!workspaceRegistryReady) return;
     const preferences = parseSidebarPreferences(
-      JSON.stringify({
-        organization,
+      serializeSidebarPreferences({
+        view,
+        chatSort,
+        projectSort,
+        projectOrder,
         expandedWorkspaceIds: [...expandedWorkspaceIds],
       }),
       workspaces.map((workspace) => workspace.id),
     );
-    localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify(preferences));
-  }, [expandedWorkspaceIds, organization, workspaceRegistryReady, workspaces]);
+    localStorage.setItem(SIDEBAR_PREFERENCES_KEY, serializeSidebarPreferences(preferences));
+  }, [
+    chatSort,
+    expandedWorkspaceIds,
+    projectOrder,
+    projectSort,
+    view,
+    workspaceRegistryReady,
+    workspaces,
+  ]);
 
   React.useEffect(() => {
     const unregister = shortcutAssignments.map(({ chat, number }) =>
@@ -1123,6 +1137,27 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     });
   }, []);
 
+  const changeProjectSort = React.useCallback(
+    (sort: SidebarProjectSort) => {
+      if (sort === "manual" && projectSort !== "manual") {
+        // Start manual order from the list on screen so choosing Manual never reshuffles it.
+        const displayed = organized.projectOrder;
+        setProjectOrder((stored) => mergeProjectOrder(displayed, stored));
+      }
+      setProjectSort(sort);
+    },
+    [organized.projectOrder, projectSort],
+  );
+
+  const commitProjectOrder = React.useCallback((arranged: string[]) => {
+    setProjectOrder((stored) => mergeProjectOrder(arranged, stored));
+  }, []);
+
+  const endProjectDrag = React.useCallback(() => {
+    setDraggedProjectKey(null);
+    setProjectDropTarget(null);
+  }, []);
+
   const revealWorkspace = React.useCallback(async (workspace: Workspace) => {
     try {
       await workspacesApi.openFolder(workspace.id);
@@ -1244,31 +1279,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       triggerClassName="size-7 text-tertiary"
       contentClassName="w-56"
     >
-      <DropdownMenuLabel>Organize sidebar</DropdownMenuLabel>
-      <DropdownMenuCheckboxItem
-        checked={organization === "workspace"}
-        onCheckedChange={() => setOrganization("workspace")}
-      >
-        <span className="flex items-center gap-2">
-          <ListTree
-            className="size-4 text-secondary group-data-[highlighted]:text-accent-foreground"
-            aria-hidden="true"
-          />
-          By workspace
-        </span>
-      </DropdownMenuCheckboxItem>
-      <DropdownMenuCheckboxItem
-        checked={organization === "recent"}
-        onCheckedChange={() => setOrganization("recent")}
-      >
-        <span className="flex items-center gap-2">
-          <Rows3
-            className="size-4 text-secondary group-data-[highlighted]:text-accent-foreground"
-            aria-hidden="true"
-          />
-          Recent only
-        </span>
-      </DropdownMenuCheckboxItem>
+      <SidebarOrganizeMenuItems
+        view={view}
+        chatSort={chatSort}
+        projectSort={projectSort}
+        onViewChange={setView}
+        onChatSortChange={setChatSort}
+        onProjectSortChange={changeProjectSort}
+      />
     </SidebarOverflowMenu>
   );
 
@@ -1355,7 +1373,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         </div>
 
         <SidebarList>
-          {organization === "workspace" ? (
+          {view === "projects" ? (
             <SidebarListGroup
               title={
                 <div className="flex items-center justify-between gap-2">
@@ -1382,7 +1400,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   />
                   <SidebarListItem title="Retry" onClick={() => void chats.refetch()} />
                 </div>
-              ) : projection.groups.length === 0 ? (
+              ) : organized.projectGroups.length === 0 ? (
                 <EmptyState
                   placement="inline"
                   title={search.trim() ? "No matches" : "No workspaces yet"}
@@ -1393,57 +1411,113 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   }
                 />
               ) : (
-                projection.groups.map((group) => {
-                  const secondaryLabel = workspaceSecondaryLabel(group.workspace, pathPreferences);
-                  const explicitlyExpanded = expandedWorkspaceIds.has(group.workspace.id);
-                  const expanded =
-                    Boolean(search.trim()) || explicitlyExpanded;
-                  const revealAll =
-                    Boolean(search.trim()) || fullyRevealedWorkspaceIds.has(group.workspace.id);
-                  const visibleChats = revealAll
-                    ? group.chats
-                    : group.chats.slice(0, COLLAPSED_WORKSPACE_CHAT_LIMIT);
+                organized.projectGroups.map((group) => {
+                  const workspace = group.project.workspace;
+                  const projectKey = group.project.key;
+                  const secondaryLabel = workspaceSecondaryLabel(workspace, pathPreferences);
+                  const explicitlyExpanded = expandedWorkspaceIds.has(workspace.id);
+                  const expanded = searching || explicitlyExpanded;
+                  const visibleChats = visibleProjectChats(group, displayOptions);
                   const remainingChatCount = group.chats.length - visibleChats.length;
+                  const dropPlacement =
+                    projectDropTarget?.key === projectKey ? projectDropTarget.placement : null;
                   return (
-                    <div key={group.workspace.id} className="group/workspace">
-                      <div className="flex min-w-0 items-center gap-0.5">
+                    <div
+                      key={workspace.id}
+                      className="group/workspace relative"
+                      data-project-drop={dropPlacement ?? undefined}
+                      onDragOver={
+                        manualReorderEnabled && draggedProjectKey && draggedProjectKey !== projectKey
+                          ? (event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              const bounds = event.currentTarget.getBoundingClientRect();
+                              const placement =
+                                event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+                              if (dropPlacement !== placement) {
+                                setProjectDropTarget({ key: projectKey, placement });
+                              }
+                            }
+                          : undefined
+                      }
+                      onDrop={
+                        manualReorderEnabled && draggedProjectKey
+                          ? (event) => {
+                              event.preventDefault();
+                              if (dropPlacement && draggedProjectKey !== projectKey) {
+                                commitProjectOrder(
+                                  moveProjectKeyTo(
+                                    organized.projectOrder,
+                                    draggedProjectKey,
+                                    projectKey,
+                                    dropPlacement,
+                                  ),
+                                );
+                              }
+                              endProjectDrag();
+                            }
+                          : undefined
+                      }
+                    >
+                      {dropPlacement ? (
+                        <div
+                          aria-hidden="true"
+                          className={`pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-pill bg-accent ${
+                            dropPlacement === "before" ? "-top-px" : "-bottom-px"
+                          }`}
+                        />
+                      ) : null}
+                      <div
+                        className="flex min-w-0 items-center gap-0.5"
+                        draggable={manualReorderEnabled || undefined}
+                        onDragStart={
+                          manualReorderEnabled
+                            ? (event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", workspace.name);
+                                setDraggedProjectKey(projectKey);
+                              }
+                            : undefined
+                        }
+                        onDragEnd={manualReorderEnabled ? endProjectDrag : undefined}
+                      >
                         <SidebarListItem
                           className="min-w-0 flex-1"
                           icon={
                             <span className="flex items-center gap-1.5">
                               {expanded ? <ChevronDown /> : <ChevronRight />}
-                              {group.workspace.folderPath ? <FolderGit2 /> : <Folder />}
+                              {workspace.folderPath ? <FolderGit2 /> : <Folder />}
                             </span>
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{workspaceDisplayName(group.workspace, workspaces)}</span>
-                              {group.workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                              <span className="truncate">{workspaceDisplayName(workspace, workspaces)}</span>
+                              {workspace.folderPath && pathPreferences.showWorkspacePaths ? (
                                 <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
-                                  {group.workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{group.workspace.managedWorktree.branch} ·</span> : null}
-                                  <WorkspacePathLabel path={group.workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                                  {workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span> : null}
+                                  <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
                                 </span>
                               ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                             </span>
                           }
-                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
+                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
                           aria-expanded={expanded}
-                          onClick={() => toggleWorkspace(group.workspace.id)}
+                          onClick={() => toggleWorkspace(workspace.id)}
                         />
                         <div className="group/workspace-actions relative size-7 shrink-0">
                           <div className="absolute inset-0 group-hover/workspace:invisible group-has-[.workspace-overflow-trigger:focus-visible]/workspace-actions:invisible group-has-[.workspace-overflow-trigger[data-state=open]]/workspace-actions:invisible">
                             <WorkspacePullRequestIndicator
-                              workspace={group.workspace}
+                              workspace={workspace}
                               visible={explicitlyExpanded}
                               accessibilityName={workspaceAccessibleName(
-                                group.workspace,
+                                workspace,
                                 pathPreferences,
                                 workspaces,
                               )}
                             />
                           </div>
                           <SidebarOverflowMenu
-                            ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
+                            ariaLabel={`Actions for ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
                             triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
                             contentClassName="w-64"
                           >
@@ -1451,7 +1525,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                               disabled={
                                 Boolean(settingsBlockedReason) || appendReconciliationRequired
                               }
-                              onSelect={() => void newAgentInWorkspace(group.workspace.id)}
+                              onSelect={() => void newAgentInWorkspace(workspace.id)}
                             >
                               New chat
                             </DropdownMenuItem>
@@ -1462,36 +1536,67 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                                   ? "Choose New chat to start this workspace."
                                   : undefined
                               }
-                              onSelect={() => void openChat(group.chats[0])}
+                              onSelect={() => void openChat(group.chats[0]?.chat)}
                             >
                               Open latest chat
                             </DropdownMenuItem>
-                            {group.workspace.folderPath ? (
+                            {workspace.folderPath ? (
                               <DropdownMenuItem
-                                onSelect={() => void revealWorkspace(group.workspace)}
+                                onSelect={() => void revealWorkspace(workspace)}
                               >
                                 Show in file manager
                               </DropdownMenuItem>
                             ) : null}
+                            {projectSort === "manual" ? (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  disabled={
+                                    searching ||
+                                    !canMoveProjectKey(organized.projectOrder, projectKey, -1)
+                                  }
+                                  onSelect={() =>
+                                    commitProjectOrder(
+                                      moveProjectKey(organized.projectOrder, projectKey, -1),
+                                    )
+                                  }
+                                >
+                                  Move up
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={
+                                    searching ||
+                                    !canMoveProjectKey(organized.projectOrder, projectKey, 1)
+                                  }
+                                  onSelect={() =>
+                                    commitProjectOrder(
+                                      moveProjectKey(organized.projectOrder, projectKey, 1),
+                                    )
+                                  }
+                                >
+                                  Move down
+                                </DropdownMenuItem>
+                              </>
+                            ) : null}
                             {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
-                            {workspaces.length > 1 && group.workspace.managedWorktree ? (
+                            {workspaces.length > 1 && workspace.managedWorktree ? (
                               <DropdownMenuItem
                                 disabled={workspaceActionBlocked}
                                 icon="trash"
                                 color="red"
-                                onSelect={() => setDeletingWorktree(group.workspace)}
+                                onSelect={() => setDeletingWorktree(workspace)}
                               >
                                 Delete worktree…
                               </DropdownMenuItem>
                             ) : null}
-                            {workspaces.length > 1 && !group.workspace.managedWorktree ? (
+                            {workspaces.length > 1 && !workspace.managedWorktree ? (
                               <DropdownMenuItem
                                 disabled={workspaceActionBlocked}
                                 icon="trash"
                                 color="red"
-                                onSelect={() => setRemovingWorkspace(group.workspace)}
+                                onSelect={() => setRemovingWorkspace(workspace)}
                               >
-                                Remove “{group.workspace.name}”
+                                Remove “{workspace.name}”
                               </DropdownMenuItem>
                             ) : null}
                           </SidebarOverflowMenu>
@@ -1499,7 +1604,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
-                          {visibleChats.map((chat) => renderChatRow(chat, true))}
+                          {visibleChats.map((summary) => renderChatRow(summary.chat, true))}
                           {group.chats.length === 0 ? (
                             <SidebarListItem
                               className="pl-9 text-secondary"
@@ -1508,7 +1613,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                               disabled={
                                 Boolean(settingsBlockedReason) || appendReconciliationRequired
                               }
-                              onClick={() => void newAgentInWorkspace(group.workspace.id)}
+                              onClick={() => void newAgentInWorkspace(workspace.id)}
                             />
                           ) : null}
                           {remainingChatCount > 0 ? (
@@ -1517,7 +1622,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                               title={`Show ${remainingChatCount} more`}
                               onClick={() =>
                                 setFullyRevealedWorkspaceIds((current) =>
-                                  new Set(current).add(group.workspace.id),
+                                  new Set(current).add(workspace.id),
                                 )
                               }
                             />
@@ -1533,7 +1638,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <SidebarListGroup
               title={
                 <div className="flex items-center justify-between gap-2">
-                  <span>Recents</span>
+                  <span>{chatViewTitle}</span>
                   {sidebarOrganizationMenu}
                 </div>
               }
@@ -1548,7 +1653,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <SidebarListGroup
               title={
                 <div className="flex items-center justify-between gap-2">
-                  <span>Recents</span>
+                  <span>{chatViewTitle}</span>
                   {sidebarOrganizationMenu}
                 </div>
               }
@@ -1562,11 +1667,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 <SidebarListItem title="Retry" onClick={() => void chats.refetch()} />
               </div>
             </SidebarListGroup>
-          ) : recentGroups.length === 0 ? (
+          ) : organized.chatSections.length === 0 ? (
             <SidebarListGroup
               title={
                 <div className="flex items-center justify-between gap-2">
-                  <span>Recents</span>
+                  <span>{chatViewTitle}</span>
                   {sidebarOrganizationMenu}
                 </div>
               }
@@ -1582,9 +1687,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
               />
             </SidebarListGroup>
           ) : (
-            recentGroups.map((group, index) => (
+            organized.chatSections.map((group, index) => (
               <SidebarListGroup
-                key={group.label}
+                key={group.id}
                 title={
                   index === 0 ? (
                     <div className="flex items-center justify-between gap-2">
@@ -1596,7 +1701,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   )
                 }
               >
-                {group.chats.map((chat) => renderChatRow(chat))}
+                {group.chats.map((summary) => renderChatRow(summary.chat))}
               </SidebarListGroup>
             ))
           )}

@@ -1361,6 +1361,27 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
     </DropdownMenuPrimitive.CheckboxItem>
   );
 });
+export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
+/** Single-choice menu row; the check mark and `aria-checked` carry selection. */
+export const DropdownMenuRadioItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>
+>(function RadioItem({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      ref={ref}
+      className={cn(menuItemClass, "group pl-7", className)}
+      {...props}
+    >
+      <span className="absolute left-2">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check className="size-3.5" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
+  );
+});
 
 export const CustomDropdownMenu = DropdownMenuPrimitive.Root;
 export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;

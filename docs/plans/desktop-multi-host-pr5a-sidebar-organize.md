@@ -46,7 +46,7 @@ The existing **Organize sidebar** menu gains three radio groups.
     - show only in Manual sort
     - are disabled at either end of the list
     - are disabled while a search is active, because the filtered neighbours would hide the effect
-- **Shortcuts follow the screen.** Chat jump shortcuts (⌘1–9) and previous/next navigation follow the rows in the order they are displayed. Before this change, Workspaces mode re-sorted the visible rows by recency.
+- **Shortcuts follow the screen.** Chat jump shortcuts (⌘1–9) and previous/next navigation follow the rows in the order they are displayed, computed by `displayedSidebarChats(...)` from the same projection. Before this change, Workspaces mode re-sorted the visible rows by recency.
 - **Preferences**
   - Same storage key, `aiden-agent.sidebar.v1`, with these new fields: `view`, `chatSort`, `projectSort`, `projectOrder`.
   - A legacy `organization` value is migrated: `workspace` → `projects`, `recent` → `recent`.
@@ -58,8 +58,9 @@ The existing **Organize sidebar** menu gains three radio groups.
 
 - `renderer/lib/sidebar-organization.test.ts`
   - Projection behaviour: tiers, ties, missing timestamps, identical names, manual order with unknown and stale keys, search, and move helpers.
+  - Displayed rows (`displayedSidebarChats`), which drive the chat shortcuts. This replaces the old source-grep shortcut assertion.
   - Preference migration and bounds.
 - `renderer/lib/sidebar-workspace-groups.test.ts`: the local adapter's admission rules (registered workspaces only; no Bot, Assistant or orphan chats).
 - `renderer/components/sidebar-organize-menu.test.tsx`: the rendered menu's radio semantics and which groups show in each view.
 - `renderer/components/chat-sidebar.test.tsx`: the source-grep assertions about organization were replaced by the behavioural coverage above.
-- `tests/e2e/chat-shell-interactions.spec.ts`: the Needs attention section order driven by live activity snapshots, and Manual sort with Move down persisting across a reload.
+- `tests/e2e/chat-shell-interactions.spec.ts`: the Needs attention section order driven by live activity snapshots, and Manual sort reordered by Move down and by drag, persisting across a reload.

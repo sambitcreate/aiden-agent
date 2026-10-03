@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { organizeSidebar, type SidebarView } from "./sidebar-organization";
 import type { ChatMeta, Workspace } from "./types";
-import { parseSidebarPreferences, projectSidebarWorkspaces } from "./sidebar-workspace-groups";
+import { localSidebarChats, localSidebarProjects } from "./sidebar-workspace-groups";
 
 const workspaces: Workspace[] = [
   {
@@ -30,86 +31,58 @@ const chats: ChatMeta[] = [
   },
   { id: "assistant", title: "Assistant", workspaceId: "assistant", createdAt: 6, updatedAt: 70 },
   { id: "orphan", title: "Removed", workspaceId: "removed", createdAt: 7, updatedAt: 80 },
+  { id: "unowned", title: "No workspace", createdAt: 8, updatedAt: 90 },
 ];
 
+function organize(search: string, view: SidebarView = "projects", attention = new Map<string, "needs_input">()) {
+  return organizeSidebar({
+    projects: localSidebarProjects(workspaces),
+    chats: localSidebarChats(workspaces, chats, (chat) => attention.get(chat.id) ?? "none"),
+    search,
+    view,
+    chatSort: "last_activity",
+    projectSort: "last_activity",
+    projectOrder: [],
+    now: 100,
+  });
+}
+
+const workspaceIds = (result: ReturnType<typeof organize>) =>
+  result.projectGroups.map((group) => group.project.workspace.id);
+const chatIds = (items: readonly { chat: ChatMeta }[]) => items.map((item) => item.chat.id);
+
 test("projects every registered workspace and only its owned regular chats", () => {
-  const projection = projectSidebarWorkspaces(workspaces, chats, "");
+  const result = organize("", "recent");
+  assert.deepEqual(workspaceIds(result), ["beta", "alpha", "empty"]);
+  assert.deepEqual(chatIds(result.projectGroups[1].chats), ["alpha-new", "alpha-old"]);
+  assert.deepEqual(result.projectGroups[2].chats, []);
   assert.deepEqual(
-    projection.groups.map((group) => group.workspace.id),
-    ["beta", "alpha", "empty"],
-  );
-  assert.deepEqual(
-    projection.groups[1].chats.map((chat) => chat.id),
-    ["alpha-new", "alpha-old"],
-  );
-  assert.deepEqual(projection.groups[2].chats, []);
-  assert.deepEqual(
-    projection.recents.map((chat) => chat.id),
+    result.chatSections.flatMap((section) => chatIds(section.chats)),
     ["beta-new", "alpha-new", "alpha-old"],
   );
 });
 
-test("search matches workspace identity and chat titles without leaking orphans", () => {
-  const byWorkspace = projectSidebarWorkspaces(workspaces, chats, "code/alpha");
+test("search matches the workspace folder path and chat titles without leaking orphans", () => {
+  const byWorkspace = organize("code/alpha", "recent");
+  assert.deepEqual(workspaceIds(byWorkspace), ["alpha"]);
+  assert.deepEqual(chatIds(byWorkspace.projectGroups[0].chats), ["alpha-new", "alpha-old"]);
   assert.deepEqual(
-    byWorkspace.groups.map((group) => group.workspace.id),
-    ["alpha"],
-  );
-  assert.deepEqual(
-    byWorkspace.groups[0].chats.map((chat) => chat.id),
-    ["alpha-new", "alpha-old"],
-  );
-  assert.deepEqual(
-    byWorkspace.recents.map((chat) => chat.id),
+    byWorkspace.chatSections.flatMap((section) => chatIds(section.chats)),
     ["alpha-new", "alpha-old"],
   );
 
-  const byChat = projectSidebarWorkspaces(workspaces, chats, "release");
-  assert.deepEqual(
-    byChat.groups.map((group) => group.workspace.id),
-    ["beta"],
-  );
-  assert.deepEqual(
-    byChat.groups[0].chats.map((chat) => chat.id),
-    ["beta-new"],
-  );
-  assert.deepEqual(
-    byChat.recents.map((chat) => chat.id),
-    ["beta-new"],
-  );
+  const byChat = organize("removed", "recent");
+  assert.deepEqual(workspaceIds(byChat), []);
+  assert.deepEqual(byChat.chatSections, []);
 });
 
-test("sidebar preferences are bounded, sanitized, and backward safe", () => {
-  assert.deepEqual(parseSidebarPreferences(null), {
-    organization: "workspace",
-    expandedWorkspaceIds: [],
-  });
+test("the attention tier supplied for a local chat drives the triage view", () => {
+  const result = organize("", "attention", new Map([["alpha-old", "needs_input"]]));
   assert.deepEqual(
-    parseSidebarPreferences(
-      JSON.stringify({
-        organization: "recent",
-        expandedWorkspaceIds: ["alpha", "removed", "alpha", "bad/id"],
-      }),
-      ["alpha", "beta"],
-    ),
-    { organization: "recent", expandedWorkspaceIds: ["alpha"] },
-  );
-  assert.deepEqual(parseSidebarPreferences("{"), {
-    organization: "workspace",
-    expandedWorkspaceIds: [],
-  });
-  assert.deepEqual(
-    parseSidebarPreferences(
-      JSON.stringify({ organization: "workspace", expandedWorkspaceIds: ["alpha"] }),
-      [],
-    ),
-    { organization: "workspace", expandedWorkspaceIds: [] },
-  );
-  const manyIds = Array.from({ length: 250 }, (_, index) => `workspace-${index}`);
-  assert.equal(
-    parseSidebarPreferences(
-      JSON.stringify({ organization: "workspace", expandedWorkspaceIds: manyIds }),
-    ).expandedWorkspaceIds.length,
-    200,
+    result.chatSections.map((section) => [section.label, chatIds(section.chats)]),
+    [
+      ["Needs input", ["alpha-old"]],
+      ["Other chats", ["beta-new", "alpha-new"]],
+    ],
   );
 });
