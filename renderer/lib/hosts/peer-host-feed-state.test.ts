@@ -77,6 +77,21 @@ test("a run update moves that run to the newest position, as main keeps it", () 
   );
 });
 
+test("a removed chat takes its run states with it, so a chat re-added later starts idle", () => {
+  const withRuns = snapshotOrFail(
+    replayPeerHostFeedMessages(base, [
+      message(5, { type: "run.state", run: { chatId: "b", runId: "r2", state: "needs_approval", unread: false } }),
+      message(6, { type: "chat.remove", id: "a" }),
+    ]),
+  );
+  assert.deepEqual(withRuns.runs.map((run) => run.runId), ["r2"]);
+
+  const readded = snapshotOrFail(
+    applyPeerHostFeedMessage(withRuns, message(7, { type: "chat.upsert", row: { id: "a", title: "A" } })),
+  );
+  assert.deepEqual(readded.runs.filter((run) => run.chatId === "a"), []);
+});
+
 test("a paired upsert and remove sharing a sequence both apply, and older messages are skipped", () => {
   const moved = snapshotOrFail(
     replayPeerHostFeedMessages(base, [
