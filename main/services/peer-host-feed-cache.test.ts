@@ -123,7 +123,7 @@ const initial = (): AidenRemoteHostFeedState => ({
   bots: [],
 });
 
-const ids = (rows: { id: string }[]) => rows.map((row) => row.id).sort();
+const ids = (rows: readonly { id: string }[]) => rows.map((row) => row.id).sort();
 
 test("a chunked snapshot applies only when complete and then mirrors the host's live changes", async () => {
   const { feed, state } = host("epoch_a", initial(), { snapshotChunkBytes: 1_024 });
