@@ -96,7 +96,9 @@ export function openCursorSse(
         cleanup();
         return false;
       }
-      if (!response.write(frame)) {
+      if (!response.write(frame) && !blocked) {
+        // One drain timer per blocked period; a later frame in the same batch
+        // must not orphan a timer that `onDrain` can no longer clear.
         blocked = true;
         drainTimeout = setTimeout(abort, drainTimeoutMs);
         drainTimeout.unref?.();
