@@ -315,7 +315,13 @@
       "THIRD_PARTY_NOTICES.md",
       "package.json",
       "main/services/browser/PLAYWRIGHT-LICENSE",
-      "!**/*.map"
+      "!**/*.map",
+      "!**/node_modules/esbuild/**",
+      "!**/node_modules/@esbuild/**",
+      "!**/*.d.{ts,mts,cts}",
+      "!**/node_modules/**/*.{ts,mts,cts,tsx}",
+      "!**/node_modules/**/{test,tests,__tests__,__mocks__,example,examples,docs}/**",
+      "!**/node_modules/**/{README,readme,Readme,CHANGELOG,changelog,Changelog,HISTORY,History,CONTRIBUTING,SECURITY,CODE_OF_CONDUCT,MIGRATION,UPGRADING}*.md"
     ],
     "extraResources": [
       {
