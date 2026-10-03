@@ -552,32 +552,97 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private let endpoint: URL
     private let credential: String?
+    /// Request/response calls, bounded by `SessionPolicy.interactive`.
     private let session: URLSession
+    /// Long-lived SSE streams, bounded by `SessionPolicy.stream`.
+    private let streamSession: URLSession
+    /// Sessions this client created. They hold their delegates strongly until
+    /// invalidated, so the client invalidates them when it is released.
+    private let ownedSessions: [URLSession]
 
     init(
         installation: AidenInstallation,
         credential: String,
         waitsForConnectivity: Bool = true,
-        requestTimeout: TimeInterval = 30
+        requestTimeout: TimeInterval = SessionPolicy.idleTimeout
     ) throws {
         guard let pairingTrust = installation.pairingTrust else {
             throw AidenRemoteClientError.missingTrustConfiguration
         }
         endpoint = installation.endpoint
         self.credential = credential
+        let trustPolicy = try AidenServerTrustPolicy(pairingTrust: pairingTrust)
         session = Self.makePinnedSession(
             endpoint: installation.endpoint,
             fingerprint: installation.serverSpkiSha256,
-            trustPolicy: try AidenServerTrustPolicy(pairingTrust: pairingTrust),
+            trustPolicy: trustPolicy,
+            policy: .interactive,
             waitsForConnectivity: waitsForConnectivity,
             requestTimeout: requestTimeout
         )
+        streamSession = Self.makePinnedSession(
+            endpoint: installation.endpoint,
+            fingerprint: installation.serverSpkiSha256,
+            trustPolicy: trustPolicy,
+            policy: .stream,
+            waitsForConnectivity: waitsForConnectivity,
+            requestTimeout: requestTimeout
+        )
+        ownedSessions = [session, streamSession]
     }
 
-    init(endpoint: URL, credential: String?, session: URLSession) {
+    init(endpoint: URL, credential: String?, session: URLSession, streamSession: URLSession? = nil) {
         self.endpoint = endpoint
         self.credential = credential
         self.session = session
+        self.streamSession = streamSession ?? session
+        ownedSessions = []
+    }
+
+    private init(endpoint: URL, ownedSession: URLSession) {
+        self.endpoint = endpoint
+        credential = nil
+        session = ownedSession
+        streamSession = ownedSession
+        ownedSessions = [ownedSession]
+    }
+
+    deinit {
+        // Let in-flight work finish, then release the sessions and their
+        // delegates. Without this every replaced client leaks both.
+        ownedSessions.forEach { $0.finishTasksAndInvalidate() }
+    }
+
+    /// Timeouts per call type. The idle timeout doubles as stream liveness:
+    /// the server sends an SSE heartbeat comment every 15 s on both transcript
+    /// and progress streams, so a stream with no bytes for two heartbeats is
+    /// treated as dead and reconnects through the normal recovery path.
+    enum SessionPolicy: Equatable {
+        case interactive
+        case stream
+
+        static let idleTimeout: TimeInterval = 30
+
+        /// Total time one task may take, including waiting for connectivity.
+        var resourceTimeout: TimeInterval {
+            switch self {
+            case .interactive: 5 * 60
+            case .stream: 60 * 60
+            }
+        }
+
+        func configuration(
+            waitsForConnectivity: Bool,
+            requestTimeout: TimeInterval = SessionPolicy.idleTimeout
+        ) -> URLSessionConfiguration {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.waitsForConnectivity = waitsForConnectivity
+            configuration.timeoutIntervalForRequest = requestTimeout
+            configuration.timeoutIntervalForResource = max(requestTimeout, resourceTimeout)
+            configuration.httpCookieAcceptPolicy = .never
+            configuration.httpShouldSetCookies = false
+            return configuration
+        }
     }
 
     static func pair(
@@ -591,17 +656,20 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> AidenRemoteContractFixture.PairingExchange {
         let payload = try payload.validated(at: now)
         let bootstrap = payload.bootstrap
-        let session: URLSession
+        let client: AidenRemoteClient
         if let injectedSession {
-            session = injectedSession
+            client = AidenRemoteClient(endpoint: bootstrap.endpoint, credential: nil, session: injectedSession)
         } else {
-            session = makePinnedSession(
+            client = AidenRemoteClient(
                 endpoint: bootstrap.endpoint,
-                fingerprint: bootstrap.serverSpkiSha256,
-                trustPolicy: try AidenServerTrustPolicy(pairingTrust: payload.trust)
+                ownedSession: makePinnedSession(
+                    endpoint: bootstrap.endpoint,
+                    fingerprint: bootstrap.serverSpkiSha256,
+                    trustPolicy: try AidenServerTrustPolicy(pairingTrust: payload.trust),
+                    policy: .interactive
+                )
             )
         }
-        let client = AidenRemoteClient(endpoint: bootstrap.endpoint, credential: nil, session: session)
         let request = PairingExchangeRequest(
             secret: bootstrap.secret,
             deviceName: deviceName,
@@ -680,8 +748,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         guard isCanonicalAidenEndpoint(endpoint) else {
             throw AidenRemoteClientError.invalidEndpoint
         }
-        let session = injectedSession ?? makeSealedBootstrapSession(endpoint: endpoint)
-        let client = AidenRemoteClient(endpoint: endpoint, credential: nil, session: session)
+        let client = injectedSession.map {
+            AidenRemoteClient(endpoint: endpoint, credential: nil, session: $0)
+        } ?? AidenRemoteClient(endpoint: endpoint, ownedSession: makeSealedBootstrapSession(endpoint: endpoint))
         let sealed: AidenRemoteContractFixture.ManualPairingBootstrap = try await client.send(
             method: "POST",
             path: ["pairing", "manual-bootstrap"],
@@ -1960,7 +2029,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                         authenticated: true
                     )
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    let (bytes, response) = try await session.bytes(for: request)
+                    let (bytes, response) = try await streamSession.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw AidenRemoteClientError.invalidResponse
                     }
@@ -2038,8 +2107,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         endpoint: URL,
         fingerprint: String,
         trustPolicy: AidenServerTrustPolicy,
+        policy: SessionPolicy,
         waitsForConnectivity: Bool = true,
-        requestTimeout: TimeInterval = 30
+        requestTimeout: TimeInterval = SessionPolicy.idleTimeout
     ) -> URLSession {
         let delegate = AidenPinnedServerSessionDelegate(
             expectedHost: endpoint.host ?? "",
@@ -2047,12 +2117,10 @@ final class AidenRemoteClient: @unchecked Sendable {
             expectedFingerprint: fingerprint,
             trustPolicy: trustPolicy
         )
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.waitsForConnectivity = waitsForConnectivity
-        configuration.timeoutIntervalForRequest = requestTimeout
-        configuration.timeoutIntervalForResource = 60 * 60
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.httpShouldSetCookies = false
+        let configuration = policy.configuration(
+            waitsForConnectivity: waitsForConnectivity,
+            requestTimeout: requestTimeout
+        )
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
