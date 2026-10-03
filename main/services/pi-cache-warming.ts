@@ -66,8 +66,10 @@ export function cacheWarmingEconomics(model: Pick<Model<Api>, "cost">, promptTok
 }
 
 interface WarmRun {
-  identity: string;
-  context: TranscriptContext;
+  /** Hash of the model endpoint/config, computed only once warming is economical. */
+  identity?: string;
+  /** Shallow message-list snapshot until warming is economical, then a frozen deep copy; dropped on stop. */
+  context?: TranscriptContext;
   options: Pick<SimpleStreamOptions, "sessionId" | "reasoning" | "thinkingBudgets" | "cacheRetention" | "temperature" | "transport" | "toolChoice">;
   cost: Model<Api>["cost"];
   startedAt: number;
@@ -118,15 +120,17 @@ export class PiCacheWarmer {
     const controller = new AbortController();
     const requestSignal = options.signal;
     const cancel = () => { if (this.run === run) this.stop(); };
+    // Only the message list is copied here: each foreground request (every
+    // tool-loop turn) passes through, and most never become worth warming.
     const run: WarmRun = {
-      identity: modelIdentity(model), context: structuredClone(context),
+      context: { ...context, messages: [...context.messages] },
       options: {
         sessionId: options.sessionId, reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets ? structuredClone(options.thinkingBudgets) : undefined,
         cacheRetention: retention, temperature: options.temperature, transport: options.transport,
         toolChoice: options.toolChoice ? structuredClone(options.toolChoice) : undefined,
       },
-      cost: structuredClone(model.cost), startedAt: this.clock.now(), ttlMs,
+      cost: model.cost, startedAt: this.clock.now(), ttlMs,
       delayMs: Math.floor(Math.min(ttlMs * 0.9, ttlMs - 10_000)), deadlineAt: 0,
       promptTokens: 0, spentUsd: 0, controller,
       removeAbort: () => requestSignal?.removeEventListener("abort", cancel),
@@ -137,6 +141,12 @@ export class PiCacheWarmer {
     return (message) => {
       if (this.run !== run || message.stopReason === "error" || message.stopReason === "aborted") return;
       run.promptTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
+      const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
+      if (!economics || economics.expectedSavings < MIN_SAVINGS_USD || !run.context) { this.stop(); return; }
+      // Freeze the replayed prefix and endpoint identity only for a request worth warming.
+      run.context = structuredClone(run.context);
+      run.cost = structuredClone(run.cost);
+      run.identity = modelIdentity(model);
       this.schedule(run, run.startedAt);
     };
   }
@@ -146,6 +156,7 @@ export class PiCacheWarmer {
     this.run = undefined;
     if (!run) return;
     if (run.timer !== undefined) this.clock.clearTimeout(run.timer);
+    run.context = undefined;
     run.removeAbort();
     run.controller.abort();
   }
@@ -174,17 +185,20 @@ export class PiCacheWarmer {
   private async refresh(run: WarmRun): Promise<void> {
     run.timer = undefined;
     try {
+      // Settings are read before resolving credentials (no keychain read when off)
+      // and again after, since either await can race a toggle or a cancellation.
       if (!this.current(run) || !(await this.deps.enabled())) { if (this.run === run) this.stop(); return; }
       const runtime = await this.deps.resolveRuntime(run.controller.signal);
-      if (!this.current(run) || modelIdentity(runtime.model) !== run.identity || !(await this.deps.enabled())) { if (this.run === run) this.stop(); return; }
-      if (!this.current(run)) { if (this.run === run) this.stop(); return; }
+      if (!this.current(run) || !(await this.deps.enabled()) || !this.current(run) || modelIdentity(runtime.model) !== run.identity) { if (this.run === run) this.stop(); return; }
+      const context = run.context;
+      if (!context) { this.stop(); return; }
       const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
       if (!economics || economics.expectedSavings - run.spentUsd < MIN_SAVINGS_USD) { this.stop(); return; }
       // One replayed prefix can avoid only one future miss. Reserve this request's
       // estimated cost before dispatch; every later refresh shares that budget.
       run.spentUsd += economics.warmCost;
       const dispatchedAt = this.clock.now();
-      const message = await runtime.streams.streamSimple(runtime.model, run.context, {
+      const message = await runtime.streams.streamSimple(runtime.model, context, {
         ...run.options, apiKey: runtime.apiKey, headers: runtime.headers,
         maxTokens: 1, maxRetries: 0, timeoutMs: 30_000, signal: run.controller.signal,
       }).result();
