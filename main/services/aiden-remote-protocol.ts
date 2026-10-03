@@ -1035,6 +1035,47 @@ export interface AidenRemoteContractFixture {
   };
   /** Revision 19: a run-control loser's `409 approval_resolved`. */
   runControlError?: AidenRemoteErrorEnvelope;
+  /** Revision 19, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
+  pairingRequests?: AidenRemotePairingRequestsFixture;
+}
+
+/** One status poll answer; only `approved` carries the sealed grant envelope. */
+export interface AidenRemotePairingRequestStatusFixture {
+  requestId: string;
+  state: "pending" | "approved" | "denied" | "expired" | "cancelled";
+  expiresAt: string;
+  envelope?: {
+    kind: "aiden-pairing-request-v1";
+    protocolVersion: 1;
+    requestId: string;
+    expiresAt: string;
+    hostPublicKey: string;
+    salt: string;
+    nonce: string;
+    ciphertext: string;
+    tag: string;
+  };
+}
+
+/** Contract fixture section for `/pairing/requests*` (feature `pairing-requests-v1`). */
+export interface AidenRemotePairingRequestsFixture {
+  feature: typeof AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE;
+  create: {
+    request: { deviceName: string; deviceType: "mac" | "linux"; publicKey: string; clientVersion?: string };
+    response: { requestId: string; pollSecret: string; expiresAt: string; hostCommitment: string };
+  };
+  reveal: { request: { requesterNonce: string }; response: { hostNonce: string } };
+  status: AidenRemotePairingRequestStatusFixture[];
+  error: AidenRemoteErrorEnvelope;
+  matchCodeVectors: {
+    requesterPublicKey: string;
+    serverSpkiSha256: string;
+    requestId: string;
+    requesterNonce: string;
+    hostNonce: string;
+    hostCommitment: string;
+    matchCode: string;
+  }[];
 }
 
 /** `GET /health?detail=host`: non-secret host identity for desktop controllers. */
@@ -5175,6 +5216,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   const revision19 = contractRevision >= 19
     ? parseRevision19Fixture(value, { instanceId, contractRevision })
     : {};
+  if (value.pairingRequests !== undefined) {
+    if (contractRevision < 19) throw new Error("Pairing request fixtures require contract revision 19.");
+    parsePairingRequestsFixture(value.pairingRequests);
+  }
   assertNoForbiddenWireKeys(value);
   return {
     ...value,
@@ -5337,6 +5382,169 @@ function parseHostFeedWorkspaceRepository(workspace: unknown, label: string): vo
   if (relativePath.startsWith("/") || relativePath.split("/").some((part) => part === "..")) {
     throw new Error(`${label} repository relativePath must stay inside the repository.`);
   }
+}
+
+const PAIRING_REQUEST_FIXTURE_ID = /^pairreq_[A-Za-z0-9_-]{32}$/u;
+const PAIRING_REQUEST_FIXTURE_STATES = ["pending", "approved", "denied", "expired", "cancelled"] as const;
+
+/** Unpadded base64url carrying exactly `bytes` bytes. */
+function fixtureBase64Url(value: unknown, label: string, bytes: number): string {
+  const length = Math.ceil((bytes * 4) / 3);
+  if (typeof value !== "string" || value.length !== length || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new Error(`${label} must be ${bytes} bytes of unpadded base64url.`);
+  }
+  return value;
+}
+
+function requiredFixtureRecord(
+  value: unknown,
+  label: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} is invalid.`);
+  assertExactKeys(value, [...required, ...optional], label);
+  for (const key of required) {
+    if (!(key in value)) throw new Error(`${label} is missing ${key}.`);
+  }
+  return value;
+}
+
+function fixturePairingRequestId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !PAIRING_REQUEST_FIXTURE_ID.test(value)) {
+    throw new Error(`${label} requestId is invalid.`);
+  }
+  return value;
+}
+
+function fixtureTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value)) || !value.endsWith("Z")) {
+    throw new Error(`${label} expiresAt must be an RFC 3339 UTC timestamp.`);
+  }
+  return value;
+}
+
+/**
+ * Validates the `pairing-requests-v1` section: unauthenticated request,
+ * reveal and poll shapes, the sealed grant envelope and the match-code
+ * vectors. The cryptographic vectors themselves are checked by the
+ * sealed-envelope tests; this keeps the shapes fail-closed for every client.
+ */
+function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequestsFixture {
+  const section = requiredFixtureRecord(
+    value,
+    "Pairing requests fixture",
+    ["feature", "create", "reveal", "status", "error", "matchCodeVectors"],
+  );
+  if (section.feature !== AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE) {
+    throw new Error("Pairing requests fixture names another feature.");
+  }
+
+  const create = requiredFixtureRecord(section.create, "Pairing request create", ["request", "response"]);
+  const createRequest = requiredFixtureRecord(
+    create.request,
+    "Pairing request create body",
+    ["deviceName", "deviceType", "publicKey"],
+    ["clientVersion"],
+  );
+  boundedText(createRequest.deviceName, "Pairing request deviceName", 80);
+  if (createRequest.deviceType !== "mac" && createRequest.deviceType !== "linux") {
+    throw new Error("Pairing requests come only from mac or linux devices.");
+  }
+  fixtureBase64Url(createRequest.publicKey, "Pairing request publicKey", 32);
+  if (createRequest.clientVersion !== undefined) boundedText(createRequest.clientVersion, "Pairing request clientVersion", 40);
+  const created = requiredFixtureRecord(
+    create.response,
+    "Pairing request create response",
+    ["requestId", "pollSecret", "expiresAt", "hostCommitment"],
+  );
+  const requestId = fixturePairingRequestId(created.requestId, "Pairing request create response");
+  fixtureBase64Url(created.pollSecret, "Pairing request pollSecret", 32);
+  const expiresAt = fixtureTimestamp(created.expiresAt, "Pairing request create response");
+  fixtureBase64Url(created.hostCommitment, "Pairing request hostCommitment", 32);
+
+  const reveal = requiredFixtureRecord(section.reveal, "Pairing request reveal", ["request", "response"]);
+  fixtureBase64Url(
+    requiredFixtureRecord(reveal.request, "Pairing request reveal body", ["requesterNonce"]).requesterNonce,
+    "Pairing request requesterNonce",
+    32,
+  );
+  fixtureBase64Url(
+    requiredFixtureRecord(reveal.response, "Pairing request reveal response", ["hostNonce"]).hostNonce,
+    "Pairing request hostNonce",
+    32,
+  );
+
+  if (!Array.isArray(section.status) || section.status.length === 0) {
+    throw new Error("Pairing request status fixtures must be a non-empty array.");
+  }
+  section.status.forEach((entry, index) => {
+    const label = `Pairing request status ${index}`;
+    const status = requiredFixtureRecord(entry, label, ["requestId", "state", "expiresAt"], ["envelope"]);
+    if (fixturePairingRequestId(status.requestId, label) !== requestId) throw new Error(`${label} names another request.`);
+    if (fixtureTimestamp(status.expiresAt, label) !== expiresAt) throw new Error(`${label} changes the expiry.`);
+    if (!(PAIRING_REQUEST_FIXTURE_STATES as readonly unknown[]).includes(status.state)) {
+      throw new Error(`${label} state is invalid.`);
+    }
+    if ((status.state === "approved") !== (status.envelope !== undefined)) {
+      throw new Error("Only an approved pairing request carries an envelope, and it always does.");
+    }
+    if (status.envelope === undefined) return;
+    const envelope = requiredFixtureRecord(
+      status.envelope,
+      `${label} envelope`,
+      ["kind", "protocolVersion", "requestId", "expiresAt", "hostPublicKey", "salt", "nonce", "ciphertext", "tag"],
+    );
+    if (envelope.kind !== "aiden-pairing-request-v1" || envelope.protocolVersion !== 1) {
+      throw new Error(`${label} envelope kind is invalid.`);
+    }
+    if (envelope.requestId !== requestId || envelope.expiresAt !== expiresAt) {
+      throw new Error(`${label} envelope must be bound to its request and expiry.`);
+    }
+    fixtureBase64Url(envelope.hostPublicKey, `${label} envelope hostPublicKey`, 32);
+    fixtureBase64Url(envelope.salt, `${label} envelope salt`, 16);
+    fixtureBase64Url(envelope.nonce, `${label} envelope nonce`, 12);
+    fixtureBase64Url(envelope.tag, `${label} envelope tag`, 16);
+    if (
+      typeof envelope.ciphertext !== "string" ||
+      envelope.ciphertext.length === 0 ||
+      envelope.ciphertext.length > 10_923 ||
+      !/^[A-Za-z0-9_-]+$/u.test(envelope.ciphertext)
+    ) {
+      throw new Error(`${label} envelope ciphertext must be bounded unpadded base64url.`);
+    }
+  });
+
+  const error = parseErrorEnvelopeFixture(section.error, "Pairing request error");
+
+  if (!Array.isArray(section.matchCodeVectors) || section.matchCodeVectors.length === 0) {
+    throw new Error("Pairing request match-code vectors must be a non-empty array.");
+  }
+  section.matchCodeVectors.forEach((entry, index) => {
+    const label = `Pairing request match-code vector ${index}`;
+    const vector = requiredFixtureRecord(entry, label, [
+      "requesterPublicKey",
+      "serverSpkiSha256",
+      "requestId",
+      "requesterNonce",
+      "hostNonce",
+      "hostCommitment",
+      "matchCode",
+    ]);
+    fixtureBase64Url(vector.requesterPublicKey, `${label} requesterPublicKey`, 32);
+    if (typeof vector.serverSpkiSha256 !== "string" || !/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(vector.serverSpkiSha256)) {
+      throw new Error(`${label} serverSpkiSha256 is invalid.`);
+    }
+    fixturePairingRequestId(vector.requestId, label);
+    fixtureBase64Url(vector.requesterNonce, `${label} requesterNonce`, 32);
+    fixtureBase64Url(vector.hostNonce, `${label} hostNonce`, 32);
+    fixtureBase64Url(vector.hostCommitment, `${label} hostCommitment`, 32);
+    if (typeof vector.matchCode !== "string" || !/^[0-9]{6}$/u.test(vector.matchCode)) {
+      throw new Error(`${label} matchCode must be six digits.`);
+    }
+  });
+
+  return { ...(section as unknown as AidenRemotePairingRequestsFixture), error };
 }
 
 function parseRevision19Fixture(
