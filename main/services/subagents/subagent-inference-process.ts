@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import type {
@@ -187,8 +187,7 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     this.launchIdentity = launchIdentity;
     this.launchError = launchError;
     child.once("spawn", () => {
-      const identity = readOwnedProcessIdentity(child.pid);
-      if (identity.kind === "found") this.launchIdentity = identity.identity;
+      void this.captureLaunchIdentity();
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       this.startupStderr.append(chunk);
@@ -208,16 +207,26 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     this.launchError = error;
   }
 
-  captureLaunchIdentity(): boolean {
-    if (this.launchIdentity) return true;
-    const identity = readOwnedProcessIdentity(this.child.pid);
-    if (identity.kind !== "found") return false;
-    this.launchIdentity = identity.identity;
-    return true;
+  private identityCapture: Promise<boolean> | undefined;
+
+  /** Read the launch identity off the event loop; concurrent callers share one `ps`. */
+  captureLaunchIdentity(): Promise<boolean> {
+    if (this.launchIdentity) return Promise.resolve(true);
+    this.identityCapture ??= readOwnedProcessIdentity(this.child.pid)
+      .then((identity) => {
+        if (identity.kind !== "found") return false;
+        this.launchIdentity ??= identity.identity;
+        return true;
+      })
+      .finally(() => {
+        this.identityCapture = undefined;
+      });
+    return this.identityCapture;
   }
 
+  /** Launch resolves only after the identity was captured, so this reads cached state. */
   isLaunchVerified(): boolean {
-    return this.launchError === undefined && this.captureLaunchIdentity();
+    return this.launchError === undefined && this.launchIdentity !== undefined;
   }
 
   verifyReadyIdentity(launchToken: string): boolean {
@@ -233,13 +242,14 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     return this.child.kill();
   }
 
-  killHard(): void {
+  async killHard(): Promise<void> {
     const pid = this.child.pid;
     if (this.exited) return;
     if (!this.launchIdentity) {
       throw new Error("The isolated inference process launch identity is unavailable.");
     }
-    const current = readOwnedProcessIdentity(pid);
+    const current = await readOwnedProcessIdentity(pid);
+    if (this.exited) return;
     if (
       current.kind === "missing" ||
       (current.kind === "found" && current.identity !== this.launchIdentity)
@@ -255,10 +265,10 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     process.kill(pid, "SIGKILL");
   }
 
-  hasExited(): boolean {
+  async hasExited(): Promise<boolean> {
     if (this.exited) return true;
-    const current = readOwnedProcessIdentity(this.child.pid);
-    if (current.kind === "missing") return true;
+    const current = await readOwnedProcessIdentity(this.child.pid);
+    if (this.exited || current.kind === "missing") return true;
     if (current.kind === "indeterminate") {
       throw new Error("Could not verify isolated inference process termination.");
     }
@@ -295,7 +305,18 @@ type OwnedProcessIdentityResult =
   | { kind: "missing" }
   | { kind: "indeterminate" };
 
-function readOwnedProcessIdentity(pid: number | undefined): OwnedProcessIdentityResult {
+function readProcessTable(pid: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "ps",
+      ["-p", String(pid), "-o", "lstart=", "-o", "command="],
+      { encoding: "utf8", timeout: 1_000, maxBuffer: 16 * 1024 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+  });
+}
+
+async function readOwnedProcessIdentity(pid: number | undefined): Promise<OwnedProcessIdentityResult> {
   if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) {
     return { kind: "indeterminate" };
   }
@@ -310,11 +331,7 @@ function readOwnedProcessIdentity(pid: number | undefined): OwnedProcessIdentity
     return { kind: "indeterminate" };
   }
   try {
-    const identity = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], {
-      encoding: "utf8",
-      timeout: 1_000,
-      maxBuffer: 16 * 1024,
-    }).trim();
+    const identity = (await readProcessTable(pid)).trim();
     return identity ? { kind: "found", identity } : { kind: "indeterminate" };
   } catch {
     return { kind: "indeterminate" };
@@ -342,12 +359,7 @@ async function launchElectronInferenceProcess(
       ...(request.options.env ?? {}),
     },
   });
-  const initialIdentity = readOwnedProcessIdentity(child.pid);
-  const owned = new ElectronInferenceProcess(
-    child,
-    initialIdentity.kind === "found" ? initialIdentity.identity : undefined,
-    launchNonce,
-  );
+  const owned = new ElectronInferenceProcess(child, undefined, launchNonce);
   return new Promise<KillableInferenceProcess>((resolve) => {
     let settled = false;
     let identityRetry: NodeJS.Timeout | undefined;
@@ -359,17 +371,21 @@ async function launchElectronInferenceProcess(
       if (launchError && !initiallyExited) child.kill();
       resolve(owned);
     };
+    // Up to ten `ps` reads 25 ms apart, without blocking the main process.
     const verifySpawnIdentity = (attempt = 0) => {
       if (settled) return;
-      if (owned.captureLaunchIdentity()) {
-        finish();
-        return;
-      }
-      if (attempt >= 9) {
-        finish(new Error("Subagent inference process launch identity could not be verified."));
-        return;
-      }
-      identityRetry = setTimeout(() => verifySpawnIdentity(attempt + 1), 25);
+      void owned.captureLaunchIdentity().then((captured) => {
+        if (settled) return;
+        if (captured) {
+          finish();
+          return;
+        }
+        if (attempt >= 9) {
+          finish(new Error("Subagent inference process launch identity could not be verified."));
+          return;
+        }
+        identityRetry = setTimeout(() => verifySpawnIdentity(attempt + 1), 25);
+      });
     };
     const onSpawn = () => verifySpawnIdentity();
     const onExit = (code: number) => {
