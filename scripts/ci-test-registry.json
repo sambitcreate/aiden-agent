@@ -612,6 +612,7 @@
         "scripts/apple-developer-tools.test.mjs",
         "scripts/build-electron.test.mjs",
         "scripts/check-macos-release.test.mjs",
+        "scripts/check-renderer-bundle-budget.test.mjs",
         "scripts/computer-use-packaged-acceptance.test.mjs",
         "scripts/configure-electron-fuses.test.mjs",
         "scripts/gemini-live-electron-spike-core.test.mjs",
