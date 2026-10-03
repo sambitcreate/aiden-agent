@@ -65,6 +65,13 @@ export interface PeerRunState {
   unread: boolean;
 }
 
+/** Credential-free repository identity (contract revision 19); equal keys mean the same repository. */
+export interface PeerRepositoryIdentity {
+  canonicalKey: string;
+  /** POSIX path of the workspace folder inside the repository; `""` at the root. */
+  relativePath: string;
+}
+
 /** Feed rows are the host's list projections, passed through as plain JSON objects. */
 export type PeerFeedRow = Record<string, unknown> & { id: string };
 

@@ -5,6 +5,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
 import {
   gitBranches,
+  gitCachedRepositoryIdentity,
   gitCheckout,
   gitCommit,
   gitCompare,
@@ -176,6 +177,16 @@ export function registerWorkspaceHandlers(): void {
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) =>
       resolved ? gitInfo(resolved.folderPath, signal) : { isRepo: false },
     ),
+  );
+
+  // Credential-free repository identity for cross-machine sidebar grouping.
+  // Reuses the shared Git info read, which records the identity as it goes.
+  ipcMain.handle("workspaces:repositoryIdentity", async (event, workspaceId: unknown) =>
+    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+      if (!resolved) return null;
+      const info = await gitInfo(resolved.folderPath, signal);
+      return info.isRepo ? (gitCachedRepositoryIdentity(resolved.folderPath) ?? null) : null;
+    }),
   );
 
   ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>

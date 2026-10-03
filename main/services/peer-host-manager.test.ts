@@ -500,6 +500,62 @@ test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds 
   assert.equal(peerBackoffDelay(9, () => 0.5), 30_000);
 });
 
+test("Reconnect restarts a backing-off host at once and leaves a blocked host alone", async () => {
+  const offline = new FakeHost("host_a", "Plans");
+  const blocked = new FakeHost("host_b", "Other");
+  offline.server = () => {
+    throw new PeerTransportError("unavailable");
+  };
+  blocked.server = () => {
+    throw new PeerTransportError("identity_changed");
+  };
+  const harness = setup([offline, blocked]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    // Two failures stretch the schedule beyond its first step.
+    let state = harness.status("host_a").state as { kind: string; retryAt: number };
+    await harness.advance(state.retryAt - harness.timers.now);
+    state = harness.status("host_a").state as { kind: string; retryAt: number };
+    assert.equal(state.kind, "backoff");
+    assert.equal(offline.calls.length, 2);
+
+    offline.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    harness.manager.reconnect("host_a");
+    await settle();
+    assert.equal(offline.calls.filter((call) => call === "GET /server").length, 3, "no wait for the backoff");
+    assert.equal(harness.status("host_a").state.kind, "connected");
+
+    harness.manager.reconnect("host_b");
+    harness.manager.reconnect("host_unknown");
+    await harness.advance(10 * 60_000);
+    assert.deepEqual(blocked.calls, ["GET /server"], "a blocked host is never retried");
+    assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "identity_changed" });
+
+    // A connected host is not torn down by a stray reconnect.
+    const generation = harness.status("host_a").generation;
+    harness.manager.reconnect("host_a");
+    await settle();
+    assert.equal(harness.status("host_a").generation, generation);
+
+    // Failing again after a manual reconnect starts the schedule from its first step.
+    offline.server = () => {
+      throw new PeerTransportError("unavailable");
+    };
+    offline.streams("/host/events")[0]!.drop();
+    await settle();
+    await harness.advance(PEER_STABLE_MS);
+    state = harness.status("host_a").state as { kind: string; retryAt: number };
+    assert.equal(state.kind, "backoff");
+    harness.manager.reconnect("host_a");
+    await settle();
+    state = harness.status("host_a").state as { kind: string; retryAt: number };
+    assert.equal(state.retryAt - harness.timers.now, PEER_BACKOFF_STEPS_MS[0]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("a superseded connection attempt cannot move the host, and generations only increase", async () => {
   const host = new FakeHost("host_a", "Plans");
   let release!: () => void;
