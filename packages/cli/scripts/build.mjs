@@ -18,7 +18,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
@@ -147,12 +147,63 @@ const httpsProxyAgentNamedExportPlugin = {
 	},
 };
 
-// Note: the Aiden cores bundled from ../../../main/services resolve
-// @earendil-works packages through the repo root's node_modules while pi's
-// shrinkwrapped copies stay nested. esbuild aliasing cannot unify them without
-// breaking subpath exports resolution (pi-ai/compat etc.), so both copies are
-// bundled. This is safe: the Aiden cores use pi-ai only for TypeBox schema
-// construction (plain objects), never for identity-sensitive runtime behavior.
+const cliNodeModules = `${resolve(pkgDir, "node_modules")}${sep}`;
+const packageIdentityCache = new Map();
+
+/** Name and version of the installed node_modules package that owns a file. */
+function owningPackage(file) {
+	for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+		if (packageIdentityCache.has(dir)) return packageIdentityCache.get(dir);
+		const manifest = join(dir, "package.json");
+		if (!existsSync(manifest)) continue;
+		let parsed;
+		try {
+			parsed = JSON.parse(readFileSync(manifest, "utf8"));
+		} catch {
+			continue;
+		}
+		// Nested manifests (dist/esm/package.json with only "type") are not the
+		// package root; the root is the directory installed as node_modules/<name>.
+		if (typeof parsed.name !== "string" || !dir.endsWith(`${sep}node_modules${sep}${parsed.name.replaceAll("/", sep)}`)) {
+			continue;
+		}
+		const identity = { name: parsed.name, version: parsed.version, dir };
+		packageIdentityCache.set(dir, identity);
+		return identity;
+	}
+	return undefined;
+}
+
+// The Aiden cores bundled from ../../../main and ../../../renderer resolve bare
+// imports (pi-ai, pi-agent-core, typebox, yaml, ...) through the repo root's
+// node_modules, and so do packages/cli sources for packages that only exist
+// nested under pi-coding-agent's shrinkwrap (pi-ai itself). Left alone, esbuild bundles both trees (about 7 MB of duplicate
+// input: pi-ai and its provider SDKs twice). Re-resolve each bare import made
+// from outside packages/cli/node_modules as if pi-coding-agent made it, and keep that answer
+// only when it is the same package at the same version. Subpath exports still
+// go through each package's own exports map, and a genuine version difference
+// keeps its own copy.
+const dedupeRepoPackagesPlugin = {
+	name: "aiden-dedupe-repo-packages",
+	setup(build) {
+		build.onResolve({ filter: /^(?:@[^/]+\/)?[^./][^:]*$/ }, async (args) => {
+			if (args.pluginData?.aidenDedupe || args.namespace !== "file" || !args.importer) return undefined;
+			if (args.importer.startsWith(cliNodeModules) || isBuiltin(args.path)) return undefined;
+			const options = { kind: args.kind, importer: args.importer, pluginData: { aidenDedupe: true } };
+			const original = await build.resolve(args.path, { ...options, resolveDir: args.resolveDir });
+			if (original.errors.length > 0 || original.external || original.path.startsWith(cliNodeModules)) {
+				return undefined;
+			}
+			const shared = await build.resolve(args.path, { ...options, resolveDir: piAgentPkg });
+			if (shared.errors.length > 0 || shared.external || !shared.path.startsWith(cliNodeModules)) return undefined;
+			const from = owningPackage(original.path);
+			const to = owningPackage(shared.path);
+			if (!from || !to || from.name !== to.name || from.version !== to.version) return undefined;
+			return { path: shared.path, sideEffects: shared.sideEffects };
+		});
+	},
+};
+
 const packageAlias = {
 	// Keep the desktop platform facade out of the bundle: cores that can reach
 	// for electron lazily resolve to a loud stub instead of the npm package.
@@ -177,7 +228,13 @@ function commonBuildOptions() {
 		minifySyntax: true,
 		minifyWhitespace: true,
 		platform: "node",
-		plugins: [credentialStorePlugin, aidenRelativeTsRewritePlugin, lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
+		plugins: [
+			credentialStorePlugin,
+			aidenRelativeTsRewritePlugin,
+			lazyJitiPlugin,
+			httpsProxyAgentNamedExportPlugin,
+			dedupeRepoPackagesPlugin,
+		],
 		sourcemap: false,
 		target: "node22.19",
 		tsconfigRaw: { compilerOptions: {} },
@@ -204,6 +261,27 @@ function validateExternalImports(metafiles) {
 	}
 	if (unexpected.size > 0) {
 		throw new Error(`Bundle left unexpected external imports: ${Array.from(unexpected).sort().join(", ")}`);
+	}
+}
+
+/**
+ * Fails the build when one package version is bundled from two install
+ * locations, which is what the dedupe plugin above exists to prevent.
+ */
+function assertNoDuplicatePackages(metafile) {
+	const locations = new Map();
+	for (const inputPath of Object.keys(metafile.inputs)) {
+		if (!inputPath.includes("node_modules/")) continue;
+		const identity = owningPackage(resolve(pkgDir, inputPath));
+		if (!identity) continue;
+		const key = `${identity.name}@${identity.version}`;
+		const dirs = locations.get(key) ?? new Set();
+		dirs.add(identity.dir);
+		locations.set(key, dirs);
+	}
+	const duplicated = [...locations].filter(([, dirs]) => dirs.size > 1).map(([key, dirs]) => `${key} (${[...dirs].map((dir) => relative(pkgDir, dir)).join(", ")})`);
+	if (duplicated.length > 0) {
+		throw new Error(`Bundle contains the same package version from several install locations: ${duplicated.join("; ")}`);
 	}
 }
 
@@ -276,6 +354,7 @@ if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 }
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+assertNoDuplicatePackages(mainResult.metafile);
 
 // Bundle externals resolve at runtime from the app root's node_modules
 // ancestry. Tree-shaking usually eliminates unreferenced ones (chord,
