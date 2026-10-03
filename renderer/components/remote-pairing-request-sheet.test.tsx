@@ -57,6 +57,34 @@ test("the sheet offers the oldest unanswered live request and counts the rest", 
   assert.equal(pairingRequestSecondsLeft(new Date(NOW + 1_500).toISOString(), NOW), 2);
 });
 
+test("a request stays on screen and alone shows as busy until its answer settles", () => {
+  const prompts = [prompt("pairreq_first"), prompt("pairreq_second")];
+
+  const settling = nextPairingRequest(prompts, new Set(), NOW, "pairreq_first");
+  assert.equal(settling.current?.requestId, "pairreq_first");
+  assert.equal(settling.busy, true);
+  assert.equal(settling.waiting, 1);
+
+  // Its countdown running out mid-answer does not swap in the next request.
+  const lateSettle = nextPairingRequest(prompts, new Set(), NOW + 90_000, "pairreq_first");
+  assert.equal(lateSettle.current?.requestId, "pairreq_first");
+  assert.equal(lateSettle.waiting, 0);
+
+  // Once settled, the next request is offered and is not shown as busy.
+  const next = nextPairingRequest(prompts, new Set(["pairreq_first"]), NOW, null);
+  assert.equal(next.current?.requestId, "pairreq_second");
+  assert.equal(next.busy, false);
+
+  // A request the host is still approving shows as busy even without a local answer.
+  const hostApproving = nextPairingRequest([prompt("pairreq_third", { approving: true })], new Set(), NOW);
+  assert.equal(hostApproving.busy, true);
+
+  // A pending answer for a request the host no longer lists falls back to the queue.
+  const gone = nextPairingRequest([prompt("pairreq_second")], new Set(), NOW, "pairreq_first");
+  assert.equal(gone.current?.requestId, "pairreq_second");
+  assert.equal(gone.busy, false);
+});
+
 test("the approval sheet shows the code to compare, where the request came from and its deadline", () => {
   const html = renderToStaticMarkup(
     <PairingRequestSheetBody
