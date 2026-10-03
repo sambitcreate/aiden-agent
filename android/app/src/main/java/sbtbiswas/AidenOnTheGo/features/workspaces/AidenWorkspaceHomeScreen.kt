@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -108,9 +109,13 @@ fun AidenWorkspaceShellScreen(
     onNavigateToGit: (String) -> Unit,
     productSwitcher: @Composable () -> Unit,
     onOpenSettings: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isActive: Boolean = true
 ) {
     var destination by rememberSaveable { mutableStateOf(AidenWorkspaceDestination.HOME) }
+    BackHandler(enabled = isActive && destination == AidenWorkspaceDestination.DIRECTORY) {
+        destination = AidenWorkspaceDestination.HOME
+    }
 
     AnimatedContent(
         targetState = destination,
@@ -132,7 +137,8 @@ fun AidenWorkspaceShellScreen(
                 onNavigateBack = { destination = AidenWorkspaceDestination.HOME },
                 onNavigateToChat = onNavigateToChat,
                 onNavigateToFiles = onNavigateToFiles,
-                onNavigateToGit = onNavigateToGit
+                onNavigateToGit = onNavigateToGit,
+                isActive = isActive
             )
         }
     }

@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.scheduled
 
+import androidx.activity.compose.BackHandler
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -85,6 +86,7 @@ fun AidenScheduledTasksScreen(
     var operationTaskId by remember { mutableStateOf<String?>(null) }
     var operationRequestId by remember { mutableStateOf<UUID?>(null) }
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = selectedTaskId != null) { selectedTaskId = null }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AidenScheduledTaskFilter.ALL) }
     var runs by remember { mutableStateOf<List<AidenScheduledRun>>(emptyList()) }

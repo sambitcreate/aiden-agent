@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,6 +43,7 @@ fun AidenGitScreen(
 
     var gitReviewResult by remember { mutableStateOf<AidenGitResult?>(null) }
     var selectedDiff by remember { mutableStateOf<AidenGitDiff?>(null) }
+    BackHandler(enabled = selectedDiff != null) { selectedDiff = null }
     var isLoading by remember { mutableStateOf(true) }
     var lastError by remember { mutableStateOf<String?>(null) }
 

@@ -186,6 +186,7 @@ fun AidenProductShellScreen(
                     AidenProductSwitcher(activeArea, activeInstallation?.isBotsEligible == true, selectArea)
                 },
                 onOpenSettings = { showSettingsSheet = true },
+                isActive = activeArea == AidenProductArea.WORKSPACES,
                 modifier = Modifier
                     .fillMaxSize()
                     .alpha(workspacesAlpha)

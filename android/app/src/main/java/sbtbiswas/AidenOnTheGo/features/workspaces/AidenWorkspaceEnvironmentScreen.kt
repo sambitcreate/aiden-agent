@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -77,6 +78,10 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
 
     // Dialog States
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
+    // System back mirrors the toolbar: leave an open file first, confirming unsaved edits.
+    BackHandler(enabled = selectedFile != null) {
+        if (isDirty) showDiscardConfirmDialog = true else selectedFile = null
+    }
     var showConflictDialog by remember { mutableStateOf(false) }
     fun availability() = AidenWorkspaceFileAvailability(
         isOfflineIndex, isOfflineDocument, connectionState == AidenConnectionState.CONNECTED

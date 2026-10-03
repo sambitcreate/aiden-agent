@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -360,6 +361,8 @@ fun AidenBotEditorScreen(
         isCreating = isCreating,
         hasAvatarCandidate = avatarModel?.hasCandidate == true
     )
+    // System back must not silently discard edits the Close button would confirm.
+    BackHandler(enabled = isDirty && !isConfirmingDiscard) { isConfirmingDiscard = true }
 
     LaunchedEffect(botId, client) {
         val cl = client ?: return@LaunchedEffect

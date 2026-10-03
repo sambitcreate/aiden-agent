@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,7 +40,8 @@ fun AidenWorkspaceDirectoryScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToFiles: (String) -> Unit,
     onNavigateToGit: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isActive: Boolean = true
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
@@ -52,6 +54,7 @@ fun AidenWorkspaceDirectoryScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) } // 0: Active, 1: Archived
     var selectedWorkspace by remember { mutableStateOf<AidenWorkspace?>(null) }
+    BackHandler(enabled = isActive && selectedWorkspace != null) { selectedWorkspace = null }
     var workspaceChats by remember { mutableStateOf<List<AidenChat>>(emptyList()) }
     var isLoadingChats by remember { mutableStateOf(false) }
 
