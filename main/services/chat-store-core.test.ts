@@ -999,6 +999,146 @@ test("removes an indexed chat even when its payload is corrupt", async (t) => {
   );
 });
 
+test("a torn chat payload is set aside with its bytes intact and counted", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-quarantine-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let notices = 0;
+  const store = createChatStore(async () => directory, undefined, {
+    onQuarantine: () => {
+      notices += 1;
+    },
+  });
+  const damaged = await store.create({ title: "Damaged" });
+  const survivor = await store.create({ title: "Survivor" });
+  const torn = '{"id":"' + damaged.id + '","title":"Damaged","messages":[{"role":"us';
+  await fs.writeFile(path.join(directory, `${damaged.id}.json`), torn, "utf-8");
+
+  assert.equal(await store.get(damaged.id), null);
+
+  // The damaged chat leaves the list, but its original bytes survive aside.
+  assert.deepEqual((await store.list()).map((chat) => chat.id), [survivor.id]);
+  await assert.rejects(fs.access(path.join(directory, `${damaged.id}.json`)));
+  const aside = (await fs.readdir(directory)).filter((name) =>
+    name.startsWith(`.${damaged.id}.json.`) && name.endsWith(".corrupt"),
+  );
+  assert.equal(aside.length, 1);
+  assert.equal(await fs.readFile(path.join(directory, aside[0]!), "utf-8"), torn);
+  assert.equal(await store.quarantinedPayloadCount(), 1);
+  assert.equal(notices, 1);
+
+  // A later chat with the same identity cannot overwrite the rescued bytes.
+  const restarted = createChatStore(async () => directory);
+  assert.equal(await restarted.quarantinedPayloadCount(), 1);
+  assert.deepEqual((await restarted.list()).map((chat) => chat.id), [survivor.id]);
+});
+
+test("legacy indented chat payloads still load and are rewritten compactly", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-indented-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "indented-chat",
+    title: "Indented",
+    workspaceId: "default",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [{ id: "m1", role: "user", content: "Hello", createdAt: 10 }],
+  };
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat], null, 2));
+  await fs.writeFile(path.join(directory, `${chat.id}.json`), JSON.stringify(chat, null, 2));
+  const store = createChatStore(async () => directory);
+
+  assert.equal((await store.list())[0]?.title, "Indented");
+  await store.appendMessage(chat.id, { role: "assistant", content: "Hi" });
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    (await restarted.get(chat.id))?.messages.map((message) => message.content),
+    ["Hello", "Hi"],
+  );
+  const stored = await fs.readFile(path.join(directory, `${chat.id}.json`), "utf-8");
+  assert.equal(stored.includes("\n"), false);
+});
+
+test("appending to one chat reads only that chat's payload once the index is verified", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-read-amplification-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const reads: string[] = [];
+  const store = createChatStore(async () => directory, undefined, {
+    readFile: async (target) => {
+      reads.push(path.basename(target));
+      return fs.readFile(target, "utf-8");
+    },
+  });
+  const chats = [];
+  for (let index = 0; index < 6; index += 1) {
+    chats.push(await store.create({ title: `Chat ${index}` }));
+  }
+  await store.list();
+
+  reads.length = 0;
+  await store.appendMessage(chats[2]!.id, { role: "user", content: "only me" });
+  const listed = await store.list();
+
+  assert.deepEqual(reads, [`${chats[2]!.id}.json`]);
+  assert.equal(listed[0]?.id, chats[2]!.id);
+  assert.equal(listed[0]?.preview, "only me");
+  assert.equal(listed.length, 6);
+});
+
+test("a slow write to one chat does not block writes to another chat", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-per-chat-queue-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let blockedId: string | undefined;
+  let releaseBlocked!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    releaseBlocked = resolve;
+  });
+  const store = createChatStore(async () => directory, undefined, {
+    syncFile: async (target) => {
+      if (blockedId && path.basename(target).startsWith(`.${blockedId}.json.`)) {
+        await blocked;
+      }
+    },
+    syncDirectory: async () => undefined,
+  });
+  const slow = await store.create({ title: "Slow" });
+  const fast = await store.create({ title: "Fast" });
+  blockedId = slow.id;
+
+  const slowAppend = store.appendMessage(slow.id, { role: "user", content: "large" });
+  const sameChatFollowUp = store.rename(slow.id, "Renamed after append");
+  await store.appendMessage(fast.id, { role: "user", content: "quick" });
+
+  assert.deepEqual(
+    (await store.get(fast.id))?.messages.map((message) => message.content),
+    ["quick"],
+  );
+  // The slow append has not committed yet; its payload is still the old one.
+  const pending = JSON.parse(
+    await fs.readFile(path.join(directory, `${slow.id}.json`), "utf-8"),
+  ) as { messages: unknown[] };
+  assert.equal(pending.messages.length, 0);
+
+  releaseBlocked();
+  await slowAppend;
+  const renamed = await sameChatFollowUp;
+  // Same-chat operations stay ordered: the rename saw the appended message.
+  assert.deepEqual(renamed.messages.map((message) => message.content), ["large"]);
+  const listed = await store.list();
+  assert.deepEqual(
+    listed.map((chat) => [chat.title, chat.preview]).sort(),
+    [["Fast", "quick"], ["Renamed after append", "large"]],
+  );
+});
+
 test("rejects a valid chat payload whose identity differs from its storage key", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-mismatched-id-"),
