@@ -2181,35 +2181,48 @@ struct AidenAppControlReceipt: Codable, Equatable, Sendable {
     private(set) var snapshots: [String: AidenAppControlSnapshot] = [:]
     @ObservationIgnored private var tracked: [String: AidenAppControlPanel] = [:]
     @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var readSerial: UInt64 = 0
+    @ObservationIgnored private var reads: [String: UInt64] = [:]
+    private func beginRead(_ panel: AidenAppControlPanel) -> UInt64 {
+        readSerial &+= 1
+        reads[panel.id] = readSerial
+        return readSerial
+    }
+    private func isCurrent(_ panel: AidenAppControlPanel, epoch: UInt64, token: UInt64) -> Bool {
+        epoch == generation && tracked[panel.id] == panel && reads[panel.id] == token
+    }
     func load(_ panel: AidenAppControlPanel, read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async throws -> AidenAppControlSnapshot {
         guard tracked[panel.id] != nil || tracked.count < 16 else { throw AidenRemoteClientError.invalidResponse }
         tracked[panel.id] = panel
         let epoch = generation
+        let token = beginRead(panel)
         do {
             let value = try await read(panel)
             try Task.checkCancellation()
-            guard epoch == generation, tracked[panel.id] == panel else { throw CancellationError() }
+            guard isCurrent(panel, epoch: epoch, token: token) else { throw CancellationError() }
             snapshots[panel.id] = value
             return value
         } catch {
-            if epoch == generation { snapshots.removeValue(forKey: panel.id) }
+            if isCurrent(panel, epoch: epoch, token: token) { snapshots.removeValue(forKey: panel.id) }
             throw error
         }
     }
-    func remove(_ panel: AidenAppControlPanel) { tracked.removeValue(forKey: panel.id); snapshots.removeValue(forKey: panel.id) }
+    func remove(_ panel: AidenAppControlPanel) { tracked.removeValue(forKey: panel.id); reads.removeValue(forKey: panel.id); snapshots.removeValue(forKey: panel.id) }
     func clearSnapshots() { generation &+= 1; snapshots.removeAll() }
     func refresh(read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async {
         generation &+= 1
         let epoch = generation
         for panel in Array(tracked.values) {
             guard epoch == generation, !Task.isCancelled else { return }
+            guard tracked[panel.id] == panel else { continue }
+            let token = beginRead(panel)
             do {
                 let value = try await read(panel)
                 guard epoch == generation, !Task.isCancelled else { return }
-                if tracked[panel.id] == panel { snapshots[panel.id] = value }
+                if isCurrent(panel, epoch: epoch, token: token) { snapshots[panel.id] = value }
             } catch {
                 guard epoch == generation, !Task.isCancelled else { return }
-                snapshots.removeValue(forKey: panel.id)
+                if isCurrent(panel, epoch: epoch, token: token) { snapshots.removeValue(forKey: panel.id) }
             }
         }
     }

@@ -173,7 +173,7 @@ export function AppControlsPanel({ panel, chatId }: { panel: AppControlPanel; ch
       if (epoch !== owner.current) return;
       if (receipt.status === "outcome_unknown")
         setMessage(
-          "This change could not be confirmed. Refresh its current value before making another change.",
+          "This change could not be confirmed. Refresh its current value; checking the change will not repeat it.",
         );
       else {
         retry.current = undefined;
@@ -231,7 +231,7 @@ export function AppControlsPanel({ panel, chatId }: { panel: AppControlPanel; ch
               void apply(retry.current!);
             }}
           >
-            Retry change
+            Check change
           </Button>
         ) : null}
         <Button

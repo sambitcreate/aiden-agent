@@ -50,36 +50,48 @@ class AidenAppControlCache {
     val snapshots: kotlinx.coroutines.flow.StateFlow<Map<String, AidenAppControlSnapshot>> = state
     private val tracked = linkedMapOf<String, AidenAppControlPanel>()
     private var generation = 0L
+    private var readSerial = 0L
+    private val reads = mutableMapOf<String, Long>()
+    private fun beginRead(panel: AidenAppControlPanel): Long {
+        readSerial++
+        reads[panel.id] = readSerial
+        return readSerial
+    }
+    private fun isCurrent(panel: AidenAppControlPanel, epoch: Long, token: Long) =
+        epoch == generation && tracked[panel.id] == panel && reads[panel.id] == token
     suspend fun load(panel: AidenAppControlPanel, read: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot): AidenAppControlSnapshot {
         check(tracked.containsKey(panel.id) || tracked.size < 16)
         tracked[panel.id] = panel
         val epoch = generation
+        val token = beginRead(panel)
         try {
             val value = read(panel)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            if (epoch != generation || tracked[panel.id] != panel) throw kotlinx.coroutines.CancellationException("Card replaced")
+            if (!isCurrent(panel, epoch, token)) throw kotlinx.coroutines.CancellationException("Card replaced")
             state.value = state.value + (panel.id to value)
             return value
         } catch (error: Exception) {
-            if (epoch == generation) state.value = state.value - panel.id
+            if (isCurrent(panel, epoch, token)) state.value = state.value - panel.id
             throw error
         }
     }
-    fun remove(panel: AidenAppControlPanel) { tracked.remove(panel.id); state.value = state.value - panel.id }
+    fun remove(panel: AidenAppControlPanel) { tracked.remove(panel.id); reads.remove(panel.id); state.value = state.value - panel.id }
     fun clearSnapshots() { generation++; state.value = emptyMap() }
     suspend fun refresh(read: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot) {
         val epoch = ++generation
         for (panel in tracked.values.toList()) {
             if (epoch != generation) return
+            if (tracked[panel.id] != panel) continue
+            val token = beginRead(panel)
             try {
                 val value = read(panel)
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (epoch != generation) return
-                if (tracked[panel.id] == panel) state.value = state.value + (panel.id to value)
+                if (isCurrent(panel, epoch, token)) state.value = state.value + (panel.id to value)
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 if (epoch != generation) return
-                state.value = state.value - panel.id
+                if (isCurrent(panel, epoch, token)) state.value = state.value - panel.id
             }
         }
     }

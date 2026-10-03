@@ -2633,7 +2633,8 @@ export function createAidenRemoteRequestHandler(
           device.acceptsProgressCapabilities === true &&
           device.capabilities.has("agents:read") &&
           progressCapabilitySupported(dependencies, "agents:read");
-        const canReadControls = device.acceptsProgressCapabilities === true &&
+        const classification = await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
+        const canReadControls = !classification.botId && device.acceptsProgressCapabilities === true &&
           device.capabilities.has("app-controls:read") && Boolean(dependencies.appControls) &&
           await dependencies.appControls!.enabled();
         if (!canReadTasks && !canReadAgents && !canReadControls) {
@@ -2655,7 +2656,6 @@ export function createAidenRemoteRequestHandler(
         if (canReadTasks) progressGrants.add("tasks:read");
         if (canReadAgents) progressGrants.add("agents:read");
         if (canReadControls) progressGrants.add("app-controls:read");
-        await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
         await dependencies.chatProgress.openEvents(
           device.id,
           chatProgressEventsMatch[1]!,

@@ -395,7 +395,20 @@ export class AidenRemoteChatProgressService {
     _after: number,
     response: ServerResponse,
   ): Promise<void> {
-    if (!grants.has("tasks:read") && !grants.has("agents:read") && !(grants.has("app-controls:read") && this.ports.appControlsEnabled)) {
+    let observesControls = Boolean(grants.has("app-controls:read") && this.ports.appControlsEnabled);
+    if (observesControls) {
+      try {
+        await this.ports.authorize(deviceId, chatId, "app-controls:read");
+      } catch (error) {
+        if (!(error instanceof AidenRemoteServiceError) ||
+            !["not_found", "capability_denied"].includes(error.code) ||
+            (!grants.has("tasks:read") && !grants.has("agents:read"))) throw error;
+        // An inapplicable projection (e.g. Bot controls) cannot tear down
+        // separately authorized task/agent progress.
+        observesControls = false;
+      }
+    }
+    if (!grants.has("tasks:read") && !grants.has("agents:read") && !observesControls) {
       throw new AidenRemoteServiceError(
         "capability_denied",
         "Progress access is unavailable.",
@@ -463,7 +476,7 @@ export class AidenRemoteChatProgressService {
             write("task_update", await this.taskSnapshot(deviceId, chatId));
           if (grants.has("agents:read"))
             write("agents_update", await this.agentRoster(deviceId, chatId));
-          if (grants.has("app-controls:read") && this.ports.appControlsEnabled) {
+          if (observesControls && this.ports.appControlsEnabled) {
             await this.ports.authorize(deviceId, chatId, "app-controls:read");
             if (!(await this.ports.appControlsEnabled())) throw new Error("App controls were revoked.");
             write("app_controls_changed", { revision: this.ports.events.appControlsRevision() });

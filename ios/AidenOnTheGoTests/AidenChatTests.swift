@@ -7,6 +7,32 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    @MainActor func testObsoleteControlLoadsCannotEraseOrOverwriteReappearedCards() async throws {
+        let panel = AidenAppControlPanel(version: 1, id: "same-card", topic: "memory", fallback: "Memory", workspaceId: "work")
+        let oldValue = AidenAppControlSnapshot(version: 1, title: "Memory", target: "Host", policy: "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Facts remain", scope: "Host", value: .boolean(true), revision: "old", options: nil, disabledReason: nil)])
+        let freshValue = AidenAppControlSnapshot(version: 1, title: "Memory", target: "Host", policy: "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Facts remain", scope: "Host", value: .boolean(false), revision: "fresh", options: nil, disabledReason: nil)])
+        for (cancelOld, failOld) in [(true, false), (false, true), (false, false)] {
+            let cache = AidenAppControlCache()
+            let started = expectation(description: "Old card load held")
+            var held: CheckedContinuation<AidenAppControlSnapshot, Error>?
+            let old = Task { try await cache.load(panel, read: { _ in
+                try await withCheckedThrowingContinuation { continuation in
+                    held = continuation
+                    started.fulfill()
+                }
+            }) }
+            await fulfillment(of: [started], timeout: 2)
+            if cancelOld { old.cancel() }
+            cache.remove(panel)
+            _ = try await cache.load(panel, read: { _ in freshValue })
+            if failOld { held?.resume(throwing: AidenRemoteClientError.invalidResponse) }
+            else { held?.resume(returning: oldValue) }
+            _ = await old.result
+            XCTAssertEqual(cache.snapshots[panel.id]?.rows.first?.value, .boolean(false))
+            XCTAssertEqual(cache.snapshots[panel.id]?.rows.first?.revision, "fresh")
+        }
+    }
+
     @MainActor func testVisibleControlCardsShareOwnAndExternalHostInvalidations() async throws {
         let cache = AidenAppControlCache()
         let first = AidenAppControlPanel(version: 1, id: "first", topic: "memory", fallback: "Memory", workspaceId: "work")

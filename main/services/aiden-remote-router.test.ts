@@ -1254,12 +1254,14 @@ test("bot chats still require bot authority on progress reads and events", async
     botChat: true,
     acceptsBotCapabilities: true,
     acceptsProgressCapabilities: true,
+    appControls: { enabled: async () => true, get: async () => { throw new Error("Bot controls must not read"); }, apply: async () => { throw new Error("Bot controls must not write"); } },
     capabilities: [
       "server:read",
       "chat:read",
       "bot:read",
       "tasks:read",
       "agents:read",
+      "app-controls:read",
     ],
     botChatAuthorization: (request) =>
       request.botId === "bot-1" && request.access === "read",
