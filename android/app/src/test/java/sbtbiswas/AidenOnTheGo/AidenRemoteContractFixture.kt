@@ -270,5 +270,7 @@ data class AidenRemoteContractFixture(
     val events: List<JsonObject> = emptyList(),
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
     val scheduleRunNotification: AidenScheduledRunNotification? = null,
-    val error: AidenRemoteErrorEnvelope? = null
+    val error: AidenRemoteErrorEnvelope? = null,
+    /** Revision 19: a desktop run-control loser's error, decoded by the shared envelope. */
+    val runControlError: AidenRemoteErrorEnvelope? = null
 )

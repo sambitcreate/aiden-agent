@@ -92,6 +92,7 @@ export function createChatStore(
   durability: ChatStoreDurability = {},
 ) {
   let operationTail: Promise<void> = Promise.resolve();
+  const indexListeners = new Set<() => void>();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
   const readFile =
@@ -258,6 +259,13 @@ export function createChatStore(
       await syncFile(staged);
       await fs.rename(staged, target);
       await syncDirectoryDurably(directory);
+      for (const listener of [...indexListeners]) {
+        try {
+          listener();
+        } catch {
+          // Observers are best-effort signals; the durable write already succeeded.
+        }
+      }
     } finally {
       await removeStagedFileDurably(staged, directory);
     }
@@ -727,6 +735,15 @@ export function createChatStore(
   }
 
   return {
+    /**
+     * Observe committed summary-index writes (save, delete, metadata). Lets the
+     * Remote host feed refresh without reading or scanning transcripts.
+     */
+    onIndexChanged(listener: () => void): () => void {
+      indexListeners.add(listener);
+      return () => indexListeners.delete(listener);
+    },
+
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
       return serialized(async () => {

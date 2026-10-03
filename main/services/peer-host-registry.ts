@@ -228,6 +228,10 @@ export class PeerHostRegistry {
             deviceType: this.options.platform,
             clientVersion: this.options.clientVersion,
             acceptsDisplayName: true,
+            // Desktop controllers opt into Bot and progress grants, which carry the
+            // revision 19 host feed, run-stream and run-control capabilities.
+            acceptsBotCapabilities: true,
+            acceptsProgressCapabilities: true,
           },
         }),
       );

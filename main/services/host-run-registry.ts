@@ -38,9 +38,34 @@ export interface HostRunSummary {
   pendingQuestionIds: string[];
 }
 
+/** How a run prompt settled, kept briefly so a losing responder learns the winner. */
+export type HostRunPromptResolution =
+  | { kind: "approval"; decision: "allow" | "deny" | "expired" | "cancelled" }
+  | { kind: "question"; outcome: "answered" | "expired" | "cancelled" };
+
+export type HostRunResolvedPrompt = HostRunPromptResolution & {
+  runId: string;
+  promptId: string;
+  resolvedAt: string;
+};
+
+/** A prompt still waiting for an answer, as it was journaled. */
+export interface HostRunPendingPrompt {
+  type: "approval_required" | "question_required";
+  payload: Record<string, unknown>;
+}
+
 export type HostRunRead =
   | { kind: "events"; epoch: string; events: HostRunEvent[]; summary: HostRunSummary }
-  | { kind: "snapshot_required"; epoch: string; summary: HostRunSummary };
+  | {
+      kind: "snapshot_required";
+      epoch: string;
+      summary: HostRunSummary;
+      /** The oldest sequence still retained; resume from `nextSequence - 1`. */
+      nextSequence: number;
+      /** Every pending prompt in arrival order, even when its event was trimmed. */
+      prompts: HostRunPendingPrompt[];
+    };
 
 export interface HostRunRegistryOptions {
   now(): number;
@@ -57,6 +82,9 @@ export interface HostRunRegistryOptions {
   maxTotalEventBytes?: number;
   maxRuns?: number;
   terminalRetentionMs?: number;
+  /** Bound on remembered prompt resolutions (count and age). */
+  maxResolutions?: number;
+  resolutionRetentionMs?: number;
 }
 
 type ContentState = Extract<RunContentProjection, { kind: "event" }>["state"];
@@ -73,6 +101,8 @@ interface RunRecord {
   eventBytes: number;
   pendingApprovalIds: string[];
   pendingQuestionIds: string[];
+  /** Pending prompt payloads, kept outside the trimmable journal. */
+  prompts: Map<string, HostRunPendingPrompt>;
   projection: RunProjectionState;
   subscribers: Set<() => void>;
 }
@@ -90,6 +120,8 @@ const DEFAULT_MAX_EVENT_BYTES_PER_RUN = 4 * 1_024 * 1_024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 32 * 1_024 * 1_024;
 const DEFAULT_MAX_RUNS = 128;
 const DEFAULT_TERMINAL_RETENTION_MS = 10 * 60_000;
+const DEFAULT_MAX_RESOLUTIONS = 512;
+const DEFAULT_RESOLUTION_RETENTION_MS = 10 * 60_000;
 const MAX_PROMPT_ID_LENGTH = 128;
 // Approval details carry caller-supplied text (workspace names, commands) that
 // nothing upstream bounds. A prompt can be a run's only retained event, which
@@ -187,6 +219,7 @@ export class HostRunRegistry {
   readonly epoch: string;
   private readonly runs = new Map<string, RunRecord>();
   private readonly promptRuns = new Map<string, string>();
+  private readonly resolutions = new Map<string, HostRunResolvedPrompt & { at: number }>();
   private readonly eventSizes = new WeakMap<HostRunEvent, number>();
   private readonly listeners = new Set<(summary: HostRunSummary, removed: boolean) => void>();
   private totalEventBytes = 0;
@@ -232,6 +265,7 @@ export class HostRunRegistry {
       eventBytes: 0,
       pendingApprovalIds: [],
       pendingQuestionIds: [],
+      prompts: new Map(),
       projection: createRunProjectionState(),
       subscribers: new Set(),
     };
@@ -285,31 +319,73 @@ export class HostRunRegistry {
     if (approvalId) {
       run.pendingApprovalIds.push(approvalId);
       this.promptRuns.set(approvalId, run.runId);
+      run.prompts.set(approvalId, { type: "approval_required", payload: pending.payload });
     }
     if (questionId) {
       run.pendingQuestionIds.push(questionId);
       this.promptRuns.set(questionId, run.runId);
+      run.prompts.set(questionId, { type: "question_required", payload: pending.payload });
     }
     this.commit(run, pending, Boolean(approvalId || questionId));
   }
 
-  resolveAttention(id: string): void {
+  /**
+   * Settle a pending prompt. The optional resolution is remembered (bounded by
+   * count and age) so a responder that lost the race learns the winning
+   * decision, and is carried on the journaled `*_resolved` event.
+   */
+  resolveAttention(id: string, resolution?: HostRunPromptResolution): void {
     const runId = this.promptRuns.get(id);
     if (runId === undefined) return;
     this.promptRuns.delete(id);
     const run = this.runs.get(runId);
     if (!run) return;
+    run.prompts.delete(id);
     const approvalIndex = run.pendingApprovalIds.indexOf(id);
     if (approvalIndex >= 0) {
       run.pendingApprovalIds.splice(approvalIndex, 1);
-      this.commit(run, { type: "approval_resolved", payload: { approvalId: id }, terminal: false }, true);
+      const decision = resolution?.kind === "approval" ? resolution.decision : undefined;
+      this.remember(runId, id, decision ? { kind: "approval", decision } : undefined);
+      this.commit(run, {
+        type: "approval_resolved",
+        payload: { approvalId: id, ...(decision ? { decision } : {}) },
+        terminal: false,
+      }, true);
       return;
     }
     const questionIndex = run.pendingQuestionIds.indexOf(id);
     if (questionIndex >= 0) {
       run.pendingQuestionIds.splice(questionIndex, 1);
-      this.commit(run, { type: "question_resolved", payload: { promptId: id }, terminal: false }, true);
+      const outcome = resolution?.kind === "question" ? resolution.outcome : undefined;
+      this.remember(runId, id, outcome ? { kind: "question", outcome } : undefined);
+      this.commit(run, {
+        type: "question_resolved",
+        payload: { promptId: id, ...(outcome ? { outcome } : {}) },
+        terminal: false,
+      }, true);
     }
+  }
+
+  /** The run a pending or recently resolved prompt belongs to. */
+  runForPrompt(id: string): string | undefined {
+    this.pruneResolutions();
+    return this.promptRuns.get(id) ?? this.resolutions.get(id)?.runId;
+  }
+
+  /** A prompt that is still waiting, as journaled (details included when they fit). */
+  pendingPrompt(id: string): HostRunPendingPrompt | undefined {
+    const runId = this.promptRuns.get(id);
+    const prompt = runId === undefined ? undefined : this.runs.get(runId)?.prompts.get(id);
+    return prompt ? structuredClone(prompt) : undefined;
+  }
+
+  /** The remembered settlement of a recently resolved prompt, if any. */
+  resolution(id: string): HostRunResolvedPrompt | undefined {
+    this.pruneResolutions();
+    const entry = this.resolutions.get(id);
+    if (!entry) return undefined;
+    const { at: _at, ...resolved } = entry;
+    return { ...resolved };
   }
 
   settle(runId: string): void {
@@ -353,7 +429,12 @@ export class HostRunRegistry {
     return [...this.runs.values()].map((run) => this.summarize(run));
   }
 
-  read(runId: string, afterSequence: number): HostRunRead {
+  /**
+   * Events after `afterSequence`, oldest first, at most `limit` of them. A
+   * cursor older than retention returns `snapshot_required` with the pending
+   * prompts so the observer can rebuild its attention state.
+   */
+  read(runId: string, afterSequence: number, limit = Number.POSITIVE_INFINITY): HostRunRead {
     this.pruneExpired();
     const run = this.runs.get(runId);
     if (!run) throw new RangeError("Unknown host run.");
@@ -363,10 +444,19 @@ export class HostRunRegistry {
     const summary = this.summarize(run);
     const firstRetained = run.events[0]?.sequence ?? run.lastSequence + 1;
     if (afterSequence < firstRetained - 1) {
-      return { kind: "snapshot_required", epoch: this.epoch, summary };
+      return {
+        kind: "snapshot_required",
+        epoch: this.epoch,
+        summary,
+        nextSequence: firstRetained,
+        prompts: [...run.prompts.values()].map((prompt) => structuredClone(prompt)),
+      };
     }
+    // Sequences are contiguous, so the first unread event sits at a fixed offset.
+    const start = afterSequence - (firstRetained - 1);
+    const end = Number.isFinite(limit) ? start + Math.max(1, Math.floor(limit)) : run.events.length;
     const events = run.events
-      .filter((event) => event.sequence > afterSequence)
+      .slice(start, end)
       .map((event) => structuredClone(event));
     return { kind: "events", epoch: this.epoch, events, summary };
   }
@@ -387,6 +477,29 @@ export class HostRunRegistry {
     };
   }
 
+  private remember(runId: string, promptId: string, resolution: HostRunPromptResolution | undefined): void {
+    if (!resolution) return;
+    const at = this.options.now();
+    this.resolutions.delete(promptId);
+    this.resolutions.set(promptId, {
+      ...resolution,
+      runId,
+      promptId,
+      resolvedAt: new Date(at).toISOString(),
+      at,
+    });
+    this.pruneResolutions();
+  }
+
+  private pruneResolutions(): void {
+    const maximum = this.options.maxResolutions ?? DEFAULT_MAX_RESOLUTIONS;
+    const cutoff = this.options.now() - (this.options.resolutionRetentionMs ?? DEFAULT_RESOLUTION_RETENTION_MS);
+    for (const [id, entry] of this.resolutions) {
+      if (this.resolutions.size > maximum || entry.at < cutoff) this.resolutions.delete(id);
+      else break;
+    }
+  }
+
   /** Append, settle the run state, then wake observers and announce any change. */
   private commit(run: RunRecord, pending: PendingEvent, attentionChanged: boolean): void {
     const previousState = run.state;
@@ -394,6 +507,7 @@ export class HostRunRegistry {
       for (const id of [...run.pendingApprovalIds, ...run.pendingQuestionIds]) {
         this.promptRuns.delete(id);
       }
+      run.prompts.clear();
       attentionChanged ||= run.pendingApprovalIds.length + run.pendingQuestionIds.length > 0;
       run.pendingApprovalIds = [];
       run.pendingQuestionIds = [];

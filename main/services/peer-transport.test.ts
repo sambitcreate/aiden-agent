@@ -83,20 +83,32 @@ test("closed peer operations reject injected routes and require mutation identit
 test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and parses chunked SSE", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-test-"));
   const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
-  const pairingService = new AidenRemotePairingService("host_tls", {
-    issueDevice: async (input) => ({
-      credential: "a".repeat(43),
-      device: {
-        id: "device_tls",
-        name: input.name,
-        type: input.type,
-        clientVersion: input.clientVersion,
-        capabilities: [...input.capabilities!],
-        createdAt: Date.now(),
-        lastSeenAt: 0,
+  const issuedCapabilities: string[][] = [];
+  const pairingService = new AidenRemotePairingService(
+    "host_tls",
+    {
+      issueDevice: async (input) => {
+        issuedCapabilities.push([...input.capabilities!]);
+        return {
+          credential: "a".repeat(43),
+          device: {
+            id: "device_tls",
+            name: input.name,
+            type: input.type,
+            clientVersion: input.clientVersion,
+            capabilities: [...input.capabilities!],
+            createdAt: Date.now(),
+            lastSeenAt: 0,
+          },
+        };
       },
-    }),
-  });
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => true,
+  );
   const actualRouter = createAidenRemoteRequestHandler({
     instanceId: "host_tls",
     displayName: () => "TLS fixture",
@@ -196,6 +208,10 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     assert.equal(view.id, "host_tls");
     assert.equal(savedHosts.length, 1);
     assert.equal(view.state, "connected");
+    // A desktop controller opts into the host-wide run vocabulary at pairing.
+    for (const capability of ["host:events", "runs:observe", "runs:control"]) {
+      assert.ok(issuedCapabilities[0]!.includes(capability), capability);
+    }
     registry.close();
     await assert.rejects(
       new PeerTransport({

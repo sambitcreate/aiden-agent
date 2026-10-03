@@ -12,6 +12,7 @@ import {
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -217,6 +218,15 @@ function isSimulatorCapability(
   );
 }
 
+function isHostCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
 /** Simulator control is a desktop-to-desktop grant; phones and tablets never hold it. */
 export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boolean {
   return type === "mac" || type === "linux";
@@ -236,7 +246,7 @@ function parsePersistedCapabilities(
         (capability) =>
           (acceptsBotCapabilities || !isBotCapability(capability)) &&
           (acceptsProgressCapabilities || !isProgressCapability(capability)) &&
-          (desktop || !isSimulatorCapability(capability)),
+          (desktop || (!isSimulatorCapability(capability) && !isHostCapability(capability))),
       )
     : value;
   return parseCapabilities(negotiatedValue);
@@ -730,8 +740,8 @@ export class AidenRemoteStateRegistry {
 
   /**
    * Additive post-pairing capability negotiation. Only members of the
-   * progress vocabulary are upgradable; legacy and Bot grants remain
-   * pairing-bound. Negotiating any progress capability marks the device as
+   * progress, simulator and host vocabularies are upgradable (the latter two
+   * on desktops only); legacy and Bot grants remain pairing-bound. Negotiating any progress capability marks the device as
    * progress-aware so new projections may be delivered to it.
    */
   async upgradeDeviceCapabilities(
@@ -744,7 +754,10 @@ export class AidenRemoteStateRegistry {
       accepts.length < 1 ||
       accepts.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
       new Set(accepts).size !== accepts.length ||
-      accepts.some((capability) => !isProgressCapability(capability) && !isSimulatorCapability(capability))
+      accepts.some((capability) =>
+        !isProgressCapability(capability) &&
+        !isSimulatorCapability(capability) &&
+        !isHostCapability(capability))
     ) {
       return null;
     }
@@ -753,14 +766,20 @@ export class AidenRemoteStateRegistry {
       if (!device || device.revokedAt !== undefined) {
         return { changed: false, value: null };
       }
-      // Callers check the device type first; a phone can never be granted simulator control.
-      if (accepts.some(isSimulatorCapability) && !mayHoldSimulatorCapabilities(device.type)) {
+      // Callers check the device type first; a phone can never be granted
+      // simulator control or host-wide run authority.
+      if (
+        (accepts.some(isSimulatorCapability) || accepts.some(isHostCapability)) &&
+        !mayHoldSimulatorCapabilities(device.type)
+      ) {
         return { changed: false, value: null };
       }
       const granted = new Set(device.capabilities);
       const additions = accepts.filter(
         (capability): capability is AidenRemoteCapability =>
-          (isProgressCapability(capability) || isSimulatorCapability(capability)) &&
+          (isProgressCapability(capability) ||
+            isSimulatorCapability(capability) ||
+            isHostCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);
@@ -803,6 +822,8 @@ export class AidenRemoteStateRegistry {
       (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
       (input.acceptsProgressCapabilities !== true &&
         capabilities.some(isProgressCapability)) ||
+      (!mayHoldSimulatorCapabilities(input.type) &&
+        (capabilities.some(isSimulatorCapability) || capabilities.some(isHostCapability))) ||
       (!this.hostPolicy.botCapabilitiesSupported() &&
         (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
     ) {

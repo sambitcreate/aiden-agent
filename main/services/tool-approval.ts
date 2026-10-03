@@ -54,7 +54,8 @@ export class ToolApprovalCoordinator {
 
   constructor(
     private readonly publish: (prompt: ToolApprovalPrompt) => void,
-    private readonly withdraw?: (approvalId: string) => void,
+    /** Called once when a published prompt settles, with how it settled. */
+    private readonly withdraw?: (approvalId: string, outcome: ToolApprovalOutcome) => void,
   ) {}
 
   request(
@@ -81,7 +82,7 @@ export class ToolApprovalCoordinator {
         signal?.removeEventListener("abort", aborted);
         if (published) {
           try {
-            this.withdraw?.(approvalId);
+            this.withdraw?.(approvalId, outcome);
           } catch {
             // Owner loss can make the withdrawal channel unavailable. The
             // approval capability is still removed and must always settle.
@@ -123,6 +124,29 @@ export class ToolApprovalCoordinator {
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
+    return this.settleDecision(entry, allowed, payload);
+  }
+
+  /**
+   * Host-authority decision for a paired controller holding `runs:control`.
+   * Skips the owner-document check but keeps the one-shot settlement, so the
+   * first responder across the host UI, phones and controllers wins.
+   */
+  decideAsHost(
+    approvalId: string,
+    allowed: boolean,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
+    const entry = this.pending.get(approvalId);
+    if (!entry) return false;
+    return this.settleDecision(entry, allowed, payload);
+  }
+
+  private settleDecision(
+    entry: PendingApproval,
+    allowed: boolean,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
     if (payload) {
       const { scope: requestedScope, ...rest } = payload;
       const scope = parseToolApprovalScope(requestedScope);

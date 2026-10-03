@@ -1,7 +1,11 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { logger } from "../platform.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
-import { HostRunRegistry, type HostRunOrigin } from "./host-run-registry.js";
+import {
+  HostRunRegistry,
+  type HostRunOrigin,
+  type HostRunPromptResolution,
+} from "./host-run-registry.js";
 
 /** The host-wide journal of every generation run in this process. */
 export const hostRunRegistry = new HostRunRegistry({ now: Date.now });
@@ -40,9 +44,13 @@ export function recordRunNotification(
   }
 }
 
-export function recordRunAttentionResolved(registry: HostRunRegistry, promptId: string): void {
+export function recordRunAttentionResolved(
+  registry: HostRunRegistry,
+  promptId: string,
+  resolution?: HostRunPromptResolution,
+): void {
   try {
-    registry.resolveAttention(promptId);
+    registry.resolveAttention(promptId, resolution);
   } catch (error) {
     logger.warn("remote", "Could not journal a resolved run prompt.", error);
   }

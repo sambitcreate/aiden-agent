@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import {
   AIDEN_REMOTE_BOT_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -250,6 +251,7 @@ export class AidenRemotePairingService {
     private readonly onStatusChanged: () => void = () => undefined,
     private readonly displayName: () => string = () => "Aiden Agent",
     private readonly botCapabilitiesSupported: () => boolean = () => true,
+    private readonly hostCapabilitiesSupported: () => boolean = () => false,
   ) {}
 
   begin(
@@ -497,6 +499,14 @@ export class AidenRemotePairingService {
             : []),
           ...(input.acceptsProgressCapabilities
             ? AIDEN_REMOTE_PROGRESS_CAPABILITIES
+            : []),
+          // Host-wide run authority is desktop-only and explicit: a Mac or
+          // Linux controller that opts into the progress vocabulary is a
+          // multi-host client. Phones never receive it.
+          ...(input.acceptsProgressCapabilities === true &&
+            (input.deviceType === "mac" || input.deviceType === "linux") &&
+            this.hostCapabilitiesSupported()
+            ? AIDEN_REMOTE_HOST_CAPABILITIES
             : []),
         ],
         acceptsBotCapabilities,

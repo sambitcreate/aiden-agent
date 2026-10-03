@@ -499,7 +499,9 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val HANDLE_CAPACITY = AidenRemoteErrorCode("handle_capacity")
         val TURN_ALREADY_ACTIVE = AidenRemoteErrorCode("turn_already_active")
         val STREAM_GONE = AidenRemoteErrorCode("stream_gone")
+        val RUN_GONE = AidenRemoteErrorCode("run_gone")
         val APPROVAL_ALREADY_RESOLVED = AidenRemoteErrorCode("approval_already_resolved")
+        val APPROVAL_RESOLVED = AidenRemoteErrorCode("approval_resolved")
         val APPROVAL_EXPIRED = AidenRemoteErrorCode("approval_expired")
         val QUESTION_ALREADY_RESOLVED = AidenRemoteErrorCode("question_already_resolved")
         val QUESTION_EXPIRED = AidenRemoteErrorCode("question_expired")
@@ -523,7 +525,7 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             STREAM_GONE, APPROVAL_ALREADY_RESOLVED, APPROVAL_EXPIRED, OPERATION_IN_PROGRESS,
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
-            SKILL_UNAVAILABLE
+            SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED
         )
     }
 }
