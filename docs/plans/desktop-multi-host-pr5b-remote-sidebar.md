@@ -1,6 +1,6 @@
 # Multi-host PR 5b: remote sidebar rows
 
-Status: **In progress**. This is the remote half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and merges PR 5a ([local sidebar organization](desktop-multi-host-pr5a-sidebar-organize.md)).
+Status: **In review**. This is the remote half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and merges PR 5a ([local sidebar organization](desktop-multi-host-pr5a-sidebar-organize.md)).
 
 ## Scope
 
@@ -33,7 +33,22 @@ Status: **In progress**. This is the remote half of §6 ("Sidebar organization")
 
 - `renderer/lib/sidebar-remote-groups.test.ts`: identical names and IDs across hosts, the filter, the grouping modes, stale rows, attention.
 - `renderer/lib/hosts/peer-host-feed-state.test.ts`: the feed reducer and status ordering.
-- `renderer/components/sidebar-remote.test.tsx`: the Organize menu groups, the filter chip, the globe marker and the offline status, rendered to static markup.
+- `renderer/components/sidebar-remote.test.tsx`: the filter chip, the globe marker, machine badges, and the offline and blocked status rows, rendered to static markup.
+- `renderer/components/sidebar-organize-menu.test.tsx`: the Machines and Group across machines menu groups, shown only with a paired host.
 - `renderer/lib/sidebar-organization.test.ts`: preference migration for the new fields.
 - `main/services/peer-host-manager.test.ts` and `main/handlers/peer-host-live.test.ts`: reconnect.
 - The sidebar Playwright suite runs real Electron with no peer fake, so this PR adds no e2e.
+
+## Interfaces for PR 6, 7 and 8
+
+- **Route.** `/host/$hostId/chat/$chatId` (`hostChatRoute` in `renderer/main/router.tsx`) renders `RemoteChatPlaceholder` from `renderer/main/remote-chat-placeholder.tsx`. PR 6 replaces the component; the path and params stay.
+- **Selection.** `ChatSidebar` takes `activeRemoteChat: { hostId, chatId } | null`, kept apart from the local `activeChatId`. The composer host is not set here.
+- **Rows.** These live in `renderer/lib/sidebar-remote-groups.ts`.
+  - `RemoteSidebarProject` and `RemoteSidebarChat` carry `remote: true`, `hostId`, `hostLabel` and `stale`.
+  - Groups are `SidebarProjectEntry` (`primary` plus `members`).
+  - Keys are `projectOrderKey(hostId, id)`.
+- **Hooks.** These live in `renderer/lib/hosts/use-peer-host-sidebar.ts`.
+  - `usePeerHostSidebar()` returns `{ hosts, feeds }`.
+  - `useLocalRepositoryIdentities(ids, enabled)`.
+  - Query keys come from `hostQueryKeys` (`list`, `statuses`, `host`, `feed`).
+- **IPC.** `remote:peerReconnect` (`peerHostsApi.reconnect`) and `workspaces:repositoryIdentity` (`workspacesApi.repositoryIdentity`).
