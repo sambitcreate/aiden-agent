@@ -39,6 +39,7 @@
         "main/services/ask-user-question-extension.test.ts",
         "main/services/attachment-contract.test.ts",
         "main/services/attachments.test.ts",
+        "main/services/bounded-json.test.ts",
         "main/services/chat-activity-core.test.ts",
         "main/services/chat-append-commit.test.ts",
         "main/services/chat-deletion-gate.test.ts",

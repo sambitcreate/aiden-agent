@@ -1,6 +1,6 @@
 {
   "name": "aiden-agent",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "private": true,
   "description": "A desktop AI workspace agent for local and hosted models",
   "keywords": [
@@ -118,7 +118,7 @@
     "test:provider-failure": "tsx --test main/services/provider-failure.test.ts",
     "test:web-search": "tsx --test main/services/web-search.test.ts main/services/web-search-core.test.ts main/services/web-search-exa-core.test.ts main/services/web-search-provider-registry-core.test.ts main/services/web-search-provider-registry.test.ts main/services/web-search-credential-core.test.ts main/services/web-search-auth-reuse.test.ts main/services/web-search-rollout.test.ts main/services/web-search-wave1-adapters.test.ts main/services/web-search-wave1-ai.test.ts main/services/web-search-wave2-batch-a.test.ts main/services/web-search-wave2-batch-b.test.ts main/services/web-search-wave4-batch-a.test.ts main/services/web-search-wave4-batch-b.test.ts main/handlers/web-search-contract.test.ts renderer/components/settings/web-search-settings.test.tsx renderer/lib/settings-section.test.ts main/services/web-search-key-pool-core.test.ts main/handlers/web-search-key-pool.test.ts renderer/components/settings/web-search-key-pool.test.tsx",
     "test:concentrate": "tsx --test main/services/concentrate-provider.test.ts",
-    "test:compaction": "npm run test:vcc && tsx --test main/services/memory-shared.test.ts main/services/pi-runtime-events.test.ts main/services/pi-agent-runtime-harness.test.ts main/services/pi-codemode.test.ts main/services/pi-tool-discovery.test.ts main/services/pi-compaction-core.test.ts main/services/pi-legacy-session.test.ts main/services/pi-session-migration.test.ts main/services/pi-session-v4-upgrade.test.ts main/services/pi-session-port.test.ts main/services/context-lifecycle-service.test.ts main/services/context-lifecycle-surface-matrix.test.ts main/services/telegram/telegram-session.test.ts main/services/generation-emergency-outcome.test.ts main/services/pi-runtime-effect-store.test.ts main/services/generation-context.test.ts main/services/memory-store.test.ts main/services/memory-context.test.ts main/services/memory-surface-matrix.test.ts main/services/pi-upgrade-evaluation.test.ts main/services/subagents/agent-compatibility.test.ts renderer/lib/ipc-stream.test.ts renderer/main/chat-transition.test.tsx",
+    "test:compaction": "npm run test:vcc && tsx --test main/services/memory-shared.test.ts main/services/pi-runtime-events.test.ts main/services/pi-agent-runtime-harness.test.ts main/services/pi-codemode.test.ts main/services/pi-tool-discovery.test.ts main/services/bounded-json.test.ts main/services/pi-compaction-core.test.ts main/services/pi-legacy-session.test.ts main/services/pi-session-migration.test.ts main/services/pi-session-v4-upgrade.test.ts main/services/pi-session-port.test.ts main/services/context-lifecycle-service.test.ts main/services/context-lifecycle-surface-matrix.test.ts main/services/telegram/telegram-session.test.ts main/services/generation-emergency-outcome.test.ts main/services/pi-runtime-effect-store.test.ts main/services/generation-context.test.ts main/services/memory-store.test.ts main/services/memory-context.test.ts main/services/memory-surface-matrix.test.ts main/services/pi-upgrade-evaluation.test.ts main/services/subagents/agent-compatibility.test.ts renderer/lib/ipc-stream.test.ts renderer/main/chat-transition.test.tsx",
     "test:compaction:packaged": "node --import tsx scripts/pi-session-packaged-restart-acceptance.mjs",
     "test:compaction:evaluate": "node --import tsx scripts/pi-upgrade-evaluation.mjs",
     "pi-upgrade:advance": "node --import tsx scripts/pi-upgrade-advance.mjs",
@@ -274,6 +274,12 @@
     "vite": "^8.0.2",
     "wait-on": "^9.0.10",
     "yaml": "2.9.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai@0.87.1": {
+      "@google/genai": "$@google/genai",
+      "openai": "7.19.0"
+    }
   },
   "engines": {
     "node": ">=22.19"

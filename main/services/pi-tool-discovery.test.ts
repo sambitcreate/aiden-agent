@@ -53,6 +53,22 @@ test("ambiguous tool or namespace identities fail closed while equal display lab
   assert.throws(() => discovery.describeNamespace("mcp:first"), /identity collision/);
 });
 
+test("tools sharing one frozen server record expose it once and equal records from separate snapshots do not collide", () => {
+  const shared = Object.freeze({ namespace: "mcp:shared", label: "Shared", instructions: "Shared guidance." });
+  const sharedTools = Array.from({ length: 64 }, (_, index) => ({ ...tool(`shared_${index}`), discovery: shared }));
+  const copy = { ...tool("copy"), discovery: Object.freeze({ ...shared }) };
+  let current: PiDiscoverableTool[] = [...sharedTools, copy];
+  const discovery = createPiToolDiscovery({ tools: () => current, isCallable: () => true });
+  const namespace = discovery.describeNamespace("mcp:shared");
+  assert.equal(namespace.instructions, "Shared guidance.");
+  assert.equal(names(namespace).length, 65);
+  current = [...sharedTools, { ...tool("rival"), discovery: Object.freeze({ ...shared, instructions: "Rival guidance." }) }];
+  assert.throws(() => discovery.searchTools(""), /namespace collision/);
+  current = sharedTools.slice(0, 2);
+  assert.deepEqual(names(discovery.describeNamespace("mcp:shared")), ["shared_0", "shared_1"]);
+  assert.throws(() => createPiToolDiscovery({ tools: () => [{ ...tool("bad"), discovery: Object.freeze({ namespace: "9bad", label: "Bad" }) }], isCallable: () => true }).searchTools(""), /Invalid tool namespace/);
+});
+
 test("untrusted discovery arguments are validated before reading inventory", () => {
   const discovery = createPiToolDiscovery({ tools: () => { throw new Error("Inventory must not be read"); }, isCallable: () => true });
   for (const query of [null, {}, 4, "x".repeat(257)]) assert.throws(() => discovery.searchTools(query), /Invalid search query/);

@@ -137,6 +137,9 @@ test("codemode forwards valid images but malformed raster output never enters mo
   const invalid = await tool.execute("parent", { code: `image(${JSON.stringify({ type: "image", mimeType: "image/png", data: truncated })});` });
   assert.equal(invalid.isError, true);
   assert.equal(invalid.content.some((part) => part.type === "image"), false);
+  const limited = await tool.execute("parent", { code: `for (let i = 0; i < 7; i++) image(${JSON.stringify({ type: "image", mimeType: "image/png", data: png })});` });
+  assert.equal(limited.content.filter((part) => part.type === "image").length, 4);
+  assert.equal(limited.content.filter((part) => part.type === "text" && /output limit/u.test(part.text)).length, 1);
 });
 
 
