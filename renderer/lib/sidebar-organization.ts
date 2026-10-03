@@ -18,6 +18,23 @@ export type SidebarChatSort = (typeof SIDEBAR_CHAT_SORTS)[number];
 export const SIDEBAR_PROJECT_SORTS = ["last_activity", "created", "manual"] as const;
 export type SidebarProjectSort = (typeof SIDEBAR_PROJECT_SORTS)[number];
 
+/** How projects on different machines combine into sidebar groups. */
+export const SIDEBAR_PROJECT_GROUPINGS = ["separate", "repository", "repository_path"] as const;
+export type SidebarProjectGrouping = (typeof SIDEBAR_PROJECT_GROUPINGS)[number];
+
+/** Which machines the sidebar lists: every machine, this Mac, or one paired host. */
+export type SidebarMachineFilter = "all" | "local" | `host:${string}`;
+
+/** Paired host ids follow the host resource identifier grammar. */
+const MACHINE_FILTER_HOST = /^host:[A-Za-z0-9._:-]{1,160}$/u;
+
+export function parseSidebarMachineFilter(value: unknown): SidebarMachineFilter | null {
+  if (value === "all" || value === "local") return value;
+  return typeof value === "string" && MACHINE_FILTER_HOST.test(value)
+    ? (value as SidebarMachineFilter)
+    : null;
+}
+
 /** Triage tier used by the Needs attention view, most urgent first. */
 export const SIDEBAR_ATTENTION_TIERS = [
   "needs_approval",
@@ -405,6 +422,8 @@ export interface SidebarPreferences {
   projectOrder: string[];
   /** Local workspace ids whose groups are expanded. */
   expandedWorkspaceIds: string[];
+  machineFilter: SidebarMachineFilter;
+  projectGrouping: SidebarProjectGrouping;
 }
 
 export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.freeze({
@@ -413,6 +432,8 @@ export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.
   projectSort: "last_activity",
   projectOrder: [],
   expandedWorkspaceIds: [],
+  machineFilter: "all",
+  projectGrouping: "separate",
 });
 
 export const MAX_SIDEBAR_PROJECT_ORDER = 500;
@@ -480,6 +501,12 @@ export function parseSidebarPreferences(
       oneOf(SIDEBAR_PROJECT_SORTS, record.projectSort) ?? DEFAULT_SIDEBAR_PREFERENCES.projectSort,
     projectOrder,
     expandedWorkspaceIds,
+    // Builds from before multi-host stored neither field; unknown values fall back too.
+    machineFilter:
+      parseSidebarMachineFilter(record.machineFilter) ?? DEFAULT_SIDEBAR_PREFERENCES.machineFilter,
+    projectGrouping:
+      oneOf(SIDEBAR_PROJECT_GROUPINGS, record.projectGrouping) ??
+      DEFAULT_SIDEBAR_PREFERENCES.projectGrouping,
   };
 }
 
