@@ -172,6 +172,38 @@ test("a setup code opens the sealed payload for the typed address and pairs over
   );
 });
 
+test("a setup code for a discovered device is bound to its installation, not the address it was found at", async (t) => {
+  const host = await startPeerTestHost();
+  t.after(() => host.close());
+  const code = host.openSetupCode("lan");
+  // Discovery reached the host under a name other than its canonical endpoint.
+  const found = host.lanEndpoint.replace("127.0.0.1", "localhost");
+
+  const typed = registryFor(host);
+  assert.deepEqual(
+    await outcome(typed.registry.pairWithSetupCode({ endpoint: found, code })),
+    { status: "invalid_code" },
+    "a typed address must match the payload exactly",
+  );
+  const other = registryFor(host);
+  assert.deepEqual(
+    await outcome(
+      other.registry.pairWithSetupCode({ endpoint: found, code, instanceId: "someone-else" }),
+    ),
+    { status: "invalid_code" },
+  );
+  assert.deepEqual([...typed.saved(), ...other.saved()], []);
+
+  const discovered = registryFor(host);
+  const view = await discovered.registry.pairWithSetupCode({
+    endpoint: found,
+    code,
+    instanceId: host.instanceId,
+  });
+  assert.equal(view.id, host.instanceId);
+  assert.equal(discovered.saved()[0]?.endpoint, host.lanEndpoint, "the host's own endpoint is saved");
+});
+
 test("a renewed Tailscale key is re-pinned only after the same installation confirms it", async (t) => {
   const host = await startPeerTestHost();
   t.after(() => host.close());

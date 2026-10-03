@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { PeerPairingFailure } from "../../renderer/shared/peer-host.js";
 import { sanitizePairingRequestDeviceName } from "./aiden-remote-pairing-requests.js";
 import {
   AIDEN_PAIRING_REQUEST_ID_PATTERN,
@@ -16,19 +17,7 @@ import {
 } from "./peer-pairing.js";
 import { PeerTransportError } from "./peer-transport.js";
 
-/** Why a pairing attempt ended without a paired host. */
-export type PeerPairingFailure =
-  | { status: "denied" }
-  | { status: "expired" }
-  | { status: "cancelled" }
-  | { status: "rate_limited"; retryAfterSeconds?: number }
-  /** The other device is not accepting connection requests. */
-  | { status: "closed" }
-  /** The other device runs an Aiden without connection requests. */
-  | { status: "unsupported" }
-  /** The setup code was wrong or the payload did not authenticate. */
-  | { status: "invalid_code" }
-  | { status: "failed"; message: string };
+export type { PeerPairingFailure };
 
 export class PeerPairingOutcomeError extends Error {
   constructor(readonly outcome: PeerPairingFailure) {

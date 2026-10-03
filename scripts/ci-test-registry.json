@@ -356,6 +356,7 @@
         "main/services/mcp-selection.test.ts",
         "main/services/mcp-tool-result.test.ts",
         "main/services/peer-bootstrap-transport.test.ts",
+        "main/services/peer-discovery.test.ts",
         "main/services/peer-host-feed-cache.test.ts",
         "main/services/peer-host-manager.test.ts",
         "main/services/peer-host-pairing.test.ts",

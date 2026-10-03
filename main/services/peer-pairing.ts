@@ -96,11 +96,16 @@ function base64(value: unknown, length: number): Buffer {
   return bytes;
 }
 
-/** The setup code authenticates the entire trust payload before any credential exchange. */
+/**
+ * The setup code authenticates the entire trust payload before any credential
+ * exchange. A typed address must equal the payload's endpoint; a discovered
+ * device is bound by its installation instead, since the address it was found
+ * at need not be the host's canonical one.
+ */
 export function decryptPeerPairing(
   value: unknown,
   code: string,
-  endpoint: string,
+  expected: string | { instanceId: string },
   now = Date.now(),
 ): PeerPairing {
   const envelope = peerRecord(value);
@@ -131,7 +136,12 @@ export function decryptPeerPairing(
       `${kind}\n${sessionId}\n${expiresAt}`,
     );
     const pairing = parsePeerPairing(payload.toString("utf8"), now);
-    if (pairing.endpoint !== endpoint || pairing.expiresAt !== expiresAt)
+    if (
+      (typeof expected === "string"
+        ? pairing.endpoint !== expected
+        : pairing.instanceId !== expected.instanceId) ||
+      pairing.expiresAt !== expiresAt
+    )
       throw new Error("Pairing endpoint mismatch.");
     return pairing;
   } finally {

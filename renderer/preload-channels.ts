@@ -104,6 +104,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:peer-run-frame",
   "remote:peer-host-state",
   "remote:pairing-requests-changed",
+  "remote:peer-discovery",
+  "remote:peer-pairing-progress",
   "schedule:updated",
   "settings:appearance-changed",
   "shortcut:changed",

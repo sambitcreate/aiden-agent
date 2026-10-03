@@ -627,7 +627,12 @@ export class PeerHostRegistry {
    * payload, so the first connection is not verified.
    */
   async pairWithSetupCode(
-    input: { endpoint: string; code: string },
+    input: {
+      endpoint: string;
+      code: string;
+      /** Set for a discovered device: the payload must name this installation. */
+      instanceId?: string;
+    },
     signal?: AbortSignal,
     options: PeerPairingOptions = {},
   ): Promise<PeerHostView> {
@@ -650,7 +655,13 @@ export class PeerHostRegistry {
       }
       let pairing: PeerPairing;
       try {
-        pairing = decryptPeerPairing(envelope, input.code, input.endpoint);
+        pairing = decryptPeerPairing(
+          envelope,
+          input.code,
+          input.instanceId === undefined
+            ? input.endpoint
+            : { instanceId: input.instanceId },
+        );
       } catch {
         throw new PeerPairingOutcomeError({ status: "invalid_code" });
       }
