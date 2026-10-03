@@ -620,6 +620,7 @@
         "scripts/main-runtime-dependencies.test.mjs",
         "scripts/model-snapshot-core.test.mjs",
         "scripts/native-helpers.test.mjs",
+        "scripts/optimize-onboarding-assets.test.mjs",
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/prepare-macos-package-output.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
