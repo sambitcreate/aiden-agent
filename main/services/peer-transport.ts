@@ -97,7 +97,14 @@ export function peerTlsOptions(trust: PeerTrust): {
   };
 }
 
-/** Linear byte scanner; each input byte is visited once, including one-byte trickles. */
+/**
+ * Linear byte scanner; each input byte is visited once, including one-byte trickles.
+ *
+ * The byte and frame budget is rolling: it bounds what arrives between two
+ * frames that carry an SSE `id`, i.e. heartbeats and id-less partial snapshot
+ * chunks a reader may have to hold. A committed frame releases it, so a
+ * long-lived feed is limited by its session cap rather than its lifetime volume.
+ */
 export class PeerEventFrames {
   private buffer = Buffer.allocUnsafe(MAX_FRAME_BYTES + 4);
   private length = 0;
@@ -111,10 +118,9 @@ export class PeerEventFrames {
     onFrame: (frame: string) => void,
     onBoundary: () => void,
   ): void {
-    this.total += chunk.length;
-    if (this.total > 16 * MAX_FRAME_BYTES)
-      throw new Error("Stream byte budget exceeded.");
     for (const byte of chunk) {
+      if (++this.total > 16 * MAX_FRAME_BYTES)
+        throw new Error("Stream byte budget exceeded.");
       if (this.length >= this.buffer.length)
         throw new Error("Frame too large.");
       this.buffer[this.length++] = byte;
@@ -129,11 +135,14 @@ export class PeerEventFrames {
         this.previousLf = false;
         this.betweenCr = false;
         onBoundary();
-        if (
-          frame &&
-          !frame.split(/\r?\n/u).every((line) => line.startsWith(":"))
-        )
+        const lines = frame.split(/\r?\n/u);
+        if (frame && !lines.every((line) => line.startsWith(":"))) {
           onFrame(frame);
+          if (lines.some((line) => line.startsWith("id:"))) {
+            this.total = 0;
+            this.frames = 0;
+          }
+        }
       } else if (byte === 10) {
         this.previousLf = true;
         this.betweenCr = false;

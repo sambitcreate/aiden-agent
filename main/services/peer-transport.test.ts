@@ -366,6 +366,29 @@ test(
       /budget/,
     );
     assert.equal(boundaries, 16_384);
+    // A long-lived feed keeps going: committed frames release the rolling budget.
+    const feed = new PeerEventFrames();
+    const committed = Buffer.from(
+      `id: e:1\ndata: ${"x".repeat(1000)}\n\n`.repeat(1024),
+    );
+    let delivered = 0;
+    for (let round = 0; round < 24; round++)
+      feed.push(
+        committed,
+        () => delivered++,
+        () => {},
+      );
+    assert.equal(delivered, 24 * 1024);
+    const uncommitted = new PeerEventFrames();
+    assert.throws(
+      () =>
+        uncommitted.push(
+          Buffer.from(`data: ${"x".repeat(1000)}\n\n`.repeat(17 * 1024)),
+          () => {},
+          () => {},
+        ),
+      /budget/,
+    );
     const split = new PeerEventFrames();
     const frames: string[] = [];
     for (const byte of Buffer.from("data: ☃\r\n\r\n"))
