@@ -422,6 +422,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       terminalService.flushHistory(),
       browserService.shutdown(),
       shutdownDevices(),
+      // Bounded so a wedged server cannot hold quit; stdio children that miss
+      // the budget are still signalled by their transports' close.
+      mcpManager.closeAllWithin(2_000).then((closed) => {
+        if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
+      }),
     ]);
   } catch (error) {
     logger.error(
