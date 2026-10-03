@@ -15,7 +15,7 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
@@ -107,9 +107,11 @@ const aidenRelativeTsRewritePlugin = {
 	name: "aiden-relative-ts-rewrite",
 	setup(build) {
 		// The Aiden cores import siblings with NodeNext ".js" specifiers. esbuild
-		// normally remaps those to ".ts" sources, but at least one sibling import
-		// (advisor-attempt-store) is left unresolved and marked external inside
-		// this graph. Finish the remap deterministically for repo sources.
+		// normally remaps those to ".ts" sources, but some sibling imports (the
+		// advisor runtime's, historically) were left unresolved and marked
+		// external inside this graph. Finish the remap deterministically for repo
+		// sources, which is what lets the CLI bundle main/services originals
+		// directly instead of vendoring copies.
 		build.onResolve({ filter: /^\.{1,2}\/.+\.(js|ts)$/ }, (args) => {
 			if (!args.resolveDir) return undefined;
 			let candidate = resolve(args.resolveDir, args.path);
@@ -192,10 +194,6 @@ function validateExternalImports(metafiles) {
 				if (!imported.external || isBuiltin(imported.path) || allowedExternalPackages.has(imported.path)) {
 					continue;
 				}
-				if (imported.path.endsWith("advisor-runtime.vendor.mjs")) {
-					// Emitted beside the bundle by the vendor prebundle step above.
-					continue;
-				}
 				if (imported.path === "<runtime>") {
 					// esbuild's bookkeeping for dynamic-import machinery.
 					continue;
@@ -232,27 +230,6 @@ for (const entry of [
 
 rmSync(appDir, { force: true, recursive: true });
 mkdirSync(appDir, { recursive: true });
-
-// Prebundle the vendored advisor runtime as a self-contained module: esbuild's
-// graph marks this file's own sibling imports external (see the vendored file's
-// header), so the main bundle consumes it as a runtime external instead.
-const vendorResult = await build({
-	absWorkingDir: resolve(pkgDir),
-	bundle: true,
-	format: "esm",
-	logLevel: "warning",
-	platform: "node",
-	target: "node22.19",
-	entryPoints: { "advisor-runtime.vendor": join(pkgDir, "src", "vendor", "advisor", "advisor-runtime.ts") },
-	outdir: appDir,
-	write: true,
-});
-renameSync(join(appDir, "advisor-runtime.vendor.js"), join(appDir, "advisor-runtime.vendor.mjs"));
-void vendorResult;
-cpSync(
-	join(pkgDir, "src", "vendor", "advisor", "advisor-runtime.vendor.d.mts"),
-	join(appDir, "advisor-runtime.vendor.d.mts"),
-);
 
 const mainResult = await build({
 	...commonBuildOptions(),
