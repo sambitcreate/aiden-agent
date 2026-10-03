@@ -112,3 +112,15 @@ export function mergePeerHostStatuses(
   }
   return [...byHost.values()];
 }
+
+/**
+ * Reads every host's status, then merges against the cache as it is when the
+ * reply lands, so a newer broadcast received during the read is kept.
+ */
+export async function readPeerHostStatuses(
+  read: () => Promise<readonly PeerHostStatus[]>,
+  cached: () => readonly PeerHostStatus[] | undefined,
+): Promise<PeerHostStatus[]> {
+  const incoming = await read();
+  return mergePeerHostStatuses(cached(), incoming, true);
+}
