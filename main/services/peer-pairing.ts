@@ -22,6 +22,22 @@ export function peerText(value: unknown, max: number): string {
   return value;
 }
 
+/**
+ * A host display name under the host's own contract: at most 80 visible
+ * characters counted as Unicode code points (not UTF-16 units), with no
+ * control or format characters.
+ */
+export function peerDisplayName(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value.length ||
+    [...value].length > 80 ||
+    /[\p{Cc}\p{Cf}]/u.test(value)
+  )
+    throw new Error("Invalid peer display name.");
+  return value;
+}
+
 export function peerStrings(value: unknown, max = 64): string[] {
   if (!Array.isArray(value) || value.length > max)
     throw new Error("Invalid peer capabilities.");
@@ -217,7 +233,7 @@ export function openPeerPairingRequestGrant(
       credential,
       capabilities: peerStrings(exchange.capabilities),
       ...(exchange.displayName !== undefined
-        ? { displayName: peerText(exchange.displayName, 80) }
+        ? { displayName: peerDisplayName(exchange.displayName) }
         : {}),
     };
   } finally {

@@ -15,6 +15,7 @@ import {
 import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
+  normalizeAidenRemoteDisplayName,
   type AidenRemoteStateDocument,
 } from "./aiden-remote-state.js";
 import { openPeerPairingRequestGrant } from "./peer-pairing.js";
@@ -249,6 +250,30 @@ test("the envelope opens only for the requester and only for the identity it con
   // The envelope can be fetched again while retained, and still opens.
   const again = await service.poll(created.requestId, created.pollSecret);
   assert.equal(openPeerPairingRequestGrant(again.envelope, expected).instanceId.length > 0, true);
+});
+
+test("the requester accepts every host name the host allows and nothing longer", async () => {
+  async function grantFor(displayName: string) {
+    const { service } = harness({ displayName: () => displayName });
+    const { keys, created } = await open(service);
+    await service.respond(created.requestId, "allow");
+    const { envelope } = await service.poll(created.requestId, created.pollSecret);
+    return () => openPeerPairingRequestGrant(envelope, {
+      requestId: created.requestId,
+      publicKey: keys.publicKey,
+      privateKey: keys.privateKey,
+      serverSpkiSha256: SPKI,
+    });
+  }
+
+  // 80 characters by the host's count, but 81 UTF-16 units.
+  const longest = normalizeAidenRemoteDisplayName(`${"A".repeat(79)}\u{1F680}`);
+  assert.equal(longest.length, 81);
+  assert.equal((await grantFor(longest))().displayName, longest);
+
+  const tooLong = `${"A".repeat(80)}\u{1F680}`;
+  assert.throws(() => normalizeAidenRemoteDisplayName(tooLong));
+  assert.throws(await grantFor(tooLong), /display name/u);
 });
 
 test("deny, expiry and requester cancel issue no credential", async () => {
