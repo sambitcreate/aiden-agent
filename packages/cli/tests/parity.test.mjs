@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -458,6 +458,15 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   assert.equal(readFileSync(join(lease.authority.workingDirectory, "generated.txt"), "utf8"), "Bot-owned write");
   assert.ok(JSON.stringify(requests[0].messages).includes("Help in the Bot folder"));
   assert.ok(!requests[0].tools.some((tool) => ["bash", "run_command", "web_search", "subagent"].includes(tool.function.name)));
+  // Updating the migrated Aiden configuration must invalidate live Bot leases.
+  const invalidated = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("MCP update did not invalidate Bot authority")), 2000);
+    lease.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+  api.atomicJson(join(dir, "aiden-mcp.json"), []);
+  await invalidated;
+  await assert.rejects(write.execute("mcp-revoked", { path: "mcp-revoked.txt", content: "Denied" }));
+  assert.equal(existsSync(join(lease.authority.workingDirectory, "mcp-revoked.txt")), false);
   await app.revokeNoticeAudience(audienceId);
   await assert.rejects(write.execute("revoked", { path: "revoked.txt", content: "Denied" }));
   lease.release();
@@ -509,9 +518,11 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
-  let commits = 0, provider = { id: "test", name: "Test", auth: { oauth: { login: async () => ({ type: "oauth", access: "test-only", refresh: "refresh", expires: Date.now() + 3600000 }) } } };
+  const deviceId = crypto.randomUUID();
+  let receivedDeviceId;
+  let commits = 0, provider = { id: "test", name: "Test", auth: { oauth: { login: async (_interaction, options) => { receivedDeviceId = options.getDeviceId(); return ({ type: "oauth", access: "test-only", refresh: "refresh", expires: Date.now() + 3600000 }); } } } };
   const runtime = { getProvider: () => provider, listCredentials: async () => [], registerNativeProvider: (next) => { provider = next; }, login: async (_id, _method, interaction) => { const credential = await provider.auth.oauth.login(interaction); commits++; return credential; }, refresh: async () => ({}), logout: async () => {} };
-  const coordinator = api.createCliAuthCoordinator(runtime, async () => {});
+  const coordinator = api.createCliAuthCoordinator(runtime, async () => {}, () => deviceId);
   async function login(cancel) {
     const flowId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
@@ -520,7 +531,7 @@ test("shared auth coordinator commits a returned credential once and suppresses 
       coordinator.start(owner, request); if (cancel) coordinator.cancel(owner, request);
     });
   }
-  try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
+  try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal(receivedDeviceId, deviceId); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
   finally { await coordinator.shutdown(); }
 });
 
@@ -661,4 +672,149 @@ test("the subagent rollback switch registers no tool and opens no history", asyn
   let registered = 0;
   await api.createSubagentsExtension(temporary(t)).factory({ registerTool() { registered++; } });
   assert.equal(registered, 0);
+});
+
+test("MCP migration preserves exact legacy bytes privately and keeps native configurations separate", async (t) => {
+  const dir = temporary(t);
+  const legacy = [{ id: "old", name: "Existing server", enabled: false, transport: "stdio", command: "example" }];
+  const bytes = JSON.stringify(legacy, null, 4) + "\n";
+  writeFileSync(join(dir, "mcp.json"), bytes);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), legacy);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+  assert.equal(readFileSync(join(dir, "mcp.pre-pi-1.json"), "utf8"), bytes);
+  assert.equal(statSync(join(dir, "mcp.pre-pi-1.json")).mode & 0o777, 0o600);
+  assert.equal(statSync(join(dir, "aiden-mcp.json")).mode & 0o777, 0o600);
+  const native = { mcpServers: { native: { command: "example-native" } } };
+  api.atomicJson(join(dir, "mcp.json"), native);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), legacy);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")), native);
+});
+
+test("MCP migration recovers a completed copy and refuses conflicting or invalid records without deleting data", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json"), destination = join(dir, "aiden-mcp.json");
+  const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
+  api.atomicJson(legacy, [server]);
+  api.atomicJson(destination, [{ ...server, id: "new" }]);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /Reconcile/);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [server]);
+  assert.equal(existsSync(join(dir, "mcp.pre-pi-1.json")), false);
+  api.atomicJson(destination, [server]);
+  api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+  assert.equal(existsSync(legacy), false);
+  api.atomicJson(legacy, [{ id: "invalid" }]);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs/);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
+});
+
+test("MCP reads stay available while another process owns the Aiden MCP lease", async (t) => {
+  const dir = temporary(t), destination = join(dir, "aiden-mcp.json");
+  const server = { id: "kept", name: "Kept", enabled: true, transport: "stdio", command: "example" };
+  api.atomicJson(destination, [server]);
+  const release = api.acquireLease(destination);
+  try {
+    // CLI startup and `aiden mcp list` both read without anything to migrate,
+    // whether mcp.json is absent or holds native pi configuration.
+    const native = { mcpServers: { native: { command: "native" } } };
+    for (const legacy of [undefined, native]) {
+      if (legacy) api.atomicJson(join(dir, "mcp.json"), legacy);
+      api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+      assert.deepEqual((await api.mcpCommand(dir, ["list"])).map(({ id }) => id), ["kept"]);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")), native);
+    // Writers and pending migrations still respect the owner.
+    await assert.rejects(api.mcpCommand(dir, ["remove", "kept"]), /Another Aiden process/);
+    api.atomicJson(join(dir, "mcp.json"), [server]);
+    assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /Another Aiden process/);
+    assert.equal(existsSync(join(dir, "mcp.json")), true);
+  } finally { release(); }
+  api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+  assert.equal(existsSync(join(dir, "mcp.json")), false);
+});
+
+test("native settings keep Aiden header-only startup and persist one installation identity on demand", async (t) => {
+  const dir = temporary(t);
+  const settings = api.SettingsManager.create(dir, dir);
+  assert.equal(settings.getQuietStartup(), "header");
+  assert.equal(settings.getThemeSetting(), "light/dark");
+  settings.setTheme("system");
+  assert.equal(settings.getTheme(), "system");
+  assert.equal(settings.getEnableInstallTelemetry(), false);
+  assert.equal(settings.getGlobalSettings().deviceId, undefined);
+  const id = settings.getOrCreateDeviceId();
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  await settings.flush();
+  const reopened = api.SettingsManager.create(dir, dir);
+  assert.equal(reopened.getOrCreateDeviceId(), id);
+  reopened.setQuietStartup(false);
+  assert.equal(reopened.getQuietStartup(), false);
+  reopened.setQuietStartup(true);
+  assert.equal(reopened.getQuietStartup(), true);
+  await reopened.flush();
+});
+
+
+test("delegated MCP revisions follow migrated Aiden configuration and encrypted credentials", (t) => {
+  const dir = temporary(t);
+  const revision = api.createCliMcpRevision(dir);
+  const original = revision();
+  api.atomicJson(join(dir, "mcp.json"), { mcpServers: { native: { command: "example" } } });
+  assert.equal(revision(), original);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: true }]);
+  const configured = revision();
+  assert.notEqual(configured, original);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: false }]);
+  assert.notEqual(revision(), configured);
+  const revoked = revision();
+  mkdirSync(join(dir, "credentials"), { recursive: true });
+  api.atomicJson(join(dir, "credentials/insights.json"), { encrypted: "changed" });
+  assert.notEqual(revision(), revoked);
+});
+
+test("MCP migration validates one snapshot and restores a native replacement without deleting it", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  const servers = [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }];
+  const original = JSON.stringify(servers) + "\n";
+  const native = { mcpServers: { native: { command: "native" } } };
+  writeFileSync(legacy, original);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, (server) => {
+    api.validateMcpServer(server);
+    api.atomicJson(legacy, native);
+  }), /changed during migration/u);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), native);
+  assert.equal(readFileSync(join(dir, "mcp.pre-pi-1.json"), "utf8"), original);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "aiden-mcp.json"), "utf8")), servers);
+});
+
+test("MCP source claiming never removes a replacement published before or after the claim", (t) => {
+  for (const replaceBefore of [true, false]) {
+    const dir = temporary(t), legacy = join(dir, "mcp.json");
+    const servers = [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }];
+    const native = { mcpServers: { live: { command: "keep-live" } } };
+    const concurrent = { mcpServers: { newer: { command: "keep-newer" } } };
+    api.atomicJson(legacy, servers);
+    let claimed;
+    const migrate = () => api.migrateAidenMcpConfig(dir, api.validateMcpServer, (source, target) => {
+      if (replaceBefore) api.atomicJson(source, native);
+      renameSync(source, target); claimed = target;
+      api.atomicJson(source, concurrent);
+    });
+    if (replaceBefore) assert.throws(migrate, /changed during migration/u); else migrate();
+    assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), concurrent);
+    assert.deepEqual(JSON.parse(readFileSync(claimed, "utf8")), replaceBefore ? native : servers);
+    assert.equal(statSync(dirname(claimed)).mode & 0o777, 0o700);
+  }
+});
+
+test("MCP migration retains writes through a source descriptor opened before retirement", (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  api.atomicJson(legacy, [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }]);
+  const fd = openSync(legacy, "r+");
+  try {
+    api.migrateAidenMcpConfig(dir, api.validateMcpServer);
+    const native = { mcpServers: { late: { command: "late-writer" } } };
+    ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(native));
+    const recovery = readdirSync(dir).find((name) => name.startsWith(".mcp-migration-"));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, recovery, "mcp.json"), "utf8")), native);
+    assert.equal(existsSync(legacy), false);
+  } finally { closeSync(fd); }
 });

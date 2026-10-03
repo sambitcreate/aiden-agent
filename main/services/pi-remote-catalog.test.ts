@@ -29,7 +29,7 @@ import {
   AIDEN_PI_CATALOG_USER_AGENT,
   parsePiRemoteCatalog,
   PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS,
-  withPiRemoteCatalog,
+  withPiRemoteCatalog as createPiRemoteCatalog,
 } from "./pi-remote-catalog.js";
 import {
   normalizePiModelsDocument,
@@ -46,6 +46,14 @@ import {
 import { piModelMetadataFor } from "./pi-model-metadata.js";
 import { googleProviderModels } from "./google-provider.js";
 import { isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+
+// Catalog chronology fixtures deliberately use a fixed baseline so updating
+// the installed release cannot turn every valid remote generation into a stale one.
+const withPiRemoteCatalog: typeof createPiRemoteCatalog = (provider, options = {}) =>
+  createPiRemoteCatalog(provider, {
+    localGeneratedAt: Date.parse("2026-09-22T19:31:44.346Z"),
+    ...options,
+  });
 
 test("Google catalog policy excludes legacy families without excluding current models", () => {
   for (const id of [
@@ -179,6 +187,20 @@ test("remote catalog parser accepts Pi's keyed response and pins provider identi
   assert.equal(parsed[0]?.id, "ox-alpha-free");
   assert.equal(parsed[0]?.provider, "opencode-go");
   assert.throws(() => parsePiRemoteCatalog("opencode-go", { models: "wrong" }));
+});
+
+test("mixed Pi catalogs never admit non-chat operations to the chat inventory", () => {
+  const chat = { ...oxAlphaModel(), type: "chat" };
+  const entries = [
+    { ...chat, type: "image", output: ["image"] },
+    { ...chat, type: "classifier" },
+    { ...chat, type: "future-operation" },
+    chat,
+  ];
+  assert.deepEqual(parsePiRemoteCatalog("opencode-go", entries).map((model) => model.id), [chat.id]);
+  const document = normalizePiModelsDocument({ entries: { "opencode-go": { models: entries } } });
+  assert.deepEqual(document.entries["opencode-go"]?.models.map((model) => model.id), [chat.id]);
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...chat, contextWindow: 0 }]));
 });
 
 test("Ox Alpha publishes its native low, high, and max thinking contract", () => {

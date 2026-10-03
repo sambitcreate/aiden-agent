@@ -4,8 +4,8 @@ import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlin
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { JsonlSessionRepo, TODO_CONTEXT } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import {
   createModels,
   fauxAssistantMessage,
@@ -21,7 +21,7 @@ import {
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
 import { VccError } from "./pi-vcc/errors.js";
-import { CompactionError } from "@earendil-works/pi-agent-core";
+import { CompactionError } from "./pi-legacy-harness.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   AIDEN_PI_TRANSACTION,

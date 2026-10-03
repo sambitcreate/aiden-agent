@@ -18,6 +18,8 @@ import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createAidenInlineExtensions } from "./extensions/index.ts";
 import { desktopSkillInjectionPaths } from "./skill-paths.ts";
 import { dispatchCommand, CLI_COMMAND_HELP } from "./commands.ts";
+import { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
+import { validateMcpServer } from "./mcp.ts";
 import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
 
 // Aiden CLI carries its own release cadence; pi.dev's version feed would
@@ -97,6 +99,11 @@ if (invokedAsCli) {
 	const argv = process.argv.slice(2);
 	process.env.AIDEN_CLI_ENTRY = fileURLToPath(import.meta.url);
 	try {
+		migrateAidenMcpConfig(getAgentDir(), validateMcpServer);
+		if (argv[0] === "pi-mcp") {
+			await main(["mcp", ...argv.slice(1)]);
+			process.exit(process.exitCode ?? 0);
+		}
 		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) process.exit(0);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error)); process.exit(1);
