@@ -24,8 +24,31 @@ test("portable provider references grant no access, and requests resolve rotated
   await fetch(server.url!);
   assert.deepEqual(received, [{ authorization: "Bearer first-token", redirect: "error" }, { authorization: "Bearer rotated-token", redirect: "error" }]);
   grant = null;
-  await assert.rejects(fetch(server.url!), /Approve/u);
+  const nextOperation = createMcpProviderAuthenticatedFetch({
+    server, readGrant: async () => grant, assertCurrent() {}, resolveToken: async () => "token",
+    fetch: async () => { throw new Error("must not dispatch"); },
+  });
+  await assert.rejects(nextOperation(server.url!), /Approve/u);
   assert.equal(received.length, 2);
+});
+
+test("an operation verifies its grant once, and a published revocation still fences its later requests", async () => {
+  let grantReads = 0;
+  let current = true;
+  let dispatches = 0;
+  const fetch = createMcpProviderAuthenticatedFetch({
+    server, readGrant: async () => { grantReads++; return mcpProviderGrantBinding(server); },
+    assertCurrent() { if (!current) throw new Error("Configuration changed"); },
+    resolveToken: async () => "token",
+    fetch: async () => { dispatches++; return Response.json({}); },
+  });
+  // initialize, initialized notification and the operation's request
+  for (let i = 0; i < 3; i++) await fetch(server.url!);
+  assert.equal(dispatches, 3);
+  assert.equal(grantReads, 2, "checked before and after the first credential resolution only");
+  current = false; // grant publication invalidates the configuration lease
+  await assert.rejects(fetch(server.url!), /Configuration changed/u);
+  assert.equal(dispatches, 3);
 });
 
 test("grant revocation and configuration changes during asynchronous credential resolution prevent dispatch", async () => {

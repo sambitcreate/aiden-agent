@@ -29,7 +29,14 @@ export function admitMcpProviderAuthServers(servers: readonly McpServer[], allow
   return servers.filter((server) => allowed || server.authProvider === undefined);
 }
 
-/** Resolve only the bearer credential: model headers, base URL and environment never leave the provider. */
+/**
+ * Resolve only the bearer credential: model headers, base URL and environment never leave the provider.
+ *
+ * One fetch serves one attended operation's transport. The device grant is
+ * verified on both sides of the first credential resolution; later requests in
+ * the same operation rely on `assertCurrent`, which the configuration lease
+ * fails synchronously when a grant or connection change is published.
+ */
 export function createMcpProviderAuthenticatedFetch(options: {
   server: McpServer;
   readGrant(): Promise<string | null>;
@@ -41,6 +48,7 @@ export function createMcpProviderAuthenticatedFetch(options: {
   const binding = mcpProviderGrantBinding(server);
   const endpoint = new URL(server.url!).href;
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  let grantVerified = false;
   return async (input, init) => {
     options.assertCurrent();
     const request = input instanceof Request ? input : undefined;
@@ -48,14 +56,18 @@ export function createMcpProviderAuthenticatedFetch(options: {
     if (url.href !== endpoint) throw new Error("Provider credentials may only reach the exact approved MCP URL.");
     const signal = init?.signal ?? request?.signal;
     signal?.throwIfAborted();
-    if (await options.readGrant() !== binding) throw new Error("Approve this provider credential in Settings → Plugins on this device before connecting.");
+    const verifyGrant = !grantVerified;
+    if (verifyGrant && await options.readGrant() !== binding) throw new Error("Approve this provider credential in Settings → Plugins on this device before connecting.");
     options.assertCurrent();
     let token: string | undefined;
     try { token = await options.resolveToken(server.authProvider!); }
     catch { throw new Error("The selected provider credential could not be refreshed. Sign in again in Provider Settings."); }
     signal?.throwIfAborted();
     options.assertCurrent();
-    if (await options.readGrant() !== binding) throw new Error("MCP provider credential approval was revoked.");
+    if (verifyGrant) {
+      if (await options.readGrant() !== binding) throw new Error("MCP provider credential approval was revoked.");
+      grantVerified = true;
+    }
     signal?.throwIfAborted();
     options.assertCurrent();
     if (typeof token !== "string" || !token || token.length > 32_768 || [...token].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) {
