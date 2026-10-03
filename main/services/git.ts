@@ -11,7 +11,7 @@ import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
-import { resolveGitExecutable } from "./git-executable.js";
+import { resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -1029,7 +1029,7 @@ export class GitService {
     const env = gitEnvironment(options.mutation === true);
     let binary: string;
     try {
-      binary = await resolveGitExecutable(this.gitBinary, cwd, env, options.signal);
+      binary = await resolveGitExecutableMemoized(this.gitBinary, cwd, env, options.signal);
     } catch (error) {
       if (options.signal?.aborted) {
         throw new GitServiceError("aborted", "Git operation was cancelled.");
