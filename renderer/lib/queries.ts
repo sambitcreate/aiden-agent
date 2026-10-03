@@ -392,8 +392,13 @@ const PULL_REQUEST_POLL_MS = 5 * 60_000;
 const PULL_REQUEST_STALE_MS = 60_000;
 const GIT_STALE_MS = 5_000;
 
+/** A refetch interval that is switched off while the window is hidden or blurred. */
+export function pollWhileWindowActive(intervalMs: number) {
+  return () => (isWindowActive() ? intervalMs : false);
+}
+
 export function gitSafetyPoll(enabled: boolean, intervalMs = GIT_SAFETY_POLL_MS) {
-  return enabled ? () => (isWindowActive() ? intervalMs : false) : false;
+  return enabled ? pollWhileWindowActive(intervalMs) : false;
 }
 
 export function useGitInfo(workspaceId: string | undefined) {
@@ -661,14 +666,26 @@ export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
 }
 
-export function useAidenRemoteSettings() {
-  return useQuery({
+// Each Remote snapshot runs the Tailscale CLI twice. Settings changes arrive as
+// `remote:changed`, so only a surface showing live status (the open popover or
+// Remote settings) polls quickly; the always-visible sidebar badge refreshes
+// once a minute while the window is active, and on focus once stale.
+export const AIDEN_REMOTE_LIVE_POLL_MS = 10_000;
+export const AIDEN_REMOTE_IDLE_POLL_MS = 60_000;
+
+export function aidenRemoteSettingsQueryOptions(live = false) {
+  return queryOptions({
     queryKey: queryKeys.aidenRemote,
     queryFn: aidenRemoteApi.get,
     retry: false,
     refetchOnWindowFocus: true,
-    refetchInterval: 10_000,
+    staleTime: live ? 0 : AIDEN_REMOTE_IDLE_POLL_MS,
+    refetchInterval: live ? AIDEN_REMOTE_LIVE_POLL_MS : pollWhileWindowActive(AIDEN_REMOTE_IDLE_POLL_MS),
   });
+}
+
+export function useAidenRemoteSettings(live = false) {
+  return useQuery(aidenRemoteSettingsQueryOptions(live));
 }
 
 export function useEngineStatus(enabled = true) {
