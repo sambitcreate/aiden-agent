@@ -1497,6 +1497,7 @@ async function prepareGeneration(
         providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
+        resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {

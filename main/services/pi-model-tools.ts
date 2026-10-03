@@ -9,7 +9,7 @@ import {
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { validateDisplayImageDimensions } from "./display-image-extension.js";
+import { hasCanonicalBase64Padding, validateDisplayImageDimensions } from "./display-image-extension.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Parent codemode results aggregate child usage; only provider operations add turn totals. */
@@ -35,6 +35,11 @@ export interface PiModelToolsHost {
     id: string,
     signal?: AbortSignal,
   ): Promise<{ name: string; image: ImageContent }>;
+  /** Resolve several IDs against one inventory read, in request order. */
+  resolveImages?(
+    ids: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<{ name: string; image: ImageContent }[]>;
   models: Pick<
     Models,
     "getAvailableOfType" | "getModelOfType" | "generateImages" | "classify"
@@ -199,13 +204,16 @@ function errorResult(message: string, usage?: Usage): AgentToolResult<null> {
     ...(usage ? { usage } : {}),
   };
 }
-function validImages(output: unknown): {
+/** One decode per image: callers reuse the decoded byte count and pixel area. */
+function validImages(output: unknown, name = "Generated image"): {
   images: ImageContent[];
+  sizes: { bytes: number; pixels: number }[];
   description: string;
 } {
   if (!Array.isArray(output) || output.length > 64)
     throw new Error("Invalid image-generation output.");
   const images: ImageContent[] = [];
+  const sizes: { bytes: number; pixels: number }[] = [];
   let bytes = 0,
     description = "";
   for (const raw of output) {
@@ -229,24 +237,25 @@ function validImages(output: unknown): {
       !/^[A-Za-z0-9+/]+={0,2}$/u.test(raw.data)
     )
       throw new Error("Invalid generated image data.");
+    if (!hasCanonicalBase64Padding(raw.data))
+      throw new Error("Invalid generated image encoding.");
     const data = Buffer.from(raw.data, "base64");
     bytes += data.length;
     if (bytes > MAX_IMAGE_BYTES || images.length >= MAX_IMAGES)
       throw new Error(
         "Generated images exceed the 4-image or 8 MiB output limit.",
       );
-    if (data.toString("base64") !== raw.data)
-      throw new Error("Invalid generated image encoding.");
-    validateDisplayImageDimensions(data, raw.mimeType, "Generated image");
+    const size = validateDisplayImageDimensions(data, raw.mimeType, name);
     images.push({ type: "image", data: raw.data, mimeType: raw.mimeType });
+    sizes.push({ bytes: data.length, pixels: size.width * size.height });
   }
   if (!images.length)
     throw new Error("The model returned no generated images.");
-  return { images, description };
+  return { images, sizes, description };
 }
 /** Resolve only host-owned current-chat IDs, and validate the whole batch before dispatch. */
 export async function resolvePiModelImageInputs(
-  host: Pick<PiModelToolsHost, "resolveImage">,
+  host: Pick<PiModelToolsHost, "resolveImage" | "resolveImages">,
   value: unknown,
   signal?: AbortSignal,
 ): Promise<{ images: ImageContent[]; references: PiModelImageReference[] }> {
@@ -257,28 +266,26 @@ export async function resolvePiModelImageInputs(
   if (new Set(ids).size !== ids.length)
     throw new Error("Reference image IDs must be unique.");
   if (!ids.length) return { images: [], references: [] };
-  if (!host.resolveImage)
+  if (!host.resolveImage && !host.resolveImages)
     throw new Error("Reference images are unavailable in this chat.");
-  const resolved: { id: string; name: string; image: ImageContent }[] = [];
-  for (const id of ids) {
-    signal?.throwIfAborted();
-    const result = await host.resolveImage(id, signal);
-    signal?.throwIfAborted();
-    resolved.push({
-      id,
-      name: text(result.name, 256, "reference image name"),
-      image: result.image,
-    });
-  }
-  const { images } = validImages(resolved.map((item) => item.image));
-  const pixels = images.reduce((sum, item) => {
-    const size = validateDisplayImageDimensions(
-      Buffer.from(item.data, "base64"),
-      item.mimeType,
-      "Reference image",
-    );
-    return sum + size.width * size.height;
-  }, 0);
+  signal?.throwIfAborted();
+  // A batch-capable host reads the chat inventory once for every ID.
+  const results = host.resolveImages
+    ? await host.resolveImages(ids, signal)
+    : await (async () => {
+        const each: { name: string; image: ImageContent }[] = [];
+        for (const id of ids) {
+          signal?.throwIfAborted();
+          each.push(await host.resolveImage!(id, signal));
+        }
+        return each;
+      })();
+  signal?.throwIfAborted();
+  if (results.length !== ids.length)
+    throw new Error("Reference images could not be resolved.");
+  const names = results.map((result) => text(result.name, 256, "reference image name"));
+  const { images, sizes } = validImages(results.map((result) => result.image), "Reference image");
+  const pixels = sizes.reduce((sum, size) => sum + size.pixels, 0);
   if (pixels > 40_000_000)
     throw new Error(
       "Reference images exceed the 40-million decoded-pixel limit.",
@@ -286,10 +293,10 @@ export async function resolvePiModelImageInputs(
   return {
     images,
     references: images.map((image, index) => ({
-      id: resolved[index]!.id,
-      name: resolved[index]!.name,
+      id: ids[index]!,
+      name: names[index]!,
       mimeType: image.mimeType,
-      bytes: Buffer.from(image.data, "base64").length,
+      bytes: sizes[index]!.bytes,
     })),
   };
 }
