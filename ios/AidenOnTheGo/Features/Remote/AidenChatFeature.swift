@@ -490,9 +490,21 @@ struct AidenTerminalReplayGate {
 }
 
 enum AidenTerminalReconciliation {
-    static func retryDelayMilliseconds(attempt: Int) -> Int {
+    static let maximumRetryDelayMilliseconds = 30_000
+
+    /// Capped exponential backoff with equal jitter: the delay lands in
+    /// `[ceiling / 2, ceiling)`, where the ceiling doubles from 1 s to 30 s.
+    /// Keeping half the ceiling preserves real back-off while the random half
+    /// spreads reconnects from many devices after a Mac restart or network flap.
+    static func retryDelayMilliseconds(
+        attempt: Int,
+        randomUnit: () -> Double = { Double.random(in: 0..<1) }
+    ) -> Int {
         let safeAttempt = max(0, min(attempt, 5))
-        return min(30_000, 1_000 * (1 << safeAttempt))
+        let ceiling = min(maximumRetryDelayMilliseconds, 1_000 * (1 << safeAttempt))
+        let floor = ceiling / 2
+        let unit = min(max(randomUnit(), 0), 1)
+        return min(ceiling, floor + Int(Double(ceiling - floor) * unit))
     }
 
     static func isDefinitiveMissingStream(_ error: Error) -> Bool {
@@ -1600,12 +1612,15 @@ final class AidenChatViewModel {
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
+        // A running observer already owns a live progress channel whose
+        // snapshots supersede a one-off fetch, so a reload does not duplicate it.
+        guard progressTask == nil else { return }
         await loadProgressSnapshot(
             context: context,
             observationGeneration: observationGeneration
         )
         guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
-        startProgressObservation()
+        startProgressObservation(initialSnapshotLoaded: true)
     }
 
     private func refreshModelCatalog(context: AidenRemoteRequestContext) async {
@@ -1764,7 +1779,10 @@ final class AidenChatViewModel {
         return historicalAgentRosters.first { $0.turnId == turnId }
     }
 
-    func startProgressObservation() {
+    /// Starts the single progress owner for this chat. `initialSnapshotLoaded`
+    /// lets `load()` hand over the snapshot it just fetched so the observer goes
+    /// straight to the live channel instead of fetching the same state again.
+    func startProgressObservation(initialSnapshotLoaded: Bool = false) {
         guard !isReadOnlyFixture else { return }
         guard !isRemoved else { return }
         clearProgressStateForLostAccess()
@@ -1773,7 +1791,10 @@ final class AidenChatViewModel {
         progressObservationGeneration &+= 1
         let generation = progressObservationGeneration
         progressTask = Task { [weak self] in
-            await self?.observeProgress(generation: generation)
+            await self?.observeProgress(
+                generation: generation,
+                initialSnapshotLoaded: initialSnapshotLoaded
+            )
             self?.finishProgressObservation(generation: generation)
         }
     }
@@ -1846,7 +1867,9 @@ final class AidenChatViewModel {
         isAgentRosterStale = rosterFetchFailed && agentRoster != nil
     }
 
-    private func observeProgress(generation: UInt64) async {
+    private func observeProgress(generation: UInt64, initialSnapshotLoaded: Bool = false) async {
+        var skipsSnapshot = initialSnapshotLoaded
+        var failedAttempts = 0
         while !Task.isCancelled {
             guard let context = try? coordinator.requestContext(for: instanceId) else {
                 clearProgressState()
@@ -1854,7 +1877,10 @@ final class AidenChatViewModel {
             }
             guard isCurrentProgressObservation(generation, context: context),
                   canReadTaskProgress || canReadAgentRoster else { return }
-            await loadProgressSnapshot(context: context, observationGeneration: generation)
+            if !skipsSnapshot {
+                await loadProgressSnapshot(context: context, observationGeneration: generation)
+            }
+            skipsSnapshot = false
             guard isCurrentProgressObservation(generation, context: context) else { return }
             do {
                 let events = try coordinator.remoteClient(for: context).progressEvents(
@@ -1865,6 +1891,9 @@ final class AidenChatViewModel {
                     try Task.checkCancellation()
                     guard isCurrentProgressObservation(generation, context: context),
                           event.streamId == chat.id else { return }
+                    // A delivered event proves the channel is healthy, so the
+                    // next reconnect starts again from the shortest delay.
+                    failedAttempts = 0
                     applyProgress(event)
                 }
                 if isCurrentProgressObservation(generation, context: context) {
@@ -1884,8 +1913,10 @@ final class AidenChatViewModel {
                 isTaskProgressStale = taskProgress != nil
                 isAgentRosterStale = agentRoster != nil
             }
+            let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: failedAttempts)
+            failedAttempts += 1
             do {
-                try await Task.sleep(for: .seconds(1))
+                try await Task.sleep(for: .milliseconds(delay))
             } catch {
                 return
             }
