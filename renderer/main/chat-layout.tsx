@@ -85,7 +85,7 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench>
+      <EnvironmentWorkbench suppressed={activeRemoteChat !== null}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />

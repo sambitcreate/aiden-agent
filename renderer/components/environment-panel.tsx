@@ -1696,29 +1696,40 @@ function QuickViewCard({
   );
 }
 
-export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
+export function EnvironmentWorkbench({
+  children,
+  suppressed = false,
+}: React.PropsWithChildren<{
+  /**
+   * Hides the Environment and Quick View surfaces without changing whether
+   * they are open, for content that is not on this Mac (a paired host's chat).
+   */
+  suppressed?: boolean;
+}>) {
   const panel = useEnvironmentPanel();
+  const toolsOpen = panel.toolsOpen && !suppressed;
+  const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const [resizing, setResizing] = React.useState(false);
   const [preferredWidth, setPreferredWidth] = React.useState(storedPanelWidth);
-  const fullOpen = panel.toolsOpen;
+  const fullOpen = toolsOpen;
   const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
     preferredWidth,
     containerWidth,
   );
   const quickViewLayout = resolveQuickViewLayout(
     containerWidth,
-    panel.toolsOpen,
+    toolsOpen,
     renderedWidth,
     inline,
   );
   const stacked =
-    panel.quickViewOpen && panel.toolsOpen && !quickViewLayout.alongsideTools;
+    quickViewOpen && toolsOpen && !quickViewLayout.alongsideTools;
   const toolsPresented =
-    panel.toolsOpen && (!stacked || panel.frontSurface === "tools");
+    toolsOpen && (!stacked || panel.frontSurface === "tools");
   const quickViewPresented =
-    panel.quickViewOpen && (!stacked || panel.frontSurface === "quick-view");
+    quickViewOpen && (!stacked || panel.frontSurface === "quick-view");
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -1731,7 +1742,7 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
   }, []);
 
   React.useEffect(() => {
-    if (!panel.toolsOpen && !panel.quickViewOpen) return;
+    if (!toolsOpen && !quickViewOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== "Escape") return;
       if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
@@ -1757,8 +1768,8 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
     panel.closeTools,
     panel.frontSurface,
     panel.gitOperationBusy,
-    panel.quickViewOpen,
-    panel.toolsOpen,
+    quickViewOpen,
+    toolsOpen,
   ]);
 
   const reportSurfaceLayout = panel.reportSurfaceLayout;
@@ -1771,7 +1782,7 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
     <div
       ref={containerRef}
       data-environment-surface-mode={panel.surfaceMode}
-      data-quick-view-open={panel.quickViewOpen ? "true" : "false"}
+      data-quick-view-open={quickViewOpen ? "true" : "false"}
       data-environment-stacked={stacked ? "true" : "false"}
       className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
     >
