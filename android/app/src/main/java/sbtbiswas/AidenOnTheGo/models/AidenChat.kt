@@ -1358,9 +1358,16 @@ class AidenTerminalReplayGate {
 }
 
 object AidenTerminalReconciliation {
-    fun retryDelayMilliseconds(attempt: Int): Long {
+    /**
+     * Exponential backoff (1 s doubling to a 30 s cap) with equal jitter: the
+     * delay falls in the upper half of the step, so many devices that lost the
+     * same Mac at once do not reconnect in lockstep.
+     */
+    fun retryDelayMilliseconds(attempt: Int, random: kotlin.random.Random = kotlin.random.Random.Default): Long {
         val safeAttempt = maxOf(0, minOf(attempt, 5))
-        return minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val ceiling = minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val floor = ceiling / 2
+        return floor + random.nextLong(ceiling - floor + 1)
     }
 
     fun isDefinitiveMissingStream(error: Throwable): Boolean {
