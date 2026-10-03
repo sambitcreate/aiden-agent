@@ -33,6 +33,11 @@ android {
       shaders = false
     }
 
+    sourceSets {
+      // JVM contract tests read the canonical Aiden Remote fixtures directly.
+      getByName("test").resources.directories.add("../../protocol/aiden-remote/v1/fixtures")
+    }
+
     packaging {
       resources {
         excludes += "/META-INF/{AL2.0,LGPL2.1}"
