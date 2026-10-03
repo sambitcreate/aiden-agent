@@ -187,13 +187,22 @@ enum class AidenAgentStepStatus {
         get() = this == FAILED || this == BLOCKED || this == CANCELLED
 }
 
+/** Patterns compiled once; transcript validation runs on every streamed frame. */
+private object AidenChatPatterns {
+    val DRIVE_PREFIX = Regex("^[A-Za-z]:/")
+    val TOOL_STEP_ID = Regex("^tool-[1-9][0-9]*$")
+    val TOOL_CALL_ID = Regex("^call-[1-9][0-9]*$")
+    val THINKING_STEP_ID = Regex("^think-[1-9][0-9]*$")
+    val WHITESPACE = Regex("\\s+")
+}
+
 @Serializable
 data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
     fun isValid(toolName: String?): Boolean {
         val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
         return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
             !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
-            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            !AidenChatPatterns.DRIVE_PREFIX.containsMatchIn(relativePath) &&
             relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
             relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
     }
@@ -393,14 +402,14 @@ data class AidenGenerationTimeline(
 
             when (step.kind) {
                 AidenAgentStep.Kind.TOOL -> {
-                    if (!step.id.matches(Regex("^tool-[1-9][0-9]*$")) || step.id.length > 128 ||
+                    if (!step.id.matches(AidenChatPatterns.TOOL_STEP_ID) || step.id.length > 128 ||
                         step.toolCallId == null || step.toolCallId.length > 128 ||
-                        !step.toolCallId.matches(Regex("^call-[1-9][0-9]*$")) ||
+                        !step.toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID) ||
                         step.toolName == null || step.label == null || step.status == null
                     ) return false
                 }
                 AidenAgentStep.Kind.THINKING -> {
-                    if (version == 1 || step.id.length > 128 || !step.id.matches(Regex("^think-[1-9][0-9]*$"))) {
+                    if (version == 1 || step.id.length > 128 || !step.id.matches(AidenChatPatterns.THINKING_STEP_ID)) {
                         return false
                     }
                 }
@@ -1121,7 +1130,7 @@ object AidenApprovalPresentation {
     private val automationTools = setOf("schedule_task", "edit_automation")
 
     fun oneLineSummary(summary: String): String {
-        val collapsed = summary.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val collapsed = summary.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
         return if (collapsed.isEmpty()) "Review requested action" else collapsed
     }
 
@@ -1321,7 +1330,7 @@ data class AidenBotReplyProjection(
             for (paragraph in paragraphs) {
                 val cleaned = paragraph.trim()
                 if (cleaned.isEmpty()) continue
-                val identity = cleaned.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+                val identity = cleaned.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
                 if (seen.add(identity)) {
                     result.add(cleaned)
                 }

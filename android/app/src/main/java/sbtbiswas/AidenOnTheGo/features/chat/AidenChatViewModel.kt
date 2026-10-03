@@ -87,6 +87,11 @@ class AidenChatViewModel(
     private val _reasoning = MutableStateFlow("")
     val reasoning: StateFlow<String> = _reasoning.asStateFlow()
 
+    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+        _liveText.value = text
+        _reasoning.value = reasoning
+    }
+
     private val _tools = MutableStateFlow<List<AidenLiveTool>>(emptyList())
     val tools: StateFlow<List<AidenLiveTool>> = _tools.asStateFlow()
 
@@ -984,8 +989,7 @@ class AidenChatViewModel(
                 }
                 _chat.value = accepted.chat
 
-                _liveText.value = ""
-                _reasoning.value = ""
+                liveTranscript.reset()
                 _tools.value = emptyList()
                 _activityTimeline.value = null
                 _pendingApproval.value = null
@@ -1241,12 +1245,14 @@ class AidenChatViewModel(
 
     private suspend fun apply(event: AidenRemoteStreamEvent) {
         if (activeStreamId != event.streamId) return
+        val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
+        // Timeline offsets and terminal states describe the text received so far.
+        if (!isDelta) liveTranscript.flush()
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
                 _streamState.value = AidenStreamState.RECONCILING
                 if (_chat.value?.isBotChat == true) {
-                    _liveText.value = ""
-                    _reasoning.value = ""
+                    liveTranscript.reset()
                 }
                 reconcileChat()
             }
@@ -1267,12 +1273,12 @@ class AidenChatViewModel(
             }
             AidenRemoteEventType.TEXT_DELTA -> {
                 val delta = event.payload?.text ?: ""
-                _liveText.value += delta
+                liveTranscript.appendText(delta)
                 _streamState.value = AidenStreamState.RUNNING
             }
             AidenRemoteEventType.REASONING_DELTA -> {
                 val delta = event.payload?.text ?: ""
-                _reasoning.value += delta
+                liveTranscript.appendReasoning(delta)
             }
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = event.payload?.toolId
@@ -2094,8 +2100,7 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
-            _liveText.value = ""
-            _reasoning.value = ""
+            liveTranscript.reset()
             _tools.value = emptyList()
             _activityTimeline.value = null
             _pendingApproval.value = null

@@ -1239,8 +1239,9 @@ private fun ActiveStreamingCard(
             (activityTimeline == null && liveText.isEmpty())
         )
     val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
-    val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
+    val chronologicalRows = remember(isBotChat, liveText, reasoning, activityTimeline) {
+        if (isBotChat) null else AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
+    }
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1626,6 +1627,8 @@ private fun AidenTimelineCollapsibleCard(
     }
 }
 
+private val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
+
 @Composable
 private fun RichFormattedMessage(
     text: String,
@@ -1633,8 +1636,7 @@ private fun RichFormattedMessage(
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit
 ) {
-    val codeBlockRegex = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
-    val matches = codeBlockRegex.findAll(text).toList()
+    val matches = remember(text) { CODE_BLOCK_REGEX.findAll(text).toList() }
 
     if (matches.isEmpty()) {
         val formatted = buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
