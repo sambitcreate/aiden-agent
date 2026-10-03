@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
+import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Host-owned namespace identity. Remote descriptions/instructions are reference data only. */
 export interface PiToolDiscoveryMetadata {
@@ -25,58 +26,37 @@ function boundedString(value: unknown, maximum: number, label: string): string {
   return value;
 }
 
-/** Copy plain JSON without invoking accessors, accepting cycles, or allocating unbounded output. */
+/** A detached, ordinary-prototype copy of a bounded plain-JSON schema object, or undefined. */
 function copySchema(value: unknown): JsonObject | undefined {
-  let nodes = 0;
-  let budget = MAX_RECORD_BYTES;
-  const seen = new Set<object>();
-  function copy(entry: unknown, depth: number): JsonValue {
-    if (++nodes > 2048 || depth > 24 || budget <= 0) throw new Error("Schema limit");
-    if (entry === null || typeof entry === "boolean") { budget -= 5; return entry; }
-    if (typeof entry === "number" && Number.isFinite(entry)) { budget -= 32; return entry; }
-    if (typeof entry === "string") {
-      budget -= byteLength(entry) + 2;
-      if (budget < 0) throw new Error("Schema limit");
-      return entry;
-    }
-    if (typeof entry !== "object" || !entry || seen.has(entry)) throw new Error("Invalid schema");
-    if (!Array.isArray(entry) && ![null, Object.prototype].includes(Object.getPrototypeOf(entry))) throw new Error("Invalid schema");
-    seen.add(entry);
-    const result: JsonValue[] | JsonObject = Array.isArray(entry) ? [] : Object.create(null);
-    budget -= 2;
-    for (const key in entry) {
-      if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
-      budget -= byteLength(key) + 4;
-      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
-      if (!descriptor || !("value" in descriptor)) throw new Error("Invalid schema accessor");
-      const child = copy(descriptor.value, depth + 1);
-      if (Array.isArray(result)) {
-        if (key !== String(result.length)) throw new Error("Invalid schema array");
-        result.push(child);
-      } else result[key] = child;
-    }
-    if (Array.isArray(entry) && (result as JsonValue[]).length !== entry.length) throw new Error("Sparse schema array");
-    seen.delete(entry);
-    return result;
-  }
-  try {
-    const result = copy(value, 0);
-    if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
-    const serialized = JSON.stringify(result);
-    return byteLength(serialized) <= MAX_RECORD_BYTES ? JSON.parse(serialized) as JsonObject : undefined;
-  } catch { return undefined; }
+  const result = copyBoundedJson(value, { maxNodes: 2048, maxDepth: 24, maxSize: MAX_RECORD_BYTES, measure: utf8Size });
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const serialized = JSON.stringify(result);
+  return byteLength(serialized) <= MAX_RECORD_BYTES ? JSON.parse(serialized) as JsonObject : undefined;
+}
+
+/** Validated records for frozen (immutable) discovery objects, which servers share across their tools. */
+const validatedMetadata = new WeakMap<object, PiToolDiscoveryMetadata>();
+
+function sameMetadata(left: PiToolDiscoveryMetadata, right: PiToolDiscoveryMetadata): boolean {
+  return left === right || (left.namespace === right.namespace && left.label === right.label &&
+    left.description === right.description && left.instructions === right.instructions);
 }
 
 function namespaceMetadata(value: PiToolDiscoveryMetadata | undefined): PiToolDiscoveryMetadata | undefined {
   if (!value) return undefined;
+  const cached = validatedMetadata.get(value);
+  if (cached) return cached;
   const namespace = boundedString(value.namespace, 128, "tool namespace");
   if (!/^[a-zA-Z][a-zA-Z0-9_.:-]*$/u.test(namespace)) throw new Error("Invalid tool namespace.");
   const label = boundedString(value.label, 256, "namespace label");
   if (!label.trim()) throw new Error("Invalid namespace label.");
-  return { namespace, label,
+  const metadata: PiToolDiscoveryMetadata = Object.freeze({ namespace, label,
     ...(value.description === undefined ? {} : { description: boundedString(value.description, 1024, "namespace description") }),
     ...(value.instructions === undefined ? {} : { instructions: boundedString(value.instructions, 8192, "namespace instructions") }),
-  };
+  });
+  // Every field is a primitive, so a frozen source cannot change after validation.
+  if (Object.isFrozen(value)) validatedMetadata.set(value, metadata);
+  return metadata;
 }
 
 export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
@@ -91,7 +71,7 @@ export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
       const metadata = namespaceMetadata((tool as PiDiscoverableTool).discovery);
       if (metadata) {
         const existing = namespaces.get(metadata.namespace);
-        if (existing && JSON.stringify(existing) !== JSON.stringify(metadata)) throw new Error("Tool discovery namespace collision.");
+        if (existing && !sameMetadata(existing, metadata)) throw new Error("Tool discovery namespace collision.");
         namespaces.set(metadata.namespace, metadata);
       }
       return { tool, metadata };

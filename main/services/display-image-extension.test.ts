@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  hasCanonicalBase64Padding,
   createDisplayImageExtension,
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -429,4 +430,14 @@ test("generated images share existing chat byte budgets and cancellation before 
   const cancelled = createDisplayImageExtensionRuntime({ workspaceRoot: root, beforeArtifact: () => controller.abort(), onArtifact: () => { staged++; } });
   await assert.rejects(cancelled.presentGeneratedImage("cancel", image, controller.signal), /abort/i);
   assert.equal(staged, 0);
+});
+
+test("canonical base64 padding agrees with a decode and re-encode round trip", () => {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  for (const char of alphabet) {
+    for (const data of [`AA${char}=`, `A${char}==`, `AAA${char}`]) {
+      const roundTrips = Buffer.from(data, "base64").toString("base64") === data;
+      assert.equal(hasCanonicalBase64Padding(data), roundTrips, data);
+    }
+  }
 });

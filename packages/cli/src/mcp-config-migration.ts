@@ -16,6 +16,12 @@ export function migrateAidenMcpConfig(
 ): void {
   const legacy = join(agentDir, "mcp.json");
   const destination = join(agentDir, "aiden-mcp.json");
+  // Every store construction runs this, so the no-op paths (no legacy file, or
+  // a native pi config object) stay lock-free: a read must not contend with,
+  // or throw beside, another process's writer. Anything else is re-read and
+  // validated under the lease below.
+  try { if (!Array.isArray(JSON.parse(readFileSync(legacy, "utf8")))) return; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; }
   const release = acquireLease(destination);
   try {
     let bytes: Buffer;

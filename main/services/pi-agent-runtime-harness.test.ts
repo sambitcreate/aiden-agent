@@ -799,6 +799,32 @@ test("nested result redaction removes stale structured data before the script re
   assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { content: [{ type: "text", text: "redacted" }], hasStructured: false });
 });
 
+test("nested call arguments are retained within per-call and per-script budgets that reset for each parent", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const read: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({ path: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], details: null }) };
+  // Each call's arguments serialize to exactly 7000 UTF-8 bytes ({"path":"…"} adds 11 bytes, "é" is two).
+  const script = 'for (const size of [6989, 6989, 6989, 6989, 6989]) await tools.read_file({path:"x".repeat(size)}); await tools.read_file({path:"é".repeat(4100)});';
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: script }, { id: "first" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'await tools.read_file({path:"x".repeat(6989)});' }, { id: "second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { initialState: { tools: [read, codemode] } }));
+  await harness.prompt("run");
+  const nested = (id: string) => {
+    const message = harness.state.messages.find((entry) => entry.role === "toolResult" && entry.toolCallId === id);
+    if (message?.role !== "toolResult" || !message.nestedCalls) throw new Error(`Missing nested calls for ${id}`);
+    return message.nestedCalls;
+  };
+  const first = nested("first");
+  assert.deepEqual(first.calls.map((call) => call.arguments ? "kept" : call.argumentsBytes), ["kept", "kept", "kept", "kept", 7000, 8211]);
+  assert.equal(first.complete, false);
+  const second = nested("second");
+  assert.equal((second.calls[0]!.arguments as { path: string }).path.length, 6989);
+  assert.equal(second.complete, true);
+});
+
 test("nested termination fences tool calls already queued by a script", async () => {
   let harness!: PiAgentRuntimeHarness;
   let calls = 0;
