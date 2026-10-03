@@ -1,6 +1,6 @@
 {
   "name": "aiden-agent",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "private": true,
   "description": "A desktop AI workspace agent for local and hosted models",
   "keywords": [
@@ -274,6 +274,12 @@
     "vite": "^8.0.2",
     "wait-on": "^9.0.10",
     "yaml": "2.9.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai@0.87.1": {
+      "@google/genai": "$@google/genai",
+      "openai": "7.19.0"
+    }
   },
   "engines": {
     "node": ">=22.19"
