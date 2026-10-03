@@ -7,7 +7,8 @@
 import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { PillCopiedNotice, type PillCopiedNoticeProps } from "./pill-copied-notice";
-import { dictationApi, onNotification, settingsApi } from "../lib/ipc";
+import { onNotification } from "../lib/ipc-bridge";
+import { dictationApi, settingsApi } from "../lib/ipc-voice";
 import type { DictationStatePayload } from "../shared/dictation";
 import {
   ensureMicrophoneAccess,
