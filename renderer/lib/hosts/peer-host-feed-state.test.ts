@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { QueryClient } from "@tanstack/react-query";
 import type {
   PeerHostFeedChange,
   PeerHostFeedMessage,
@@ -10,8 +11,10 @@ import {
   applyPeerHostFeedMessage,
   FEED_RESYNC,
   mergePeerHostStatuses,
+  readPeerHostStatuses,
   replayPeerHostFeedMessages,
 } from "./peer-host-feed-state";
+import { hostQueryKeys } from "./host-query-keys";
 
 const base: PeerHostFeedSnapshot = {
   hostId: "studio",
@@ -72,6 +75,21 @@ test("a run update moves that run to the newest position, as main keeps it", () 
       ["r1", "done"],
     ],
   );
+});
+
+test("a removed chat takes its run states with it, so a chat re-added later starts idle", () => {
+  const withRuns = snapshotOrFail(
+    replayPeerHostFeedMessages(base, [
+      message(5, { type: "run.state", run: { chatId: "b", runId: "r2", state: "needs_approval", unread: false } }),
+      message(6, { type: "chat.remove", id: "a" }),
+    ]),
+  );
+  assert.deepEqual(withRuns.runs.map((run) => run.runId), ["r2"]);
+
+  const readded = snapshotOrFail(
+    applyPeerHostFeedMessage(withRuns, message(7, { type: "chat.upsert", row: { id: "a", title: "A" } })),
+  );
+  assert.deepEqual(readded.runs.filter((run) => run.chatId === "a"), []);
 });
 
 test("a paired upsert and remove sharing a sequence both apply, and older messages are skipped", () => {
@@ -159,4 +177,37 @@ test("host statuses only move forward by generation", () => {
     [["studio", 5]],
   );
   assert.deepEqual(mergePeerHostStatuses(undefined, [status("studio", 1, "connecting")]).length, 1);
+});
+
+test("a status reply that lands after a newer broadcast keeps the broadcast", async () => {
+  const queryClient = new QueryClient();
+  const key = hostQueryKeys.statuses();
+  queryClient.setQueryData<PeerHostStatus[]>(key, [status("studio", 1, "connecting")]);
+  let reply: (statuses: PeerHostStatus[]) => void = () => {};
+  const pendingReply = new Promise<PeerHostStatus[]>((resolve) => (reply = resolve));
+  const read = queryClient.fetchQuery({
+    queryKey: key,
+    queryFn: () =>
+      readPeerHostStatuses(
+        () => pendingReply,
+        () => queryClient.getQueryData<PeerHostStatus[]>(key),
+      ),
+  });
+  await Promise.resolve();
+  // The supervisor connects and broadcasts while the read is still waiting.
+  queryClient.setQueryData<PeerHostStatus[]>(key, (current) =>
+    mergePeerHostStatuses(current, [status("studio", 2, "connected")]),
+  );
+  reply([status("studio", 1, "connecting"), status("laptop", 1, "connecting")]);
+  await read;
+
+  const cached = queryClient.getQueryData<PeerHostStatus[]>(key) ?? [];
+  assert.deepEqual(
+    cached.map((entry) => [entry.hostId, entry.generation, entry.state.kind]),
+    [
+      ["studio", 2, "connected"],
+      ["laptop", 1, "connecting"],
+    ],
+  );
+  queryClient.clear();
 });

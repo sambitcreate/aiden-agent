@@ -66,7 +66,12 @@ export function applyPeerHostFeedMessage(
     case "bot.upsert":
       return { ...next, bots: upsert(snapshot.bots, change.row) };
     case "chat.remove":
-      return { ...next, summaries: without(snapshot.summaries, change.id) };
+      // As main's cache does, a chat that leaves takes its run states with it.
+      return {
+        ...next,
+        summaries: without(snapshot.summaries, change.id),
+        runs: snapshot.runs.filter((run) => run.chatId !== change.id),
+      };
     case "workspace.remove":
       return { ...next, workspaces: without(snapshot.workspaces, change.id) };
     case "bot.remove":
@@ -111,4 +116,16 @@ export function mergePeerHostStatuses(
     );
   }
   return [...byHost.values()];
+}
+
+/**
+ * Reads every host's status, then merges against the cache as it is when the
+ * reply lands, so a newer broadcast received during the read is kept.
+ */
+export async function readPeerHostStatuses(
+  read: () => Promise<readonly PeerHostStatus[]>,
+  cached: () => readonly PeerHostStatus[] | undefined,
+): Promise<PeerHostStatus[]> {
+  const incoming = await read();
+  return mergePeerHostStatuses(cached(), incoming, true);
 }

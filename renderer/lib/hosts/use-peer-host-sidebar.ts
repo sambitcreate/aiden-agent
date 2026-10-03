@@ -13,6 +13,7 @@ import {
   applyPeerHostFeedMessage,
   FEED_RESYNC,
   mergePeerHostStatuses,
+  readPeerHostStatuses,
   replayPeerHostFeedMessages,
 } from "./peer-host-feed-state";
 
@@ -77,34 +78,18 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     }
   }, [enabledIds, list.data, queryClient]);
 
-  const statuses = useQuery({
-    queryKey: hostQueryKeys.statuses(),
-    queryFn: async () =>
-      mergePeerHostStatuses(
-        queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()),
-        await peerHostsApi.statuses(),
-        true,
-      ),
-    enabled: supervised,
-    staleTime: Infinity,
-  });
-
+  // Messages that arrive while a snapshot read is in flight, per host.
+  const pending = useRef(new Map<string, PeerHostFeedMessage[]>());
+  // Status and feed reads wait for the broadcast listeners so no change can slip between them.
+  const [listening, setListening] = useState(false);
   useEffect(() => {
     if (!supervised) return;
-    return peerHostsApi.onHostState((status) => {
+    const unsubscribeState = peerHostsApi.onHostState((status) => {
       queryClient.setQueryData<PeerHostStatus[]>(hostQueryKeys.statuses(), (current) =>
         mergePeerHostStatuses(current, [status]),
       );
     });
-  }, [queryClient, supervised]);
-
-  // Messages that arrive while a snapshot read is in flight, per host.
-  const pending = useRef(new Map<string, PeerHostFeedMessage[]>());
-  // Feed reads wait for the broadcast listener so no change can slip between them.
-  const [listening, setListening] = useState(false);
-  useEffect(() => {
-    if (!supervised) return;
-    const unsubscribe = peerHostsApi.onHostFeed((message) => {
+    const unsubscribeFeed = peerHostsApi.onHostFeed((message) => {
       pending.current.get(message.hostId)?.push(message);
       const key = hostQueryKeys.feed(message.hostId);
       const current = queryClient.getQueryData<PeerHostFeedSnapshot | null>(key);
@@ -115,10 +100,21 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     });
     setListening(true);
     return () => {
-      unsubscribe();
+      unsubscribeState();
+      unsubscribeFeed();
       setListening(false);
     };
   }, [queryClient, supervised]);
+
+  const statuses = useQuery({
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: () =>
+      readPeerHostStatuses(peerHostsApi.statuses, () =>
+        queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()),
+      ),
+    enabled: supervised && listening,
+    staleTime: Infinity,
+  });
 
   const feeds = useQueries({
     queries: enabledIds.map((hostId) => ({

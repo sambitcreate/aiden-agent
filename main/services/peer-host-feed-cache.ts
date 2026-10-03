@@ -146,8 +146,11 @@ export class PeerHostFeedCache {
         return this.upsertBounded(this.workspaces, row(payload), PEER_FEED_MAX_WORKSPACES, "workspace.upsert");
       case "bot.upsert":
         return this.upsertBounded(this.bots, row(payload), PEER_FEED_MAX_BOTS, "bot.upsert");
-      case "chat.remove":
-        return this.remove(this.summaries, row(payload).id, "chat.remove");
+      case "chat.remove": {
+        const id = row(payload).id;
+        this.forgetRuns(id);
+        return this.remove(this.summaries, id, "chat.remove");
+      }
       case "workspace.remove":
         return this.remove(this.workspaces, row(payload).id, "workspace.remove");
       case "bot.remove":
@@ -227,6 +230,7 @@ export class PeerHostFeedCache {
     for (const candidate of this.summaries.values())
       if (!oldest || newestFirst(candidate, oldest) > 0) oldest = candidate;
     this.summaries.delete(oldest!.id);
+    this.forgetRuns(oldest!.id);
     // The upsert itself may be the oldest chat; then nothing visible changed.
     return oldest!.id === item.id
       ? []
@@ -234,6 +238,11 @@ export class PeerHostFeedCache {
           { type: "chat.upsert", row: item },
           { type: "chat.remove", id: oldest!.id },
         ];
+  }
+
+  /** A chat that leaves the cache takes its run states with it; the feed has no run removal. */
+  private forgetRuns(chatId: string): void {
+    for (const [runId, run] of this.runs) if (run.chatId === chatId) this.runs.delete(runId);
   }
 
   private upsertBounded(
