@@ -660,6 +660,20 @@ export const aidenRemoteApi = {
   onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
     onNotification("remote:approval-changed", handler),
+  setAcceptPairingRequests: (accept: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setAcceptPairingRequests", accept),
+  listPairingRequests: () =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestPrompt[]>(
+      "remote:listPairingRequests",
+    ),
+  respondPairingRequest: (requestId: string, decision: "allow" | "deny") =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestDecisionView>(
+      "remote:respondPairingRequest",
+      requestId,
+      decision,
+    ),
+  onPairingRequestsChanged: (handler: () => void) =>
+    onNotification("remote:pairing-requests-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

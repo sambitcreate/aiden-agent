@@ -1,7 +1,13 @@
-import { createDecipheriv, hkdfSync } from "node:crypto";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import { normalizeAidenManualPairingCode } from "./aiden-remote-pairing.js";
 import { parseAidenRemoteJson } from "./aiden-remote-protocol.js";
+import type { KeyObject } from "node:crypto";
+import {
+  AIDEN_PAIRING_GRANT_KIND,
+  hkdfSha256,
+  openAesGcm,
+  openPairingRequestEnvelope,
+} from "./aiden-remote-sealed-envelope.js";
 import { validatePeerTrust, type PeerTrust } from "./peer-transport.js";
 
 export function peerRecord(value: unknown): Record<string, unknown> {
@@ -106,37 +112,105 @@ export function decryptPeerPairing(
   const sessionId = hostIdentifier(envelope.sessionId);
   const expiresAt = peerText(envelope.expiresAt, 40);
   const kind = "aiden-manual-pairing-v1";
-  const key = Buffer.from(
-    hkdfSync(
-      "sha256",
-      Buffer.from(normalizeAidenManualPairingCode(code), "ascii"),
-      base64(envelope.salt, 16),
-      Buffer.from(`${kind}\n${sessionId}`),
-      32,
-    ),
+  const key = hkdfSha256(
+    Buffer.from(normalizeAidenManualPairingCode(code), "ascii"),
+    base64(envelope.salt, 16),
+    `${kind}\n${sessionId}`,
   );
   try {
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      key,
-      base64(envelope.nonce, 12),
-    );
-    decipher.setAAD(Buffer.from(`${kind}\n${sessionId}\n${expiresAt}`));
-    decipher.setAuthTag(base64(envelope.tag, 16));
     const ciphertext = Buffer.from(
       peerText(envelope.ciphertext, 6000),
       "base64url",
     );
     if (ciphertext.length > 4096) throw new Error("Pairing payload too large.");
-    const payload = Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]);
+    const payload = openAesGcm(
+      key,
+      base64(envelope.nonce, 12),
+      ciphertext,
+      base64(envelope.tag, 16),
+      `${kind}\n${sessionId}\n${expiresAt}`,
+    );
     const pairing = parsePeerPairing(payload.toString("utf8"), now);
     if (pairing.endpoint !== endpoint || pairing.expiresAt !== expiresAt)
       throw new Error("Pairing endpoint mismatch.");
     return pairing;
   } finally {
     key.fill(0);
+  }
+}
+
+/** A credential delivered by an approved connection request, with the trust to reach it. */
+export interface PeerPairingRequestGrant extends PeerTrust {
+  instanceId: string;
+  deviceId: string;
+  credential: string;
+  capabilities: string[];
+  displayName?: string;
+}
+
+/**
+ * Open the sealed grant from an approved connection request. The requester
+ * must pass the SPKI it observed on the TLS connection it polled (the same
+ * SPKI its match code covered); a grant naming any other certificate is
+ * refused. `endpoint` is optional: a Bonjour-discovered address can differ
+ * from the host's canonical name, and the pinned SPKI already binds the
+ * grant to the host the user approved. When given, it must match exactly.
+ */
+export function openPeerPairingRequestGrant(
+  envelope: unknown,
+  expected: {
+    requestId: string;
+    publicKey: string;
+    privateKey: KeyObject;
+    endpoint?: string;
+    serverSpkiSha256: string;
+  },
+): PeerPairingRequestGrant {
+  const plaintext = openPairingRequestEnvelope(envelope, expected);
+  try {
+    const grant = peerRecord(
+      parseAidenRemoteJson(plaintext.toString("utf8"), "pairing grant"),
+    );
+    const trust = peerRecord(grant.trust);
+    const exchange = peerRecord(grant.exchange);
+    if (
+      grant.kind !== AIDEN_PAIRING_GRANT_KIND ||
+      grant.requestId !== expected.requestId ||
+      (trust.mode !== "private-ca" && trust.mode !== "system") ||
+      exchange.protocolVersion !== 1
+    )
+      throw new Error("Invalid pairing grant.");
+    const credential = peerText(exchange.credential, 43);
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(credential))
+      throw new Error("Invalid pairing grant.");
+    const validated = validatePeerTrust({
+      endpoint: peerText(exchange.endpoint, 2048),
+      serverSpkiSha256: peerText(exchange.serverSpkiSha256, 51),
+      ...(trust.mode === "private-ca"
+        ? {
+            caCertificateDerBase64: peerText(
+              trust.caCertificateDerBase64,
+              8192,
+            ),
+          }
+        : {}),
+    });
+    if (
+      (expected.endpoint !== undefined && validated.endpoint !== expected.endpoint) ||
+      validated.serverSpkiSha256 !== expected.serverSpkiSha256
+    )
+      throw new Error("The pairing identity did not match.");
+    return {
+      ...validated,
+      instanceId: hostIdentifier(exchange.instanceId),
+      deviceId: hostIdentifier(exchange.deviceId),
+      credential,
+      capabilities: peerStrings(exchange.capabilities),
+      ...(exchange.displayName !== undefined
+        ? { displayName: peerText(exchange.displayName, 80) }
+        : {}),
+    };
+  } finally {
+    plaintext.fill(0);
   }
 }
