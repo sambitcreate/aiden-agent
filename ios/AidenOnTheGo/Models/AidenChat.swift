@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import ImageIO
 
 private func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
@@ -26,6 +27,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let reasoning: String?
     let attachments: [AidenMessageAttachment]?
     let htmlArtifacts: [AidenHtmlArtifact]?
+    let appPanels: [AidenAppControlPanel]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
     let createdAt: Date
@@ -37,6 +39,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         reasoning: String? = nil,
         attachments: [AidenMessageAttachment]? = nil,
         htmlArtifacts: [AidenHtmlArtifact]? = nil,
+        appPanels: [AidenAppControlPanel]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
         createdAt: Date
@@ -47,6 +50,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.reasoning = reasoning
         self.attachments = attachments
         self.htmlArtifacts = htmlArtifacts
+        self.appPanels = appPanels
         self.outcome = outcome
         self.timeline = timeline
         self.createdAt = createdAt
@@ -68,6 +72,8 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .htmlArtifacts
         )
+        let panels = try? values.decode([AidenAppControlPanel].self, forKey: .appPanels)
+        appPanels = role == .assistant && (panels?.count ?? 0) <= 4 && (panels?.allSatisfy(\.isWireSafe) ?? false) && Set(panels?.map(\.id) ?? []).count == panels?.count ? panels : nil
         outcome = try aidenDecodeOptionalNonNull(
             AidenMessageOutcome.self,
             from: values,
@@ -98,7 +104,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, reasoning, attachments, htmlArtifacts, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, appPanels, outcome, timeline, createdAt
     }
 }
 
@@ -2099,5 +2105,125 @@ enum AidenQuietOpenChat {
     /// chat is foregrounded.
     static func publishesAmbientProgress(isChatForegrounded: Bool) -> Bool {
         !isChatForegrounded
+    }
+}
+
+// Inert descriptors share the desktop vocabulary. No model-authored view tree,
+// URLs, credentials or action callbacks are interpreted by native clients.
+private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "appearance.terminalTheme", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]
+private func aidenControlToken(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
+}
+struct AidenAppControlPanel: Codable, Identifiable, Equatable, Sendable {
+    let version: Int
+    let id: String
+    let topic: String
+    let fallback: String
+    let workspaceId: String?
+    var isWireSafe: Bool { version == 1 && aidenControlToken(id) && ["appearance", "memory", "web-search", "skills"].contains(topic) && fallback.utf16.count <= 500 && (workspaceId.map(aidenControlToken) ?? true) }
+}
+enum AidenAppControlValue: Codable, Equatable, Sendable {
+    case boolean(Bool), text(String)
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let boolean = try? value.decode(Bool.self) { self = .boolean(boolean) }
+        else { self = .text(try value.decode(String.self)) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var value = encoder.singleValueContainer()
+        switch self { case .boolean(let flag): try value.encode(flag); case .text(let text): try value.encode(text) }
+    }
+    var label: String { switch self { case .boolean(let flag): return flag ? "On" : "Off"; case .text(let text): return text } }
+}
+struct AidenAppControlOption: Codable, Equatable, Sendable { let value: String; let label: String }
+struct AidenAppControlRow: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let label: String
+    let description: String
+    let scope: String
+    let value: AidenAppControlValue
+    let revision: String
+    let options: [AidenAppControlOption]?
+    let disabledReason: String?
+    var isWireSafe: Bool {
+        aidenControlIDs.contains(id) && aidenControlToken(revision) && !label.isEmpty && label.utf16.count <= 120 && description.utf16.count <= 500 && scope.utf16.count <= 256 && value.label.utf16.count <= 80 && (disabledReason?.utf16.count ?? 0) <= 500 && (options?.count ?? 0) <= 50 && (options?.allSatisfy { !$0.value.isEmpty && $0.value.utf16.count <= 80 && $0.label.utf16.count <= 120 } ?? true)
+    }
+}
+struct AidenAppControlSnapshot: Codable, Equatable, Sendable {
+    let version: Int
+    let title: String
+    let target: String
+    let policy: String
+    let rows: [AidenAppControlRow]
+    var isWireSafe: Bool { version == 1 && !title.isEmpty && title.utf16.count <= 120 && !target.isEmpty && target.utf16.count <= 256 && ["disabled", "ask", "safe"].contains(policy) && rows.count <= 8 && rows.allSatisfy(\.isWireSafe) && Set(rows.map(\.id)).count == rows.count }
+}
+struct AidenAppControlOperation: Codable, Equatable, Sendable {
+    let control: String
+    let value: AidenAppControlValue
+    let expectedRevision: String
+    let operationId: String
+    var isWireSafe: Bool { aidenControlIDs.contains(control) && aidenControlToken(expectedRevision) && aidenControlToken(operationId) && value.label.utf16.count <= 80 }
+}
+struct AidenAppControlReceipt: Codable, Equatable, Sendable {
+    let status: String
+    let operationId: String
+    let control: String
+    let value: AidenAppControlValue
+    let scope: String
+    let effective: String
+    let warning: String?
+    var isWireSafe: Bool { ["applied", "already_set", "outcome_unknown"].contains(status) && aidenControlToken(operationId) && aidenControlIDs.contains(control) && value.label.utf16.count <= 80 && scope.utf16.count <= 256 && ["now", "next_turn", "next_session", "after_preview"].contains(effective) && (warning?.utf16.count ?? 0) <= 500 }
+}
+
+
+/// Foreground cards share authoritative reads; descriptors are never effects.
+@MainActor @Observable final class AidenAppControlCache {
+    private(set) var snapshots: [String: AidenAppControlSnapshot] = [:]
+    @ObservationIgnored private var tracked: [String: AidenAppControlPanel] = [:]
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var readSerial: UInt64 = 0
+    @ObservationIgnored private var reads: [String: UInt64] = [:]
+    private func beginRead(_ panel: AidenAppControlPanel) -> UInt64 {
+        readSerial &+= 1
+        reads[panel.id] = readSerial
+        return readSerial
+    }
+    private func isCurrent(_ panel: AidenAppControlPanel, epoch: UInt64, token: UInt64) -> Bool {
+        epoch == generation && tracked[panel.id] == panel && reads[panel.id] == token
+    }
+    func load(_ panel: AidenAppControlPanel, read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async throws -> AidenAppControlSnapshot {
+        guard tracked[panel.id] != nil || tracked.count < 16 else { throw AidenRemoteClientError.invalidResponse }
+        tracked[panel.id] = panel
+        let epoch = generation
+        let token = beginRead(panel)
+        do {
+            let value = try await read(panel)
+            try Task.checkCancellation()
+            guard isCurrent(panel, epoch: epoch, token: token) else { throw CancellationError() }
+            snapshots[panel.id] = value
+            return value
+        } catch {
+            if isCurrent(panel, epoch: epoch, token: token) { snapshots.removeValue(forKey: panel.id) }
+            throw error
+        }
+    }
+    func remove(_ panel: AidenAppControlPanel) { tracked.removeValue(forKey: panel.id); reads.removeValue(forKey: panel.id); snapshots.removeValue(forKey: panel.id) }
+    func clearSnapshots() { generation &+= 1; snapshots.removeAll() }
+    func refresh(read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async {
+        generation &+= 1
+        let epoch = generation
+        for panel in Array(tracked.values) {
+            guard epoch == generation, !Task.isCancelled else { return }
+            guard tracked[panel.id] == panel else { continue }
+            let token = beginRead(panel)
+            do {
+                let value = try await read(panel)
+                guard epoch == generation, !Task.isCancelled else { return }
+                if isCurrent(panel, epoch: epoch, token: token) { snapshots[panel.id] = value }
+            } catch {
+                guard epoch == generation, !Task.isCancelled else { return }
+                if isCurrent(panel, epoch: epoch, token: token) { snapshots.removeValue(forKey: panel.id) }
+            }
+        }
     }
 }

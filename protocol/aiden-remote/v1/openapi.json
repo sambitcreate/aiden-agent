@@ -1086,7 +1086,7 @@
       ],
       "get": {
         "operationId": "chatProgressEvents",
-    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
+    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots and app_controls_changed read-only revision invalidations filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read, agents:read or owner-enabled app-controls:read. These progress events are not emitted on ordinary parent turn streams.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "parameters": [
@@ -4167,6 +4167,86 @@
           }
         }
       }
+    },
+    "/chats/{chatId}/controls/{panelId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "panelId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAppControls",
+        "description": "Host-owned conversation settings controls. Requires desktop owner consent, live device grants, canonical chat access and the unchanged panel workspace. Display/read makes no mutation. POST additionally requires app-controls:respond; memory mutations require workspace:manage. Every operation uses its original ID and expected value/policy revision; retry returns the durable receipt and never repeats an uncertain effect. No bot, credential, shell or arbitrary settings action is supported.",
+        "x-aiden-capability": "app-controls:read",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "app-controls:read"
+        ],
+        "x-aiden-archived-access": "readable",
+        "responses": {
+          "200": {
+            "description": "Current host projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppControlSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "applyAppControl",
+        "description": "Host-owned conversation settings controls. Requires desktop owner consent, live device grants, canonical chat access and the unchanged panel workspace. Display/read makes no mutation. POST additionally requires app-controls:respond; memory mutations require workspace:manage. Every operation uses its original ID and expected value/policy revision; retry returns the durable receipt and never repeats an uncertain effect. No bot, credential, shell or arbitrary settings action is supported.",
+        "x-aiden-capability": "app-controls:respond",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "app-controls:read",
+          "app-controls:respond"
+        ],
+        "x-aiden-archived-access": "denied",
+        "responses": {
+          "200": {
+            "description": "Durable operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppControlReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppControlOperation"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4580,7 +4660,9 @@
                 "tasks:read",
                 "agents:read",
                 "questions:respond",
-                "skills:invoke"
+                "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond"
               ]
             },
             "uniqueItems": true
@@ -4672,6 +4754,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control"
               ]
             },
@@ -4701,6 +4785,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control"
               ]
             },
@@ -4815,6 +4901,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control"
               ]
             },
@@ -4853,6 +4941,8 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
+                "app-controls:read",
+                "app-controls:respond",
                 "simulators:control"
               ]
             },
@@ -6127,6 +6217,13 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "appPanels": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/AppControlPanel"
+            }
           }
         },
         "additionalProperties": false
@@ -7487,6 +7584,7 @@
           },
           "source": {
             "enum": [
+              "builtin",
               "configured",
               "workspace",
               "global"
@@ -7519,6 +7617,7 @@
           },
           "source": {
             "enum": [
+              "builtin",
               "configured",
               "workspace",
               "global"
@@ -7778,7 +7877,7 @@
       },
       "StreamEvent": {
         "type": "object",
-        "description": "An ordinary parent-turn event or, for task_update and agents_update, an event on the dedicated chat-scoped progress channel. Progress event streamId values are chat IDs; they never appear on ordinary parent turn streams.",
+        "description": "An ordinary parent-turn event or, for task_update, agents_update and app_controls_changed, an event on the dedicated chat-scoped progress channel. Progress event streamId values are chat IDs; they never appear on ordinary parent turn streams.",
         "required": [
           "protocolVersion",
           "streamId",
@@ -8304,6 +8403,39 @@
             "if": {
               "properties": {
                 "type": {
+                  "const": "app_controls_changed"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "revision"
+                  ],
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
                   "not": {
                     "enum": [
                       "snapshot",
@@ -8316,6 +8448,7 @@
                       "approval_required",
                       "task_update",
                       "agents_update",
+                      "app_controls_changed",
                       "done",
                       "error",
                       "cancelled",
@@ -9972,6 +10105,272 @@
           "complete"
         ],
         "additionalProperties": false
+      },
+      "AppControlPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "id",
+          "topic",
+          "fallback"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "topic": {
+            "enum": [
+              "appearance",
+              "memory",
+              "web-search",
+              "skills"
+            ]
+          },
+          "fallback": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "workspaceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      },
+      "AppControlOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          }
+        }
+      },
+      "AppControlRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "description",
+          "scope",
+          "value",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "options": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/AppControlOption"
+            }
+          },
+          "disabledReason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "AppControlSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "title",
+          "target",
+          "policy",
+          "rows"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "policy": {
+            "enum": [
+              "disabled",
+              "ask",
+              "safe"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/AppControlRow"
+            }
+          }
+        }
+      },
+      "AppControlOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "control",
+          "value",
+          "expectedRevision",
+          "operationId"
+        ],
+        "properties": {
+          "control": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      },
+      "AppControlReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "operationId",
+          "control",
+          "value",
+          "scope",
+          "effective"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "applied",
+              "already_set",
+              "outcome_unknown"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "control": {
+            "enum": [
+              "appearance.mode",
+              "appearance.chatWidth",
+              "appearance.reduceMotion",
+              "appearance.terminalTheme",
+              "memory.enabled",
+              "memory.workspace",
+              "webSearch.enabled",
+              "skills.enabled"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "maxLength": 80
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "effective": {
+            "enum": [
+              "now",
+              "next_turn",
+              "next_session",
+              "after_preview"
+            ]
+          },
+          "warning": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
       }
     }
   }

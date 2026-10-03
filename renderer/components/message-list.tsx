@@ -1,3 +1,4 @@
+import { AppControlsPanel } from "./app-controls-panel";
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
@@ -383,6 +384,7 @@ export function MessageList({
                 ) : undefined
               }
             />
+            {message.appPanels?.map((panel) => <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />)}
             {message.providerFailure ? (
               <ProviderFailureCallout failure={message.providerFailure} />
             ) : null}

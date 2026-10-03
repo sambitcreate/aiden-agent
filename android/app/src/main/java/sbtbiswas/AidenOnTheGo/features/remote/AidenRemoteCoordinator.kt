@@ -190,6 +190,10 @@ class AidenRemoteCoordinator(
     ): AidenServer {
         if (!isCurrent(generation, installation.id, client)) return server
         val requested = buildList {
+            if (server.features.contains("chat-ui-panels-enabled-v1")) {
+                if (!installation.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_READ)) add(AidenRemoteCapability.APP_CONTROLS_READ)
+                if (!installation.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_RESPOND)) add(AidenRemoteCapability.APP_CONTROLS_RESPOND)
+            }
             if (server.supportsChatTasks && !installation.hasNegotiatedAccess(AidenRemoteCapability.TASKS_READ)) {
                 add(AidenRemoteCapability.TASKS_READ)
             }

@@ -452,6 +452,7 @@ if (prebuiltFailure === undefined) {
 await vendorGenerativeUiLibraries(resolve(pkgDir, "../.."));
 cpSync(resolve(pkgDir, "../../THIRD_PARTY_NOTICES.md"), join(appDir, "THIRD_PARTY_NOTICES.md"));
 cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), { recursive: true });
+cpSync(resolve(pkgDir, "../../resources/aiden-help"), join(appDir, "aiden-help"), { recursive: true });
 cpSync(resolve(pkgDir, "../../resources/model-capabilities.json"), join(appDir, "model-capabilities.json"));
 
 chmodSync(join(appDir, "cli.js"), 0o755);

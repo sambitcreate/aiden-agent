@@ -1,6 +1,7 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
 import { appApi, chatsApi, onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
@@ -357,6 +358,16 @@ function RootContent() {
     };
   }, [reconcileDetachedLifecycleChat]);
 
+  React.useEffect(() => appControlsApi.onChanged(() => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.webSearch }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
+      queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
+    ]);
+  }), [queryClient]);
+
   React.useEffect(() => {
     // ~/.aiden/config.json was edited outside the app. Only the lists sourced
     // from the portable file are stale; workspaces and UI settings are stored
@@ -372,17 +383,20 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
-    return onNotification<{ path: string }>("app:navigate", (payload) => {
+    return onNotification<{ path: string; requestId?: string }>("app:navigate", (payload) => {
+      const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
       if (!payload?.path) return;
       if (document.querySelector("[data-onboarding-active='true']")) {
         toast.info("Finish onboarding before opening another part of Aiden.");
+        acknowledge("blocked");
         return;
       }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
+        acknowledge("blocked");
         return;
       }
-      void navigate({ to: payload.path });
+      void navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
     });
   }, [navigate, navigationBlockedReason]);
 

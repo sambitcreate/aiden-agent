@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createSettingsApplicationEffects } from "../../../main/services/settings-application-effects-core.js";
 
 const source = readFileSync(new URL("./skills-settings.tsx", import.meta.url), "utf8");
-const handlers = readFileSync(
-  new URL("../../../main/handlers/providers.ts", import.meta.url),
-  "utf8",
-);
 
 test("Skills exposes a persisted global switch with a right-side control and failure recovery", () => {
   assert.match(source, /label="Use skills globally"[\s\S]*orientation="horizontal"/u);
@@ -18,11 +15,22 @@ test("Skills exposes a persisted global switch with a right-side control and fai
   assert.match(source, /disabled=\{!globallyEnabled\}/u);
 });
 
-test("the settings boundary invalidates cached Bot and chat skills and stops old active replies", () => {
-  assert.match(handlers, /typeof p.skillsEnabled !== "boolean"/u);
-  assert.match(handlers, /skillRegistry\.invalidate\(\)/u);
-  assert.match(handlers, /invalidateBotRuntimeInventoryAuthority\("skill_configuration"\)/u);
-  assert.match(handlers, /llmClient\.cancelForSkillsDisabled\(\)/u);
+test("the settings boundary revokes cached skill authority and settles active work before publishing the saved state", async () => {
+  const events: string[] = [];
+  const effects = createSettingsApplicationEffects({
+    invalidateSkills: () => { events.push("invalidate"); }, revokeBotSkills: () => { events.push("revoke"); },
+    cancelSkillWork: async () => { await Promise.resolve(); events.push("cancel-active-work"); },
+    refreshCommands: async () => { events.push("refresh-commands"); }, reconfigureIdleUnload: async () => { events.push("idle"); },
+    publishAppearance: () => { events.push("appearance"); }, publishControls: () => { events.push("publish"); },
+  });
+  await effects({ skillsEnabled: false }, { skillsEnabled: false });
+  assert.deepEqual(events, ["invalidate", "revoke", "cancel-active-work", "refresh-commands", "publish"]);
+  events.length = 0;
+  await effects({ skillsEnabled: true }, { skillsEnabled: true });
+  assert.deepEqual(events, ["invalidate", "revoke", "refresh-commands", "publish"]);
+  events.length = 0;
+  await effects({ memoryEnabled: false }, { memoryEnabled: false });
+  assert.deepEqual(events, ["publish"]);
 });
 
 

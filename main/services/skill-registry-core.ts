@@ -33,6 +33,7 @@ export interface SkillCatalogProjectionContext {
 }
 
 const SOURCE_PRECEDENCE: Record<SkillSource, number> = {
+  builtin: -1,
   configured: 0,
   workspace: 1,
   global: 2,

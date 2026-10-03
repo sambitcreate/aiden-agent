@@ -1,3 +1,4 @@
+import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { CompactionEngine } from "../shared/compaction";
 import type {
   TtsJobSnapshot,
@@ -323,6 +324,13 @@ export const providersApi = {
     onNotification("providers:auth:error", handler),
   onAuthStatusChanged: (handler: (event: CodexProviderStatusChanged) => void) =>
     onNotification("providers:auth:status-changed", handler),
+};
+
+export const appControlsApi = {
+  acknowledgeNavigation: (requestId: string, status: "opened" | "blocked") => invoke<boolean>("settings:controls:navigation-ack", requestId, status),
+  get: (chatId: string, panelId: string) => invoke<AppControlSnapshot>("settings:controls:get", chatId, panelId),
+  apply: (chatId: string, panelId: string, operation: AppControlOperation) => invoke<AppControlReceipt>("settings:controls:apply", chatId, panelId, operation),
+  onChanged: (handler: () => void) => onNotification("settings:controls-changed", handler),
 };
 
 export const settingsApi = {

@@ -176,9 +176,9 @@ export function SkillsSettings() {
       {globallyEnabled && discoveredList.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2">
           <div>
-            <Text variant="strong">From skill folders</Text>
+            <Text variant="strong">Built-in and discovered skills</Text>
             <Text variant="small" color="secondary" className="mt-0.5 block">
-              Auto-discovered SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
+              Aiden includes the immutable aiden-app skill. Other skills come from SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
               <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders.
               Availability follows the same collision and safety rules as the composer and model.
             </Text>
@@ -195,7 +195,7 @@ export function SkillsSettings() {
                         {s.name}
                       </Text>
                       <Badge color={s.source === "workspace" ? "blue" : "secondary"}>
-                        {s.source}
+                        {s.source === "builtin" ? "Built-in" : s.source}
                       </Badge>
                       {!s.available ? <Badge color="red">Unavailable</Badge> : null}
                     </div>

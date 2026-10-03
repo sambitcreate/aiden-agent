@@ -1,3 +1,4 @@
+import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   ChatRunInputMode,
@@ -70,6 +71,8 @@ export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
   "agents:read",
   "questions:respond",
   "skills:invoke",
+  "app-controls:read",
+  "app-controls:respond",
 ] as const;
 
 export type AidenRemoteProgressCapability =
@@ -167,6 +170,7 @@ export const AIDEN_REMOTE_EVENT_TYPES = [
   "question_required",
   "task_update",
   "agents_update",
+  "app_controls_changed",
   "done",
   "error",
   "cancelled",
@@ -1421,6 +1425,7 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   question_required: ["promptId", "questions", "expiresAt"],
   task_update: [],
   agents_update: [],
+  app_controls_changed: ["revision"],
   done: ["messageId"],
   error: ["code", "message"],
   cancelled: ["source"],
@@ -2114,6 +2119,7 @@ export function parseAidenRemoteChatProjection(
               ),
             }
           : {}),
+        ...(hasOwn(entry, "appPanels") ? { appPanels: parseAppControlPanels(entry.appPanels) } : {}),
         ...(hasOwn(entry, "htmlArtifacts")
           ? {
               htmlArtifacts: parseChatHtmlArtifactsProjection(
@@ -3489,7 +3495,7 @@ export function parseAidenRemoteChatAgentRoster(
  * workspace- and registry-revision-bound and may only be redeemed on the turn
  * route by a device holding `skills:invoke`.
  */
-export const AIDEN_REMOTE_SKILL_SOURCES = ["configured", "workspace", "global"] as const;
+export const AIDEN_REMOTE_SKILL_SOURCES = ["builtin", "configured", "workspace", "global"] as const;
 export type AidenRemoteSkillSource = (typeof AIDEN_REMOTE_SKILL_SOURCES)[number];
 export const AIDEN_REMOTE_SKILL_MAX_ENTRIES = 500;
 export const AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH = 64;
@@ -3969,7 +3975,9 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
   for (const key of keys) {
     if (!(key in payload)) throw new Error(`${type} payload is missing required field ${key}.`);
   }
-  if (type === "snapshot") {
+  if (type === "app_controls_changed") {
+    if (!Number.isSafeInteger(payload.revision) || (payload.revision as number) < 0) throw new Error("Invalid app control revision.");
+  } else if (type === "snapshot") {
     assertBoundedString(payload, "chatId", 128);
     assertBoundedString(payload, "turnId", 128);
     if (!Number.isSafeInteger(payload.nextSequence) || (payload.nextSequence as number) < 1) throw new Error("snapshot nextSequence must be positive.");
@@ -4966,6 +4974,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   const progressEventTypes = new Set<AidenRemoteEventType>([
     "task_update",
     "agents_update",
+  "app_controls_changed",
   ]);
   for (const event of chatProgressEvents) {
     if (
@@ -5003,7 +5012,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (!Array.isArray(value.events)) throw new Error("Fixture events must be an array.");
   const events = value.events.map(parseAidenRemoteStreamEvent).filter((event): event is AidenRemoteStreamEvent => event !== null);
   assertOrderedAidenRemoteEvents(events);
-  if (events.some((event) => event.type === "task_update" || event.type === "agents_update")) {
+  if (events.some((event) => event.type === "task_update" || event.type === "agents_update" || event.type === "app_controls_changed")) {
     throw new Error(
       "Ordinary turn streams must not carry chat progress projections.",
     );

@@ -99,7 +99,7 @@ const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 18);
+  assert.equal(fixture.contractRevision, 19);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -121,13 +121,13 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
     new Set(fixture.events.map((event) => event.type)),
     new Set(
       AIDEN_REMOTE_EVENT_TYPES.filter(
-        (type) => type !== "task_update" && type !== "agents_update",
+        (type) => type !== "task_update" && type !== "agents_update" && type !== "app_controls_changed",
       ),
     ),
   );
   assert.deepEqual(
     new Set(fixture.chatProgressEvents.map((event) => event.type)),
-    new Set(["task_update", "agents_update"]),
+    new Set(["task_update", "agents_update", "app_controls_changed"]),
   );
   assert.equal(JSON.stringify(fixture).includes("/Users/"), false);
   assert.equal(JSON.stringify(fixture).includes("BEGIN PRIVATE KEY"), false);
@@ -350,6 +350,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/read-aloud",
     "/chats/{chatId}/read-aloud/stop",
     "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}",
+    "/chats/{chatId}/controls/{panelId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -1335,7 +1336,7 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
     ...progressEvents,
     {
       ...record(progressEvents[0], "progress event"),
-      sequence: 3,
+      sequence: progressEvents.length + 1,
       type: "heartbeat",
       payload: {},
     },

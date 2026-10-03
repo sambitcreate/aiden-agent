@@ -1,3 +1,4 @@
+import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -191,6 +192,7 @@ export interface AidenRemoteRouterDependencies {
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  appControls?: typeof remoteAppControls;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
@@ -277,6 +279,7 @@ export type AidenRemoteRouteLabel =
   | "workspaceFile"
   | "workspaceGit"
   | "scheduledTasks"
+  | "appControls"
   | "memorySettings"
   | "usage"
   | "readAloud"
@@ -342,6 +345,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/scheduled-tasks/:id/:action",
     "/scheduled-tasks/:id",
   ],
+  appControls: ["/chats/:chatId/controls/:panelId"],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
   readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
@@ -1098,6 +1102,7 @@ function progressCapabilitySupported(
   if (capability === "questions:respond") {
     return dependencies.streams?.supportsQuestionPrompts?.() === true;
   }
+  if (capability === "app-controls:read" || capability === "app-controls:respond") return Boolean(dependencies.appControls);
   if (capability === "skills:invoke") {
     return typeof dependencies.chats?.chatSkillCatalog === "function";
   }
@@ -1331,6 +1336,8 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.appControls ? ["chat-ui-panels-v1"] : []),
+            ...(await dependencies.appControls?.enabled() ? ["chat-ui-panels-enabled-v1"] : []),
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
@@ -1410,6 +1417,7 @@ export function createAidenRemoteRequestHandler(
           );
         }
         for (const capability of input.accepts) {
+          if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Paired-host controls require desktop owner consent.", 403);
           if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
             if (device.type !== "mac" && device.type !== "linux") {
@@ -2147,6 +2155,23 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, await dependencies.schedules.settings());
         return;
       }
+      const appControlMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/controls\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
+      if (appControlMatch && (request.method === "GET" || request.method === "POST")) {
+        requireNoQuery(query); route = "appControls";
+        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "app-controls:read" : "app-controls:respond");
+        requireDeviceCapabilities(device, ["chat:read", "app-controls:read"]);
+        if (!dependencies.appControls || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Chat controls are unavailable.", 404);
+        const chatId = appControlMatch[1]!, panelId = appControlMatch[2]!;
+        const chats = dependencies.chats;
+        const authority = { deviceId: device.id, capabilities: device.capabilities,
+          current: () => { try { dependencies.devices.acquireDeviceAuthorization(device.id, false)(); return true; } catch { return false; } },
+          authorize: async () => { await requireChatAccess(chats, device, chatId, "read"); },
+        };
+        const value = request.method === "GET"
+          ? await dependencies.appControls.get(authority, chatId, panelId)
+          : await dependencies.appControls.apply(authority, chatId, panelId, await readJsonBody(request, 2048));
+        writeJson(response, 200, value); return;
+      }
       if (path === "/memory/settings" && request.method === "GET") {
         requireNoQuery(query);
         route = "memorySettings";
@@ -2437,6 +2462,10 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         await requireChatAccess(dependencies.chats, device, chatMatch[1]!, "read");
         const chat = await dependencies.chats.get(chatMatch[1]!);
+        if (!device.capabilities.has("app-controls:read")) {
+          chat.messages = chat.messages.map(({ appPanels, ...message }) => ({ ...message,
+            text: appPanels?.length ? [message.text, ...appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n") : message.text }));
+        }
         writeJson(response, 200, chat);
         return;
       }
@@ -2584,7 +2613,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!),
+          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!, device.capabilities.has("app-controls:read")),
         );
         return;
       }
@@ -2604,7 +2633,11 @@ export function createAidenRemoteRequestHandler(
           device.acceptsProgressCapabilities === true &&
           device.capabilities.has("agents:read") &&
           progressCapabilitySupported(dependencies, "agents:read");
-        if (!canReadTasks && !canReadAgents) {
+        const classification = await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
+        const canReadControls = !classification.botId && device.acceptsProgressCapabilities === true &&
+          device.capabilities.has("app-controls:read") && Boolean(dependencies.appControls) &&
+          await dependencies.appControls!.enabled();
+        if (!canReadTasks && !canReadAgents && !canReadControls) {
           throw new AidenRemoteServiceError(
             device.acceptsProgressCapabilities === true
               ? "not_found"
@@ -2622,7 +2655,7 @@ export function createAidenRemoteRequestHandler(
         const progressGrants = new Set<AidenRemoteCapability>();
         if (canReadTasks) progressGrants.add("tasks:read");
         if (canReadAgents) progressGrants.add("agents:read");
-        await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
+        if (canReadControls) progressGrants.add("app-controls:read");
         await dependencies.chatProgress.openEvents(
           device.id,
           chatProgressEventsMatch[1]!,

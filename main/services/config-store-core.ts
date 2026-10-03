@@ -1,5 +1,8 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 import { randomBytes } from "node:crypto";
+import { normalizeAppearanceConfig, parseAppearanceConfig } from "../../renderer/shared/appearance.js";
+import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
+import { parseAppControlOperation, type AppControlOperation } from "../../renderer/shared/app-controls.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -834,6 +837,34 @@ export function createConfigStore(
       };
     },
 
+    /** Revision and nested appearance merge happen inside the settings lease. */
+    async updateAppControl(input: AppControlOperation, isCurrent: () => boolean, remote = false, authorize?: () => Promise<void>): Promise<AppSettings> {
+      const operation = parseAppControlOperation(input);
+      if (operation.control === "memory.workspace") throw new Error("Workspace memory needs its workspace application service.");
+      const saved = await mutateSettings(async (config) => {
+        await authorize?.();
+        const state: AppControlState = { settings: runtimeSettingsFrom(config.settings) };
+        if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Paired-host app controls were disabled.");
+        if (!isCurrent() || appControlPolicy(state.settings) === "disabled") throw new Error("App control authority changed.");
+        if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
+        if (operation.control.startsWith("appearance.")) {
+          const current = config.settings.appearance === undefined
+            ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
+          const field = operation.control.slice("appearance.".length);
+          config.settings.appearance = parseAppearanceConfig({ ...current, [field]: operation.value });
+        } else if (operation.control === "webSearch.enabled") {
+          const raw = config.settings.webSearch;
+          const current = parseWebSearchSettings(raw);
+          if (raw !== undefined && !current) throw new Error("Web Search settings need repair before changing them.");
+          config.settings.webSearch = normalizeWebSearchSettings({ ...(current ?? freshWebSearchSettings()), enabled: operation.value });
+        } else {
+          config.settings[operation.control === "memory.enabled" ? "memoryEnabled" : "skillsEnabled"] = operation.value as boolean;
+        }
+        return structuredClone(config.settings);
+      }, isCurrent);
+      return runtimeSettingsFrom(saved);
+    },
+
     async setSettings(
       patch: Partial<AppSettings>,
       isCurrent: () => boolean = () => true,
@@ -1099,7 +1130,7 @@ export function createConfigStore(
     },
 
     /** Insert or update a workspace (upsert by id). */
-    async saveWorkspace(workspace: Workspace): Promise<Workspace> {
+    async saveWorkspace(workspace: Workspace, assertCurrent?: (current: Workspace | undefined) => void | Promise<void>): Promise<Workspace> {
       // The Aiden assistant's threads live under this reserved id and it must
       // never resolve to a real folder: a workspace claiming it would hand the
       // assistant that folder's path and permission, and would cross-link its
@@ -1109,7 +1140,8 @@ export function createConfigStore(
       }
       const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
       await requireSeededForWrite();
-      return localStore.update((config) => {
+      return localStore.update(async (config) => {
+        await assertCurrent?.(config.workspaces.find((w) => w.id === next.id));
         const idx = config.workspaces.findIndex((w) => w.id === next.id);
         if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
         else config.workspaces.push(next);

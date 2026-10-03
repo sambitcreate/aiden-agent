@@ -1,5 +1,5 @@
 {
-  "contractRevision": 18,
+  "contractRevision": 19,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -22,7 +22,9 @@
     "tasks:read",
     "agents:read",
     "questions:respond",
-    "skills:invoke"
+    "skills:invoke",
+    "app-controls:read",
+    "app-controls:respond"
   ],
   "health": { "ok": true, "protocolVersion": 1 },
   "pairingBootstrap": {
@@ -49,8 +51,8 @@
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
     "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1"],
+    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke", "app-controls:read", "app-controls:respond"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1", "chat-ui-panels-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -970,7 +972,8 @@
   },
   "chatProgressEvents": [
     { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:09.000Z", "type": "task_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "availability": "ready", "epoch": "epoch_fixture_01", "revision": 3, "updatedAt": "2026-08-18T19:01:09.000Z", "tasks": [ { "id": 1, "subject": "Inspect workspace structure", "status": "completed" }, { "id": 2, "subject": "Update greeting copy", "status": "in_progress", "activeForm": "Updating greeting copy", "blockedBy": [1] }, { "id": 3, "subject": "Verify the change builds", "status": "pending", "blockedBy": [2] } ] } },
-    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:09.500Z", "type": "agents_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "previousTurns": [ { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" }, { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" } ], "availability": "ready", "epoch": "epoch_fixture_01", "revision": 2, "updatedAt": "2026-08-18T19:01:09.000Z", "agents": [ { "agentId": "agent_fixture_01", "depth": 1, "revision": 4, "role": "implementer", "label": "Implement the change", "taskPreview": "Make a scoped code change", "state": "running", "activity": "Reading sources", "startedAt": "2026-08-18T19:01:01.000Z", "updatedAt": "2026-08-18T19:01:08.000Z", "modelId": "model_fixture", "turns": 3, "tools": 5, "tokens": 4200, "milestones": ["reading", "searching"] }, { "agentId": "agent_fixture_02", "parentAgentId": "agent_fixture_01", "depth": 2, "revision": 2, "role": "reviewer", "label": "Check the findings", "taskPreview": "Review the surveyed findings", "state": "completed", "startedAt": "2026-08-18T19:01:02.000Z", "updatedAt": "2026-08-18T19:01:07.000Z", "finishedAt": "2026-08-18T19:01:07.000Z", "modelId": "model_fixture", "turns": 2, "tools": 1, "tokens": 1100, "notices": ["display_filtered"] } ] } }
+    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:09.500Z", "type": "agents_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "previousTurns": [ { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" }, { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" } ], "availability": "ready", "epoch": "epoch_fixture_01", "revision": 2, "updatedAt": "2026-08-18T19:01:09.000Z", "agents": [ { "agentId": "agent_fixture_01", "depth": 1, "revision": 4, "role": "implementer", "label": "Implement the change", "taskPreview": "Make a scoped code change", "state": "running", "activity": "Reading sources", "startedAt": "2026-08-18T19:01:01.000Z", "updatedAt": "2026-08-18T19:01:08.000Z", "modelId": "model_fixture", "turns": 3, "tools": 5, "tokens": 4200, "milestones": ["reading", "searching"] }, { "agentId": "agent_fixture_02", "parentAgentId": "agent_fixture_01", "depth": 2, "revision": 2, "role": "reviewer", "label": "Check the findings", "taskPreview": "Review the surveyed findings", "state": "completed", "startedAt": "2026-08-18T19:01:02.000Z", "updatedAt": "2026-08-18T19:01:07.000Z", "finishedAt": "2026-08-18T19:01:07.000Z", "modelId": "model_fixture", "turns": 2, "tools": 1, "tokens": 1100, "notices": ["display_filtered"] } ] } },
+    {"protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:10.000Z", "type": "app_controls_changed", "terminal": false, "payload": {"revision": 1}}
   ],
   "legacyNonNegotiating": {
     "pairingExchange": {
@@ -1101,5 +1104,44 @@
     "segmentBytes": 2,
     "nextOffset": 2,
     "complete": true
+  },
+  "appControls": {
+    "panel": {
+      "version": 1,
+      "id": "panel_fixture_01",
+      "topic": "memory",
+      "fallback": "Memory settings on the paired host.",
+      "workspaceId": "workspace_fixture_01"
+    },
+    "snapshot": {
+      "version": 1,
+      "title": "Memory",
+      "target": "Paired host",
+      "policy": "safe",
+      "rows": [
+        {
+          "id": "memory.enabled",
+          "label": "Memory",
+          "description": "Turning memory off does not delete facts.",
+          "scope": "Paired host",
+          "value": true,
+          "revision": "revision_fixture_01"
+        }
+      ]
+    },
+    "operation": {
+      "control": "memory.enabled",
+      "value": false,
+      "expectedRevision": "revision_fixture_01",
+      "operationId": "operation_fixture_01"
+    },
+    "receipt": {
+      "status": "applied",
+      "operationId": "operation_fixture_01",
+      "control": "memory.enabled",
+      "value": false,
+      "scope": "Paired host",
+      "effective": "next_turn"
+    }
   }
 }

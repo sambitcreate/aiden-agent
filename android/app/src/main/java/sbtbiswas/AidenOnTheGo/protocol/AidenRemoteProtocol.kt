@@ -441,6 +441,8 @@ data class AidenRemoteCapability(val rawValue: String) {
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
+        val APP_CONTROLS_READ = AidenRemoteCapability("app-controls:read")
+        val APP_CONTROLS_RESPOND = AidenRemoteCapability("app-controls:respond")
         val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
 
         val V1_KNOWN = listOf(
@@ -448,10 +450,10 @@ data class AidenRemoteCapability(val rawValue: String) {
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
             FILES_READ, FILES_WRITE, GIT_READ, GIT_WRITE,
             SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ,
-            QUESTIONS_RESPOND, SKILLS_INVOKE
+            QUESTIONS_RESPOND, SKILLS_INVOKE, APP_CONTROLS_READ, APP_CONTROLS_RESPOND
         )
 
-        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE)
+        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE, APP_CONTROLS_READ, APP_CONTROLS_RESPOND)
     }
 }
 
@@ -557,6 +559,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val APPROVAL_REQUIRED = AidenRemoteEventType("approval_required")
         val TASK_UPDATE = AidenRemoteEventType("task_update")
         val AGENTS_UPDATE = AidenRemoteEventType("agents_update")
+        val APP_CONTROLS_CHANGED = AidenRemoteEventType("app_controls_changed")
         val QUESTION_REQUIRED = AidenRemoteEventType("question_required")
         val DONE = AidenRemoteEventType("done")
         val ERROR = AidenRemoteEventType("error")
@@ -566,7 +569,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val V1_KNOWN = listOf(
             SNAPSHOT, STATUS, TEXT_DELTA, REASONING_DELTA,
             TOOL_STARTED, TOOL_FINISHED, TIMELINE, APPROVAL_REQUIRED,
-            TASK_UPDATE, AGENTS_UPDATE, QUESTION_REQUIRED,
+            TASK_UPDATE, AGENTS_UPDATE, APP_CONTROLS_CHANGED, QUESTION_REQUIRED,
             DONE, ERROR, CANCELLED, HEARTBEAT
         )
     }

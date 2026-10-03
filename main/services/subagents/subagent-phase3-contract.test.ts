@@ -468,7 +468,7 @@ test("persisted chat workspace ownership closes generation admission before setu
     beginMutation,
   );
   const saveWorkspace = workspaceApplicationService.indexOf(
-    "deps.configStore.saveWorkspace(next)",
+    "deps.configStore.saveWorkspace(next",
     cancelGeneration,
   );
   assert.ok(updateHandler >= 0);
@@ -757,7 +757,7 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   assert.ok(updateGenerationDrain > updateTerminalClose);
   assert.ok(updateScheduleCancel > updateTerminalClose);
   const updateSave = workspaceApplicationService.indexOf(
-    "await deps.configStore.saveWorkspace(next)",
+    "await deps.configStore.saveWorkspace(next",
     updateScheduleCancel,
   );
   const armPostSaveResume = workspaceApplicationService.indexOf(

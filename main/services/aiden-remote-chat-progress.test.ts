@@ -9,6 +9,7 @@ import type {
 import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
+import { createChatProgressAuthorizer } from "./aiden-remote-chat-progress-authorize.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
 import { parseAidenRemoteChatAgentRoster } from "./aiden-remote-protocol.js";
 
@@ -71,6 +72,7 @@ class Response extends EventEmitter {
   flushHeaders() {}
   write(chunk: string) {
     this.chunks.push(chunk);
+    this.emit("chunk", chunk);
     return true;
   }
   end() {
@@ -611,4 +613,67 @@ test("interrupt is unavailable when the host does not wire subagent control", as
     service.interruptAgent("device-1", "chat-1", "agent_any"),
     hasCode("not_found", 404),
   );
+});
+
+
+test("foreground control invalidations reach every subscribed client without exposing preferences", { timeout: 4000 }, async (t) => {
+  // The mock response has no socket to keep Node alive for the service's unref'd coalescer.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  let allowed = true;
+  const { service, events } = fixture({ appControlsEnabled: async () => allowed });
+  t.after(() => service.close());
+  const first = new Response(), second = new Response(), legacy = new Response();
+  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, first.wire);
+  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, second.wire);
+  await service.openEvents("device-1", "chat-1", new Set(["tasks:read"]), 0, legacy.wire);
+  assert.match(first.chunks.join(""), /app_controls_changed/u);
+  const changed = (response: Response) => new Promise<string>((resolve) => response.once("chunk", resolve));
+  const nextFirst = changed(first), nextSecond = changed(second);
+  events.appControlsChanged(); // same path used by normal Settings and another client
+  const updates = await Promise.all([nextFirst, nextSecond]);
+  assert.ok(updates.every((text) => text.includes('"revision":1')));
+  assert.ok(updates.every((text) => !text.includes("memory") && !text.includes("value")));
+  assert.doesNotMatch(legacy.chunks.join(""), /app_controls_changed/u);
+  allowed = false;
+  const closed = new Promise<void>((resolve) => { const end = first.end.bind(first); first.end = () => { end(); resolve(); }; });
+  events.appControlsChanged();
+  await closed;
+  assert.ok(first.ended);
+  service.close();
+});
+
+test("Bot progress remains live with an unrelated controls grant", { timeout: 4000 }, async (t) => {
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  const events = new ChatProgressEvents();
+  const meta = { id: "chat-1", workspaceId: "workspace-1", title: "Bot", botId: "bot-1", createdAt: 1, updatedAt: 2 };
+  const authorize = createChatProgressAuthorizer({
+    events, acquireDeviceAuthorization: () => () => {},
+    device: async () => ({ id: "device-1", acceptsProgressCapabilities: true,
+      capabilities: ["chat:read", "bot:read", "tasks:read", "agents:read", "app-controls:read"] }),
+    chatMetadata: async () => [meta], readChat: async () => ({ ...meta, messages: [] }),
+    authorizeRetainedBotChat: async () => true,
+  });
+  let subject = "Initial task", label = "Initial reviewer";
+  const { service } = fixture({ events, authorize, appControlsEnabled: async () => true,
+    readTodo: async () => ({ ...todo, tasks: [{ id: 1, subject, status: "pending" }] }),
+    readAgents: async () => [{ ...run, label }],
+  });
+  t.after(() => service.close());
+  const response = new Response();
+  await service.openEvents("device-1", "chat-1", new Set(["tasks:read", "agents:read", "app-controls:read"]), 0, response.wire);
+  assert.equal(response.ended, false);
+  assert.doesNotMatch(response.chunks.join(""), /app_controls_changed/u);
+  const updated = (type: string) => new Promise<string>((resolve) => response.on("chunk", (chunk: string) => {
+    if (chunk.includes(`"type":"${type}"`)) resolve(chunk);
+  }));
+  const nextTask = updated("task_update"), nextAgent = updated("agents_update");
+  subject = "Updated task"; label = "Updated reviewer";
+  events.changed("chat-1");
+  const [tasks, agents] = await Promise.all([nextTask, nextAgent]);
+  assert.match(tasks, /Updated task/u);
+  assert.match(agents, /Updated reviewer/u);
+  assert.equal(response.ended, false);
+  assert.doesNotMatch(response.chunks.join(""), /app_controls_changed/u);
 });

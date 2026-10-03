@@ -1,3 +1,4 @@
+import { isOwnedAppTool } from "./app.ts";
 import { resolve } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { deriveChatTitleSeed, buildChatTitlePrompt, sanitizeGeneratedChatTitle } from "../../../../main/services/chat-title-policy.js";
@@ -33,6 +34,7 @@ export function createSessionParityExtension(agentDir: string): InlineExtension 
         const allowed = process.env.AIDEN_CHILD_PERMISSION === "full" ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : ["read", "grep", "find", "ls"];
         return allowed.includes(event.toolName) ? undefined : { block: true, reason: "Tool outside the delegated capability profile." };
       }
+      if (isOwnedAppTool(pi, event.toolName)) return;
       try {
       const tier = accessFor(agentDir, ctx.cwd);
       if (tier === "full") return;
