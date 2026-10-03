@@ -57,9 +57,40 @@ jobs:
       - name: Verify workflow policy and complete test assignment
         run: npm run test:ci-policy
 
+  # One macOS production build feeds the E2E shards and desktop verification.
+  # The tarball keeps the native helpers' executable modes, which the artifact
+  # zip format drops. The E2E type check runs in the static job.
+  build:
+    name: Desktop production build
+    needs: changes
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build production bundles once
+        run: npm run build
+      - name: Package production bundles and native helpers
+        run: tar -cf "$RUNNER_TEMP/desktop-build.tar" build
+      - name: Upload production build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-build.tar
+          if-no-files-found: error
+          retention-days: 1
+
   e2e:
     name: Electron E2E (${{ matrix.shard }}/3)
-    needs: changes
+    needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -77,8 +108,13 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Prepare Electron E2E build
-        run: npm run type-check:e2e && npm run build
+      - name: Download production build
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-build
+      - name: Restore production build
+        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
       - name: Build sanitized E2E failure receipt
@@ -116,7 +152,7 @@ jobs:
 
   verify:
     name: Desktop build and diagnostics
-    needs: changes
+    needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -136,8 +172,13 @@ jobs:
         run: npm run test:branding
       - name: Verify model catalog contracts
         run: npm run test:model-catalog
-      - name: Build production bundles once
-        run: npm run build
+      - name: Download production build
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-build
+      - name: Restore production build
+        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Verify foreground file tools in pinned Electron
         run: npm run test:foreground-file-tools:electron
       - name: Verify production-profile diagnostics support workflow
