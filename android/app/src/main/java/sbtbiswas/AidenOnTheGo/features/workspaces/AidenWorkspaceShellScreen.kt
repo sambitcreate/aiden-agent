@@ -31,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,10 +46,10 @@ fun AidenWorkspaceDirectoryScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
-    val allWorkspaces by coordinator.workspaces.collectAsState()
+    val client = coordinator.client.collectAsStateWithLifecycle().value
+    val allWorkspaces by coordinator.workspaces.collectAsStateWithLifecycle()
     val archiveStore = coordinator.archiveStore
-    val archivedIDs by archiveStore.workspaceIDsByInstance.collectAsState()
+    val archivedIDs by archiveStore.workspaceIDsByInstance.collectAsStateWithLifecycle()
     val activeInstanceId = coordinator.activeInstanceId
 
     var searchQuery by remember { mutableStateOf("") }
@@ -964,7 +965,7 @@ fun AidenFolderBrowserSheet(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
+    val client = coordinator.client.collectAsStateWithLifecycle().value
 
     var roots by remember { mutableStateOf<List<AidenBrowserRoot>>(emptyList()) }
     var currentPage by remember { mutableStateOf<AidenBrowserPage?>(null) }

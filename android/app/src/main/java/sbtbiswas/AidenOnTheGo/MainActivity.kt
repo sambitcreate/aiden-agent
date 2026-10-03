@@ -28,6 +28,7 @@ import sbtbiswas.AidenOnTheGo.navigation.rememberAidenNavigator
 import sbtbiswas.AidenOnTheGo.navigation.AidenScreen
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val pendingNavigationRequest = mutableStateOf<AidenNavigationRequest?>(null)
@@ -55,12 +56,12 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            val appearanceConfig by appearanceStore.config.collectAsState()
-            val connectionState by coordinator.connectionState.collectAsState()
-            val workspaces by coordinator.workspaces.collectAsState()
-            val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsState()
-            val activeInstallationId by installationStore.activeInstallationId.collectAsState()
-            val installations by installationStore.installations.collectAsState()
+            val appearanceConfig by appearanceStore.config.collectAsStateWithLifecycle()
+            val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+            val workspaces by coordinator.workspaces.collectAsStateWithLifecycle()
+            val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsStateWithLifecycle()
+            val activeInstallationId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
+            val installations by installationStore.installations.collectAsStateWithLifecycle()
             val navigator = rememberAidenNavigator()
             fun push(screen: AidenScreen) = navigator.push(screen)
             val botsViewModel: AidenBotsViewModel = viewModel(

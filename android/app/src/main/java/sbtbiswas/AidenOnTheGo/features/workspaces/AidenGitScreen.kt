@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,7 +40,7 @@ fun AidenGitScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
+    val client = coordinator.client.collectAsStateWithLifecycle().value
 
     var gitReviewResult by remember { mutableStateOf<AidenGitResult?>(null) }
     var selectedDiff by remember { mutableStateOf<AidenGitDiff?>(null) }

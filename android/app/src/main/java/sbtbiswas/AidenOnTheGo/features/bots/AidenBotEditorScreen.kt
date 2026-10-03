@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 enum class AidenBotEditorDefaultAccess {
     RECOMMENDED,
@@ -339,7 +340,7 @@ fun AidenBotEditorScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client by coordinator.client.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
 
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var baselineBot by remember { mutableStateOf<AidenBotDetail?>(null) }

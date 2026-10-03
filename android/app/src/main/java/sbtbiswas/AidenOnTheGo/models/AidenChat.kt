@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -23,6 +24,7 @@ enum class AidenAttachmentKind {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageAttachment(
     val id: String,
     val name: String,
@@ -151,6 +153,7 @@ enum class AidenMessageOutcomeStatus {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageOutcome(
     val status: AidenMessageOutcomeStatus,
     val category: String? = null,
@@ -197,6 +200,7 @@ private object AidenChatPatterns {
 }
 
 @Serializable
+@Immutable
 data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
     fun isValid(toolName: String?): Boolean {
         val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
@@ -209,12 +213,14 @@ data class AidenProducedFile(val relativePath: String, val operation: String, va
 }
 
 @Serializable
+@Immutable
 data class AidenAgentLineChanges(
     val additions: Int,
     val deletions: Int
 )
 
 @Serializable
+@Immutable
 data class AidenAgentStep(
     val id: String,
     val order: Int,
@@ -245,6 +251,7 @@ data class AidenAgentStep(
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
 }
 
+@Immutable
 data class AidenChronologicalRow(
     val id: String,
     val kind: Kind,
@@ -322,6 +329,7 @@ enum class AidenGenerationCancellationOrigin {
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationClaimCheck(
     val kind: Kind,
     val stepIds: List<String>
@@ -333,6 +341,7 @@ data class AidenGenerationClaimCheck(
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationTimeline(
     val version: Int,
     val generationId: String,
@@ -596,6 +605,7 @@ object AidenAgentActivityPresentation {
 }
 
 @Serializable
+@Immutable
 data class AidenChatMessage(
     val id: String,
     val role: AidenChatRole,
@@ -623,6 +633,7 @@ data class AidenChatMessage(
 }
 
 @Serializable
+@Immutable
 data class AidenHtmlArtifact(
     val id: String,
     val title: String

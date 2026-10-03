@@ -60,7 +60,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +93,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -158,25 +158,25 @@ private fun AidenWorkspaceHome(
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val client by coordinator.client.collectAsState()
-    val connectionState by coordinator.connectionState.collectAsState()
-    val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsState()
-    val installations by coordinator.installationStore.installations.collectAsState()
-    val activeInstallationId by coordinator.installationStore.activeInstallationId.collectAsState()
-    val workspaces by coordinator.workspaces.collectAsState()
-    val archivedByInstance by coordinator.archiveStore.workspaceIDsByInstance.collectAsState()
-    val chats by viewModel.chats.collectAsState()
-    val scheduledTasks by viewModel.scheduledTasks.collectAsState()
-    val usage by viewModel.usage.collectAsState()
-    val modelCatalog by viewModel.modelCatalog.collectAsState()
-    val usageErrorMessage by viewModel.usageErrorMessage.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
-    val chatLoadErrorMessage by viewModel.chatLoadErrorMessage.collectAsState()
-    val chatListLoadState by viewModel.chatListLoadState.collectAsState()
-    val nextChatCursor by viewModel.nextChatCursor.collectAsState()
-    val isLoadingMoreChats by viewModel.isLoadingMoreChats.collectAsState()
-    val chatPaginationErrorMessage by viewModel.chatPaginationErrorMessage.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+    val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsStateWithLifecycle()
+    val installations by coordinator.installationStore.installations.collectAsStateWithLifecycle()
+    val activeInstallationId by coordinator.installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    val workspaces by coordinator.workspaces.collectAsStateWithLifecycle()
+    val archivedByInstance by coordinator.archiveStore.workspaceIDsByInstance.collectAsStateWithLifecycle()
+    val chats by viewModel.chats.collectAsStateWithLifecycle()
+    val scheduledTasks by viewModel.scheduledTasks.collectAsStateWithLifecycle()
+    val usage by viewModel.usage.collectAsStateWithLifecycle()
+    val modelCatalog by viewModel.modelCatalog.collectAsStateWithLifecycle()
+    val usageErrorMessage by viewModel.usageErrorMessage.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val chatLoadErrorMessage by viewModel.chatLoadErrorMessage.collectAsStateWithLifecycle()
+    val chatListLoadState by viewModel.chatListLoadState.collectAsStateWithLifecycle()
+    val nextChatCursor by viewModel.nextChatCursor.collectAsStateWithLifecycle()
+    val isLoadingMoreChats by viewModel.isLoadingMoreChats.collectAsStateWithLifecycle()
+    val chatPaginationErrorMessage by viewModel.chatPaginationErrorMessage.collectAsStateWithLifecycle()
     val canReadSchedules = installations.firstOrNull { it.id == activeInstallationId }
         ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
 

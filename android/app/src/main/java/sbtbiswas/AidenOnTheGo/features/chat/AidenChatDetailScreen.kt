@@ -85,6 +85,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
 import kotlin.math.abs
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 enum class MessageClusterPosition {
     SINGLE, FIRST, MIDDLE, LAST
@@ -121,40 +122,40 @@ fun AidenChatDetailScreen(
         )
     )
 
-    val connectionState by coordinator.connectionState.collectAsState()
-    val chat by viewModel.chat.collectAsState()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+    val chat by viewModel.chat.collectAsStateWithLifecycle()
     var workspaceFileReference by remember(chatId) { mutableStateOf<String?>(null) }
-    val streamState by viewModel.streamState.collectAsState()
-    val hasActiveStream by viewModel.hasActiveStream.collectAsState()
+    val streamState by viewModel.streamState.collectAsStateWithLifecycle()
+    val hasActiveStream by viewModel.hasActiveStream.collectAsStateWithLifecycle()
     val isStreaming = streamState != null && !streamState!!.isTerminal
-    val pendingApproval by viewModel.pendingApproval.collectAsState()
-    val isStopping by viewModel.isStopping.collectAsState()
-    val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
-    val runInputReceipt by viewModel.runInputReceipt.collectAsState()
-    val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
-    val pendingQuestion by viewModel.pendingQuestion.collectAsState()
-    val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
-    val pendingAttachments by viewModel.pendingAttachments.collectAsState()
-    val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsState()
-    val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsState()
-    val draft by viewModel.draft.collectAsState()
-    val selectedSkill by viewModel.selectedSkill.collectAsState()
-    val modelCatalog by viewModel.catalog.collectAsState()
-    val selectedProviderId by viewModel.selectedProviderId.collectAsState()
-    val selectedModelId by viewModel.selectedModelId.collectAsState()
-    val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsState()
-    val composerSuggestions by viewModel.composerSuggestions.collectAsState()
-    val presentedError by viewModel.presentedError.collectAsState()
-    val voiceInputMode by voiceInputStore.mode.collectAsState()
-    val taskProgress by viewModel.taskProgress.collectAsState()
-    val currentAgentRoster by viewModel.agentRoster.collectAsState()
-    val selectedAgentRoster by viewModel.selectedAgentRoster.collectAsState()
-    val agentRosterHistory by viewModel.agentRosterHistory.collectAsState()
-    val interruptingAgentIds by viewModel.interruptingAgentIds.collectAsState()
-    val progressConnectionState by viewModel.progressConnectionState.collectAsState()
+    val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+    val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
+    val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
+    val runInputReceipt by viewModel.runInputReceipt.collectAsStateWithLifecycle()
+    val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsStateWithLifecycle()
+    val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
+    val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsStateWithLifecycle()
+    val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
+    val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsStateWithLifecycle()
+    val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsStateWithLifecycle()
+    val draft by viewModel.draft.collectAsStateWithLifecycle()
+    val selectedSkill by viewModel.selectedSkill.collectAsStateWithLifecycle()
+    val modelCatalog by viewModel.catalog.collectAsStateWithLifecycle()
+    val selectedProviderId by viewModel.selectedProviderId.collectAsStateWithLifecycle()
+    val selectedModelId by viewModel.selectedModelId.collectAsStateWithLifecycle()
+    val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsStateWithLifecycle()
+    val composerSuggestions by viewModel.composerSuggestions.collectAsStateWithLifecycle()
+    val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
+    val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
+    val taskProgress by viewModel.taskProgress.collectAsStateWithLifecycle()
+    val currentAgentRoster by viewModel.agentRoster.collectAsStateWithLifecycle()
+    val selectedAgentRoster by viewModel.selectedAgentRoster.collectAsStateWithLifecycle()
+    val agentRosterHistory by viewModel.agentRosterHistory.collectAsStateWithLifecycle()
+    val interruptingAgentIds by viewModel.interruptingAgentIds.collectAsStateWithLifecycle()
+    val progressConnectionState by viewModel.progressConnectionState.collectAsStateWithLifecycle()
     // The coordinator updates /server after grant negotiation, which drives the
     // progress capability gate and makes the controls appear without a reload.
-    val serverInfo by coordinator.serverInfo.collectAsState()
+    val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
@@ -169,7 +170,7 @@ fun AidenChatDetailScreen(
     }
     var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
-    val readAloudClient by coordinator.client.collectAsState()
+    val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
             readAloudClient != null && coordinator.client.value === readAloudClient
@@ -771,10 +772,10 @@ fun AidenChatDetailScreen(
                     item(key = "live_stream") {
                         // Per-token state is collected inside the item so each
                         // update recomposes only this card, not the screen.
-                        val liveText by viewModel.liveText.collectAsState()
-                        val reasoning by viewModel.reasoning.collectAsState()
-                        val tools by viewModel.tools.collectAsState()
-                        val activityTimeline by viewModel.activityTimeline.collectAsState()
+                        val liveText by viewModel.liveText.collectAsStateWithLifecycle()
+                        val reasoning by viewModel.reasoning.collectAsStateWithLifecycle()
+                        val tools by viewModel.tools.collectAsStateWithLifecycle()
+                        val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,

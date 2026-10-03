@@ -38,6 +38,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenToolbarAction
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,10 +56,10 @@ fun AidenProductShellScreen(
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit
 ) {
-    val activeArea by navigationStore.activeArea.collectAsState()
-    val activeInstallationId by installationStore.activeInstallationId.collectAsState()
-    val installations by installationStore.installations.collectAsState()
-    val connectionState by coordinator.connectionState.collectAsState()
+    val activeArea by navigationStore.activeArea.collectAsStateWithLifecycle()
+    val activeInstallationId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    val installations by installationStore.installations.collectAsStateWithLifecycle()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val palette = AidenTheme.palette
     val workspaceHomeViewModel: AidenWorkspaceHomeViewModel = viewModel(
         factory = AidenWorkspaceHomeViewModel.factory(coordinator, chatCache)
@@ -221,7 +222,7 @@ fun AidenProductShellScreen(
             AidenAppearanceSettingsScreen(
                 appearanceStore = appearanceStore,
                 voiceInputStore = voiceInputStore,
-                remoteClient = coordinator.client.collectAsState().value,
+                remoteClient = coordinator.client.collectAsStateWithLifecycle().value,
                 onOpenInstallations = {
                     showSettingsSheet = false
                     showPairingDialog = true
