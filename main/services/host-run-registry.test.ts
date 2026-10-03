@@ -105,7 +105,7 @@ test("begin journals run_started once and announces the run", () => {
   assert.equal(changes[0]!.summary.runId, "run-1");
 });
 
-test("deltas append contiguous text events without announcing a change", () => {
+test("unread deltas fold into one event without announcing a change", () => {
   const { registry, changes } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   for (const delta of ["Hel", "lo", " there"]) registry.publish("run-1", "chat:delta", { delta });
@@ -113,14 +113,102 @@ test("deltas append contiguous text events without announcing a change", () => {
   const read = registry.read("run-1", 1);
   assert.deepEqual(
     events(read).map(({ sequence, type, payload }) => ({ sequence, type, payload })),
+    [{ sequence: 2, type: "text_delta", payload: { text: "Hello there" } }],
+  );
+  assert.equal(read.summary.lastSequence, 2);
+  assert.equal(changes.length, 1, "only begin announced a change");
+});
+
+test("a delta read by an observer is final, so later text takes the next sequence", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.publish("run-1", "chat:delta", { delta: "Hel" });
+  registry.publish("run-1", "chat:delta", { delta: "lo" });
+  const seen = events(registry.read("run-1", 1));
+  registry.publish("run-1", "chat:delta", { delta: " the" });
+  registry.publish("run-1", "chat:delta", { delta: "re" });
+  const next = events(registry.read("run-1", last(seen).sequence));
+
+  assert.deepEqual(seen.map(({ sequence, payload }) => [sequence, payload.text]), [[2, "Hello"]]);
+  assert.deepEqual(next.map(({ sequence, payload }) => [sequence, payload.text]), [[3, " there"]]);
+  // A reader that resumes from the start still sees every character once.
+  assert.equal(
+    events(registry.read("run-1", 1)).map(({ payload }) => payload.text).join(""),
+    "Hello there",
+  );
+});
+
+test("folding keeps deltas ordered around other events and closes after its window", () => {
+  const { registry, clock } = harness({ deltaCoalesceMs: 250 });
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.publish("run-1", "chat:delta", { delta: "a" });
+  registry.publish("run-1", "chat:delta", { delta: "b" });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "think" });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "ing" });
+  registry.publish("run-1", "chat:delta", { delta: "c" });
+  registry.publish("run-1", "chat:tool", { phase: "call", toolName: "read_file" });
+  registry.publish("run-1", "chat:delta", { delta: "d" });
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  registry.publish("run-1", "chat:delta", { delta: "e" });
+  clock.now += 249;
+  registry.publish("run-1", "chat:delta", { delta: "f" });
+  clock.now += 1;
+  registry.publish("run-1", "chat:delta", { delta: "g" });
+  registry.publish("run-1", "chat:done", {});
+
+  assert.deepEqual(
+    events(registry.read("run-1", 1)).map(({ type, payload }) =>
+      typeof payload.text === "string" ? `${type}:${payload.text}` : type),
     [
-      { sequence: 2, type: "text_delta", payload: { text: "Hel" } },
-      { sequence: 3, type: "text_delta", payload: { text: "lo" } },
-      { sequence: 4, type: "text_delta", payload: { text: " there" } },
+      "text_delta:ab",
+      "reasoning_delta:thinking",
+      "text_delta:c",
+      "tool_started",
+      "text_delta:d",
+      "approval_required",
+      "text_delta:ef",
+      "text_delta:g",
+      "done",
     ],
   );
-  assert.equal(read.summary.lastSequence, 4);
-  assert.equal(changes.length, 1, "only begin announced a change");
+});
+
+test("a folded delta stays within the text bound and a frame mobile clients accept", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const chunk = "x".repeat(150_000);
+  registry.publish("run-1", "chat:delta", { delta: chunk });
+  registry.publish("run-1", "chat:delta", { delta: chunk });
+  // Control characters serialize as six-byte escapes.
+  const escaped = "\u0001".repeat(20_000);
+  for (let index = 0; index < 5; index += 1) registry.publish("run-1", "chat:delta", { delta: escaped });
+
+  const texts = events(registry.read("run-1", 1));
+  assert.deepEqual(texts.slice(0, 2).map(({ payload }) => (payload.text as string).length), [150_000, 150_000]);
+  assert.equal(texts.slice(2).map(({ payload }) => payload.text).join(""), escaped.repeat(5));
+  assert.ok(texts.length > 3, "escaped text split before a frame grew too large");
+  for (const event of texts) assert.ok(Buffer.byteLength(JSON.stringify(event)) <= 1_048_576);
+});
+
+test("a late observer replays a long answer instead of needing a snapshot", () => {
+  const { registry, clock } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  // 10,000 tokens over 50 seconds, well past the 4,096-event journal cap.
+  for (let token = 0; token < 10_000; token += 1) {
+    clock.now += 5;
+    registry.publish("run-1", "chat:delta", { delta: "t " });
+  }
+  registry.publish("run-1", "chat:done", {});
+
+  const read = registry.read("run-1", 0);
+  assert.equal(read.kind, "events");
+  const replayed = read.events;
+  assert.ok(replayed.length < 400, `journal holds ${replayed.length} events`);
+  assert.equal(
+    replayed.filter(({ type }) => type === "text_delta").map(({ payload }) => payload.text).join(""),
+    "t ".repeat(10_000),
+  );
+  assert.equal(last(replayed).type, "done");
 });
 
 test("a run needs approval until its last pending approval resolves", () => {
@@ -248,7 +336,7 @@ test("settling a run without an outcome fails it exactly once", () => {
 });
 
 test("a cursor behind per-run retention must snapshot while a recent cursor replays", () => {
-  const { registry } = harness({ maxEventsPerRun: 5 });
+  const { registry } = harness({ maxEventsPerRun: 5, deltaCoalesceMs: 0 });
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   for (let index = 0; index < 10; index += 1) {
     registry.publish("run-1", "chat:delta", { delta: `d${index}` });
@@ -305,7 +393,7 @@ test("terminal runs past retention are pruned lazily and their observers woken",
 });
 
 test("the total byte budget evicts terminal runs before trimming live ones", () => {
-  const { registry, changes } = harness({ maxTotalEventBytes: 4_000 });
+  const { registry, changes } = harness({ maxTotalEventBytes: 4_000, deltaCoalesceMs: 0 });
   const kilobyte = "x".repeat(1_000);
   registry.begin({ runId: "finished", chatId: "chat-1", origin: "renderer" });
   registry.publish("finished", "chat:delta", { delta: kilobyte });

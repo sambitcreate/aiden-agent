@@ -38,6 +38,9 @@ import type {
 import {
   boundedText,
   createRunProjectionState,
+  isCoalescibleDelta,
+  MAX_COALESCED_DELTA_EVENT_BYTES,
+  mergeDeltaPayload,
   ownRecord,
   projectApprovalDetails,
   projectRunContentNotification,
@@ -178,6 +181,12 @@ interface StreamRecord {
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
   projection: RunProjectionState;
+  /**
+   * The newest delta event while no subscriber has been sent it. Later deltas
+   * of the same kind extend it within one persistence window instead of
+   * taking a sequence each, so replay after a disconnect stays compact.
+   */
+  openDelta?: { sequence: number; openedAt: number };
 }
 
 interface StreamEnvelopeBytes {
@@ -487,11 +496,13 @@ export class AidenRemoteStreamService {
       snapshot?: AidenRemoteStreamSnapshot;
       persist?: (snapshot: AidenRemoteStreamSnapshot) => Promise<void>;
       /**
-       * Streaming content (deltas, timeline, tool progress) is journaled at
-       * most this many milliseconds (default 250) after it arrives; terminal,
-       * prompt, cancel, snapshot and state-change events are written at once.
-       * A crash can therefore lose up to this window of non-boundary events;
-       * restart still recovers the stream as `server_interrupted`.
+       * Streaming content (text and reasoning deltas, timeline, status) is
+       * journaled at most this many milliseconds (default 250) after it
+       * arrives; terminal, prompt, cancel, snapshot, tool start/finish and
+       * state-change events are written at once. A crash can therefore lose
+       * up to this window of non-boundary events; restart still recovers the
+       * stream as `server_interrupted`. The same window bounds how long
+       * consecutive undelivered deltas fold into one journal event.
        */
       persistCoalesceMs?: number;
       idempotency?: AidenIdempotencyLedger;
@@ -966,6 +977,10 @@ export class AidenRemoteStreamService {
     state?: AidenRemoteStreamState,
   ): AidenRemoteStreamEvent {
     if (terminal(stream.state)) return stream.events[stream.events.length - 1]!;
+    if (!isTerminal && (state === undefined || state === stream.state)) {
+      const extended = this.extendOpenDelta(stream, type, payload);
+      if (extended) return extended;
+    }
     // A new journal, any state transition, and every event a client must not
     // miss across a crash are durable boundaries; plain content is coalesced.
     const boundary =
@@ -987,13 +1002,10 @@ export class AidenRemoteStreamService {
     const bytes = this.eventSize(event);
     stream.events.push(event);
     stream.eventBytes += bytes;
-    while (
-      stream.events.length > MAX_EVENTS_PER_STREAM ||
-      (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
-    ) {
-      const removed = stream.events.shift();
-      if (removed) stream.eventBytes -= this.eventSize(removed);
-    }
+    stream.openDelta = isCoalescibleDelta(type)
+      ? { sequence: event.sequence, openedAt: this.options.now() }
+      : undefined;
+    this.trimStream(stream);
     stream.state = state ?? stream.state;
     stream.updatedAt = this.options.now();
     this.enforceAggregateBudget(stream.streamId);
@@ -1018,6 +1030,48 @@ export class AidenRemoteStreamService {
     }
     if (boundary) this.persist();
     else this.schedulePersist();
+    return event;
+  }
+
+  private trimStream(stream: StreamRecord): void {
+    while (
+      stream.events.length > MAX_EVENTS_PER_STREAM ||
+      (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
+    ) {
+      const removed = stream.events.shift();
+      if (removed) stream.eventBytes -= this.eventSize(removed);
+    }
+  }
+
+  /**
+   * Fold a delta into the stream's open (still undelivered) delta event.
+   * The event keeps its sequence and timestamp; subscribers have not been
+   * sent it, so every cursor still precedes it and nothing is skipped.
+   */
+  private extendOpenDelta(
+    stream: StreamRecord,
+    type: string,
+    payload: Record<string, unknown>,
+  ): AidenRemoteStreamEvent | undefined {
+    const open = stream.openDelta;
+    const tail = stream.events[stream.events.length - 1];
+    if (!open || !tail || tail.sequence !== open.sequence || tail.type !== type) return undefined;
+    const now = this.options.now();
+    const window = this.options.persistCoalesceMs ?? DEFAULT_PERSIST_COALESCE_MS;
+    if (now - open.openedAt >= window) return undefined;
+    const merged = mergeDeltaPayload(type, tail.payload, payload);
+    if (!merged) return undefined;
+    // Replace rather than mutate: snapshots and cached sizes key on identity.
+    const event: AidenRemoteStreamEvent = { ...tail, payload: merged };
+    const bytes = this.eventSize(event);
+    if (bytes > MAX_COALESCED_DELTA_EVENT_BYTES) return undefined;
+    stream.events[stream.events.length - 1] = event;
+    stream.eventBytes += bytes - this.eventSize(tail);
+    this.trimStream(stream);
+    stream.updatedAt = now;
+    this.enforceAggregateBudget(stream.streamId);
+    for (const subscriber of [...stream.subscribers]) subscriber.flush();
+    this.schedulePersist();
     return event;
   }
 
@@ -1825,6 +1879,8 @@ export class AidenRemoteStreamService {
       for (let index = Math.max(0, after - firstSequence + 1); index < stream.events.length; index++) {
         const event = stream.events[index]!;
         after = event.sequence;
+        // Once sent, an event is final; later deltas take a new sequence.
+        if (stream.openDelta?.sequence === event.sequence) stream.openDelta = undefined;
         if (!write(sseFrame(event))) return;
       }
       if (terminal(stream.state)) close();

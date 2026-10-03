@@ -11,6 +11,39 @@ import {
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { AidenRemoteStreamState } from "./aiden-remote-streams.js";
 
+/** Bound on one delta event's text, whether projected or coalesced. */
+export const MAX_DELTA_TEXT_LENGTH = 200_000;
+/**
+ * Folding stops once an event's serialized envelope would pass this size, well
+ * inside the 1 MiB SSE frame the native clients accept even for text that
+ * escapes heavily in JSON.
+ */
+export const MAX_COALESCED_DELTA_EVENT_BYTES = 256 * 1_024;
+
+/**
+ * Journals coalesce consecutive deltas of one kind into a single event while
+ * that event is still undelivered. A delivered event is immutable: an
+ * observer's cursor has moved past it, so later text must take a new sequence.
+ */
+export function isCoalescibleDelta(type: string): type is "text_delta" | "reasoning_delta" {
+  return type === "text_delta" || type === "reasoning_delta";
+}
+
+/**
+ * Merged payload when `next` may extend `previous`, otherwise undefined.
+ * Both must be deltas of the same kind and the result must stay in bounds.
+ */
+export function mergeDeltaPayload(
+  type: string,
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+): { text: string } | undefined {
+  if (!isCoalescibleDelta(type)) return undefined;
+  if (typeof previous.text !== "string" || typeof next.text !== "string") return undefined;
+  if (previous.text.length + next.text.length > MAX_DELTA_TEXT_LENGTH) return undefined;
+  return { text: previous.text + next.text };
+}
+
 /**
  * Per-run memory the content projection needs across notifications: tool
  * calls are paired with their results by name, in call order, so the wire
@@ -190,11 +223,11 @@ export function projectRunContentNotification(
         "reconciling",
       );
     }
-    const text = boundedText(payload.delta, 200_000);
+    const text = boundedText(payload.delta, MAX_DELTA_TEXT_LENGTH);
     return text ? event("text_delta", { text }, false, "running") : { kind: "ignored" };
   }
   if (channel === "chat:reasoning-delta") {
-    const text = boundedText(payload.delta, 200_000);
+    const text = boundedText(payload.delta, MAX_DELTA_TEXT_LENGTH);
     return text ? event("reasoning_delta", { text }, false, "running") : { kind: "ignored" };
   }
   if (channel === "chat:status") {
