@@ -230,6 +230,7 @@
         "main/handlers/bot-params.test.ts",
         "main/handlers/bots.contract.test.ts",
         "main/handlers/peer-host-live.test.ts",
+        "main/handlers/peer-pairing.test.ts",
         "main/handlers/scheduled-tasks-parse.test.ts",
         "main/services/agents-instructions.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",

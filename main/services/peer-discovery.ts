@@ -18,6 +18,8 @@ export const PEER_PROBE_TIMEOUT_MS = 3_000;
 export const MAX_TAILSCALE_CANDIDATES = 64;
 /** Bonjour services probed per scan. */
 export const MAX_LAN_CANDIDATES = 64;
+/** A scan reads as searching for at least this long while Bonjour answers arrive. */
+export const PEER_BROWSE_SETTLE_MS = 3_000;
 const MAX_STATUS_CHARS = 256 * 1_024;
 const MAX_STATUS_PEERS = 4_096;
 const DESKTOP_OS = new Set(["macOS", "linux"]);
@@ -43,6 +45,8 @@ export interface PeerDiscoveryOptions {
   localInstanceId(): Promise<string>;
   pairedIds(): Promise<string[]>;
   publish(state: PeerDiscoveryState): void;
+  /** Defaults to `PEER_BROWSE_SETTLE_MS`. */
+  browseSettleMs?: number;
 }
 
 /**
@@ -117,6 +121,8 @@ interface Session {
   active: number;
   lanServices: number;
   tailscaleScan: Promise<void> | undefined;
+  /** Until the settle window passes, Bonjour may still announce devices. */
+  settle: ReturnType<typeof setTimeout> | undefined;
   self: Promise<string>;
 }
 
@@ -154,6 +160,7 @@ export class PeerDiscovery {
     this.session = undefined;
     session.controller.abort();
     session.queue.length = 0;
+    clearTimeout(session.settle);
     session.stopBrowse();
     if (publish) this.emit();
   }
@@ -174,7 +181,11 @@ export class PeerDiscovery {
       .map(({ endpoint: _endpoint, ...device }) => ({ ...device, paired: paired.has(device.id) }))
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     return {
-      scanning: session.tailscaleScan !== undefined || session.active > 0 || session.queue.length > 0,
+      scanning:
+        session.tailscaleScan !== undefined ||
+        session.settle !== undefined ||
+        session.active > 0 ||
+        session.queue.length > 0,
       devices,
     };
   }
@@ -197,6 +208,7 @@ export class PeerDiscovery {
       active: 0,
       lanServices: 0,
       tailscaleScan: undefined,
+      settle: undefined,
       self: this.options.localInstanceId().catch(() => ""),
     };
     this.session = session;
@@ -206,6 +218,10 @@ export class PeerDiscovery {
     });
     try {
       session.stopBrowse = this.options.browse((service) => this.lanService(session, service));
+      session.settle = setTimeout(() => {
+        session.settle = undefined;
+        if (this.session === session) this.emit();
+      }, this.options.browseSettleMs ?? PEER_BROWSE_SETTLE_MS);
     } catch {
       // Local discovery is unavailable; Tailscale and setup codes still work.
     }

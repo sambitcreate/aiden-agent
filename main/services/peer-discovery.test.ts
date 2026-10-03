@@ -54,6 +54,7 @@ function discovery(
     browse: () => () => undefined,
     localInstanceId: async () => "this-installation",
     pairedIds: async () => [],
+    browseSettleMs: 0,
     ...overrides,
   });
 }
