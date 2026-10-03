@@ -55,11 +55,15 @@ const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_PERSIST_COALESCE_MS = 250;
+// Prompts and structural transcript changes are written at once; only text,
+// reasoning and timeline progress wait for the coalescing window.
 const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
   "approval_required",
   "question_required",
   "cancelled",
   "snapshot",
+  "tool_started",
+  "tool_finished",
 ]);
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
 const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
@@ -174,6 +178,11 @@ interface StreamRecord {
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
   projection: RunProjectionState;
+}
+
+interface StreamEnvelopeBytes {
+  state: AidenRemoteStreamState;
+  bytesWithoutUpdatedAt: number;
 }
 
 interface ApprovalRecord {
@@ -419,6 +428,15 @@ export function removeRevokedDeviceStreams(
   };
 }
 
+const EMPTY_SNAPSHOT_BYTES = Buffer.byteLength(
+  JSON.stringify({ version: 1, streams: [], turnIndex: [] }),
+  "utf8",
+);
+
+function turnIndexEntryBytes(streamId: string, chatId: string, turnId: string): number {
+  return Buffer.byteLength(JSON.stringify({ streamId, chatId, turnId }), "utf8");
+}
+
 function sseFrame(event: AidenRemoteStreamEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -426,7 +444,9 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
   private readonly eventSizes = new WeakMap<AidenRemoteStreamEvent, number>();
+  private readonly envelopeSizes = new WeakMap<StreamRecord, StreamEnvelopeBytes>();
   private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
+  private turnIndexBytes = 0;
   private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly questions = new Map<string, QuestionRecord>();
   private persistTail: Promise<void> = Promise.resolve();
@@ -598,9 +618,12 @@ export class AidenRemoteStreamService {
     if (this.turnIndex.has(streamId)) return;
     // Bounded oldest-first eviction; the index outlives stream records.
     if (this.turnIndex.size >= MAX_STREAMS * 4) {
-      this.turnIndex.delete(this.turnIndex.keys().next().value!);
+      const [evictedId, evicted] = this.turnIndex.entries().next().value!;
+      this.turnIndex.delete(evictedId);
+      this.turnIndexBytes -= turnIndexEntryBytes(evictedId, evicted.chatId, evicted.turnId);
     }
     this.turnIndex.set(streamId, { chatId, turnId });
+    this.turnIndexBytes += turnIndexEntryBytes(streamId, chatId, turnId);
   }
 
   private snapshotEnvelope(): AidenRemoteStreamSnapshot {
@@ -640,14 +663,48 @@ export class AidenRemoteStreamService {
     return bytes;
   }
 
+  /**
+   * Serialized size of one stream's metadata. Only `state` and `updatedAt`
+   * ever change; the timestamp is a finite number, so its JSON is its
+   * decimal string and the rest is cached per state.
+   */
+  private envelopeEntryBytes(stream: StreamRecord): number {
+    let cached = this.envelopeSizes.get(stream);
+    if (!cached || cached.state !== stream.state) {
+      const bytes = Buffer.byteLength(
+        JSON.stringify({
+          streamId: stream.streamId,
+          chatId: stream.chatId,
+          turnId: stream.turnId,
+          deviceId: stream.deviceId,
+          state: stream.state,
+          updatedAt: 0,
+          events: [],
+        }),
+        "utf8",
+      );
+      cached = { state: stream.state, bytesWithoutUpdatedAt: bytes - 1 };
+      this.envelopeSizes.set(stream, cached);
+    }
+    return cached.bytesWithoutUpdatedAt + String(stream.updatedAt).length;
+  }
+
   private snapshotBytes(): number {
-    // Serialize only bounded metadata (256 streams / 1,024 turn identities).
-    // The empty arrays already include brackets; add event bytes and commas.
-    // Rebuilding this envelope keeps deletion, expiry and delivery cleanup from
-    // having to maintain a second, fragile aggregate mutation ledger.
-    let bytes = Buffer.byteLength(JSON.stringify(this.snapshotEnvelope()), "utf8");
+    // Equal to the compact serialization of snapshot(), without building it.
+    // Each live stream's metadata size is cached against the only fields that
+    // change, so deletion, expiry and delivery cleanup need no ledger: they
+    // simply stop contributing once removed from the map.
+    const streamCount = this.streams.size;
+    let bytes =
+      EMPTY_SNAPSHOT_BYTES +
+      this.turnIndexBytes +
+      Math.max(0, this.turnIndex.size - 1) +
+      Math.max(0, streamCount - 1);
     for (const stream of this.streams.values()) {
-      bytes += stream.eventBytes + Math.max(0, stream.events.length - 1);
+      bytes +=
+        this.envelopeEntryBytes(stream) +
+        stream.eventBytes +
+        Math.max(0, stream.events.length - 1);
     }
     return bytes;
   }

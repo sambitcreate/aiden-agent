@@ -2042,6 +2042,21 @@ test("an approval prompt is journaled without waiting for the coalescing window"
   assert.equal(app.writes[app.writes.length - 1]?.streams[0]?.state, "waiting_for_approval");
 });
 
+test("tool progress is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  owner.owner.send("chat:delta", { delta: "Reading" });
+  owner.owner.send("chat:tool", { phase: "call", toolName: "read_file" });
+  await afterPendingWrites();
+  assert.deepEqual(app.lastWrittenEvents().slice(-2).map((event) => event.type), ["text_delta", "tool_started"]);
+
+  owner.owner.send("chat:tool", { phase: "result", toolName: "read_file" });
+  await afterPendingWrites();
+  const written = app.lastWrittenEvents();
+  assert.equal(written[written.length - 1]?.type, "tool_finished");
+});
+
 test("settling persistence flushes a pending coalesced write exactly once", async () => {
   const app = persistenceFixture(60 * 60 * 1_000);
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
