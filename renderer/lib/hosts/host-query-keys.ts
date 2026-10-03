@@ -12,4 +12,9 @@ export const hostQueryKeys = {
   host: (hostId: string) => ["host", hostId] as const,
   /** One host's last-known feed rows. */
   feed: (hostId: string) => ["host", hostId, "feed"] as const,
+  /** Everything cached for one chat on one host. */
+  chat: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId] as const,
+  /** The open remote chat's paged transcript (newest window plus older pages). */
+  messagesWindow: (hostId: string, chatId: string) =>
+    ["host", hostId, "chat", chatId, "messages"] as const,
 };
