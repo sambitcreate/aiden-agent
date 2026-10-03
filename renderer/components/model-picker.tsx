@@ -21,6 +21,7 @@ import { cn } from "../lib/ui-utils";
 import {
   createModelEntries,
   encodeSelection,
+  modelInfoByValue,
   modelGridSize,
   orderModelEntries,
   PINNED_MODELS_KEY,
@@ -335,6 +336,20 @@ function ModelHoverDetails({
   );
 }
 
+/** Keeps the previous catalog object while every provider's cached answer is unchanged. */
+function useStableModelInfo(
+  data: Record<string, Record<string, ModelInfo>>,
+): Record<string, Record<string, ModelInfo>> {
+  const ref = React.useRef(data);
+  const previous = ref.current;
+  const keys = Object.keys(data);
+  const same =
+    keys.length === Object.keys(previous).length &&
+    keys.every((key) => previous[key] === data[key]);
+  if (!same) ref.current = data;
+  return same ? previous : data;
+}
+
 export function ModelPicker({
   providers,
   providerId,
@@ -360,28 +375,39 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
-
-  const infoByValue: Record<string, ModelInfo | undefined> = {};
-  providers.forEach((provider) => {
-    const data = catalog.data[provider.id];
-    for (const modelId of provider.models) {
-      infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
-    }
-  });
-
-  const allEntries = createModelEntries(providers, infoByValue);
-  const entries = visibleModelEntries(allEntries, hiddenModelsByProvider);
-  const orderedEntries = orderModelEntries(entries, pinned);
-  const detailPositions = positionModels(entries);
-  const positioned = positionSavedModels(entries, modelPadLayout.placements);
+  // The composer re-renders on every streamed token. Keep the catalog derivation
+  // keyed on its real inputs, and derive list order and detail positions only
+  // while the popover is open.
+  const catalogData = useStableModelInfo(catalog.data);
+  const allEntries = React.useMemo(
+    () => createModelEntries(providers, modelInfoByValue(providers, catalogData)),
+    [providers, catalogData],
+  );
+  const entries = React.useMemo(
+    () => visibleModelEntries(allEntries, hiddenModelsByProvider),
+    [allEntries, hiddenModelsByProvider],
+  );
+  const positioned = React.useMemo(
+    () => positionSavedModels(entries, modelPadLayout.placements),
+    [entries, modelPadLayout.placements],
+  );
+  const orderedEntries = React.useMemo(
+    () => (open ? orderModelEntries(entries, pinned) : []),
+    [open, entries, pinned],
+  );
+  const detailPositions = React.useMemo(
+    () => (open ? positionModels(entries) : []),
+    [open, entries],
+  );
   const padGridSize = modelGridSize(entries.length);
   const hasPadModels = positioned.length > 0;
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
   const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
-  const activePosition =
-    view === "pad"
+  const activePosition = !open
+    ? undefined
+    : view === "pad"
       ? (positioned.find((entry) => entry.value === previewValue) ??
         selectedPosition ??
         positioned[0])
