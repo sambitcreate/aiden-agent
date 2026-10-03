@@ -554,6 +554,8 @@
         "renderer/lib/ghostty-terminal/runtime.test.ts",
         "renderer/lib/ghostty-terminal/surface.test.ts",
         "renderer/lib/held-modifier-reveal.test.ts",
+        "renderer/lib/hosts/chat-session-control.test.ts",
+        "renderer/lib/hosts/local-host-adapter.test.ts",
         "renderer/lib/hosts/peer-host-feed-state.test.ts",
         "renderer/lib/hosts/remote-chat-mapper.test.ts",
         "renderer/lib/hosts/remote-stream-translator.test.ts",
