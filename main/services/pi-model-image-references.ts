@@ -61,22 +61,32 @@ export function createPiModelImageReferences(options: {
     for (const id of collisions) images.delete(id);
     return images;
   };
-  const resolveImage: NonNullable<PiModelToolsHost["resolveImage"]> = async (
-    id,
-    signal,
-  ) => {
-    const item = (await inventory(signal)).get(id);
+  const resolveFrom = (images: Map<string, Attachment>, id: string) => {
+    const item = images.get(id);
     if (!item)
       throw new Error(
         "Reference image is missing, changed, or does not belong to this chat generation. Use list_image_references again.",
       );
     return {
       name: nameFor(item),
-      image: { type: "image", mimeType: item.mimeType, data: item.data! },
+      image: { type: "image" as const, mimeType: item.mimeType, data: item.data! },
     };
+  };
+  const resolveImage: NonNullable<PiModelToolsHost["resolveImage"]> = async (
+    id,
+    signal,
+  ) => resolveFrom(await inventory(signal), id);
+  // One chat read covers the whole batch instead of one per reference ID.
+  const resolveImages: NonNullable<PiModelToolsHost["resolveImages"]> = async (
+    ids,
+    signal,
+  ) => {
+    const images = await inventory(signal);
+    return ids.map((id) => resolveFrom(images, id));
   };
   return {
     resolveImage,
+    resolveImages,
     async listImages(signal?: AbortSignal) {
       return [...(await inventory(signal)).values()].map((item) => ({
         id: item.id,
@@ -91,7 +101,7 @@ export function createPiModelImageReferences(options: {
           ? (args as { referenceImageIds?: unknown }).referenceImageIds
           : undefined;
       const { references } = await resolvePiModelImageInputs(
-        { resolveImage },
+        { resolveImage, resolveImages },
         ids,
         signal,
       );

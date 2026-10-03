@@ -114,6 +114,23 @@ test("off, unknown economics, unsafe replay and late wakeups never dispatch", as
   }
 });
 
+test("foreground requests serialize the model only once warming is economical", async (t) => {
+  let serialized = 0;
+  // Identity hashing serializes the model; count it through toJSON.
+  const counted = (base: Model<Api>) => Object.defineProperty({ ...base }, "toJSON", { value: () => { serialized++; return base; } }) as Model<Api>;
+  const h = fixture(t);
+  h.start({}, counted({ ...model, cost: { input: 0.1, output: 0.1, cacheRead: 0.05, cacheWrite: 0 } }));
+  assert.equal(serialized, 0);
+  assert.equal(h.clock.timers.size, 0);
+  const pending = h.warmer.requestStarted(counted(model), normalizeContext({ messages: [{ role: "user", content: "prefix", timestamp: 1 }] }));
+  assert.equal(serialized, 0, "nothing is hashed before provider usage is known");
+  pending(usageMessage());
+  assert.equal(serialized, 1);
+  await h.clock.advance(270_000);
+  assert.equal(h.requests.length, 1);
+  assert.match(JSON.stringify(h.contexts), /prefix/u);
+});
+
 test("new requests replace timers; generation cancellation and settings off abort in-flight warming", async (t) => {
   const h = fixture(t);
   h.start();

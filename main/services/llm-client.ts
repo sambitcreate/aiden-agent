@@ -6,7 +6,7 @@ import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -1488,7 +1488,8 @@ async function prepareGeneration(
     if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
-    const savedOperationProviders = await configStore.listProviders();
+    // Labels, local/remote accounting and classifier opt-in need provider shape only, not keychain presence.
+    const savedOperationProviders = await configStore.listStoredProviders();
     const localClassifierModels = createLocalClassifierModels({
       models: providerRegistry.models,
       providers: savedOperationProviders,
@@ -1504,6 +1505,7 @@ async function prepareGeneration(
         providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
+        resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
@@ -2441,8 +2443,9 @@ export const llmClient = {
       };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
+      const compactionInputReserveTokens = configuredCompactionReserveTokens(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
-        compactionReserveTokens: compactionBudget?.reserveTokens,
+        compactionReserveTokens: compactionInputReserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2692,7 +2695,7 @@ export const llmClient = {
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
-          compactionReserveTokens: compactionBudget?.reserveTokens,
+          compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {
