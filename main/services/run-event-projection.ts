@@ -1,4 +1,13 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+import {
+  isAssistantAutomationApprovalDetails,
+  isScheduledTaskApprovalDetails,
+  isSubagentMcpMutationApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
+  isSubagentShellApprovalDetails,
+  isSubagentWorkspaceWriteApprovalDetails,
+  type ToolApprovalDetails,
+} from "../../renderer/shared/assistant.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { AidenRemoteStreamState } from "./aiden-remote-streams.js";
 
@@ -45,6 +54,59 @@ export function ownRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const ASSISTANT_AUTOMATION_DETAIL_KEYS = [
+  "kind", "action", "taskId", "enabled", "name", "prompt", "cron", "timezone", "nextRunAt",
+  "notify", "mode", "permission", "workspaceId", "workspaceName", "mcpServerIds",
+  "mcpServerNames", "providerId", "providerName", "model", "modelName", "schedulerEnabled",
+] as const;
+
+const SCHEDULED_TASK_DETAIL_KEYS = [
+  "kind", "action", "taskId", "expectedUpdatedAt", "enabled", "name", "prompt", "script",
+  "cron", "timezone", "nextRunAt", "notify", "mode", "permission", "workspaceId",
+  "workspaceName", "mcpServerIds", "mcpServerNames", "providerId", "providerName", "model",
+  "modelName", "legacyGlobalMcp", "schedulerEnabled",
+] as const;
+
+function pickDeclared(
+  details: Record<string, unknown>,
+  keys: readonly string[],
+): ToolApprovalDetails {
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(details, key)) picked[key] = structuredClone(details[key]);
+  }
+  return picked as unknown as ToolApprovalDetails;
+}
+
+/**
+ * The single allowlist for approval facts any run journal may retain.
+ * Only recognized detail kinds survive, and only their declared fields:
+ * internal state riding on a recognized kind (for example classifier state)
+ * is dropped rather than copied. Anything else returns undefined.
+ */
+export function projectApprovalDetails(value: unknown): ToolApprovalDetails | undefined {
+  try {
+    if (isAssistantAutomationApprovalDetails(value)) {
+      return pickDeclared(value as unknown as Record<string, unknown>, ASSISTANT_AUTOMATION_DETAIL_KEYS);
+    }
+    if (isScheduledTaskApprovalDetails(value)) {
+      return pickDeclared(value as unknown as Record<string, unknown>, SCHEDULED_TASK_DETAIL_KEYS);
+    }
+    // These guards already require their exact key sets.
+    if (
+      isSubagentWorkspaceWriteApprovalDetails(value) ||
+      isSubagentMcpMutationApprovalDetails(value) ||
+      isSubagentShellApprovalDetails(value) ||
+      isSubagentRunGrantApprovalDetails(value)
+    ) {
+      return structuredClone(value);
+    }
+  } catch {
+    // Getters or uncloneable values fail closed.
+  }
+  return undefined;
+}
+
 /** Truncate to `maximum` UTF-16 units and replace any unpaired surrogate. */
 export function boundedText(value: unknown, maximum: number): string {
   if (typeof value !== "string") return "";
@@ -67,6 +129,14 @@ export function boundedText(value: unknown, maximum: number): string {
     }
   }
   return result;
+}
+
+/** Newest assistant message, scanning back without copying the transcript. */
+function lastAssistantMessage(messages: readonly unknown[]): unknown {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (ownRecord(messages[index])?.role === "assistant") return messages[index];
+  }
+  return undefined;
 }
 
 function event(
@@ -166,7 +236,7 @@ export function projectRunContentNotification(
     if (cancelled) return cancelled;
     const chat = ownRecord(payload.chat);
     const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-    const assistant = [...messages].reverse().find((message) => ownRecord(message)?.role === "assistant");
+    const assistant = lastAssistantMessage(messages);
     const messageId = boundedText(ownRecord(assistant)?.id, 128) || `assistant_${context.turnId}`;
     return event("done", { messageId }, true, "done");
   }

@@ -8,12 +8,6 @@ import {
 import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
-  isAssistantAutomationApprovalDetails,
-  isScheduledTaskApprovalDetails,
-  isSubagentMcpMutationApprovalDetails,
-  isSubagentShellApprovalDetails,
-  isSubagentRunGrantApprovalDetails,
-  isSubagentWorkspaceWriteApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import {
   createRemoteChatGenerationOwner,
@@ -45,6 +39,7 @@ import {
   boundedText,
   createRunProjectionState,
   ownRecord,
+  projectApprovalDetails,
   projectRunContentNotification,
   type RunProjectionState,
 } from "./run-event-projection.js";
@@ -205,17 +200,6 @@ interface QuestionRecord {
   questions: AskUserQuestionV1[];
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
-}
-
-function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
-  return isAssistantAutomationApprovalDetails(value)
-    || isScheduledTaskApprovalDetails(value)
-    || isSubagentWorkspaceWriteApprovalDetails(value)
-    || isSubagentMcpMutationApprovalDetails(value)
-    || isSubagentShellApprovalDetails(value)
-    || isSubagentRunGrantApprovalDetails(value)
-    ? structuredClone(value)
-    : undefined;
 }
 
 /** Keep only known scopes, in canonical order, and only when broader than once. */
@@ -1039,7 +1023,7 @@ export class AidenRemoteStreamService {
       const summary = boundedText(payload.summary, 2_000) || "Aiden needs approval.";
       const toolCallId = boundedText(payload.toolCallId, 128) || "remote-tool";
       const toolName = boundedText(payload.toolName, 120) || "Tool";
-      const details = approvalDetails(payload.details);
+      const details = projectApprovalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
       const scopes = offeredScopes(payload.scopes);
       const expiresAt = this.options.now() + APPROVAL_LIFETIME_MS;

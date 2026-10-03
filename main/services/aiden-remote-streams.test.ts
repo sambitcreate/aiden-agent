@@ -548,6 +548,62 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
   assert.match(app.approvals[0] ?? "", /:allow:/u);
 });
 
+test("approval detail fields outside the declared shape never reach the host, a device or the journal", async () => {
+  const app = persistenceFixture(0);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const secret = "classifier-secret-7f3a";
+  const schedule = {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Inbox monitor",
+    prompt: "Summarize inbox changes.",
+    script: null,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    nextRunAt: 2_000_000_000_000,
+    notify: true,
+    mode: "llm",
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: ["gmail"],
+    mcpServerNames: ["Gmail"],
+    providerId: "local-provider",
+    providerName: "Local Provider",
+    model: "local-model",
+    modelName: "Local Model",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+  };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-known",
+    summary: "Create scheduled task",
+    details: { ...schedule, state: { classifier: secret } },
+  });
+  assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, schedule);
+  assert.equal(app.service.respondApprovalFromHost("chat-1", "approval-known", "deny"), true);
+
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-unknown",
+    summary: "Classify this action",
+    details: { kind: "permission-classifier", state: { classifier: secret } },
+  });
+  assert.equal(app.service.pendingApprovalForChat("chat-1")?.details, undefined);
+  await app.service.settlePersistence();
+
+  const views = [
+    JSON.stringify(app.service.pendingApprovalForChat("chat-1")),
+    JSON.stringify(app.service.pendingApproval("device-1", "stream-1")),
+    JSON.stringify(app.service.snapshot()),
+    ...app.writes.map((write) => JSON.stringify(write)),
+  ];
+  assert.ok(app.writes.length > 0);
+  for (const view of views) assert.equal(view.includes(secret), false);
+});
+
 test("multiple approvals remain queued and cancellation synchronously clears them", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

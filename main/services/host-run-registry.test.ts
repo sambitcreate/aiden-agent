@@ -50,6 +50,36 @@ function approval(approvalId: string) {
   return { approvalId, summary: "Run npm test", toolCallId: "call-a", toolName: "run_command" };
 }
 
+/** A complete, valid scheduled-task approval detail with a chosen prompt. */
+function scheduleDetails(prompt = "Summarize inbox changes.") {
+  return {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Inbox monitor",
+    prompt,
+    script: null,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    nextRunAt: 2_000_000_000_000,
+    notify: true,
+    mode: "llm",
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: ["gmail"],
+    mcpServerNames: ["Gmail"],
+    providerId: "local-provider",
+    providerName: "Local Provider",
+    model: "local-model",
+    modelName: "Local Model",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+  };
+}
+
 test("begin journals run_started once and announces the run", () => {
   const { registry, changes } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
@@ -382,29 +412,53 @@ test("malformed or oversized payloads never throw", () => {
 test("approval scopes and details are copied into the journal", () => {
   const { registry } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
-  const details = { kind: "scheduled-task", task: { name: "Nightly" } };
+  const details = scheduleDetails();
   registry.publish("run-1", "chat:approval", {
     ...approval("approval-1"),
     scopes: ["chat", "bogus", "once"],
     details,
   });
-  details.task.name = "Mutated after publish";
+  details.mcpServerNames[0] = "Mutated after publish";
 
   const payload = events(registry.read("run-1", 1))[0]!.payload;
   assert.deepEqual(payload.scopes, ["chat", "once"]);
-  assert.deepEqual(payload.details, { kind: "scheduled-task", task: { name: "Nightly" } });
+  assert.deepEqual(payload.details, scheduleDetails());
+});
+
+test("observers never see approval detail fields outside the declared shape", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const woken: string[] = [];
+  registry.subscribe("run-1", () => {
+    woken.push(JSON.stringify(registry.read("run-1", 0)));
+  });
+  const secret = "classifier-secret-7f3a";
+  registry.publish("run-1", "chat:approval", {
+    ...approval("approval-known"),
+    details: { ...scheduleDetails(), state: { classifier: secret } },
+  });
+  registry.publish("run-1", "chat:approval", {
+    ...approval("approval-unknown"),
+    details: { kind: "permission-classifier", state: { classifier: secret } },
+  });
+
+  const [known, unknown] = events(registry.read("run-1", 1));
+  assert.deepEqual(known!.payload.details, scheduleDetails());
+  assert.equal("details" in unknown!.payload, false);
+  assert.equal(unknown!.payload.detailsOmitted, true);
+  assert.equal(woken.length, 2);
+  for (const view of [...woken, JSON.stringify(registry.read("run-1", 0))]) {
+    assert.equal(view.includes(secret), false);
+  }
 });
 
 test("an oversized approval detail cannot push retained events past the byte budgets", () => {
   // Each detail fits the default allowance but not these smaller budgets.
   const { registry } = harness({ maxEventBytesPerRun: 32 * 1_024, maxTotalEventBytes: 64 * 1_024 });
-  const workspaceLabel = "w".repeat(40 * 1_024);
+  const details = scheduleDetails("p".repeat(30 * 1_024));
   for (const runId of ["run-1", "run-2", "run-3", "run-4"]) {
     registry.begin({ runId, chatId: `chat-${runId}`, origin: "renderer" });
-    registry.publish(runId, "chat:approval", {
-      ...approval(`approval-${runId}`),
-      details: { kind: "subagent-shell", workspaceLabel, command: "npm test" },
-    });
+    registry.publish(runId, "chat:approval", { ...approval(`approval-${runId}`), details });
   }
 
   let retainedBytes = 0;
@@ -424,7 +478,7 @@ test("an oversized approval detail cannot push retained events past the byte bud
 
 test("approval details are counted with the rest of the prompt against the allowance", () => {
   // An 8 KiB run budget leaves a 4 KiB allowance for the whole prompt.
-  const details = { kind: "subagent-shell", workspaceLabel: "w".repeat(2_500) };
+  const details = scheduleDetails("p".repeat(2_500));
   const published = (summary: string) => {
     const { registry } = harness({ maxEventBytesPerRun: 8 * 1_024, maxRuns: 1 });
     registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });

@@ -6,6 +6,7 @@ import {
   boundedText,
   createRunProjectionState,
   ownRecord,
+  projectApprovalDetails,
   projectRunContentNotification,
   type RunContentProjection,
   type RunProjectionState,
@@ -115,14 +116,6 @@ function promptId(value: unknown): string | undefined {
     : undefined;
 }
 
-function cloneOrUndefined<T>(value: T): T | undefined {
-  try {
-    return structuredClone(value);
-  } catch {
-    return undefined;
-  }
-}
-
 function knownScopes(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const scopes = [...new Set(value.map(parseToolApprovalScope))].filter(
@@ -144,9 +137,18 @@ function approvalEvent(
     toolName: boundedText(payload.toolName, 120) || "Tool",
     ...(scopes ? { scopes } : {}),
   };
-  const detailsRecord = ownRecord(payload.details);
-  const details = detailsRecord ? cloneOrUndefined(detailsRecord) : undefined;
-  if (!details) return { type: "approval_required", payload: prompt, terminal: false };
+  // Details pass the same allowlist as Remote approvals: unrecognized kinds and
+  // undeclared fields (such as classifier state) are never journaled, so no
+  // observer of this host can read them.
+  const supplied = ownRecord(payload.details) !== null;
+  const details = projectApprovalDetails(payload.details);
+  if (!details) {
+    return {
+      type: "approval_required",
+      payload: supplied ? { ...prompt, detailsOmitted: true } : prompt,
+      terminal: false,
+    };
+  }
   const withDetails = { ...prompt, details };
   let fits = false;
   try {
