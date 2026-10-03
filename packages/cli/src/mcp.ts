@@ -1,3 +1,7 @@
+import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js";
+import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
+import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
+import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
 import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -6,13 +10,13 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthTokens, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createServer } from "node:http";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
-import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer, createNoRedirectFetch } from "../../../main/services/mcp-presets.js";
+import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
@@ -40,51 +44,69 @@ export function validateMcpServer(value: unknown): McpServer {
   return server;
 }
 
-export const mcpCredentialId = (server: McpServer) => `mcp-${createHash("sha256").update(`${server.id}\0${server.url}`).digest("hex")}`;
+export function mcpCredentialId(server: McpServer): string {
+  const override = server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined
+    ? `\0${JSON.stringify([server.authServerMetadataUrl ?? null, server.oauthClientName?.trim() ?? null])}` : "";
+  return `mcp-${createHash("sha256").update(`${server.id}\0${server.url}${override}`).digest("hex")}`;
+}
 export async function mcpCredentialSignature(agentDir: string, server: McpServer) {
   return createHash("sha256").update(JSON.stringify({ server, oauth: await insightCredentials(agentDir).read(mcpCredentialId(server)) })).digest("hex");
 }
 
-interface OAuthState { tokens?: OAuthTokens; client?: OAuthClientInformationMixed; redirectUrl?: string; }
-async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; state: string; notify(url: URL): void }): Promise<OAuthClientProvider> {
+interface OAuthState { tokens?: OAuthTokens; client?: OAuthClientInformationMixed; redirectUrl?: string; grantedScope?: string; }
+async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; flow: McpOAuthAuthorizationFlow; notify(url: URL): void }): Promise<OAuthClientProvider> {
   const credentials = insightCredentials(agentDir);
   const id = mcpCredentialId(server);
   const serialized = await credentials.read(id);
   const stored: OAuthState = serialized ? JSON.parse(serialized) : {};
-  if (interaction) { delete stored.client; delete stored.tokens; stored.redirectUrl = interaction.redirectUrl; }
+  if (interaction) { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.client; delete stored.tokens; stored.redirectUrl = interaction.redirectUrl; }
+  const flow = interaction?.flow ?? new McpOAuthAuthorizationFlow();
+  const metadataUrl = mcpOAuthMetadataUrlForServer(server);
   let verifier: string | undefined;
   const save = () => credentials.write(id, JSON.stringify(stored));
   return {
     redirectUrl: stored.redirectUrl ?? "http://127.0.0.1/callback",
-    clientMetadata: { client_name: "Aiden CLI", redirect_uris: [stored.redirectUrl ?? "http://127.0.0.1/callback"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
-    state: () => interaction?.state ?? randomBytes(24).toString("hex"),
+    clientMetadata: { client_name: server.oauthClientName?.trim() || "Aiden CLI", redirect_uris: [stored.redirectUrl ?? "http://127.0.0.1/callback"], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
+    state: () => flow.state,
+    saveDiscoveryState: (state) => flow.saveDiscovery(state),
+    async discoveryState() {
+      if (metadataUrl && !flow.discoveryState()) flow.saveDiscovery(await loadMcpOAuthMetadataOverride(metadataUrl, { serviceUrl: server.url!, serviceHeaders: server.headers }));
+      return flow.discoveryState();
+    },
     clientInformation: () => stored.client,
     saveClientInformation: async (client) => { stored.client = client; await save(); },
     tokens: () => stored.tokens,
-    saveTokens: async (tokens) => { stored.tokens = tokens; await save(); },
-    redirectToAuthorization(url) { if (!interaction) throw new Error(`Sign in with aiden mcp login ${server.id}.`); interaction.notify(url); },
+    saveTokens: async (tokens) => { stored.grantedScope = tokens.scope || flow.requestedScope || stored.grantedScope; stored.tokens = tokens; await save(); },
+    redirectToAuthorization(url) { if (!interaction) throw new Error(`Sign in with aiden mcp login ${server.id}.`); interaction.notify(flow.authorizationUrl(url, stored.tokens?.scope || stored.grantedScope)); },
     saveCodeVerifier(value) { verifier = value; },
     codeVerifier() { if (!verifier) throw new Error("No active MCP OAuth verifier."); return verifier; },
-    invalidateCredentials: async (scope) => { if (scope === "all" || scope === "tokens") delete stored.tokens; if (scope === "all" || scope === "client") delete stored.client; await save(); },
+    invalidateCredentials: async (scope) => { if (scope === "all" || scope === "discovery") flow.clearDiscovery(); if (scope === "all" || scope === "tokens") { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.tokens; } if (scope === "all" || scope === "client") delete stored.client; await save(); },
   };
 }
 
 export async function mcpLogin(agentDir: string, server: McpServer): Promise<void> {
   if (!server.oauth || !server.url) throw new Error("This server is not configured for OAuth.");
-  const state = randomBytes(32).toString("hex");
+  validateMcpServer(server);
+  const flow = new McpOAuthAuthorizationFlow();
   let finish: (value: string) => void = () => {};
-  const code = new Promise<string>((resolve) => { finish = resolve; });
+  let deny: (error: Error) => void = () => {};
+  const code = new Promise<string>((resolve, reject) => { finish = resolve; deny = reject; });
+  void code.catch(() => undefined);
   const listener = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method !== "GET" || url.pathname !== "/callback" || url.searchParams.get("state") !== state || !url.searchParams.get("code")) { response.writeHead(400).end("Invalid OAuth callback."); return; }
-    finish(url.searchParams.get("code")!); response.writeHead(200, { "content-type": "text/plain" }).end("Aiden received your sign-in. You can close this tab.");
+    if (request.method !== "GET" || url.pathname !== "/callback") { response.writeHead(400).end("Invalid OAuth callback."); return; }
+    try {
+      const result = flow.callback(url);
+      if ("error" in result) deny(result.error); else finish(result.code);
+      response.writeHead(200, { "content-type": "text/plain" }).end("Aiden received your sign-in. You can close this tab.");
+    } catch { response.writeHead(400).end("Invalid OAuth callback."); }
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
     const port = (listener.address() as import("node:net").AddressInfo).port;
-    const provider = await oauthProvider(agentDir, server, { state, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
-    const fetchFn = createNoRedirectFetch();
+    const provider = await oauthProvider(agentDir, server, { flow, redirectUrl: `http://127.0.0.1:${port}/callback`, notify: (url) => process.stderr.write(`Open this URL to sign in:\n${url.href}\n`) });
+    const fetchFn = withMcpOAuthMetadataObservation(createMcpFetchPolicy({ serviceUrl: server.url, serviceHeaders: server.headers }), (url, document) => flow.observeAuthorizationMetadata(url, document));
     const status = await auth(provider, { serverUrl: server.url, fetchFn });
     if (status === "REDIRECT") {
       const authorizationCode = await Promise.race([code, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MCP login timed out.")), 180_000); })]);
@@ -135,7 +157,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     const pending = (async () => {
       const client = new Client({ name: "aiden-cli", version: "0.1.0" });
       try {
-        const options = { requestInit: { headers: server.headers }, fetch: createBoundedSubagentMcpFetch(createNoRedirectFetch(), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
+        const options = server.transport === "stdio" ? undefined : { fetch: createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
         const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })
           : server.transport === "http" ? new StreamableHTTPClientTransport(new URL(server.url!), options) : new SSEClientTransport(new URL(server.url!), options);
         if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
@@ -165,7 +187,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   }
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     const inventory = await inspectTools(server, signal);
-    return inventory.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: tool.description ?? tool.name,
+    return inventory.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const fresh = (await inspectTools(server, signal)).find(({ name }) => name === tool.name);

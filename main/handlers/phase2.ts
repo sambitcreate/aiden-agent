@@ -304,7 +304,7 @@ export function registerPhase2Handlers(): void {
                   JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
                 )),
               )
-            : await hasOAuthTokens(serverId, existing?.url ?? preset.url);
+            : await hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName);
         return {
           preset,
           serverId,
@@ -407,7 +407,7 @@ export function registerPhase2Handlers(): void {
         );
         return {
           ...status,
-          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
+          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url, parsed.authServerMetadataUrl, parsed.oauthClientName) : undefined,
         };
       },
       () => !owner.isDestroyed(),
@@ -455,7 +455,7 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
     const server = (await configStore.listMcpServers()).find((item) => item.id === serverId);
-    return { authorized: await hasOAuthTokens(serverId, server?.url) };
+    return { authorized: await hasOAuthTokens(serverId, server?.url, server?.authServerMetadataUrl, server?.oauthClientName) };
   });
   // Force-drop all cached MCP connections so the next message reconnects fresh.
   ipcMain.handle("mcp:reconnect", async () => {

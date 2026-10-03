@@ -1413,3 +1413,12 @@ test("pre-marker unsafe workspaces defer migration without consuming the local s
   assert.equal(await missing(r.archiveFile), true);
   assert.equal(await missing(r.portableFile), true);
 });
+
+
+test("portable MCP OAuth metadata validates authority without requiring new fields on old configs", () => {
+  const server = { id: "custom", name: "Custom", transport: "http", enabled: true, oauth: true, url: "https://service.test/mcp" };
+  assert.equal(isMcpServer(server), true);
+  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "https://identity.test/metadata" }), true);
+  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "http://identity.test/metadata" }), false);
+  assert.equal(isMcpServer({ ...server, oauth: false, authServerMetadataUrl: "https://identity.test/metadata" }), false);
+});

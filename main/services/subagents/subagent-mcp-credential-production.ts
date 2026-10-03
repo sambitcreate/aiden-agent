@@ -53,7 +53,7 @@ export async function resolveProductionSubagentMcpCredentialBoundary(
     assertCurrent(signal);
     oauthSession =
       server.url &&
-      sessionMatchesMcpBinding(session, mcpAuthorizationBinding(server.url))
+      sessionMatchesMcpBinding(session, mcpAuthorizationBinding(server.url, server.authServerMetadataUrl, server.oauthClientName))
         ? session
         : {};
   }

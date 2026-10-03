@@ -770,6 +770,67 @@ test("delegated MCP revisions follow migrated Aiden configuration and encrypted 
   assert.notEqual(revision(), revoked);
 });
 
+
+for (const oidc of [false, true]) test(`CLI custom MCP OAuth uses ${oidc ? "OIDC discovery" : "configured metadata"} and enforces callback issuers`, async (t) => {
+  const dir = temporary(t), file = join(dir, "remote.json");
+  const requests = []; let issuer; let registration; let tokenCalls = 0; let callbackCheck;
+  const server = createServer(async (request, response) => {
+    requests.push(request.url);
+    response.setHeader("content-type", "application/json");
+    if (oidc && request.url.includes("oauth-authorization-server")) { response.statusCode = 404; return response.end("{}"); }
+    if (request.url === "/metadata" || (oidc && request.url.includes("openid-configuration"))) return response.end(JSON.stringify({ ...(oidc ? { jwks_uri: `${issuer}/jwks`, subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"] } : {}), issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, registration_endpoint: `${issuer}/register`, response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true }));
+    if (request.url.includes("oauth-protected-resource")) return response.end(JSON.stringify({ resource: `${issuer}/mcp`, authorization_servers: [oidc ? issuer : `${issuer}/wrong`] }));
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString();
+    if (request.url === "/register") {
+      registration = JSON.parse(body);
+      return response.end(JSON.stringify({ client_id: "registered", ...registration }));
+    }
+    if (request.url === "/token") {
+      tokenCalls++;
+      assert.equal(new URLSearchParams(body).get("code"), "accepted");
+      return response.end(JSON.stringify({ access_token: "new-token", token_type: "Bearer", scope: null, refresh_token: "", expires_in: null }));
+    }
+    response.statusCode = 404; response.end("{}");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  issuer = `http://127.0.0.1:${server.address().port}`;
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  writeFileSync(file, JSON.stringify({ id: "metadata", name: "Metadata", transport: "http", url: `${issuer}/mcp`, enabled: true, oauth: true, ...(oidc ? {} : { authServerMetadataUrl: `${issuer}/metadata` }), oauthClientName: "Approved Aiden CLI", description: "Documents" }));
+  await api.mcpCommand(dir, ["add", file]);
+  const write = process.stderr.write;
+  process.stderr.write = function(chunk, ...args) {
+    const match = String(chunk).match(/Open this URL to sign in:\n([^\n]+)/u);
+    if (!match) return write.call(this, chunk, ...args);
+    const authorization = new URL(match[1]);
+    callbackCheck = (async () => {
+      const callback = new URL(authorization.searchParams.get("redirect_uri"));
+      callback.searchParams.set("state", authorization.searchParams.get("state"));
+      callback.searchParams.set("code", "accepted");
+      assert.equal((await fetch(callback)).status, 400, "advertised issuer support requires iss before token exchange");
+      assert.equal(tokenCalls, 0);
+      callback.searchParams.set("iss", `${issuer}/wrong`);
+      assert.equal((await fetch(callback)).status, 400);
+      assert.equal(tokenCalls, 0);
+      callback.searchParams.set("iss", issuer);
+      assert.equal((await fetch(callback)).status, 200);
+    })();
+    return true;
+  };
+  try {
+    assert.deepEqual(await api.mcpCommand(dir, ["login", "metadata"]), { signedIn: "metadata" });
+    await callbackCheck;
+  } finally { process.stderr.write = write; }
+  assert.equal(tokenCalls, 1);
+  assert.equal(registration.client_name, "Approved Aiden CLI");
+  assert.equal(requests.filter((path) => path === "/metadata").length, oidc ? 0 : 1);
+  assert.equal(requests.some((path) => path.includes("openid-configuration")), oidc);
+  assert.ok(requests.every((path) => !path.includes("wrong")));
+  const [listed] = await api.mcpCommand(dir, ["list"]);
+  assert.equal(listed.authServerMetadataUrl, oidc ? undefined : `${issuer}/metadata`);
+  assert.equal(listed.description, "Documents");
+});
+
 test("MCP migration validates one snapshot and restores a native replacement without deleting it", (t) => {
   const dir = temporary(t), legacy = join(dir, "mcp.json");
   const servers = [{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }];

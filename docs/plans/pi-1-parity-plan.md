@@ -1,6 +1,6 @@
 # Pi 1.0 parity upgrade
 
-Status: implementation active; runtime and CLI 1.0 foundation is implemented in PR #299, with the remaining feature lanes in progress (2026-10-02).
+Status: active implementation and validation (2026-10-02). Foundation and compaction PRs are open; provider/MCP OAuth integration, including custom authorization-server metadata overrides, is implemented in PR #302. Desktop model operations, cache warming and integrated acceptance remain in progress.
 
 ## Baseline and target
 
@@ -22,7 +22,7 @@ The audit covers the delta from Aiden's 0.87.1 pins and the complete stable codi
 | Codemode / nested tool calls / tool search | No desktop codemode; CLI inherits after bump | Package native CLI worker and helpers, exercise real offline nested calls with permission gates. Desktop adoption must route nested execution through current approval/tool lifecycle, preserve transcript and native consumers |
 | Images / classifiers | Existing Aiden image/vision surfaces | CLI inherits unified model API and codemode generation/classification. Desktop inventory remains type-aware; expose tools only through approved credential/runtime paths with usage accounting |
 | MCP config / transport / resources | Aiden server IDs, encrypted credentials, scoped resources/instructions | CLI legacy array collides with Pi native object mcp.json: migrate Aiden config safely to own file, preserve native config and separate explicit admin commands. Native MCP remains user configured |
-| MCP OAuth | Aiden server-scoped OAuth | Bind callback state and issuer, metadata override and scope preservation where supported; test auth failure before token exchange and independent server identities |
+| MCP OAuth | Aiden server-scoped OAuth | Implemented in PR #302: callback state/issuer binding, explicit custom authorization-server metadata URL, and scope preservation; focused tests cover invalid metadata, pre-token callback rejection and independent server identities |
 | Skills / templates / AGENTS / plugins | Aiden trust, skill discovery, refresh, slash invocation | Preserve existing host semantics; CLI inherits native plugin/resource features without widening worker permissions |
 | Queue / steering / abort / subagents | Existing desktop/CLI/remote implementations | Preserve behavior through 1.0 replay, cancellation and subagent regression gates |
 | Onboarding / desktop / iOS / Android | Existing data-driven tour and native protocol | Update only for capabilities actually shipped; inspect native consumers and run mobile suites for any shared contract/transcript changes |
@@ -51,8 +51,22 @@ Agents audit first, then implement their assigned lane in different worktrees. N
 
 - [x] Pull Aiden origin/main and pi checkout; parallel runtime, CLI, stable-feature audits.
 - [x] Record target, feature inventory, architecture decisions and three-worktree PR plan before edits.
-- [x] Runtime foundation and replay gates — implemented in PR #299.
-- [x] CLI stable 1.0 parity and offline bundle/permission gates — included atomically in PR #299.
-- [ ] Provider/MCP integration and focused tests.
+- [x] Runtime foundation and replay gates — PR #299.
+- [x] CLI stable 1.0 upgrade and offline bundle/permission gates — combined into PR #299 so desktop and CLI pins change atomically. Review follow-up covers migrated MCP revocation readers.
+- [x] Provider/MCP OAuth integration and focused tests — PR #302, including custom authorization-server metadata override.
 - [ ] Desktop codemode/tool search/image/classifier capability acceptance.
 - [ ] Integrated validation, reviewable PRs and final status reconciliation.
+
+
+## Implementation checkpoints
+
+- [PR #299](https://github.com/sambitcreate/aiden-agent/pull/299): atomic desktop/CLI 1.0 upgrade. The separate CLI PR #300 was superseded and closed after CI proved that mixed desktop/CLI versions break standalone types. Frozen journal helpers remain an explicit compatibility boundary.
+- [PR #301](https://github.com/sambitcreate/aiden-agent/pull/301): exact provider/model compaction budgets across foreground, child, nested, manual and idle paths; Memory settings save/reset. Real Electron save/relaunch/reset passed.
+- Desktop scripts execute in QuickJS without ambient filesystem/network access. Nested calls reuse approval, schema validation, durable effects and public activity IDs. Final admitted MCP schemas are deferred only when codemode is enabled; search returns schemas for execution inside codemode. Excluding codemode restores direct MCP tools. Bots, assistant mode and child supervisors retain their existing tool inventories.
+- OpenAI OAuth receives a private, lazily generated installation identity. First-run login prefers the new OpenAI provider while preserving legacy Codex selections. MCP callbacks validate state/issuer and preserve scope consent. Custom remote OAuth servers can save an explicit authorization-server metadata URL; sign-in loads and validates the bounded document through the SDK public discovery-state hook. Small JSON structured results and validated raster images survive tool conversion.
+- Focused desktop script/discovery/runtime tests pass (418 compaction suite tests at the first integrated checkpoint). iOS 230 and Android 62 tests passed, with follow-up public activity-ID fixtures rerun. No native wire change or physical-device validation is claimed.
+- Remaining stable acceptance: production image/classifier tools with paid-operation disclosure and artifact accounting; off-default cache warming; final integrated tests and PR review. Desktop warming initially targets active foreground generations only, with timers tied to generation cancellation and bounded provider cost eligibility.
+
+## Onboarding illustration provenance
+
+`renderer/assets/onboarding/features/tool-scripts.png` was generated with the imagegen skill/tool and resampled to the required 1024 × 1024 transparent PNG. Prompt: premium 3D clay Aiden Tool Scripts illustration; friendly purple ghost, navy script console with cyan brackets, blue folder, purple magnifying glass, coral result card, short purple cables and a small gold padlock; matte lavender/navy/blue/coral palette, centered with generous transparent margin, no floor, background, text, frame or brain imagery. The onboarding asset contract validates the shipped image.
