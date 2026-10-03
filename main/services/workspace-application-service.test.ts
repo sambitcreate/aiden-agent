@@ -5,6 +5,9 @@ import {
   createWorkspaceApplicationService,
   type WorkspaceApplicationDependencies,
 } from "./workspace-application-service.js";
+import { AppControlsService, appControlRevision, type StoredAppOperation } from "./app-controls-core.js";
+import { createAidenAppTools } from "./aiden-app-tools.js";
+import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 
@@ -204,4 +207,34 @@ test("workspace authority revoked during cancellation is checked inside persiste
   }), /revoked/);
   assert.equal(application.saved.length, 0);
   assert.equal(application.events.includes("save"), false);
+});
+
+
+test("agent workspace Memory redirects before intent while the caller is awaiting its tool", async () => {
+  const application = fixture();
+  let finishCaller!: () => void;
+  const completion = new Promise<void>((resolve) => { finishCaller = resolve; });
+  const active = new Map([["caller", { workspaceId: "workspace-1", completion }]]);
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () => cancelWorkspaceGenerationsAndSettle({
+    workspaceId: "workspace-1", initializations: () => new Map(), active: () => active,
+    cancel: () => {}, abortChildren: () => {}, hasChildren: () => false,
+    timeoutMs: 10, timeoutMessage: "caller cannot settle while awaiting its tool",
+  });
+  let ledger: StoredAppOperation[] = [];
+  const state = { settings: {}, workspace: workspace() };
+  const service = new AppControlsService({
+    read: async () => state, loadOperations: async () => ledger,
+    saveOperations: async (value) => { ledger = value; }, onChanged() {},
+    commit: async (operation) => { await application.service.update("workspace-1", { memoryEnabled: operation.value }); },
+  });
+  const panels: unknown[] = [];
+  const tool = createAidenAppTools({ service, context: { actor: "agent", workspaceId: "workspace-1", target: "This desktop", humanGesture: false, isCurrent: () => true }, present: (panel) => { panels.push(panel); } }).find((tool) => tool.name === "aiden_set_preference")!;
+  const result = await tool.execute("call", { control: "memory.workspace", value: false,
+    expectedRevision: appControlRevision(state, "memory.workspace"), operationId: "active_caller" }, undefined, undefined);
+  finishCaller();
+  assert.match(JSON.stringify(result.content), /foreground_required/u);
+  assert.equal(panels.length, 1);
+  assert.equal(ledger.length, 0);
+  assert.deepEqual(application.events, []);
+  assert.equal(application.saved.length, 0);
 });

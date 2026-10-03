@@ -20,20 +20,22 @@ internal fun NativeAppControlPanel(
     panel: AidenAppControlPanel,
     available: Boolean,
     palette: AidenPalette,
+    cache: AidenAppControlCache,
     load: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot,
     apply: suspend (AidenAppControlPanel, AidenAppControlOperation) -> AidenAppControlReceipt
 ) {
-    var snapshot by remember(panel.id) { mutableStateOf<AidenAppControlSnapshot?>(null) }
+    val snapshots by cache.snapshots.collectAsState()
+    val snapshot = snapshots[panel.id]
     var pending by remember(panel.id) { mutableStateOf(false) }
     var status by remember(panel.id) { mutableStateOf("") }
     var confirmation by remember(panel.id) { mutableStateOf<AidenAppControlOperation?>(null) }
     var retry by remember(panel.id) { mutableStateOf<AidenAppControlOperation?>(null) }
     val scope = rememberCoroutineScope()
     suspend fun refresh() {
-        try { snapshot = load(panel) }
+        try { load(panel) }
         catch (error: Exception) {
             if (error is CancellationException) throw error
-            snapshot = null; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop."
+            status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop."
         }
     }
     suspend fun commit(operation: AidenAppControlOperation) {
@@ -46,14 +48,15 @@ internal fun NativeAppControlPanel(
             refresh()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            snapshot = null; status = "Change could not be confirmed. Check the change after reconnecting."
+            status = "Change could not be confirmed. Check the change after reconnecting."
         } finally { pending = false }
     }
     fun propose(row: AidenAppControlRow, value: JsonPrimitive) {
         if (!pending && available && row.disabledReason == null && value != row.value)
             confirmation = AidenAppControlOperation(row.id, value, row.revision, UUID.randomUUID().toString())
     }
-    LaunchedEffect(panel.id, available) { snapshot = null; confirmation = null; if (available) refresh() }
+    LaunchedEffect(panel.id, available) { confirmation = null; if (available) refresh() else cache.remove(panel) }
+    DisposableEffect(panel.id) { onDispose { cache.remove(panel) } }
     Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(snapshot?.title ?: "Aiden settings", style = MaterialTheme.typography.titleSmall, color = palette.foreground)

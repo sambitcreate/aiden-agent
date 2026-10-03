@@ -691,12 +691,13 @@ struct AidenRemoteEventType: RawRepresentable, Codable, Hashable, Sendable {
     static let heartbeat = Self(rawValue: "heartbeat")
     static let taskUpdate = Self(rawValue: "task_update")
     static let agentsUpdate = Self(rawValue: "agents_update")
+    static let appControlsChanged = Self(rawValue: "app_controls_changed")
     static let questionRequired = Self(rawValue: "question_required")
 
     static let v1Known: [Self] = [
         .snapshot, .status, .textDelta, .reasoningDelta,
         .toolStarted, .toolFinished, .timeline, .approvalRequired,
-        .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate,
+        .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate, .appControlsChanged,
         .questionRequired,
     ]
 
@@ -1387,6 +1388,12 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         }
         guard terminal == type.isTerminal else {
             throw AidenRemoteContractError.invalidTerminalClassification
+        }
+        if type == .appControlsChanged {
+            let invalidation = try values.decode(AidenAppControlsInvalidation.self, forKey: .payload)
+            guard invalidation.revision >= 0 else { throw AidenRemoteContractError.invalidSequence }
+            payload = nil; taskProgress = nil; agentRoster = nil; questionPrompt = nil
+            return
         }
         if type == .taskUpdate {
             let progress = try values.decode(AidenRemoteChatTaskProgress.self, forKey: .payload)
@@ -3751,5 +3758,17 @@ private extension JSONDecoder.DateDecodingStrategy {
             in: container,
             debugDescription: "Expected a strict RFC 3339 timestamp."
         )
+    }
+}
+
+
+private struct AidenAppControlsInvalidation: Decodable {
+    let revision: Int
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["revision"])
+        let values = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        revision = try values.decode(Int.self, forKey: AidenDynamicCodingKey(stringValue: "revision")!)
+        guard (0...AidenRemoteProtocol.maxSafeInteger).contains(revision) else { throw AidenRemoteContractError.invalidSequence }
     }
 }

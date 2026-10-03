@@ -1,4 +1,5 @@
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
+import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
@@ -590,6 +591,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const chatProgress = new AidenRemoteChatProgressService({
             instanceId,
             events: chatProgressEvents,
+            appControlsEnabled: () => remoteAppControls.enabled(),
             authorize: createChatProgressAuthorizer({
               acquireDeviceAuthorization: (deviceId) =>
                 state.acquireDeviceAuthorization(deviceId, false),
@@ -811,7 +813,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
-          const memorySettings = new AidenRemoteMemorySettingsService(configStore);
+          const memorySettings = new AidenRemoteMemorySettingsService(configStore, publishAppControlsChanged);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
           const readAloud = new AidenRemoteTtsService(ttsService);

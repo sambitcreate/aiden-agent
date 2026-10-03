@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import kotlinx.coroutines.ensureActive
+
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.encoding.*
@@ -39,4 +41,46 @@ object AidenAppPanelsSerializer : KSerializer<List<AidenAppControlPanel>?> {
 }
 @Serializable data class AidenAppControlReceipt(val status: String, val operationId: String, val control: String, val value: JsonPrimitive, val scope: String, val effective: String, val warning: String? = null) {
     val isWireSafe get() = status in setOf("applied", "already_set", "outcome_unknown") && token(operationId) && control in controlIds && safeValue(value) && scope.length <= 256 && effective in setOf("now", "next_turn", "next_session", "after_preview") && (warning?.length ?: 0) <= 500
+}
+
+
+/** Owned by a foreground chat model, with at most 16 visible card registrations. */
+class AidenAppControlCache {
+    private val state = kotlinx.coroutines.flow.MutableStateFlow<Map<String, AidenAppControlSnapshot>>(emptyMap())
+    val snapshots: kotlinx.coroutines.flow.StateFlow<Map<String, AidenAppControlSnapshot>> = state
+    private val tracked = linkedMapOf<String, AidenAppControlPanel>()
+    private var generation = 0L
+    suspend fun load(panel: AidenAppControlPanel, read: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot): AidenAppControlSnapshot {
+        check(tracked.containsKey(panel.id) || tracked.size < 16)
+        tracked[panel.id] = panel
+        val epoch = generation
+        try {
+            val value = read(panel)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (epoch != generation || tracked[panel.id] != panel) throw kotlinx.coroutines.CancellationException("Card replaced")
+            state.value = state.value + (panel.id to value)
+            return value
+        } catch (error: Exception) {
+            if (epoch == generation) state.value = state.value - panel.id
+            throw error
+        }
+    }
+    fun remove(panel: AidenAppControlPanel) { tracked.remove(panel.id); state.value = state.value - panel.id }
+    fun clearSnapshots() { generation++; state.value = emptyMap() }
+    suspend fun refresh(read: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot) {
+        val epoch = ++generation
+        for (panel in tracked.values.toList()) {
+            if (epoch != generation) return
+            try {
+                val value = read(panel)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (epoch != generation) return
+                if (tracked[panel.id] == panel) state.value = state.value + (panel.id to value)
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                if (epoch != generation) return
+                state.value = state.value - panel.id
+            }
+        }
+    }
 }

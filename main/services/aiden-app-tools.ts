@@ -7,6 +7,7 @@ import { readAidenHelp } from "./aiden-app-knowledge.js";
 import type { AppControlsService, AppControlContext } from "./app-controls-core.js";
 import {
   APP_CONTROL_TOPICS,
+  parseAppControlOperation,
   isAppControlTopic,
   type AppControlPanel,
 } from "../../renderer/shared/app-controls.js";
@@ -120,7 +121,7 @@ export function createAidenAppTools(options: {
         name: "aiden_set_preference",
         label: "Change Aiden preference",
         description:
-          "Set one exact preference after an explicit user request and a fresh aiden_get_state read. Enablement or Ask policy needs a foreground control click. Do not toggle by guessing or widen workspace/host scope.",
+          "Set one exact preference after an explicit user request and a fresh aiden_get_state read. Workspace Memory, enablement or Ask policy needs a foreground control click. Do not toggle by guessing or widen workspace/host scope.",
         parameters: Type.Object({
           control: Type.String(),
           value: Type.Union([Type.String(), Type.Boolean()]),
@@ -129,6 +130,18 @@ export function createAidenAppTools(options: {
         }),
         execute: async (_id, p, signal) => {
           if (signal?.aborted) throw new Error("Change cancelled.");
+          const operation = parseAppControlOperation(p);
+          // Workspace mutations settle every generation. The generation awaiting
+          // this tool cannot settle itself; redirect before any durable intent.
+          if (operation.control === "memory.workspace") {
+            if (!options.context.workspaceId) throw new Error("Select an existing workspace first.");
+            await options.service.snapshot("memory", options.context);
+            if (signal?.aborted || !options.context.isCurrent()) throw new Error("Change cancelled.");
+            options.present({ version: 1, id: randomUUID(), topic: "memory", workspaceId: options.context.workspaceId,
+              fallback: "Use Workspace memory controls to confirm this change on the serving host." });
+            return result({ status: "foreground_required", panelShown: true,
+              reason: "Change Workspace memory through the foreground control so the active agent can settle before saving." });
+          }
           return result(
             await options.service.apply(p, {
               ...options.context,

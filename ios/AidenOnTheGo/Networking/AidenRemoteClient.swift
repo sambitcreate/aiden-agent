@@ -1994,13 +1994,14 @@ final class AidenRemoteClient: @unchecked Sendable {
                         }
                         if progressOnly,
                            event.type != .taskUpdate,
-                           event.type != .agentsUpdate {
+                           event.type != .agentsUpdate,
+                           event.type != .appControlsChanged {
                             // The progress channel uses SSE comments for keep-alive.
                             // A protocol heartbeat belongs to the transcript channel.
                             throw AidenRemoteClientError.invalidResponse
                         }
                         if !progressOnly,
-                           event.type == .taskUpdate || event.type == .agentsUpdate {
+                           event.type == .taskUpdate || event.type == .agentsUpdate || event.type == .appControlsChanged {
                             // Progress snapshots are a separate chat-scoped channel;
                             // never let one enter the parent turn cursor.
                             throw AidenRemoteClientError.invalidResponse

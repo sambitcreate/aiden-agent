@@ -1,4 +1,5 @@
 import { ipcMain } from "../platform.js";
+import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AppearancePreviewState } from "./appearance-preview-core.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { skillRegistry } from "./skill-registry-main.js";
@@ -29,5 +30,5 @@ export const applySettingsEffects = createSettingsApplicationEffects({
       "settings:appearance-changed",
       appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance)),
     ),
-  publishControls: () => ipcMain.broadcast("settings:controls-changed", {}),
+  publishControls: publishAppControlsChanged,
 });

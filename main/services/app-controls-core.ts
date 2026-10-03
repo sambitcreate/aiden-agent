@@ -206,7 +206,7 @@ export class AppControlsService {
         (context.allowedControls && !context.allowedControls.has(operation.control))
       )
         throw new Error("This control is not authorized.");
-      if (!context.humanGesture && (policy === "ask" || operation.value === true))
+      if (!context.humanGesture && (policy === "ask" || operation.value === true || operation.control === "memory.workspace"))
         throw new Error("Show this control for an explicit foreground confirmation.");
       if (operation.control === "memory.workspace" && !state.workspace)
         throw new Error("Select an existing workspace first.");

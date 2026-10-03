@@ -8,6 +8,13 @@ export class ChatProgressEvents {
   >();
   private readonly listeners = new Map<string, Set<() => void>>();
   private serial = 0;
+  private controlSerial = 0;
+  appControlsRevision(): number { return this.controlSerial; }
+  /** One bounded invalidation for each currently subscribed foreground chat. */
+  appControlsChanged(): void {
+    this.controlSerial = this.controlSerial >= Number.MAX_SAFE_INTEGER ? 0 : this.controlSerial + 1;
+    for (const chatId of this.listeners.keys()) this.changed(chatId);
+  }
   private readonly revisions = new Map<string, number>();
 
   revision(chatId: string): number {

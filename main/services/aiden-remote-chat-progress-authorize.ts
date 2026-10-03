@@ -43,7 +43,7 @@ export function createChatProgressAuthorizer(
 ): (
   deviceId: string,
   chatId: string,
-  capability: Extract<AidenRemoteCapability, "tasks:read" | "agents:read">,
+  capability: Extract<AidenRemoteCapability, "tasks:read" | "agents:read" | "app-controls:read">,
 ) => Promise<ChatProgressAuthorizedChat> {
   const latestGenerations = new Map<
     string,
@@ -83,6 +83,8 @@ export function createChatProgressAuthorizer(
           404,
         );
       }
+      if (capability === "app-controls:read" && metadata.botId)
+        throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
       if (
         metadata.botId &&
         (!device.capabilities.includes("bot:read") ||

@@ -3837,3 +3837,25 @@ test("chat controls require both scoped grants and advertise owner-enabled negot
     assert.equal(reads, 0);
   } finally { await app.close(); }
 });
+
+test("foreground invalidation stream admits control readers without task or agent authority", async () => {
+  let enabled = true;
+  const appControls = {
+    enabled: async () => enabled,
+    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }),
+    apply: async () => { throw new Error("unexpected write"); },
+  };
+  const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  try {
+    const stream = await fetch(`${app.base}/chats/chat-1/progress/events?after=0`, { headers });
+    assert.equal(stream.status, 200);
+    await stream.text();
+    assert.ok(app.calls.includes("progress-events:chat-1:0:app-controls:read"));
+    const tasks = await fetch(`${app.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 403);
+    enabled = false;
+    const denied = await fetch(`${app.base}/chats/chat-1/progress/events?after=0`, { headers });
+    assert.equal(denied.status, 404);
+  } finally { await app.close(); }
+});

@@ -121,13 +121,13 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
     new Set(fixture.events.map((event) => event.type)),
     new Set(
       AIDEN_REMOTE_EVENT_TYPES.filter(
-        (type) => type !== "task_update" && type !== "agents_update",
+        (type) => type !== "task_update" && type !== "agents_update" && type !== "app_controls_changed",
       ),
     ),
   );
   assert.deepEqual(
     new Set(fixture.chatProgressEvents.map((event) => event.type)),
-    new Set(["task_update", "agents_update"]),
+    new Set(["task_update", "agents_update", "app_controls_changed"]),
   );
   assert.equal(JSON.stringify(fixture).includes("/Users/"), false);
   assert.equal(JSON.stringify(fixture).includes("BEGIN PRIVATE KEY"), false);
@@ -1336,7 +1336,7 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
     ...progressEvents,
     {
       ...record(progressEvents[0], "progress event"),
-      sequence: 3,
+      sequence: progressEvents.length + 1,
       type: "heartbeat",
       payload: {},
     },

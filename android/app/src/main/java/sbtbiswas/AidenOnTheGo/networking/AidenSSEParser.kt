@@ -293,6 +293,13 @@ class AidenSSEParser {
             validateNoForbiddenKeys(payloadObj)
 
             val presentKeys = payloadObj.keys
+            if (type == AidenRemoteEventType.APP_CONTROLS_CHANGED) {
+                val revision = (payloadObj["revision"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+                if (presentKeys != setOf("revision") || revision == null || revision < 0 || revision > AidenRemoteProtocol.MAX_SAFE_INTEGER) {
+                    throw AidenRemoteContractException.InvalidJson("Invalid app_controls_changed payload")
+                }
+                return AidenRemoteStreamEvent(protocolVersion, streamId, sequence, timestamp, type, terminal, AidenRemoteEventPayload())
+            }
             if (type == AidenRemoteEventType.QUESTION_REQUIRED) {
                 val questionPrompt = try {
                     AidenQuestionContractCodec.parseRequiredPayload(payloadObj)
@@ -476,7 +483,7 @@ class AidenSSEParser {
             expectedChannel: ExpectedChannel
         ) {
             val isProgressEvent = event.type == AidenRemoteEventType.TASK_UPDATE ||
-                event.type == AidenRemoteEventType.AGENTS_UPDATE
+                event.type == AidenRemoteEventType.AGENTS_UPDATE || event.type == AidenRemoteEventType.APP_CONTROLS_CHANGED
             when (expectedChannel) {
                 ExpectedChannel.PARENT_STREAM -> {
                     if (isProgressEvent) {

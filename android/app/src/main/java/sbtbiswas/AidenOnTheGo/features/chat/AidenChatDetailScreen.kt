@@ -825,6 +825,7 @@ fun AidenChatDetailScreen(
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             appControlsAvailable = viewModel.canReadAppControls,
+                            appControlsCache = viewModel.appControlsCache,
                             loadAppControls = viewModel::loadAppControls,
                             applyAppControl = viewModel::applyAppControl,
                             onOpenUrl = onOpenMessageUrl
@@ -1055,6 +1056,7 @@ private fun AssistantMessageRow(
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
     appControlsAvailable: Boolean = false,
+    appControlsCache: sbtbiswas.AidenOnTheGo.models.AidenAppControlCache? = null,
     loadAppControls: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot,
     applyAppControl: suspend (AidenAppControlPanel, AidenAppControlOperation) -> AidenAppControlReceipt,
     onOpenUrl: (String) -> Unit
@@ -1193,7 +1195,7 @@ private fun AssistantMessageRow(
             }
         }
         message.appPanels.orEmpty().filter { it.isWireSafe }.forEach { panel ->
-            key(panel.id) { NativeAppControlPanel(panel, appControlsAvailable, palette, loadAppControls, applyAppControl) }
+            key(panel.id) { appControlsCache?.let { NativeAppControlPanel(panel, appControlsAvailable, palette, it, loadAppControls, applyAppControl) } }
         }
         message.htmlArtifacts.orEmpty().forEach { artifact ->
             Spacer(modifier = Modifier.height(8.dp))

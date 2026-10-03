@@ -1183,6 +1183,7 @@ final class AidenChatViewModel {
         }
     }
     private(set) var isUploadingAttachment = false
+    let appControlsCache = AidenAppControlCache()
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
     private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
@@ -1769,7 +1770,7 @@ final class AidenChatViewModel {
         guard !isRemoved else { return }
         clearProgressStateForLostAccess()
         guard progressTask == nil,
-              canReadTaskProgress || canReadAgentRoster else { return }
+              canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
         progressObservationGeneration &+= 1
         let generation = progressObservationGeneration
         progressTask = Task { [weak self] in
@@ -1799,7 +1800,7 @@ final class AidenChatViewModel {
         observationGeneration: UInt64? = nil
     ) async {
         guard isCurrentProgressObservation(observationGeneration, context: context),
-              canReadTaskProgress || canReadAgentRoster else { return }
+              canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
         var taskFetchFailed = false
         var rosterFetchFailed = false
         do {
@@ -1853,7 +1854,7 @@ final class AidenChatViewModel {
                 return
             }
             guard isCurrentProgressObservation(generation, context: context),
-                  canReadTaskProgress || canReadAgentRoster else { return }
+                  canReadTaskProgress || canReadAgentRoster || canReadAppControls else { return }
             await loadProgressSnapshot(context: context, observationGeneration: generation)
             guard isCurrentProgressObservation(generation, context: context) else { return }
             do {
@@ -1878,6 +1879,7 @@ final class AidenChatViewModel {
                 if await coordinator.handleCredentialRevocation(error, context: context) { return }
                 guard isCurrentProgressObservation(generation, context: context) else { return }
                 if isProgressAccessDenied(error) {
+                    appControlsCache.clearSnapshots()
                     clearProgressState()
                     return
                 }
@@ -1914,7 +1916,7 @@ final class AidenChatViewModel {
         guard let generation else { return true }
         guard generation == progressObservationGeneration && !Task.isCancelled else { return false }
         clearProgressStateForLostAccess()
-        return canReadTaskProgress || canReadAgentRoster
+        return canReadTaskProgress || canReadAgentRoster || canReadAppControls
     }
 
     private func applyProgress(_ event: AidenRemoteStreamEvent) {
@@ -1940,6 +1942,8 @@ final class AidenChatViewModel {
             if acceptAgentRoster(snapshot) {
                 isAgentRosterStale = false
             }
+        case .appControlsChanged:
+            Task { await appControlsCache.refresh(read: readAppControls) }
         case .heartbeat:
             break
         default:
@@ -2749,6 +2753,9 @@ final class AidenChatViewModel {
         return installation.hasNegotiatedAccess(to: .appControlsRead)
     }
     func loadAppControls(_ panel: AidenAppControlPanel) async throws -> AidenAppControlSnapshot {
+        try await appControlsCache.load(panel, read: readAppControls)
+    }
+    private func readAppControls(_ panel: AidenAppControlPanel) async throws -> AidenAppControlSnapshot {
         guard canReadAppControls else { throw AidenRemoteClientError.invalidResponse }
         let context = try coordinator.requestContext(for: instanceId)
         let client = try coordinator.remoteClient(for: context)
@@ -2762,6 +2769,7 @@ final class AidenChatViewModel {
         let client = try coordinator.remoteClient(for: context)
         let value = try await client.applyAppControl(chatId: chat.id, panelId: panel.id, operation: operation)
         guard coordinator.isCurrent(context), canReadAppControls else { throw CancellationError() }
+        await appControlsCache.refresh(read: readAppControls)
         return value
     }
 
@@ -4799,6 +4807,7 @@ private struct AidenSettledMessageRows: View, Equatable {
             showsFooter: showsFooter,
             onAskAbout: onAskAbout,
             appControlsAvailable: appControlsAvailable,
+            appControlsCache: model.appControlsCache,
             loadAppControls: { try await model.loadAppControls($0) },
             applyAppControl: { try await model.applyAppControl($0, operation: $1) }
         )
@@ -4817,6 +4826,7 @@ private struct AidenMessageView: View, Equatable {
     var showsFooter = true
     var onAskAbout: ((String) -> Void)? = nil
     var appControlsAvailable = false
+    var appControlsCache: AidenAppControlCache? = nil
     var loadAppControls: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)? = nil
     var applyAppControl: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
@@ -5007,7 +5017,7 @@ private struct AidenMessageView: View, Equatable {
             }
             if message.role == .assistant, let panels = message.appPanels {
                 ForEach(panels) { panel in
-                    AidenNativeAppControlPanel(panel: panel, available: appControlsAvailable, load: loadAppControls, apply: applyAppControl)
+                    AidenNativeAppControlPanel(panel: panel, available: appControlsAvailable, cache: appControlsCache, load: loadAppControls, apply: applyAppControl)
                 }
             }
             if message.role == .assistant, let artifacts = message.htmlArtifacts, !artifacts.isEmpty {
@@ -7630,13 +7640,15 @@ private struct AidenNativeAppControlPanel: View {
     @Environment(\.aidenPalette) private var palette
     let panel: AidenAppControlPanel
     let available: Bool
+    var cache: AidenAppControlCache? = nil
     let load: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)?
     let apply: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)?
-    @State private var snapshot: AidenAppControlSnapshot?
+    @State private var localSnapshot: AidenAppControlSnapshot?
     @State private var pending = false
     @State private var status = ""
     @State private var confirmation: AidenAppControlOperation?
     @State private var retryOperation: AidenAppControlOperation?
+    private var snapshot: AidenAppControlSnapshot? { if let cache { return cache.snapshots[panel.id] }; return localSnapshot }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(snapshot?.title ?? "Aiden settings").font(.headline)
@@ -7666,7 +7678,8 @@ private struct AidenNativeAppControlPanel: View {
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .task(id: available) { snapshot = nil; confirmation = nil; if available { await refresh() } }
+        .task(id: available) { localSnapshot = nil; confirmation = nil; if available { await refresh() } else { cache?.remove(panel) } }
+        .onDisappear { cache?.remove(panel) }
         .confirmationDialog("Change this preference on the paired host?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             Button("Apply change") { if let operation = confirmation { confirmation = nil; Task { await commit(operation) } } }
             Button("Cancel", role: .cancel) { confirmation = nil }
@@ -7677,8 +7690,9 @@ private struct AidenNativeAppControlPanel: View {
         confirmation = AidenAppControlOperation(control: row.id, value: value, expectedRevision: row.revision, operationId: UUID().uuidString)
     }
     @MainActor private func refresh() async {
-        do { guard available, let load else { return }; snapshot = try await load(panel) }
-        catch { snapshot = nil; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop." }
+        do { guard available, let load else { return }; let value = try await load(panel); if cache == nil { localSnapshot = value } }
+        catch is CancellationError { return }
+        catch { localSnapshot = nil; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop." }
     }
     @MainActor private func commit(_ operation: AidenAppControlOperation) async {
         guard !pending, available, let apply else { return }
@@ -7689,6 +7703,6 @@ private struct AidenNativeAppControlPanel: View {
             if receipt.status == "outcome_unknown" { status = "The change could not be confirmed. Refresh its current value; checking the change will not repeat it." }
             else { retryOperation = nil; status = receipt.warning ?? (receipt.effective == "now" ? "Saved." : "Saved. Applies to subsequent agent work.") }
             await refresh()
-        } catch { snapshot = nil; status = "The change could not be confirmed. Check the change after reconnecting." }
+        } catch { localSnapshot = nil; status = "The change could not be confirmed. Check the change after reconnecting." }
     }
 }

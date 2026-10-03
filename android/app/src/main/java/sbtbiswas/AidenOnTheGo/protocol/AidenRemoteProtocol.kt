@@ -559,6 +559,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val APPROVAL_REQUIRED = AidenRemoteEventType("approval_required")
         val TASK_UPDATE = AidenRemoteEventType("task_update")
         val AGENTS_UPDATE = AidenRemoteEventType("agents_update")
+        val APP_CONTROLS_CHANGED = AidenRemoteEventType("app_controls_changed")
         val QUESTION_REQUIRED = AidenRemoteEventType("question_required")
         val DONE = AidenRemoteEventType("done")
         val ERROR = AidenRemoteEventType("error")
@@ -568,7 +569,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val V1_KNOWN = listOf(
             SNAPSHOT, STATUS, TEXT_DELTA, REASONING_DELTA,
             TOOL_STARTED, TOOL_FINISHED, TIMELINE, APPROVAL_REQUIRED,
-            TASK_UPDATE, AGENTS_UPDATE, QUESTION_REQUIRED,
+            TASK_UPDATE, AGENTS_UPDATE, APP_CONTROLS_CHANGED, QUESTION_REQUIRED,
             DONE, ERROR, CANCELLED, HEARTBEAT
         )
     }

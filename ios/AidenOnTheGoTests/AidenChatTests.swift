@@ -7,6 +7,32 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    @MainActor func testVisibleControlCardsShareOwnAndExternalHostInvalidations() async throws {
+        let cache = AidenAppControlCache()
+        let first = AidenAppControlPanel(version: 1, id: "first", topic: "memory", fallback: "Memory", workspaceId: "work")
+        let second = AidenAppControlPanel(version: 1, id: "second", topic: "memory", fallback: "Memory", workspaceId: "work")
+        var enabled = true, denied = false
+        var reads: [String] = []
+        let read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot = { panel in
+            reads.append(panel.id)
+            return AidenAppControlSnapshot(version: 1, title: "Memory", target: "Paired host", policy: denied ? "disabled" : "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Saved facts remain", scope: "Paired host", value: .boolean(enabled), revision: enabled ? "on" : "off", options: nil, disabledReason: denied ? "Access disabled" : nil)])
+        }
+        _ = try await cache.load(first, read: read)
+        _ = try await cache.load(second, read: read)
+        enabled = false // confirmed change from either foreground card
+        await cache.refresh(read: read)
+        XCTAssertEqual(cache.snapshots[first.id]?.rows.first?.value, .boolean(false))
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.value, .boolean(false))
+        enabled = true; denied = true // external desktop/another client invalidation
+        await cache.refresh(read: read)
+        XCTAssertEqual(cache.snapshots[first.id]?.policy, "disabled")
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.value, .boolean(true))
+        XCTAssertEqual(cache.snapshots[second.id]?.rows.first?.disabledReason, "Access disabled")
+        cache.remove(first); reads.removeAll()
+        await cache.refresh(read: read)
+        XCTAssertEqual(reads, [second.id])
+    }
+
     func testChatControlsSharedFixtureAndMalformedAdditiveFallback() throws {
         struct Controls: Decodable { let panel: AidenAppControlPanel; let snapshot: AidenAppControlSnapshot; let operation: AidenAppControlOperation; let receipt: AidenAppControlReceipt }
         struct Fixture: Decodable { let appControls: Controls }

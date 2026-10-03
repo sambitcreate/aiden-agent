@@ -180,9 +180,10 @@ class AidenBotContractTest {
             AidenChatAgentState.STOPPED,
             agentInterrupt.response.agents.single { it.agentId == agentInterrupt.agentId }.state
         )
-        assertEquals(2, fixture.chatProgressEvents.size)
+        assertEquals(3, fixture.chatProgressEvents.size)
         assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
         assertEquals(AidenRemoteEventType.AGENTS_UPDATE, fixture.chatProgressEvents[1].type)
+        assertEquals(AidenRemoteEventType.APP_CONTROLS_CHANGED, fixture.chatProgressEvents[2].type)
         val streamInput = requireNotNull(fixture.streamInput)
         assertEquals(AidenStreamInputMode.QUEUE, streamInput.request.mode)
         assertEquals(AidenStreamInputStatus.ADMITTED, streamInput.response.status)

@@ -71,6 +71,7 @@ class Response extends EventEmitter {
   flushHeaders() {}
   write(chunk: string) {
     this.chunks.push(chunk);
+    this.emit("chunk", chunk);
     return true;
   }
   end() {
@@ -611,4 +612,32 @@ test("interrupt is unavailable when the host does not wire subagent control", as
     service.interruptAgent("device-1", "chat-1", "agent_any"),
     hasCode("not_found", 404),
   );
+});
+
+
+test("foreground control invalidations reach every subscribed client without exposing preferences", { timeout: 4000 }, async (t) => {
+  // The mock response has no socket to keep Node alive for the service's unref'd coalescer.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  let allowed = true;
+  const { service, events } = fixture({ appControlsEnabled: async () => allowed });
+  t.after(() => service.close());
+  const first = new Response(), second = new Response(), legacy = new Response();
+  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, first.wire);
+  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, second.wire);
+  await service.openEvents("device-1", "chat-1", new Set(["tasks:read"]), 0, legacy.wire);
+  assert.match(first.chunks.join(""), /app_controls_changed/u);
+  const changed = (response: Response) => new Promise<string>((resolve) => response.once("chunk", resolve));
+  const nextFirst = changed(first), nextSecond = changed(second);
+  events.appControlsChanged(); // same path used by normal Settings and another client
+  const updates = await Promise.all([nextFirst, nextSecond]);
+  assert.ok(updates.every((text) => text.includes('"revision":1')));
+  assert.ok(updates.every((text) => !text.includes("memory") && !text.includes("value")));
+  assert.doesNotMatch(legacy.chunks.join(""), /app_controls_changed/u);
+  allowed = false;
+  const closed = new Promise<void>((resolve) => { const end = first.end.bind(first); first.end = () => { end(); resolve(); }; });
+  events.appControlsChanged();
+  await closed;
+  assert.ok(first.ended);
+  service.close();
 });

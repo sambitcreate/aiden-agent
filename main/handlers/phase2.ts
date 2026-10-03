@@ -2,6 +2,7 @@
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { publishAppControlsChanged } from "../services/app-controls-events-main.js";
 import { secrets } from "../services/secrets.js";
 import { mcpManager } from "../services/mcp.js";
 import {
@@ -243,6 +244,7 @@ async function updateWebSearchSnapshot(
 ): Promise<WebSearchRendererSnapshot> {
   const owner = webSearchMutationOwner(event);
   await configStore.updateWebSearchSettings(mutation, () => !owner.isDestroyed());
+  publishAppControlsChanged();
   if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
   return readWebSearchSnapshot();
 }
@@ -590,6 +592,7 @@ export function registerPhase2Handlers(): void {
         (current) => ({ ...current, enabled: false }),
         () => !owner.isDestroyed(),
       );
+      publishAppControlsChanged();
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return { hasKey: await webSearchCredentials.has(reference) };

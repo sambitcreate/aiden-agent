@@ -2,7 +2,7 @@ import { AppControlsService, appControlRevision } from "./app-controls-core.js";
 import type { StoredAppOperation } from "./app-controls-core.js";
 import { configStore } from "./config-store.js";
 import { DataStore } from "./data-store.js";
-import { ipcMain } from "../platform.js";
+import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { applySettingsEffects, appearancePreview } from "./settings-application-effects.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { assertWebSearchRolloutMutationAllowed, webSearchRollout } from "./web-search-rollout.js";
@@ -57,7 +57,7 @@ export const appControlsService = new AppControlsService({
   saveOperations: async (value) => {
     await operations.save(value);
   },
-  onChanged: () => ipcMain.broadcast("settings:controls-changed", {}),
+  onChanged: publishAppControlsChanged,
   commit: async (operation, context) => {
     if (operation.control === "webSearch.enabled")
       assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);

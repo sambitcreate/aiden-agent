@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import ImageIO
 
 private func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
@@ -2172,4 +2173,44 @@ struct AidenAppControlReceipt: Codable, Equatable, Sendable {
     let effective: String
     let warning: String?
     var isWireSafe: Bool { ["applied", "already_set", "outcome_unknown"].contains(status) && aidenControlToken(operationId) && aidenControlIDs.contains(control) && value.label.utf16.count <= 80 && scope.utf16.count <= 256 && ["now", "next_turn", "next_session", "after_preview"].contains(effective) && (warning?.utf16.count ?? 0) <= 500 }
+}
+
+
+/// Foreground cards share authoritative reads; descriptors are never effects.
+@MainActor @Observable final class AidenAppControlCache {
+    private(set) var snapshots: [String: AidenAppControlSnapshot] = [:]
+    @ObservationIgnored private var tracked: [String: AidenAppControlPanel] = [:]
+    @ObservationIgnored private var generation: UInt64 = 0
+    func load(_ panel: AidenAppControlPanel, read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async throws -> AidenAppControlSnapshot {
+        guard tracked[panel.id] != nil || tracked.count < 16 else { throw AidenRemoteClientError.invalidResponse }
+        tracked[panel.id] = panel
+        let epoch = generation
+        do {
+            let value = try await read(panel)
+            try Task.checkCancellation()
+            guard epoch == generation, tracked[panel.id] == panel else { throw CancellationError() }
+            snapshots[panel.id] = value
+            return value
+        } catch {
+            if epoch == generation { snapshots.removeValue(forKey: panel.id) }
+            throw error
+        }
+    }
+    func remove(_ panel: AidenAppControlPanel) { tracked.removeValue(forKey: panel.id); snapshots.removeValue(forKey: panel.id) }
+    func clearSnapshots() { generation &+= 1; snapshots.removeAll() }
+    func refresh(read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot) async {
+        generation &+= 1
+        let epoch = generation
+        for panel in Array(tracked.values) {
+            guard epoch == generation, !Task.isCancelled else { return }
+            do {
+                let value = try await read(panel)
+                guard epoch == generation, !Task.isCancelled else { return }
+                if tracked[panel.id] == panel { snapshots[panel.id] = value }
+            } catch {
+                guard epoch == generation, !Task.isCancelled else { return }
+                snapshots.removeValue(forKey: panel.id)
+            }
+        }
+    }
 }
