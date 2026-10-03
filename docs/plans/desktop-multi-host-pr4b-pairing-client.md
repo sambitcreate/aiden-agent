@@ -67,6 +67,14 @@ Credentials, endpoints and pins stay in main and never reach a renderer.
       "···" menu with Rename locally, Re-pair and Forget.
   - The **Add device** sheet lists discovered devices with Connect, Enter setup code and Paste
     pairing link, and shows the match code while waiting.
+  - Re-pair opens the same sheet with `replaceHost`; it lists only that host, and main reconnects
+    the host after the new credential is saved.
+  - Pairing IPC returns a typed `PeerPairingResult` instead of throwing for an outcome. The
+    renderer mints each `attemptId`, filters `remote:peer-pairing-progress` by it, and cancels a
+    running attempt when the sheet closes.
+  - The host list and statuses use the query keys shared with the remote sidebar
+    (`renderer/lib/hosts/host-query-keys.ts`). Status broadcasts merge by generation, so an older
+    broadcast never overwrites a newer read.
 
 ## Decisions
 
@@ -83,5 +91,10 @@ Credentials, endpoints and pins stay in main and never reach a renderer.
 
 - `npm run test:peer-hosts`, which adds the discovery, bootstrap transport, pairing client and
   handler suites. The registry pairing tests run over real HTTPS against PR 4a's router in-process.
-- `npm run test:aiden-remote`, `npm run test:settings-design` and the Settings Playwright specs that
-  name the section.
+- `npm run test:aiden-remote`, which also runs the renderer suites
+  `renderer/lib/peer-connections.test.ts` (status presentation, merge, outcome copy, names) and
+  `renderer/components/settings/connections-settings.test.tsx` (rendered sheet steps, host rows and
+  segments).
+- `npm run test:settings-design` and the Settings Playwright specs that name the section.
+  `tests/e2e/remote-access-lifecycle.spec.ts` also switches segments by keyboard and runs a
+  setup-code attempt against an unreachable loopback port through to the failure and back.
