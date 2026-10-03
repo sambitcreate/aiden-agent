@@ -8,17 +8,17 @@
  * reads its `piConfig`, so the CLI identifies as "aiden", stores state under
  * ~/.aiden/agent, honors AIDEN_CODING_AGENT_DIR, and uses .aiden/ for project
  * resources.
+ *
+ * This module imports only Node built-ins and the import-free command help.
+ * It answers the static requests (`--version`, `aiden help`) directly and
+ * loads the runtime in src/cli-runtime.ts with a dynamic import otherwise, so
+ * those answers do not pay for evaluating pi and the Aiden cores.
  */
 
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { createAidenInlineExtensions } from "./extensions/index.ts";
-import { desktopSkillInjectionPaths } from "./skill-paths.ts";
-import { dispatchCommand, CLI_COMMAND_HELP } from "./commands.ts";
-import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
+import { CLI_COMMAND_HELP } from "./command-help.ts";
 
 // Aiden CLI carries its own release cadence; pi.dev's version feed would
 // compare Aiden's version numbers against pi's forever. Allow an explicit
@@ -31,63 +31,24 @@ process.env.PI_SKIP_VERSION_CHECK = process.env.PI_SKIP_VERSION_CHECK ?? "1";
 process.env.PI_TELEMETRY = "0";
 
 /**
- * Extra Aiden theme presets shipped beside the bundle. pi only auto-loads
- * dark.json/light.json as built-ins, so the remaining presets are registered
- * through the public `--theme <path>` flag, which makes them selectable in
- * /theme, --use-theme, and first-run setup like any other theme.
+ * The answer for requests that need nothing beyond the bundle's own files, or
+ * undefined. `--version` matches pi's own answer (the version in the nearest
+ * package.json, which is dist/app/package.json) unless PI_PACKAGE_DIR points
+ * pi somewhere else, in which case pi answers.
  */
-function bundledThemePaths(): string[] {
-	const themesDir = join(dirname(fileURLToPath(import.meta.url)), "themes");
-	if (!existsSync(themesDir)) {
-		return [];
+function staticAnswer(argv: string[], appDir: string): string | undefined {
+	if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v") && !process.env.PI_PACKAGE_DIR) {
+		const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as { version?: string };
+		return `${pkg.version || "0.0.0"}\n`;
 	}
-	return readdirSync(themesDir)
-		.filter((name) => name.endsWith(".json"))
-		.map((name) => join(themesDir, name))
-		.sort();
+	if (argv[0] === "help") return CLI_COMMAND_HELP;
+	return undefined;
 }
 
-/**
- * Mirrors pi's own resolution for where a tuiMode preference could be saved:
- * the rebranded agent dir (env override, else <home>/<configDir>/agent) and
- * the current project's settings.
- */
-function tuiSettingsPaths(): string[] {
-	const appDir = dirname(fileURLToPath(import.meta.url));
-	let configDir = ".aiden";
-	let appName = "aiden";
-	try {
-		const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as {
-			piConfig?: { name?: string; configDir?: string };
-		};
-		configDir = pkg.piConfig?.configDir ?? configDir;
-		appName = pkg.piConfig?.name ?? appName;
-	} catch {
-		// Fall back to the committed defaults; the generated app package.json
-		// always carries both.
-	}
-	const paths: string[] = [];
-	const envAgentDir = process.env[`${appName.toUpperCase()}_CODING_AGENT_DIR`];
-	if (envAgentDir) {
-		paths.push(join(envAgentDir, "settings.json"));
-	} else {
-		paths.push(join(homedir(), configDir, "agent", "settings.json"));
-	}
-	paths.push(join(process.cwd(), configDir, "settings.json"));
-	return paths;
-}
-
-/**
- * Desktop-shared Agent Skills injection (see src/skill-paths.ts for the
- * priority/dedup rules that keep pi's native discovery conflict-free).
- */
-function desktopSkillPaths(): string[] {
-	return desktopSkillInjectionPaths(homedir(), process.cwd());
-}
-
+const entry = fileURLToPath(import.meta.url);
 const invokedAsCli = (() => {
 	try {
-		return process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+		return process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry;
 	} catch {
 		return false;
 	}
@@ -95,27 +56,13 @@ const invokedAsCli = (() => {
 
 if (invokedAsCli) {
 	const argv = process.argv.slice(2);
-	process.env.AIDEN_CLI_ENTRY = fileURLToPath(import.meta.url);
-	try {
-		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) process.exit(0);
-	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error)); process.exit(1);
-	}
-	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
-	for (const themePath of bundledThemePaths()) {
-		argv.push("--theme", themePath);
-	}
-	for (const skillPath of desktopSkillPaths()) {
-		argv.push("--skill", skillPath);
-	}
-	if (shouldDefaultToFullscreenTui(argv, tuiSettingsPaths())) {
-		argv.push("--tui-mode", "fullscreen");
-	}
-	try {
-		const extensionFactories = await createAidenInlineExtensions();
-		await main(argv, { extensionFactories });
-	} catch (error) {
-		console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-		process.exitCode = 1;
+	const appDir = dirname(entry);
+	process.env.AIDEN_CLI_ENTRY = entry;
+	const answer = staticAnswer(argv, appDir);
+	if (answer !== undefined) {
+		process.stdout.write(answer);
+	} else {
+		const { runCli } = await import("./cli-runtime.ts");
+		await runCli(argv, appDir);
 	}
 }

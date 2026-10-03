@@ -25,6 +25,21 @@ test("--version reports the Aiden CLI version", () => {
 	assert.equal(result.stdout.trim(), outer.version);
 });
 
+test("--version answers before the runtime loads and agrees with pi's own answer", () => {
+	const fast = runCli(["--version"]);
+	// A second flag skips the entry's static answer, so pi's main() replies.
+	const viaPi = runCli(["--version", "--offline"], { env: { ...process.env, PI_OFFLINE: "1" } });
+	assert.equal(viaPi.status, 0, viaPi.stderr);
+	assert.equal(fast.stdout, viaPi.stdout);
+});
+
+test("aiden help lists the Aiden commands", () => {
+	const result = runCli(["help"]);
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /^Aiden commands:/);
+	assert.match(result.stdout, /^ {2}workspace /m);
+});
+
 test("--help brands the CLI as aiden", () => {
 	const result = runCli(["--help"]);
 	assert.equal(result.status, 0, result.stderr);
