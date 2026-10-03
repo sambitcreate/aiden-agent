@@ -165,7 +165,7 @@ export function RemoteHostStatusList({ hosts, filter, onReconnect, onManage }: R
   );
   if (unavailable.length === 0) return null;
   return (
-    <div role="group" aria-label="Unavailable machines" className="flex flex-col gap-1 pb-2">
+    <div role="group" aria-label="Unavailable machines" className="flex flex-col gap-1 px-2.5 pb-2">
       {unavailable.map((host) => (
         <RemoteHostStatusRow key={host.id} host={host} onReconnect={onReconnect} onManage={onManage} />
       ))}
