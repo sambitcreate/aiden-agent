@@ -442,6 +442,15 @@ export function registerProviderHandlers(): void {
     },
   );
   ipcMain.handle(
+    "settings:setCompactionModelBudget",
+    async (_event, modelKeyValue: unknown, budgetValue: unknown) => {
+      if (typeof modelKeyValue !== "string") throw new Error("Choose an exact provider/model for the compaction budget.");
+      if (budgetValue === null || budgetValue === undefined) return configStore.setCompactionModelBudget(modelKeyValue, undefined);
+      const parsed = parseCompactionModelOverrides({ [modelKeyValue]: budgetValue });
+      return configStore.setCompactionModelBudget(modelKeyValue, parsed[modelKeyValue]);
+    },
+  );
+  ipcMain.handle(
     "settings:setAnthropicThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
       const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue);

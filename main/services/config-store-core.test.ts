@@ -2962,3 +2962,37 @@ test("compaction settings track writes and hand-edits while reusing the parsed s
   assert.equal(edited.compactionModelOverrides, undefined);
   assert.equal((await h.store.getSettings()).compactionModelOverrides, undefined);
 });
+
+test("per-model compaction budgets merge atomically and clear without disturbing other models", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ compactionModelOverrides: { "anthropic/claude-sonnet": { keepRecentTokens: 4_000 } } });
+  await Promise.all([
+    h.store.setCompactionModelBudget("openai/gpt-5", { reserveTokens: 8_000 }),
+    h.store.setCompactionModelBudget("google/gemini-pro", { reserveTokens: 6_000, keepRecentTokens: 0 }),
+  ]);
+  assert.deepEqual((await h.store.getSettings()).compactionModelOverrides, {
+    "anthropic/claude-sonnet": { keepRecentTokens: 4_000 },
+    "openai/gpt-5": { reserveTokens: 8_000 },
+    "google/gemini-pro": { reserveTokens: 6_000, keepRecentTokens: 0 },
+  });
+
+  await assert.rejects(h.store.setCompactionModelBudget("no-slash", { reserveTokens: 8_000 }));
+  await assert.rejects(h.store.setCompactionModelBudget("openai/gpt-5", { reserveTokens: 1 }));
+  await h.store.setCompactionModelBudget("openai/gpt-5", undefined);
+  await h.store.setCompactionModelBudget("google/gemini-pro", {});
+  assert.deepEqual((await h.store.getSettings()).compactionModelOverrides, { "anthropic/claude-sonnet": { keepRecentTokens: 4_000 } });
+  await h.store.setCompactionModelBudget("anthropic/claude-sonnet", undefined);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call((await readJson<{ settings: object }>(h.settingsFile)).settings, "compactionModelOverrides"),
+    false,
+  );
+
+  // A hand-edited invalid document is not silently replaced by a one-model write.
+  const onDisk = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  onDisk.settings.compactionModelOverrides = { "openai/gpt-5": { reserveTokens: -1 } };
+  await fs.writeFile(h.settingsFile, JSON.stringify(onDisk), "utf-8");
+  await assert.rejects(h.store.setCompactionModelBudget("google/gemini-pro", { reserveTokens: 6_000 }), /repair settings\.json/u);
+  assert.deepEqual((await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings.compactionModelOverrides, {
+    "openai/gpt-5": { reserveTokens: -1 },
+  });
+});

@@ -15,6 +15,7 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
   const [error, setError] = React.useState<string>();
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
+  const suggestions = React.useMemo(() => [...new Set([...Object.keys(overrides), ...modelKeys])], [overrides, modelKeys]);
   const choose = (key: string) => {
     setModelKey(key);
     if (Object.prototype.hasOwnProperty.call(overrides, key)) {
@@ -48,7 +49,7 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
     <FieldSet title="Model compaction budgets">
       <Field label="Model" description="Choose or enter an exact provider/model. Models with no override keep automatic defaults.">
         <Input aria-label="Model for compaction budget" list={listId} value={modelKey} onChange={(event) => choose(event.target.value)} placeholder="openai/gpt-6-sol" disabled={disabled || saving} />
-        <datalist id={listId}>{[...new Set([...Object.keys(overrides), ...modelKeys])].map((key) => <option key={key} value={key} />)}</datalist>
+        <datalist id={listId}>{suggestions.map((key) => <option key={key} value={key} />)}</datalist>
       </Field>
       <Field label="Reserved tokens" description={`Space for the compaction summary. Leave blank for ${DEFAULT_COMPACTION_RESERVE_TOKENS.toLocaleString("en-US")} tokens.`}>
         <Input aria-label="Compaction reserved tokens" type="number" min={2} max={10000000} step={1} placeholder={String(DEFAULT_COMPACTION_RESERVE_TOKENS)} value={reserve} onChange={(event) => setReserve(event.target.value)} disabled={disabled || saving} />

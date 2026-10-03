@@ -1,4 +1,4 @@
-import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
@@ -1037,6 +1037,30 @@ export function createConfigStore(
           modelId,
           level,
         );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /**
+     * Atomically set or clear one model's compaction budget against the stored
+     * overrides, so concurrent edits to other models are never lost. Stored
+     * overrides that no longer validate are left for the user to repair.
+     */
+    async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        const stored = config.settings.compactionModelOverrides;
+        let current: CompactionModelOverrides = {};
+        if (stored !== undefined) {
+          try { current = parseCompactionModelOverrides(stored); }
+          catch { throw new Error("Model compaction budgets are invalid; repair settings.json before changing them."); }
+        }
+        const next: Record<string, CompactionModelBudget> = { ...current };
+        if (budget === undefined || Object.keys(budget).length === 0) delete next[modelKey];
+        else next[modelKey] = budget;
+        const parsed = parseCompactionModelOverrides(next);
+        if (Object.keys(parsed).length === 0) delete config.settings.compactionModelOverrides;
+        else config.settings.compactionModelOverrides = parsed;
         return structuredClone(config.settings);
       });
       return runtimeSettingsFrom(saved);
