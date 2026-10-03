@@ -48,9 +48,11 @@ export function createLocalClassifierModels(deps: {
     }
   }
   const find = (provider: string, id: string) => entries.find((m) => m.provider === provider && m.id === id);
+  const stillCurrent = (snapshot: StoredProvider, provider: StoredProvider | undefined, id: string): provider is StoredProvider =>
+    enabled(provider) && sameProviderConnection(snapshot, provider) && hasModel(provider, id);
   async function current(snapshot: StoredProvider, id: string): Promise<StoredProvider> {
     const provider = await deps.getProvider(snapshot.id);
-    if (!enabled(provider) || !sameProviderConnection(snapshot, provider) || !hasModel(provider, id)) {
+    if (!stillCurrent(snapshot, provider, id)) {
       throw new Error("Local classifier configuration changed. Start a new request after checking the provider settings.");
     }
     return provider;
@@ -59,11 +61,14 @@ export function createLocalClassifierModels(deps: {
     async getAvailableOfType<T extends ModelType>(type: T, providerId?: string, options?: Parameters<OperationModels["getAvailableOfType"]>[2]) {
       const base = await deps.models.getAvailableOfType(type, providerId, options);
       if (type !== "classifier") return base;
-      const available: LocalModel[] = [];
-      for (const model of entries) {
-        if (providerId && model.provider !== providerId) continue;
-        try { await current(providers.get(model.provider)!, model.id); available.push(structuredClone(model)); } catch { /* Revocation removes inventory immediately. */ }
-      }
+      // One current-provider read per opted-in provider, in parallel, not one per model.
+      const wanted = [...providers.keys()].filter((id) => !providerId || id === providerId);
+      const latest = new Map(await Promise.all(wanted.map(async (id) =>
+        [id, await deps.getProvider(id).catch(() => undefined)] as const)));
+      // Revocation removes inventory immediately.
+      const available = entries
+        .filter((model) => latest.has(model.provider) && stillCurrent(providers.get(model.provider)!, latest.get(model.provider), model.id))
+        .map((model) => structuredClone(model));
       // The generic branch is narrowed by the type discriminator above.
       return [...base, ...available] as readonly ModelTypeMap[T][];
     },
