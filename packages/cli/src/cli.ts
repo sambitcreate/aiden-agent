@@ -9,16 +9,18 @@
  * ~/.aiden/agent, honors AIDEN_CODING_AGENT_DIR, and uses .aiden/ for project
  * resources.
  *
- * This module imports only Node built-ins and the import-free command help.
- * It answers the static requests (`--version`, `aiden help`) directly and
- * loads the runtime in src/cli-runtime.ts with a dynamic import otherwise, so
- * those answers do not pay for evaluating pi and the Aiden cores.
+ * This module imports only Node built-ins and two import-free helpers. It
+ * answers the static requests (`--version`, `aiden help`) directly and loads
+ * the runtime in src/cli-runtime.ts with a dynamic import otherwise, so those
+ * answers do not pay for evaluating pi and the Aiden cores, and the SQLite
+ * warning filter is in place before `node:sqlite` is linked.
  */
 
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
+import { suppressSqliteExperimentalWarning } from "./sqlite-warning.ts";
 
 // Aiden CLI carries its own release cadence; pi.dev's version feed would
 // compare Aiden's version numbers against pi's forever. Allow an explicit
@@ -55,6 +57,7 @@ const invokedAsCli = (() => {
 })();
 
 if (invokedAsCli) {
+	suppressSqliteExperimentalWarning();
 	const argv = process.argv.slice(2);
 	const appDir = dirname(entry);
 	process.env.AIDEN_CLI_ENTRY = entry;

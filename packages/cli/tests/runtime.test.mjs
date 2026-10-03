@@ -31,6 +31,7 @@ test("--version answers before the runtime loads and agrees with pi's own answer
 	const viaPi = runCli(["--version", "--offline"], { env: { ...process.env, PI_OFFLINE: "1" } });
 	assert.equal(viaPi.status, 0, viaPi.stderr);
 	assert.equal(fast.stdout, viaPi.stdout);
+	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
 });
 
 test("aiden help lists the Aiden commands", () => {
@@ -38,6 +39,25 @@ test("aiden help lists the Aiden commands", () => {
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stdout, /^Aiden commands:/);
 	assert.match(result.stdout, /^ {2}workspace /m);
+});
+
+test("the SQLite experimental warning is filtered and other warnings are not", () => {
+	const filter = pathToFileURL(path.join(pkgDir, "src", "sqlite-warning.ts")).href;
+	const script = [
+		`import { suppressSqliteExperimentalWarning } from ${JSON.stringify(filter)};`,
+		"suppressSqliteExperimentalWarning();",
+		"await import('node:sqlite');",
+		"process.emitWarning('Probe feature is experimental', 'ExperimentalWarning');",
+		"process.emitWarning('SQLite probe without a type');",
+	].join("\n");
+	const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+		encoding: "utf-8",
+		timeout: 60_000,
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+	assert.match(result.stderr, /ExperimentalWarning: Probe feature is experimental/);
+	assert.match(result.stderr, /Warning: SQLite probe without a type/);
 });
 
 test("--help brands the CLI as aiden", () => {
@@ -53,6 +73,7 @@ test("AIDEN_CODING_AGENT_DIR isolates state (rebranded env override)", () => {
 		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
 	});
 	assert.equal(result.status, 0, result.stderr);
+	assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
 	// The agent dir being populated proves the rebranded env var redirected
 	// state away from ~/.pi and ~/.aiden.
 	assert.ok(existsSync(path.join(agentDir, "auth.json")), "auth.json must land in the agent dir");
