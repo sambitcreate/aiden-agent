@@ -1,7 +1,7 @@
-import { createDecipheriv, hkdfSync } from "node:crypto";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import { normalizeAidenManualPairingCode } from "./aiden-remote-pairing.js";
 import { parseAidenRemoteJson } from "./aiden-remote-protocol.js";
+import { hkdfSha256, openAesGcm } from "./aiden-remote-sealed-envelope.js";
 import { validatePeerTrust, type PeerTrust } from "./peer-transport.js";
 
 export function peerRecord(value: unknown): Record<string, unknown> {
@@ -106,32 +106,24 @@ export function decryptPeerPairing(
   const sessionId = hostIdentifier(envelope.sessionId);
   const expiresAt = peerText(envelope.expiresAt, 40);
   const kind = "aiden-manual-pairing-v1";
-  const key = Buffer.from(
-    hkdfSync(
-      "sha256",
-      Buffer.from(normalizeAidenManualPairingCode(code), "ascii"),
-      base64(envelope.salt, 16),
-      Buffer.from(`${kind}\n${sessionId}`),
-      32,
-    ),
+  const key = hkdfSha256(
+    Buffer.from(normalizeAidenManualPairingCode(code), "ascii"),
+    base64(envelope.salt, 16),
+    `${kind}\n${sessionId}`,
   );
   try {
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      key,
-      base64(envelope.nonce, 12),
-    );
-    decipher.setAAD(Buffer.from(`${kind}\n${sessionId}\n${expiresAt}`));
-    decipher.setAuthTag(base64(envelope.tag, 16));
     const ciphertext = Buffer.from(
       peerText(envelope.ciphertext, 6000),
       "base64url",
     );
     if (ciphertext.length > 4096) throw new Error("Pairing payload too large.");
-    const payload = Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]);
+    const payload = openAesGcm(
+      key,
+      base64(envelope.nonce, 12),
+      ciphertext,
+      base64(envelope.tag, 16),
+      `${kind}\n${sessionId}\n${expiresAt}`,
+    );
     const pairing = parsePeerPairing(payload.toString("utf8"), now);
     if (pairing.endpoint !== endpoint || pairing.expiresAt !== expiresAt)
       throw new Error("Pairing endpoint mismatch.");
