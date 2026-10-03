@@ -470,17 +470,20 @@ export class PeerTransport {
             return;
           }
           const frames = streaming ? new PeerEventFrames() : undefined;
+          const frameBoundary = () => {
+            clearTimeout(deadline);
+            deadline = setTimeout(abort, DEADLINE_MS);
+          };
           if (streaming) {
+            // The quiet time before the first frame starts once the stream is accepted,
+            // so a slow connect does not shorten it.
+            frameBoundary();
             try {
               input.onOpen?.();
             } catch {
               // An observer must not break the stream.
             }
           }
-          const frameBoundary = () => {
-            clearTimeout(deadline);
-            deadline = setTimeout(abort, DEADLINE_MS);
-          };
           const decoder = new TextDecoder("utf-8", { fatal: true });
           const binary: Buffer[] = [];
           let text = "";
