@@ -1581,7 +1581,8 @@ export class PiAgentRuntimeHarness {
       if (!activeSignal) throw new Error("The tool runtime is not active.");
       const callSignal = signal ? AbortSignal.any([signal, activeSignal]) : activeSignal;
       callSignal.throwIfAborted();
-      const tools = this.getCallableTools();
+      // getCallableTools returns a fresh array owned by this call.
+      const tools = this.getCallableTools() as AgentTool[];
       const tool = tools.find((item) => item.name === name && isPiCodemodeCallable(item));
       if (!tool) throw new Error("This tool is not available to codemode.");
       if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
