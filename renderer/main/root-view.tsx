@@ -1,5 +1,6 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { appApi, chatsApi, onNotification } from "../lib/ipc";
@@ -404,6 +405,7 @@ function RootContent() {
       <OnboardingFlow />
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+      <PairingRequestSheet />
     </div>
   );
 }

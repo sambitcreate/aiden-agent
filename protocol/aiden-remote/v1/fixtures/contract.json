@@ -1140,5 +1140,95 @@
         "resolvedAt": "2026-08-18T19:01:09.000Z"
       }
     }
+  },
+  "pairingRequests": {
+    "feature": "pairing-requests-v1",
+    "create": {
+      "request": {
+        "deviceName": "Fixture Linux Desktop",
+        "deviceType": "linux",
+        "publicKey": "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY",
+        "clientVersion": "0.52.0"
+      },
+      "response": {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "pollSecret": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "expiresAt": "2026-08-18T19:02:00.000Z",
+        "hostCommitment": "9l-hyGsHBURBtMJu9IzdhYl8u4pMZ361g5LOscBuWl8"
+      }
+    },
+    "reveal": {
+      "request": {
+        "requesterNonce": "09bZ3N_i5ejr7vH09_r9AAMGCQwPEhUYGx4hJCcqLTA"
+      },
+      "response": {
+        "hostNonce": "Q0xVXmdweYKLlJ2mr7jBytPc5e73AAkSGyQtNj9IUVo"
+      }
+    },
+    "status": [
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "pending",
+        "expiresAt": "2026-08-18T19:02:00.000Z"
+      },
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "approved",
+        "expiresAt": "2026-08-18T19:02:00.000Z",
+        "envelope": {
+          "kind": "aiden-pairing-request-v1",
+          "protocolVersion": 1,
+          "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+          "expiresAt": "2026-08-18T19:02:00.000Z",
+          "hostPublicKey": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+          "salt": "AAECAwQFBgcICQoLDA0ODw",
+          "nonce": "EBESExQVFhcYGRob",
+          "ciphertext": "ZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGiow",
+          "tag": "yMnKy8zNzs_Q0dLT1NXW1w"
+        }
+      },
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "denied",
+        "expiresAt": "2026-08-18T19:02:00.000Z"
+      }
+    ],
+    "error": {
+      "error": {
+        "code": "pairing_closed",
+        "message": "This computer is not accepting connection requests.",
+        "requestId": "request_fixture_03",
+        "retryable": false
+      }
+    },
+    "matchCodeVectors": [
+      {
+        "requesterPublicKey": "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY",
+        "serverSpkiSha256": "sha256/cXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5A=",
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "requesterNonce": "09bZ3N_i5ejr7vH09_r9AAMGCQwPEhUYGx4hJCcqLTA",
+        "hostNonce": "Q0xVXmdweYKLlJ2mr7jBytPc5e73AAkSGyQtNj9IUVo",
+        "hostCommitment": "9l-hyGsHBURBtMJu9IzdhYl8u4pMZ361g5LOscBuWl8",
+        "matchCode": "483342"
+      },
+      {
+        "requesterPublicKey": "Dg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0",
+        "serverSpkiSha256": "sha256/fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ0=",
+        "requestId": "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5",
+        "requesterNonce": "3uHk5-rt8PP2-fz_AgUICw4RFBcaHSAjJiksLzI1ODs",
+        "hostNonce": "VF1mb3iBipOcpa63wMnS2-Tt9v8IERojLDU-R1BZYms",
+        "hostCommitment": "WOecAdu_gmwZ4pmQ4iuddo1c8POxpevVCa46mnyPj78",
+        "matchCode": "607391"
+      },
+      {
+        "requesterPublicKey": "fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ0",
+        "serverSpkiSha256": "sha256/Tk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG0=",
+        "requestId": "pairreq_NjtARUpPVFleY2htcnd8gYaLkJWan6Sp",
+        "requesterNonce": "jpGUl5qdoKOmqayvsrW4u77BxMfKzdDT1tnc3-Ll6Os",
+        "hostNonce": "ZG12f4iRmqOstb7H0Nni6_T9Bg8YISozPEVOV2Bpcns",
+        "hostCommitment": "vzlNrbjRTHUnV9Y36lptQl0iAYpfOQ_ueI5Ad1UnvhU",
+        "matchCode": "086098"
+      }
+    ]
   }
 }

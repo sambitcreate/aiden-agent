@@ -1,10 +1,4 @@
-import {
-  createCipheriv,
-  createHash,
-  hkdfSync,
-  randomBytes,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
@@ -15,6 +9,7 @@ import {
   type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { hkdfSha256, sealAesGcm } from "./aiden-remote-sealed-envelope.js";
 import type {
   AidenRemoteDeviceType,
   AidenRemoteStateRegistry,
@@ -29,7 +24,6 @@ const MANUAL_PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const MANUAL_PAIRING_KIND = "aiden-manual-pairing-v1" as const;
 const MANUAL_PAIRING_SALT_BYTES = 16;
 const MANUAL_PAIRING_NONCE_BYTES = 12;
-const MANUAL_PAIRING_TAG_BYTES = 16;
 const MAX_PAIRING_PAYLOAD_BYTES = 4_096;
 
 export interface AidenRemotePairingBootstrap {
@@ -176,13 +170,7 @@ function manualPairingAdditionalData(sessionId: string, expiresAt: string): Buff
 }
 
 function deriveManualPairingKey(code: string, salt: Buffer, sessionId: string): Buffer {
-  return Buffer.from(hkdfSync(
-    "sha256",
-    Buffer.from(code, "ascii"),
-    salt,
-    manualPairingInfo(sessionId),
-    32,
-  ));
+  return hkdfSha256(Buffer.from(code, "ascii"), salt, manualPairingInfo(sessionId));
 }
 
 export function parseAidenRemotePairingExchangeInput(
@@ -313,11 +301,12 @@ export class AidenRemotePairingService {
     }
     const nonce = this.dependencies.randomBytes(MANUAL_PAIRING_NONCE_BYTES);
     const expiresAt = new Date(current.expiresAt).toISOString();
-    const cipher = createCipheriv("aes-256-gcm", current.manualCodeKey, nonce, {
-      authTagLength: MANUAL_PAIRING_TAG_BYTES,
-    });
-    cipher.setAAD(manualPairingAdditionalData(sessionId, expiresAt));
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const { ciphertext, tag } = sealAesGcm(
+      current.manualCodeKey,
+      nonce,
+      plaintext,
+      manualPairingAdditionalData(sessionId, expiresAt),
+    );
     const bootstrap: AidenRemoteManualPairingBootstrap = {
       kind: MANUAL_PAIRING_KIND,
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -326,7 +315,7 @@ export class AidenRemotePairingService {
       salt: current.manualSalt.toString("base64url"),
       nonce: nonce.toString("base64url"),
       ciphertext: ciphertext.toString("base64url"),
-      tag: cipher.getAuthTag().toString("base64url"),
+      tag: tag.toString("base64url"),
     };
     current.manualBootstrap = bootstrap;
     current.manualCodeKey.fill(0);

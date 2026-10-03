@@ -3916,7 +3916,8 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       displayName: "Studio Mac",
       platform: "mac",
       contractRevision: 19,
-      pairingRequests: true,
+      // No request service is wired in this fixture, so requests are off.
+      pairingRequests: false,
     });
     for (const query of ["detail=full", "detail=host&x=1", "verbose"]) {
       const invalid = await fetch(`${app.base}/health?${query}`);
