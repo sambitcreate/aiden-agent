@@ -274,13 +274,25 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         error.remote?.code === "credential_revoked",
     );
     const resumed: string[] = [];
+    const openedAt: number[] = [];
     assert.deepEqual(
-      await client.events({ path: "/resume", lastEventId: "epoch_1:41" }, (frame) =>
-        resumed.push(frame),
+      await client.events(
+        {
+          path: "/resume",
+          lastEventId: "epoch_1:41",
+          onOpen: () => openedAt.push(resumed.length),
+        },
+        (frame) => resumed.push(frame),
       ),
       { reason: "eof" },
     );
     assert.deepEqual(resumed, ["data: epoch_1:41"]);
+    // The accepted-stream signal precedes every frame; a refused stream never opens.
+    assert.deepEqual(openedAt, [0]);
+    await assert.rejects(
+      client.events({ path: "/denied", onOpen: () => openedAt.push(-1) }, () => {}),
+    );
+    assert.deepEqual(openedAt, [0]);
     await assert.rejects(
       client.events({ path: "/resume", lastEventId: "bad\nid" }, () => {}),
     );

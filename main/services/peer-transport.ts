@@ -26,6 +26,11 @@ export interface PeerRequest {
   timeoutMs?: number;
   /** SSE resume cursor sent as `Last-Event-ID`. */
   lastEventId?: string;
+  /**
+   * Streams only: called once the host accepted the stream, before any frame.
+   * A resumed feed may legitimately send nothing until something changes.
+   */
+  onOpen?(): void;
 }
 
 /** How a stream ended without an error: the host closed it, or the 5-minute session cap fired. */
@@ -440,6 +445,13 @@ export class PeerTransport {
             return;
           }
           const frames = streaming ? new PeerEventFrames() : undefined;
+          if (streaming) {
+            try {
+              input.onOpen?.();
+            } catch {
+              // An observer must not break the stream.
+            }
+          }
           const frameBoundary = () => {
             clearTimeout(deadline);
             deadline = setTimeout(abort, DEADLINE_MS);
