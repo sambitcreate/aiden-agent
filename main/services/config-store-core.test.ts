@@ -2941,3 +2941,24 @@ test("per-model compaction budgets persist, reset and reject invalid patches ato
   await next.setSettings({ compactionModelOverrides: {} });
   assert.deepEqual((await next.getSettings()).compactionModelOverrides, {});
 });
+
+test("compaction settings track writes and hand-edits while reusing the parsed snapshot between them", async (t) => {
+  const h = await harness(t);
+  assert.deepEqual({ ...(await h.store.getCompactionSettings()) }, { compactionEngine: "llm", compactionModelOverrides: undefined });
+
+  await h.store.setSettings({ compactionEngine: "vcc", compactionModelOverrides: { "openai/gpt-5": { reserveTokens: 8_000 } } });
+  const first = await h.store.getCompactionSettings();
+  assert.equal(first.compactionEngine, "vcc");
+  assert.deepEqual(first.compactionModelOverrides, { "openai/gpt-5": { reserveTokens: 8_000 } });
+  assert.equal(await h.store.getCompactionSettings(), first, "unchanged settings are not re-parsed");
+
+  // An external edit that stores an invalid override reads as absent, exactly as getSettings projects it.
+  const onDisk = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  onDisk.settings.compactionModelOverrides = { "openai/gpt-5": { reserveTokens: -1 } };
+  await fs.writeFile(h.settingsFile, JSON.stringify(onDisk), "utf-8");
+  assert.equal(await h.stores.settings.reload(), true);
+  const edited = await h.store.getCompactionSettings();
+  assert.equal(edited.compactionEngine, "vcc");
+  assert.equal(edited.compactionModelOverrides, undefined);
+  assert.equal((await h.store.getSettings()).compactionModelOverrides, undefined);
+});

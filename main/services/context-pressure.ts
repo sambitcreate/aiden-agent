@@ -259,7 +259,7 @@ export async function chatContextPressure(
     retainsSystemUpdates: modelRetainsSystemUpdates(model),
     overrides,
   });
-  const settings = await configStore.getSettings();
+  const settings = await configStore.getCompactionSettings();
   options.compactionReserveTokens = configuredCompactionReserveTokens(settings.compactionModelOverrides, model, settings.compactionEngine);
   const hasDraft =
     (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
