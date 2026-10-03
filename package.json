@@ -275,6 +275,12 @@
     "wait-on": "^9.0.10",
     "yaml": "2.9.0"
   },
+  "overrides": {
+    "@earendil-works/pi-ai@0.87.1": {
+      "@google/genai": "$@google/genai",
+      "openai": "7.19.0"
+    }
+  },
   "engines": {
     "node": ">=22.19"
   },
