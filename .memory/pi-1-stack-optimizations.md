@@ -98,3 +98,24 @@ merging `origin/main` into #299 and cascading each parent into its child.
   toggle that lands during resolution.
 - Not done (not in scope): 304-3 (move the lifecycle wiring onto
   `broadcastChatSettled`), 304-4 (regroup the test), 304-5 (onboarding note).
+
+## #303 `codex/pi-1-model-tools`
+
+- **PR-303-1:** classifier `jsonObject` validates through `copyBoundedJson`
+  (4096 nodes, depth 16, UTF-8 size cap) with the new `ordinaryObjects` option,
+  so results keep `Object.prototype` and stay `deepStrictEqual`-comparable.
+  The exact stringify size check stays; the stringify→parse round trip is gone.
+- **PR-303-2:** `validImages` decodes each image once and returns
+  `sizes: {bytes, pixels}`; reference resolution reuses them for the 40M pixel
+  budget and the disclosed byte counts. Canonical base64 is checked by the final
+  quantum (`hasCanonicalBase64Padding`, moved from `mcp-tool-result.ts` into
+  `display-image-extension.ts` and shared) instead of a full re-encode.
+- **PR-303-3:** `PiModelToolsHost.resolveImages(ids)` (optional) resolves a
+  batch from one chat inventory read; `resolveImage` remains as the single-ID
+  fallback. The approval disclosure is deliberately not cached for execution:
+  execution re-reads once so an image removed or changed after approval is
+  refused before paid dispatch.
+- **PR-303-4:** `configStore.listStoredProviders()` composes intent + model
+  cache without `hasKey`. The model-operation extension uses it for labels and
+  usage accounting, so preparing a turn no longer reads the keychain once per
+  provider.
