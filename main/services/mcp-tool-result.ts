@@ -17,6 +17,17 @@ function structuredContent(value: unknown): JsonValue | undefined {
   return copyBoundedJson(value, { maxNodes: 4096, maxDepth: 32, maxSize: MAX_MCP_STRUCTURED_CHARS, measure: worstCaseJsonSize });
 }
 
+/**
+ * After the strict alphabet test and a length that is a multiple of four, the
+ * only non-canonical base64 left is a set bit in the unused low bits before
+ * the padding. Checking that one character replaces a full re-encode.
+ */
+function hasCanonicalPadding(data: string): boolean {
+  if (data.endsWith("==")) return "AQgw".includes(data.charAt(data.length - 3));
+  if (data.endsWith("=")) return "AEIMQUYcgkosw048".includes(data.charAt(data.length - 2));
+  return true;
+}
+
 function imagesFor(result: unknown): Map<unknown, ImageContent> {
   const images = new Map<unknown, ImageContent>();
   if (!record(result) || !Array.isArray(result.content)) return images;
@@ -30,8 +41,9 @@ function imagesFor(result: unknown): Map<unknown, ImageContent> {
       typeof image.mimeType !== "string" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.mimeType) ||
       image.data.length > Math.ceil(MAX_MCP_IMAGE_BYTES / 3) * 4 || image.data.length % 4 !== 0 ||
       !/^[A-Za-z0-9+/]+={0,2}$/u.test(image.data)) continue;
+    if (!hasCanonicalPadding(image.data)) continue;
     const bytes = Buffer.from(image.data, "base64");
-    if (bytes.length > MAX_MCP_IMAGE_BYTES || bytes.toString("base64") !== image.data) continue;
+    if (bytes.length > MAX_MCP_IMAGE_BYTES) continue;
     try { validateDisplayImageDimensions(bytes, image.mimeType, "MCP image"); } catch { continue; }
     images.set(part, { type: "image", data: image.data, mimeType: image.mimeType });
   }
