@@ -29,8 +29,22 @@ Where the master plan leaves a choice open, this PR takes the conservative optio
 8. **The messages window omits the turn stats, skill and subagent references** that `GET /chats/{id}` carries. PR 6 asks for them only if the remote view needs them, so the window stays small and the full-chat contract is untouched.
 9. **Repository identity applies only to a workspace's root.** It is derived from the `origin` fetch URL that `git status` already reads, because the remote list is now read verbatim. It is never crawled, never sent for nested folders, and never included in the workspace revision. The projection is only emitted on the host feed, which is visible to `host:events` holders only.
 10. **The Bot host-owner audience is read-only.** A `bot:read` desktop controller that holds `host:events` reads the host's Bot chats as the desktop audience (`desktop:local`). Writes keep the device-scoped audience.
-11. **Run control does not require chat-level write access.** It authorizes on `runs:control` plus the run's current identity, and is limited to the runs the host journal knows about.
+11. **Run control still requires chat-level write access** (revised during implementation). It authorizes on `runs:control`, the run's current identity, and the same chat write access a device-scoped send would need. It is limited to the runs the host journal knows about. Dropping the chat check is deferred until a host-owner audience for writes exists.
 12. **`pairingRequests` is advertised as `true`.** Hosts advertise the field now, and PR 4 adds the request/approve routes and the Settings switch. It carries no secret and gives no access.
+
+### Decisions recorded during implementation
+
+13. **The `/health` descriptor is opt-in through `?detail=host`.** The strict iOS health decoder rejects unknown keys, so the plain `/health` body is unchanged. Any other query string returns `400 invalid_request`.
+14. **Repository identity appears only on host-feed workspaces** (revises decision 9's scope). It is built from cached Git data, has credentials stripped, and never contributes to the device-scoped workspace projection or revision.
+15. **Feed chat summaries exclude Bot chats.** Bots travel as `bot.*` entries, and a Bot chat's `run.state` reaches only desktops that hold `bot:read`. Devices without `bot:read` get `bots: []` in the snapshot.
+16. **The run-control idempotency ledger is in memory with a 10-minute TTL.** Keys match `^[\x21-\x7e]{16,128}$`. Errors are recorded as outcomes, so a replay returns the same error. A key reused with a different body returns `409 idempotency_conflict`, not `approval_resolved`.
+17. **`run.ended` repeats the sequence of the terminal event it follows.** It is synthesized and carries no new journal entry. PR 3 clients must not discard it as a duplicate id.
+18. **Host grants are negotiable without the progress opt-in.** Pairing issues them only with `acceptsProgressCapabilities`, but a paired `mac`/`linux` device can request them later through `POST /device/capabilities`. Phones are refused with 403 before the host reveals whether it serves the feed. A host without the services answers 404.
+19. **The messages window is advertised to every device.** `chat-messages-window-v1` is read-only and uses the device's existing chat read access. The host feed, run-stream and run-control features are desktop-only.
+20. **Revocation closes SSE subscriptions only.** In-flight controls are refused by the access check, and runs are never cancelled.
+21. **`x-aiden-sse-event`** is a new OpenAPI extension naming each SSE event type and its payload schema.
+22. **The shared SSE pump keeps one drain timer per blocked period.** Repeated writes against a full socket no longer stack timers.
+23. **The fixture `capabilities` array stays mobile-only.** The pairing response enum is every capability except `simulators:control`.
 
 ## Global constraints
 
