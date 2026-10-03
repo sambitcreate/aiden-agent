@@ -4,6 +4,18 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+// versionName is the single source; CI may pass -PaidenVersionName=1.2.3.
+// versionCode is derived as major * 1_000_000 + minor * 1_000 + patch, so the
+// same version always produces the same code and newer versions sort higher.
+val aidenVersionName = (findProperty("aidenVersionName") as String?) ?: "0.1.0"
+val aidenVersionCode = run {
+    val parts = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)$").matchEntire(aidenVersionName)?.destructured
+        ?: error("aidenVersionName must be MAJOR.MINOR.PATCH, got '$aidenVersionName'")
+    val (major, minor, patch) = parts.toList().map { it.toInt() }
+    require(minor < 1_000 && patch < 1_000 && major < 2_100) { "aidenVersionName out of range: $aidenVersionName" }
+    major * 1_000_000 + minor * 1_000 + patch
+}
+
 android {
     namespace = "sbtbiswas.AidenOnTheGo"
     compileSdk = 36
@@ -11,14 +23,15 @@ android {
         applicationId = "sbtbiswas.AidenOnTheGo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = aidenVersionCode
+        versionName = aidenVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -81,7 +94,6 @@ dependencies {
   implementation(libs.camera.camera2)
   implementation(libs.camera.lifecycle)
   implementation(libs.camera.view)
-  implementation(libs.play.services.code.scanner)
   implementation(libs.mlkit.barcode.scanning)
 
   // OkHttp
@@ -102,9 +114,4 @@ dependencies {
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.espresso.core)
-
-  // Navigation
-  implementation(libs.androidx.navigation3.ui)
-  implementation(libs.androidx.navigation3.runtime)
-  implementation(libs.androidx.lifecycle.viewmodel.navigation3)
 }
