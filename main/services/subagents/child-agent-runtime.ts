@@ -1,4 +1,4 @@
-import { resolveCompactionModelBudget } from "../../../renderer/shared/compaction.js";
+import { configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "../pi-vcc/recall.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
@@ -203,8 +203,9 @@ export class SubagentRuntimeRegistry {
     if (this.children.has(childId)) throw new Error("Subagent child identity was reused.");
     let entry!: RegisteredSubagentChild;
     const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
+    const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
     const contextOptions = {
-      compactionReserveTokens: budget?.reserveTokens,
+      compactionReserveTokens: inputReserveTokens,
       contextWindow: spec.runtime.model.contextWindow,
       systemPrompt: spec.systemPrompt,
       tools: spec.tools,
@@ -257,7 +258,7 @@ export class SubagentRuntimeRegistry {
         session: sessionPromise,
         initialMessages: spec.initialMessages,
         compaction: compactionOptions,
-        compactionReserveTokens: budget?.reserveTokens,
+        compactionReserveTokens: inputReserveTokens,
         ...(this.appendSessionMessages ? { appendMessages: this.appendSessionMessages } : {}),
         signal: cancellation.signal,
         ...(this.effectStore
