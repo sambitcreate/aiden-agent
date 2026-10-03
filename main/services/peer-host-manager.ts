@@ -251,6 +251,19 @@ export class PeerHostManager {
     await this.sync();
   }
 
+  /**
+   * The person asked to reconnect, or re-paired a host: try now with no
+   * backoff, clearing a block. Unknown or disabled hosts are ignored.
+   */
+  async reconnect(hostId: string): Promise<void> {
+    await this.ready;
+    await this.sync();
+    const sup = this.supervisors.get(hostIdentifier(hostId));
+    if (!sup || this.closed) return;
+    sup.failures = 0;
+    this.start(sup);
+  }
+
   /** Sleep/resume, unlock or a network change: reconnect every unblocked host once. */
   wake(): void {
     if (this.closed || this.wakeTimer !== undefined) return;

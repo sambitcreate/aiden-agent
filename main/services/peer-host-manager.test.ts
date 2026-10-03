@@ -452,6 +452,13 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
     await settle();
     assert.equal(harness.status("host_a").state.kind, "connected");
     assert.equal(harness.status("host_b").state.kind, "blocked");
+
+    // After a re-pair, an explicit reconnect clears the block at once.
+    revoked.server = () => ({ protocolVersion: 1, instanceId: "host_b", capabilities: CAPABILITIES, features: FEATURES });
+    await harness.manager.reconnect("host_b");
+    await settle();
+    assert.equal(harness.status("host_b").state.kind, "connected");
+    assert.deepEqual(revoked.calls.slice(0, 2), ["GET /server", "GET /server"]);
   } finally {
     harness.close();
   }
