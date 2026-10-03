@@ -18,6 +18,7 @@ import {
   projectNextContextUsage,
   projectMessagesForModel,
 } from "./generation-context.js";
+import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 
 const options = {
   contextWindow: 128_000,
@@ -967,4 +968,24 @@ test("model-specific reserves tighten context capacity without reducing safety f
   assert.equal(configured.reservedTokens, 64_000);
   assert.equal(configured.inputBudgetTokens, 64_000);
   assert.equal(projectChatContextPressure([user("hello")], { ...options, compactionReserveTokens: 2 }).reservedTokens, ordinary.reservedTokens);
+});
+
+test("a recent-tokens-only model override leaves a small window's input budget unchanged", () => {
+  const small = { ...options, contextWindow: 32_000 };
+  const model = { provider: small.providerId, id: small.modelId, contextWindow: small.contextWindow };
+  const key = `${model.provider}/${model.id}`;
+  const ordinary = projectChatContextPressure([user("hello")], small);
+  const keepOnly = projectChatContextPressure([user("hello")], {
+    ...small,
+    compactionReserveTokens: configuredCompactionReserveTokens({ [key]: { keepRecentTokens: 4_000 } }, model),
+  });
+  assert.equal(keepOnly.inputBudgetTokens, ordinary.inputBudgetTokens);
+  assert.equal(keepOnly.reservedTokens, ordinary.reservedTokens);
+  // An explicit reserve still tightens the budget, bounded to a quarter of the window.
+  const reserved = projectChatContextPressure([user("hello")], {
+    ...small,
+    compactionReserveTokens: configuredCompactionReserveTokens({ [key]: { reserveTokens: 30_000 } }, model),
+  });
+  assert.equal(reserved.reservedTokens, Math.max(ordinary.reservedTokens, 8_000));
+  assert.ok(reserved.inputBudgetTokens <= ordinary.inputBudgetTokens);
 });
