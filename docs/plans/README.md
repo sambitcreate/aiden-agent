@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merges). "On main" means merged after 0.51.0 and not yet in a release.
 
-Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), proposed built-in Aiden knowledge/actions plan, and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The expanded MVP includes desktop, iOS, Android and CLI TUI controls. This adds research; older release-status rows have not been globally reconciled. The eight Pi 1.0 PRs remain open, while main still pins Pi 0.87.1.
+Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), [implemented Aiden knowledge/actions MVP (PR #312)](https://github.com/sambitcreate/aiden-agent/pull/312), and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The expanded MVP includes desktop, iOS, Android and CLI TUI controls. This adds research; older release-status rows have not been globally reconciled. The eight Pi 1.0 PRs remain open, while main still pins Pi 0.87.1.
 
 ## Active and partial
 

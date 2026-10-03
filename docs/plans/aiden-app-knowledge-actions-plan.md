@@ -1,6 +1,6 @@
 # Built-in Aiden knowledge and app actions
 
-Status: **Implemented MVP; local validation complete, PR/hosted validation in progress. Release hardware acceptance remains open.**
+Status: **Implemented MVP; local validation complete, [PR #312](https://github.com/sambitcreate/aiden-agent/pull/312) / hosted validation in progress. Release hardware acceptance remains open.**
 Date: 2026-10-03.
 Baseline: Aiden main `3f86d41af16ea653e907606fb2952d3f67b2dd6e` (0.52.0); desktop and CLI Pi pins remain 0.87.1.
 Pi reference: `/Users/sambitbiswas/projects/opp/pi`, `a276dabe57911253350bffb93cb7d7aff6a73261`; stable published target **1.0.0**, tag `a13d35a742`.
