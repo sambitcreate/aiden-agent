@@ -76,6 +76,7 @@ export const queryKeys = {
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
   aidenRemote: ["aidenRemote"] as const,
+  aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,

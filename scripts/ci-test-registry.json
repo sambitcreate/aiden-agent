@@ -489,6 +489,7 @@
         "renderer/components/message-bubble.test.tsx",
         "renderer/components/onboarding-flow.test.tsx",
         "renderer/components/remote-connection-popover.test.tsx",
+        "renderer/components/remote-pairing-request-sheet.test.tsx",
         "renderer/components/settings/about-settings.test.tsx",
         "renderer/components/settings/dictation-dictionary-settings.test.tsx",
         "renderer/components/settings/gemini-voice-setup.test.tsx",
