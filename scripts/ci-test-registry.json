@@ -568,6 +568,7 @@
         "renderer/lib/subagent-context-usage-store.test.ts",
         "renderer/lib/subagent-tree.test.ts",
         "renderer/lib/subagent-view-state.test.ts",
+        "renderer/lib/syntax-highlight.test.ts",
         "renderer/lib/telegram-workspace-options.test.ts",
         "renderer/lib/text-entry-focus-contract.test.ts",
         "renderer/lib/truncate-path.test.ts",
