@@ -432,3 +432,21 @@ test("revocation closes a device's run streams but never cancels the run", () =>
   assert.equal(keptFrames[keptFrames.length - 1]!.event, "text_delta");
   assert.equal(revoked.frames().length, 1);
 });
+
+test("a run stream refused at admission writes nothing and never follows the run", () => {
+  const { registry, service } = harness();
+  const refusedResponse = new RecordingResponse();
+  const refused = thrown(() =>
+    service.openRunEvents(controller("device-revoked"), "run-1", 0, refusedResponse.asServerResponse(), () => {
+      throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
+    }));
+  assert.equal(refused.code, "credential_revoked");
+  assert.equal(refusedResponse.status, 0);
+
+  const kept = open(service, controller("device-kept"), "run-1");
+  registry.publish("run-1", "chat:delta", { delta: "after revocation" });
+  assert.equal(refusedResponse.body, "");
+  const keptFrames = kept.frames();
+  assert.equal(keptFrames[keptFrames.length - 1]!.event, "text_delta");
+  assert.equal(registry.summary("run-1")!.state, "working");
+});

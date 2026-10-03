@@ -21,6 +21,7 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
@@ -48,7 +49,8 @@ async function fixture(options: {
   agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
-  hostFeed?: boolean;
+  /** `true` installs a recording fake; an object installs that feed service. */
+  hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
   hostRuns?: boolean;
   messagesWindow?: boolean;
   platform?: "mac" | "linux" | "windows";
@@ -941,7 +943,8 @@ async function fixture(options: {
     log: (entry) => logs.push(entry),
     ...(options.simulators ? { simulators: options.simulators } : {}),
     ...(options.platform ? { platform: options.platform } : {}),
-    ...(options.hostFeed
+    ...(typeof options.hostFeed === "object" ? { hostFeed: options.hostFeed } : {}),
+    ...(options.hostFeed === true
       ? {
           hostFeed: {
             open: async (device, cursor, response) => {
@@ -4110,5 +4113,44 @@ test("the messages window is offered to every device and validates its query", a
     }
   } finally {
     await phone.close();
+  }
+});
+
+test("a revocation that wins while the host feed is opening refuses the subscription", async () => {
+  let blocked = false;
+  let release: (() => void) | undefined;
+  let readStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => { readStarted = resolve; });
+  const hostFeed = new AidenRemoteHostFeedService({
+    source: {
+      read: async () => {
+        readStarted?.();
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { summaries: [], botChatIds: new Set<string>(), workspaces: [], bots: [] };
+      },
+    },
+    now: () => 1_000,
+    epoch: "epoch_router",
+  });
+  const mac = await fixture({
+    hostFeed,
+    deviceType: "mac",
+    acceptsProgressCapabilities: true,
+    capabilities: HOST_GRANTS,
+    authorizationBlocked: () => blocked,
+  });
+  try {
+    const pending = fetch(`${mac.base}/host/events`, { headers: HOST_HEADERS });
+    await started;
+    // Revocation blocks the device and runs its subscription cleanup while the feed is still reading.
+    blocked = true;
+    hostFeed.revokeDevice("device-authorized-12345678");
+    release?.();
+    const response = await pending;
+    assert.equal(response.status, 403);
+    assert.equal(await errorCode(response), "credential_revoked");
+  } finally {
+    hostFeed.close();
+    await mac.close();
   }
 });

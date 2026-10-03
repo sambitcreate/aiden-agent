@@ -35,9 +35,13 @@ export interface CursorSseHandle {
 
 export const AIDEN_REMOTE_SSE_DRAIN_TIMEOUT_MS = 30_000;
 
-/** Serialize one SSE frame. `id` and `event` never contain newlines. */
-export function sseFrame(id: string, event: string, data: unknown): string {
-  return `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+/**
+ * Serialize one SSE frame. `id` and `event` never contain newlines. A frame
+ * without an `id` leaves the client's `Last-Event-ID` unchanged.
+ */
+export function sseFrame(id: string | undefined, event: string, data: unknown): string {
+  const idLine = id === undefined ? "" : `id: ${id}\n`;
+  return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 /**

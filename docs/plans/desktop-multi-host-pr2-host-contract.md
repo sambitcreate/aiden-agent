@@ -45,6 +45,9 @@ Where the master plan leaves a choice open, this PR takes the conservative optio
 21. **`x-aiden-sse-event`** is a new OpenAPI extension naming each SSE event type and its payload schema.
 22. **The shared SSE pump keeps one drain timer per blocked period.** Repeated writes against a full socket no longer stack timers.
 23. **The fixture `capabilities` array stays mobile-only.** The pairing response enum is every capability except `simulators:control`.
+24. **Subscriptions are fenced at admission** (from review). The router passes an `admit` callback that re-acquires the device authorization. The host feed calls it after its opening read and the run streams call it before registering. A revocation that completes while a subscription is opening therefore refuses it with `403 credential_revoked` instead of leaving a stream that the revocation cleanup already missed.
+25. **Large host snapshots are chunked** (from review). A snapshot is packed in order (summaries, then workspaces, then Bots) into frames of at most 256 KiB of rows. Every frame but the last carries `partial: true` and no SSE id, so `Last-Event-ID` advances only when the whole snapshot has arrived and an interrupted snapshot is resent whole. A snapshot that fits in one chunk is unchanged on the wire.
+26. **A change signalled during a subscriber's opening read is not lost** (from review). `schedule()` ignores changes while nobody is subscribed, so after registering the first subscriber the feed reschedules any pending invalidation.
 
 ## Global constraints
 

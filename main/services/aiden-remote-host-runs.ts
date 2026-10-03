@@ -267,13 +267,19 @@ export class AidenRemoteHostRunService {
    * (decimal `Last-Event-ID`); a cursor older than retention yields a
    * `snapshot` first, a cursor past the head is a 400, and an unknown run is
    * `404 run_gone`. The stream ends after `run.ended`.
+   *
+   * `admit` is the caller's revocation fence, run synchronously before the
+   * subscription becomes visible to `revokeDevice`. It throws when the device
+   * lost its authorization while the caller awaited chat access.
    */
   openRunEvents(
     device: AidenRemoteHostRunDevice,
     runId: string,
     after: number,
     response: ServerResponse,
+    admit: () => void = () => {},
   ): void {
+    admit();
     const registry = this.options.registry;
     const initial = registry.summary(runId);
     if (!initial) throw runGone();

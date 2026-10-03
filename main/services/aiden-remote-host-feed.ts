@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import {
   AIDEN_REMOTE_HOST_FEED_MAX_BYTES,
   AIDEN_REMOTE_HOST_FEED_MAX_EVENTS,
+  AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
   type AidenRemoteHostFeedEventType,
@@ -58,6 +59,8 @@ export interface AidenRemoteHostFeedOptions {
   debounceMs?: number;
   maxEvents?: number;
   maxBytes?: number;
+  /** Item budget of one snapshot frame; tests lower it. */
+  snapshotChunkBytes?: number;
   /** Fixed epoch for tests; random per process otherwise. */
   epoch?: string;
 }
@@ -154,19 +157,30 @@ export class AidenRemoteHostFeedService {
   /**
    * Open `GET /host/events`. Always refreshes first, so a reconnecting reader
    * sees every change made while nobody was subscribed.
+   *
+   * `admit` is the caller's revocation fence. It runs synchronously after the
+   * refresh and immediately before the subscription becomes visible to
+   * `revokeDevice`, and throws when the device lost its authorization while
+   * the refresh was awaited. Nothing is written to `response` in that case.
    */
   async open(
     device: AidenRemoteHostFeedDevice,
     cursor: string | undefined,
     response: ServerResponse,
+    admit: () => void = () => {},
   ): Promise<void> {
     await this.refresh();
+    admit();
     const botVisible = device.capabilities.has("bot:read");
     let position = this.resumePosition(cursor);
+    /** Remaining frames of a snapshot being delivered one frame per pull. */
+    let snapshot: string[] = [];
     const pull = (): CursorSsePull => {
+      if (snapshot.length > 0) return { frames: [snapshot.shift()!] };
       if (position === undefined || position < this.floor) {
         position = this.head;
-        return { frames: [this.snapshotFrame(botVisible)] };
+        snapshot = this.snapshotFrames(botVisible);
+        return { frames: [snapshot.shift()!] };
       }
       const frames: string[] = [];
       for (
@@ -197,6 +211,9 @@ export class AidenRemoteHostFeedService {
     this.subscriptions.set(device.id, owned);
     // A refresh that landed between the first pull and registration is not missed.
     handle.wake();
+    // A change signalled while the opening refresh awaited its source was
+    // refused by `schedule` (no subscriber yet); deliver it now.
+    if (this.dirty) this.schedule();
   }
 
   /** Close every feed a revoked device holds. */
@@ -314,14 +331,48 @@ export class AidenRemoteHostFeedService {
     this.journalBytes = 0;
   }
 
-  private snapshotFrame(botVisible: boolean): string {
+  /**
+   * The snapshot at the current head as one or more frames. Items are packed
+   * in order (summaries, workspaces, Bots) up to the chunk budget. Every frame
+   * but the last carries `partial: true` and no SSE id, so a reader that
+   * disconnects mid-snapshot resumes from its previous cursor; the last frame
+   * carries the `<epoch>:<sequence>` id. A host that fits in one chunk sends
+   * exactly one frame without `partial`.
+   */
+  private snapshotFrames(botVisible: boolean): string[] {
     const state = this.state!;
-    return this.frame(this.head, "snapshot", {
-      epoch: this.epoch,
-      sequence: this.head,
+    const budget = this.options.snapshotChunkBytes ?? AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES;
+    const sections = {
       summaries: state.summaries,
       workspaces: state.workspaces,
       bots: botVisible ? state.bots : [],
+    } as const;
+    type Section = keyof typeof sections;
+    const empty = (): Record<Section, unknown[]> => ({ summaries: [], workspaces: [], bots: [] });
+    const chunks: Record<Section, unknown[]>[] = [];
+    let current = empty();
+    let bytes = 0;
+    for (const section of ["summaries", "workspaces", "bots"] as const) {
+      for (const item of sections[section]) {
+        const size = Buffer.byteLength(JSON.stringify(item)) + 1;
+        if (bytes > 0 && bytes + size > budget) {
+          chunks.push(current);
+          current = empty();
+          bytes = 0;
+        }
+        current[section].push(item);
+        bytes += size;
+      }
+    }
+    chunks.push(current);
+    return chunks.map((chunk, index) => {
+      const final = index === chunks.length - 1;
+      return this.frame(this.head, "snapshot", {
+        epoch: this.epoch,
+        sequence: this.head,
+        ...chunk,
+        ...(final ? {} : { partial: true }),
+      }, final);
     });
   }
 
@@ -329,6 +380,7 @@ export class AidenRemoteHostFeedService {
     sequence: number,
     type: AidenRemoteHostFeedEventType,
     payload: Record<string, unknown>,
+    withId = true,
   ): string {
     const wire: AidenRemoteHostFeedEvent = {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -339,7 +391,7 @@ export class AidenRemoteHostFeedService {
       terminal: false,
       payload,
     };
-    return sseFrame(`${this.epoch}:${sequence}`, type, wire);
+    return sseFrame(withId ? `${this.epoch}:${sequence}` : undefined, type, wire);
   }
 
   /** A replayable cursor position, or undefined when the reader needs a snapshot. */

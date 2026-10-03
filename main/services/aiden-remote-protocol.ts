@@ -193,6 +193,12 @@ export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
 export const AIDEN_REMOTE_HOST_FEED_MAX_BYTES = 8 * 1_048_576;
+/**
+ * Item budget of one host-feed `snapshot` frame. A larger host projection is
+ * split into `partial` frames so every frame stays well inside the 1 MiB SSE
+ * frame limit.
+ */
+export const AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES = 256 * 1_024;
 export const AIDEN_REMOTE_SSE_HEARTBEAT_MS = 15_000;
 
 /** Host platforms published by the opt-in `GET /health?detail=host` descriptor. */

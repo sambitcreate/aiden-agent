@@ -6,7 +6,9 @@ import {
   AidenRemoteHostFeedService,
   type AidenRemoteHostFeedState,
 } from "./aiden-remote-host-feed.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { PeerEventFrames } from "./peer-transport.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { HostRunSummary } from "./host-run-registry.js";
 
@@ -42,16 +44,18 @@ class RecordingResponse extends EventEmitter {
     return this;
   }
 
-  frames(): Array<{ id: string; event: string; data: Record<string, unknown> }> {
+  /** Every event frame; `id` is undefined for a frame that carries no SSE id. */
+  frames(): Array<{ id: string | undefined; event: string; data: Record<string, unknown> }> {
     return this.body
       .split("\n\n")
-      .filter((block) => block.startsWith("id: "))
+      .filter((block) => block.length > 0 && !block.startsWith(":"))
       .map((block) => {
-        const [idLine, eventLine, dataLine] = block.split("\n");
+        const field = (name: string) =>
+          block.split("\n").find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2);
         return {
-          id: idLine!.slice("id: ".length),
-          event: eventLine!.slice("event: ".length),
-          data: JSON.parse(dataLine!.slice("data: ".length)) as Record<string, unknown>,
+          id: field("id"),
+          event: field("event")!,
+          data: JSON.parse(field("data")!) as Record<string, unknown>,
         };
       });
   }
@@ -109,7 +113,13 @@ const desktop = (id: string, extra: AidenRemoteCapability[] = []) => ({
   capabilities: new Set<AidenRemoteCapability>(["host:events", ...extra]),
 });
 
-function harness(options: { maxEvents?: number; maxBytes?: number; heartbeatMs?: number } = {}) {
+function harness(options: {
+  maxEvents?: number;
+  maxBytes?: number;
+  heartbeatMs?: number;
+  debounceMs?: number;
+  snapshotChunkBytes?: number;
+} = {}) {
   const state: { current: AidenRemoteHostFeedState; reads: number } = {
     current: {
       summaries: [summary("chat-1")],
@@ -119,11 +129,21 @@ function harness(options: { maxEvents?: number; maxBytes?: number; heartbeatMs?:
     },
     reads: 0,
   };
+  /** When set, the next read captures the state, then waits for `release()`. */
+  const gate: { hold: boolean; started?: () => void; release?: () => void } = { hold: false };
   const feed = new AidenRemoteHostFeedService({
     source: {
       read: async () => {
         state.reads += 1;
-        return state.current;
+        const captured = state.current;
+        if (gate.hold) {
+          gate.hold = false;
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+            gate.started?.();
+          });
+        }
+        return captured;
       },
     },
     now: () => 5_000,
@@ -132,7 +152,13 @@ function harness(options: { maxEvents?: number; maxBytes?: number; heartbeatMs?:
     debounceMs: 60_000,
     ...options,
   });
-  return { feed, state };
+  /** Hold the next source read; resolves once that read has captured its state. */
+  const holdNextRead = () =>
+    new Promise<void>((resolve) => {
+      gate.hold = true;
+      gate.started = resolve;
+    });
+  return { feed, state, holdNextRead, releaseRead: () => gate.release?.() };
 }
 
 async function open(feed: AidenRemoteHostFeedService, device: ReturnType<typeof desktop>, cursor?: string) {
@@ -362,6 +388,108 @@ test("an idle feed sends heartbeat comments", async () => {
   try {
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.match(response.body, /\n\n: heartbeat\n\n/u);
+  } finally {
+    feed.close();
+  }
+});
+
+async function eventually(check: () => boolean, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
+test("a revocation that lands while a feed is opening refuses the subscription", async () => {
+  const { feed, state, holdNextRead, releaseRead } = harness();
+  let revoked = false;
+  const admit = () => {
+    if (revoked) throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
+  };
+  const response = new RecordingResponse();
+  const reading = holdNextRead();
+  const opening = feed.open(desktop("device-a"), undefined, response.asServerResponse(), admit);
+  await reading;
+  // Revocation completes, cleanup included, before the opening read returns.
+  revoked = true;
+  feed.revokeDevice("device-a");
+  releaseRead();
+  await assert.rejects(opening, (error: unknown) =>
+    error instanceof AidenRemoteServiceError && error.code === "credential_revoked");
+  assert.equal(response.status, 0);
+  assert.equal(response.body, "");
+
+  state.current = { ...state.current, summaries: [summary("chat-1"), summary("chat-2")] };
+  feed.invalidate();
+  await feed.refresh();
+  assert.equal(response.body, "");
+});
+
+test("a change signalled during the opening read reaches the new subscriber", async () => {
+  const { feed, state, holdNextRead, releaseRead } = harness({ debounceMs: 1 });
+  const response = new RecordingResponse();
+  const reading = holdNextRead();
+  const opening = feed.open(desktop("device-a"), undefined, response.asServerResponse());
+  await reading;
+  // The read already captured the old state; this change arrives while it is suspended.
+  state.current = { ...state.current, summaries: [summary("chat-1", { title: "Renamed" })] };
+  feed.invalidate();
+  releaseRead();
+  await opening;
+  try {
+    await eventually(() => response.frames().some((frame) => frame.event === "chat.upsert"), "chat.upsert");
+    const [snapshot, upsert] = response.frames();
+    assert.equal(snapshot!.event, "snapshot");
+    assert.equal(
+      ((snapshot!.data.payload as { summaries: Array<{ title: string }> }).summaries[0]!).title,
+      "Chat chat-1",
+    );
+    assert.equal((upsert!.data.payload as { title: string }).title, "Renamed");
+  } finally {
+    feed.close();
+  }
+});
+
+test("a large host snapshot arrives as bounded frames that reassemble every row", async () => {
+  const { feed, state } = harness();
+  const ids = Array.from({ length: 4_000 }, (_, index) => `chat-${String(index).padStart(4, "0")}`);
+  state.current = {
+    ...state.current,
+    summaries: ids.map((id) => summary(id, { title: `${id} `.padEnd(50, "t"), revision: "a".repeat(40) })),
+  };
+  const response = await open(feed, desktop("device-a", ["bot:read"]));
+  try {
+    assert.ok(Buffer.byteLength(response.body) > 1_048_576, "the host is larger than one SSE frame");
+
+    // The real peer reader enforces the 1 MiB frame limit and accepts every frame.
+    const reader = new PeerEventFrames();
+    const raw: string[] = [];
+    reader.push(Buffer.from(response.body), (frame) => raw.push(frame), () => {});
+    const frames = response.frames();
+    assert.equal(raw.length, frames.length);
+    assert.ok(frames.length > 1);
+    assert.ok(frames.every((frame) => frame.event === "snapshot"));
+
+    const partial = frames.slice(0, -1);
+    const final = frames[frames.length - 1]!;
+    // Only the final frame moves Last-Event-ID, so an interrupted snapshot is retried whole.
+    assert.ok(partial.every((frame) => frame.id === undefined && (frame.data.payload as { partial?: boolean }).partial === true));
+    assert.equal(final.id, "epoch_feed_01:0");
+    assert.equal((final.data.payload as { partial?: boolean }).partial, undefined);
+
+    const merged = { summaries: [] as Array<{ id: string }>, workspaces: [] as Array<{ id: string }>, bots: [] as Array<{ id: string }> };
+    for (const frame of frames) {
+      const payload = frame.data.payload as typeof merged & { epoch: string; sequence: number };
+      assert.equal(payload.epoch, "epoch_feed_01");
+      assert.equal(payload.sequence, 0);
+      merged.summaries.push(...payload.summaries);
+      merged.workspaces.push(...payload.workspaces);
+      merged.bots.push(...payload.bots);
+    }
+    assert.deepEqual(merged.summaries.map((item) => item.id), ids);
+    assert.deepEqual(merged.workspaces.map((item) => item.id), ["workspace-1"]);
+    assert.deepEqual(merged.bots.map((item) => item.id), ["bot-1"]);
   } finally {
     feed.close();
   }

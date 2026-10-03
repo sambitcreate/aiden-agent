@@ -1360,6 +1360,15 @@ function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
 export function createAidenRemoteRequestHandler(
   dependencies: AidenRemoteRouterDependencies,
 ): (request: IncomingMessage, response: ServerResponse) => void {
+  /**
+   * Revocation fence for a long-lived subscription, crossed synchronously at
+   * registration. Like the simulator relay, it does not join the mutation
+   * drain: revocation closes registered subscriptions through `revokeDevice`,
+   * and this check refuses one whose admission was still awaiting.
+   */
+  const admitDevice = (deviceId: string) => () => {
+    dependencies.devices.acquireDeviceAuthorization(deviceId, false)();
+  };
   return (request, response) => {
     const id = requestId();
     const startedAt = dependencies.now();
@@ -3084,7 +3093,7 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "host:events");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.hostFeed) throw hostRunsUnavailable();
-        await dependencies.hostFeed.open(device, cursor, response);
+        await dependencies.hostFeed.open(device, cursor, response, admitDevice(device.id));
         return;
       }
       const chatMessagesMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/messages$/u.exec(path);
@@ -3119,7 +3128,7 @@ export function createAidenRemoteRequestHandler(
         }
         await requireChatAccess(dependencies.chats, device, currentRunMatch[1]!, "read", "stream");
         const runId = dependencies.hostRuns.currentRunId(currentRunMatch[1]!);
-        dependencies.hostRuns.openRunEvents(device, runId, 0, response);
+        dependencies.hostRuns.openRunEvents(device, runId, 0, response, admitDevice(device.id));
         return;
       }
       const runEventsMatch = /^\/runs\/([A-Za-z0-9._:-]{1,128})\/events$/u.exec(path);
@@ -3131,7 +3140,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response);
+        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response, admitDevice(device.id));
         return;
       }
       const runControlMatch =

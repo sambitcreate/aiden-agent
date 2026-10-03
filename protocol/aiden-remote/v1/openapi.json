@@ -4199,7 +4199,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -10666,6 +10666,10 @@
             "items": {
               "$ref": "#/components/schemas/BotSummary"
             }
+          },
+          "partial": {
+            "const": true,
+            "description": "Present only on a non-final chunk of a snapshot larger than 256 KiB. Such frames carry no SSE id. Clients append each chunk's arrays and replace their host state only when the final chunk (without partial, with the id) arrives."
           }
         },
         "additionalProperties": false
@@ -10710,7 +10714,7 @@
       },
       "HostFeedEvent": {
         "type": "object",
-        "description": "One GET /host/events event. The SSE id is <epoch>:<sequence>; terminal is always false.",
+        "description": "One GET /host/events event. The SSE id is <epoch>:<sequence>, omitted only on a partial snapshot chunk; terminal is always false.",
         "required": [
           "protocolVersion",
           "streamId",
