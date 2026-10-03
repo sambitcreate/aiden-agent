@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import test from "node:test";
 import { generatePairingRequestKeyPair } from "./aiden-remote-sealed-envelope.js";
 import { PeerBootstrapTransport } from "./peer-bootstrap-transport.js";
@@ -132,4 +133,69 @@ test("an aborted request settles at once", async (t) => {
   setTimeout(() => controller.abort(), 50);
   assert.equal((await rejection(poll)).code, "unavailable");
   assert.ok(Date.now() - started < 2_000);
+});
+
+/** A TCP listener that takes the ClientHello and never answers it. */
+async function startStalledHandshake(): Promise<{
+  endpoint: string;
+  open(): number;
+  closed(): Promise<void>;
+  close(): Promise<void>;
+}> {
+  const sockets = new Set<Socket>();
+  let waiters: (() => void)[] = [];
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("data", () => undefined);
+    socket.on("error", () => undefined);
+    socket.on("close", () => {
+      sockets.delete(socket);
+      if (sockets.size === 0) {
+        for (const wake of waiters) wake();
+        waiters = [];
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `https://127.0.0.1:${port}/api/aiden/v1`,
+    open: () => sockets.size,
+    closed: () => (sockets.size === 0 ? Promise.resolve() : new Promise((resolve) => waiters.push(resolve))),
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function settlesWithin<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} did not happen within ${ms} ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test("a timed-out or cancelled request closes a connection stuck in the TLS handshake", async (t) => {
+  const peer = await startStalledHandshake();
+  t.after(() => peer.close());
+  const session = new PeerBootstrapTransport({ endpoint: peer.endpoint, mode: "unverified" });
+
+  assert.equal((await rejection(session.json({ path: "/health", timeoutMs: 100 }))).code, "unavailable");
+  await settlesWithin(peer.closed(), 1_000, "closing the timed-out connection");
+
+  const controller = new AbortController();
+  const request = session.json({ path: "/health", signal: controller.signal });
+  while (peer.open() === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  controller.abort();
+  assert.equal((await rejection(request)).code, "unavailable");
+  await settlesWithin(peer.closed(), 1_000, "closing the cancelled connection");
+  assert.equal(session.observedSpki, undefined);
 });

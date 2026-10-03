@@ -108,7 +108,12 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
     return this.spki;
   }
 
-  private connect(callback: (error: Error | null, socket?: Socket) => void): void {
+  /**
+   * Opens a TLS connection and hands it over once its SPKI matched the pin.
+   * Returns the socket so a caller can close it while the handshake is still
+   * pending, before the HTTP layer owns it.
+   */
+  private connect(callback: (error: Error | null, socket?: Socket) => void): tls.TLSSocket {
     let called = false;
     const done = (error: Error | null, socket?: Socket) => {
       if (called) return;
@@ -147,6 +152,7 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
       this.spki = fingerprint;
       done(null, socket);
     });
+    return socket;
   }
 
   json(input: PeerBootstrapRequest): Promise<unknown> {
@@ -167,11 +173,16 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
     return new Promise((resolve, reject) => {
       let settled = false;
       let deadline: ReturnType<typeof setTimeout> | undefined;
+      // The connection while its handshake is pending. Until it is handed to
+      // the HTTP layer, destroying the request would not close it.
+      let pending: tls.TLSSocket | undefined;
       const finish = (error?: Error, value?: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
         input.signal?.removeEventListener("abort", abort);
+        pending?.destroy();
+        pending = undefined;
         if (error) reject(error);
         else resolve(value);
       };
@@ -181,9 +192,18 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
           method: input.method ?? "GET",
           headers,
           createConnection: (_options, oncreate) => {
-            this.connect((error, socket) =>
-              oncreate(error, socket as unknown as Socket),
-            );
+            if (settled) {
+              oncreate(new PeerTransportError("unavailable"), undefined as unknown as Socket);
+              return undefined;
+            }
+            pending = this.connect((error, socket) => {
+              pending = undefined;
+              if (settled) {
+                socket?.destroy();
+                return;
+              }
+              oncreate(error, socket as unknown as Socket);
+            });
             return undefined;
           },
         },
