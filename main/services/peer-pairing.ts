@@ -150,9 +150,11 @@ export interface PeerPairingRequestGrant extends PeerTrust {
 
 /**
  * Open the sealed grant from an approved connection request. The requester
- * must pass the endpoint it polled and the SPKI it observed on that TLS
- * connection (the same SPKI its match code covered); a grant naming any other
- * identity is refused.
+ * must pass the SPKI it observed on the TLS connection it polled (the same
+ * SPKI its match code covered); a grant naming any other certificate is
+ * refused. `endpoint` is optional: a Bonjour-discovered address can differ
+ * from the host's canonical name, and the pinned SPKI already binds the
+ * grant to the host the user approved. When given, it must match exactly.
  */
 export function openPeerPairingRequestGrant(
   envelope: unknown,
@@ -160,7 +162,7 @@ export function openPeerPairingRequestGrant(
     requestId: string;
     publicKey: string;
     privateKey: KeyObject;
-    endpoint: string;
+    endpoint?: string;
     serverSpkiSha256: string;
   },
 ): PeerPairingRequestGrant {
@@ -194,7 +196,7 @@ export function openPeerPairingRequestGrant(
         : {}),
     });
     if (
-      validated.endpoint !== expected.endpoint ||
+      (expected.endpoint !== undefined && validated.endpoint !== expected.endpoint) ||
       validated.serverSpkiSha256 !== expected.serverSpkiSha256
     )
       throw new Error("The pairing identity did not match.");
