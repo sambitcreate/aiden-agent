@@ -1,6 +1,7 @@
 // React Query hooks for providers, chats, and settings.
 
 import {
+  queryOptions,
   useMutation,
   useQueries,
   useQuery,
@@ -33,6 +34,7 @@ import {
   webSearchApi,
   workspacesApi,
 } from "./ipc";
+import { isWindowActive } from "./window-activity";
 import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -382,24 +384,42 @@ export function useProvidersModelInfo(providers: Provider[]) {
   };
 }
 
+// Git display reads are refreshed by `git:changed`, agent tool results,
+// settled chats and window activation (see git-query-sync.ts). Polling is only
+// a safety net, and it stops while the window is hidden or blurred.
+export const GIT_SAFETY_POLL_MS = 60_000;
+const PULL_REQUEST_POLL_MS = 5 * 60_000;
+const PULL_REQUEST_STALE_MS = 60_000;
+const GIT_STALE_MS = 5_000;
+
+export function gitSafetyPoll(enabled: boolean, intervalMs = GIT_SAFETY_POLL_MS) {
+  return enabled ? () => (isWindowActive() ? intervalMs : false) : false;
+}
+
 export function useGitInfo(workspaceId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.git(workspaceId),
     queryFn: () => workspacesApi.gitInfo(workspaceId as string),
     enabled: Boolean(workspaceId),
-    refetchInterval: 5_000,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(true),
+    staleTime: GIT_STALE_MS,
+  });
+}
+
+export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined, enabled = true) {
+  return queryOptions({
+    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    // `gh pr view` is a network call. Push, focus and repository-change
+    // events refresh it when stale; the interval only catches remote updates.
+    refetchInterval: gitSafetyPoll(enabled, PULL_REQUEST_POLL_MS),
+    staleTime: PULL_REQUEST_STALE_MS,
   });
 }
 
 export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
-    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
-    enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 30_000 : false,
-    staleTime: 30_000,
-  });
+  return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
 }
 
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
@@ -407,8 +427,8 @@ export function useGitReview(workspaceId: string | undefined, enabled = true) {
     queryKey: queryKeys.gitReview(workspaceId),
     queryFn: () => gitApi.review(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 4_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -417,8 +437,8 @@ export function useGitPushCapability(workspaceId: string | undefined, enabled = 
     queryKey: queryKeys.gitPushCapability(workspaceId),
     queryFn: () => gitApi.pushCapability(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 5_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -431,8 +451,8 @@ export function useGitComparison(
     queryKey: queryKeys.gitComparison(workspaceId, targetRef),
     queryFn: () => gitApi.compare(workspaceId as string, targetRef as string),
     enabled: Boolean(workspaceId) && Boolean(targetRef) && enabled,
-    refetchInterval: enabled ? 5_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -441,7 +461,7 @@ export function useGitWorktrees(workspaceId: string | undefined, enabled = true)
     queryKey: queryKeys.gitWorktrees(workspaceId),
     queryFn: () => gitApi.worktrees(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    staleTime: 1_000,
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -450,7 +470,7 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
     queryKey: queryKeys.gitBranches(workspaceId),
     queryFn: () => gitApi.branches(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    staleTime: 1_000,
+    staleTime: GIT_STALE_MS,
   });
 }
 
