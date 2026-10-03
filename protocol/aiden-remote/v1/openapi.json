@@ -123,17 +123,40 @@
     "/health": {
       "get": {
         "operationId": "health",
+        "description": "Unauthenticated readiness. Without a query the body is exactly {ok, protocolVersion}. Contract revision 19 adds the opt-in detail=host query, which returns the non-secret host descriptor that desktop controllers use to identify and group hosts. Any other query is invalid_request.",
         "security": [],
+        "parameters": [
+          {
+            "name": "detail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "host"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Minimal readiness",
+            "description": "Minimal readiness, or the host descriptor when detail=host",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Health"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Health"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HostHealth"
+                    }
+                  ]
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -4167,6 +4190,453 @@
           }
         }
       }
+    },
+    "/host/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "hostEvents",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "host:events",
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]{1,128}$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]{1,128}$"
+            }
+          }
+        ],
+        "x-aiden-sse-event": {
+          "$ref": "#/components/schemas/HostFeedEvent"
+        },
+        "responses": {
+          "200": {
+            "description": "Resumable event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/messages": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "chatMessagesWindow",
+        "description": "Contract revision 19 message window (chat-messages-window-v1). Returns at most limit visible messages ending just before the message named by before (or at the newest message), oldest first, within the 1 MiB JSON budget. Oldest messages are dropped first, then reasoning; a single message that still does not fit is payload_too_large. An unknown before is revision_conflict. GET /chats/{chatId} is unchanged.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded window of visible messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessagesWindow"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/runs/current/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "chatCurrentRunEvents",
+        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "runs:observe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          }
+        ],
+        "x-aiden-sse-event": {
+          "$ref": "#/components/schemas/RunEvent"
+        },
+        "responses": {
+          "200": {
+            "description": "Resumable event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/runs/{runId}/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "runEvents",
+        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "runs:observe",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "x-aiden-sse-event": {
+          "$ref": "#/components/schemas/RunEvent"
+        },
+        "responses": {
+          "200": {
+            "description": "Resumable event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/runs/{runId}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "cancelRun",
+        "description": "Contract revision 19 (run-control-v1). Stops a running run whatever surface started it. Requires chat write access to the run's chat. run_gone for an unknown run; operation_stale once the run has finished.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "runs:control",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Cancellation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCancelResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/runs/{runId}/approvals/{approvalId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondRunApproval",
+        "description": "Contract revision 19 (run-control-v1). Resolves an approval in this run whoever owns it. The first responder wins; a later responder receives 409 approval_resolved with the winning decision and resolvedAt, and an Idempotency-Key replay returns the same outcome. An approval that is not part of the run is not_found. Allowing an approval whose details were too large to send is capability_denied; review it on the host.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "runs:control",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "approvalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunApprovalRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval resolved by this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunApprovalResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/runs/{runId}/questions/{promptId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondRunQuestion",
+        "description": "Contract revision 19 (run-control-v1). Answers or dismisses a question in this run whoever owns it. The first responder wins; a later responder receives 409 question_already_resolved with the winning outcome and resolvedAt.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "runs:control",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "promptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question resolved by this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunQuestionResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/runs/{runId}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "submitRunInput",
+        "description": "Contract revision 19 (run-control-v1). Mid-flight steer or queue input for a running run, with the same admission semantics as /streams/{streamId}/inputs.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "runs:control",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Admission outcome for the requested input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInputResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4580,7 +5050,10 @@
                 "tasks:read",
                 "agents:read",
                 "questions:respond",
-                "skills:invoke"
+                "skills:invoke",
+                "host:events",
+                "runs:observe",
+                "runs:control"
               ]
             },
             "uniqueItems": true
@@ -4672,7 +5145,10 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
-                "simulators:control"
+                "simulators:control",
+                "host:events",
+                "runs:observe",
+                "runs:control"
               ]
             },
             "uniqueItems": true
@@ -4701,7 +5177,10 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
-                "simulators:control"
+                "simulators:control",
+                "host:events",
+                "runs:observe",
+                "runs:control"
               ]
             },
             "uniqueItems": true
@@ -4806,16 +5285,19 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found.",
             "minItems": 1,
-            "maxItems": 3,
+            "maxItems": 8,
             "items": {
               "enum": [
                 "tasks:read",
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
-                "simulators:control"
+                "simulators:control",
+                "host:events",
+                "runs:observe",
+                "runs:control"
               ]
             },
             "uniqueItems": true
@@ -4853,7 +5335,10 @@
                 "agents:read",
                 "questions:respond",
                 "skills:invoke",
-                "simulators:control"
+                "simulators:control",
+                "host:events",
+                "runs:observe",
+                "runs:control"
               ]
             },
             "uniqueItems": true
@@ -9442,7 +9927,9 @@
           "handle_capacity",
           "turn_already_active",
           "stream_gone",
+          "run_gone",
           "approval_already_resolved",
+          "approval_resolved",
           "approval_expired",
           "question_already_resolved",
           "question_expired",
@@ -9484,6 +9971,28 @@
           "field": {
             "type": "string",
             "maxLength": 120
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "deny",
+              "expired",
+              "cancelled"
+            ],
+            "description": "Contract revision 19. The winning decision on approval_resolved from run control."
+          },
+          "outcome": {
+            "enum": [
+              "answered",
+              "expired",
+              "cancelled"
+            ],
+            "description": "Contract revision 19. The winning outcome on a run-control question_already_resolved."
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Contract revision 19. When the winning resolution committed."
           }
         },
         "additionalProperties": false
@@ -9971,6 +10480,846 @@
           "nextOffset",
           "complete"
         ],
+        "additionalProperties": false
+      },
+      "HostHealth": {
+        "type": "object",
+        "description": "Contract revision 19 opt-in host descriptor from GET /health?detail=host. Every field is non-secret and grants nothing.",
+        "required": [
+          "ok",
+          "protocolVersion",
+          "instanceId",
+          "displayName",
+          "contractRevision",
+          "pairingRequests"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "protocolVersion": {
+            "const": 1
+          },
+          "instanceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "platform": {
+            "enum": [
+              "mac",
+              "linux",
+              "windows"
+            ]
+          },
+          "contractRevision": {
+            "type": "integer",
+            "minimum": 19
+          },
+          "pairingRequests": {
+            "type": "boolean",
+            "description": "Whether this host accepts desktop pairing requests."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RepositoryIdentity": {
+        "type": "object",
+        "description": "Credential-free repository identity derived from cached Git data, never by crawling. canonicalKey is host/owner/name with no scheme, port, userinfo, query or .git, so the same checkout on two hosts shares a key.",
+        "required": [
+          "canonicalKey",
+          "relativePath"
+        ],
+        "properties": {
+          "canonicalKey": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 512,
+            "pattern": "^[a-z0-9.-]+(?:/[A-Za-z0-9._~+-]+)+$"
+          },
+          "relativePath": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "POSIX path of the workspace folder inside the repository; empty at the root."
+          }
+        },
+        "additionalProperties": false
+      },
+      "HostFeedWorkspace": {
+        "type": "object",
+        "description": "A Workspace as the host feed projects it: identical to Workspace plus an optional repository identity.",
+        "required": [
+          "id",
+          "name",
+          "permission",
+          "memoryEnabled",
+          "hasFolder",
+          "isManagedWorktree",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permission": {
+            "enum": [
+              "full",
+              "ask",
+              "none"
+            ]
+          },
+          "memoryEnabled": {
+            "type": "boolean"
+          },
+          "hasFolder": {
+            "type": "boolean"
+          },
+          "isManagedWorktree": {
+            "type": "boolean"
+          },
+          "branchName": {
+            "type": "string"
+          },
+          "repositoryName": {
+            "type": "string"
+          },
+          "git": {
+            "type": "object",
+            "properties": {
+              "isRepo": {
+                "type": "boolean"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "uncommitted": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "isRepo"
+            ],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryIdentity"
+          }
+        },
+        "additionalProperties": false
+      },
+      "HostFeedSnapshot": {
+        "type": "object",
+        "required": [
+          "epoch",
+          "sequence",
+          "summaries",
+          "workspaces",
+          "bots"
+        ],
+        "properties": {
+          "epoch": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "summaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostFeedWorkspace"
+            }
+          },
+          "bots": {
+            "type": "array",
+            "description": "Empty for devices without bot:read.",
+            "items": {
+              "$ref": "#/components/schemas/BotSummary"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunStateChange": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "runId",
+          "state",
+          "unread"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "unread": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunState": {
+        "enum": [
+          "working",
+          "needs_approval",
+          "needs_input",
+          "done",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "HostFeedEvent": {
+        "type": "object",
+        "description": "One GET /host/events event. The SSE id is <epoch>:<sequence>; terminal is always false.",
+        "required": [
+          "protocolVersion",
+          "streamId",
+          "sequence",
+          "timestamp",
+          "type",
+          "terminal",
+          "payload"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "streamId": {
+            "const": "host"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "type": {
+            "enum": [
+              "snapshot",
+              "chat.upsert",
+              "chat.remove",
+              "workspace.upsert",
+              "workspace.remove",
+              "bot.upsert",
+              "bot.remove",
+              "run.state"
+            ]
+          },
+          "terminal": {
+            "const": false
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "snapshot"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/HostFeedSnapshot"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "chat.upsert"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "workspace.upsert"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/HostFeedWorkspace"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "bot.upsert"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/BotSummary"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "run.state"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/RunStateChange"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "chat.remove",
+                    "workspace.remove",
+                    "bot.remove"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "RunEvent": {
+        "type": "object",
+        "description": "One run-stream event. streamId is the run ID and the SSE id is the decimal sequence. Content events carry the /streams/{streamId}/events payloads.",
+        "required": [
+          "protocolVersion",
+          "streamId",
+          "sequence",
+          "timestamp",
+          "type",
+          "terminal",
+          "payload"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "streamId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "type": {
+            "enum": [
+              "snapshot",
+              "run.started",
+              "status",
+              "text_delta",
+              "reasoning_delta",
+              "tool_started",
+              "tool_finished",
+              "timeline",
+              "approval_required",
+              "approval_resolved",
+              "question_required",
+              "question_resolved",
+              "done",
+              "error",
+              "cancelled",
+              "run.ended"
+            ]
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "snapshot"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "chatId",
+                    "reason",
+                    "nextSequence"
+                  ],
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "chatId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "reason": {
+                      "enum": [
+                        "gap",
+                        "reset"
+                      ]
+                    },
+                    "epoch": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/RunState"
+                    },
+                    "pendingApprovalIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 128
+                      }
+                    },
+                    "pendingQuestionIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 128
+                      }
+                    },
+                    "approvals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "questions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "nextSequence": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "run.started"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "chatId",
+                    "origin"
+                  ],
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "chatId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "origin": {
+                      "enum": [
+                        "renderer",
+                        "remote",
+                        "headless"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "run.ended"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": true
+                },
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "chatId",
+                    "state"
+                  ],
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "chatId": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "state": {
+                      "enum": [
+                        "done",
+                        "failed",
+                        "cancelled"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "RunApprovalRespondRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ToolApprovalScope",
+            "description": "Optional and valid only with decision allow; must be offered by the approval."
+          }
+        },
+        "if": {
+          "required": [
+            "scope"
+          ]
+        },
+        "then": {
+          "properties": {
+            "decision": {
+              "const": "allow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunCancelResult": {
+        "type": "object",
+        "required": [
+          "runId",
+          "chatId",
+          "state",
+          "cancelRequested"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "cancelRequested": {
+            "type": "boolean",
+            "description": "False when the run stopped before this request reached it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunApprovalResult": {
+        "type": "object",
+        "required": [
+          "runId",
+          "approvalId",
+          "decision",
+          "resolvedAt"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "approvalId": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ToolApprovalScope"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunQuestionResult": {
+        "type": "object",
+        "required": [
+          "runId",
+          "promptId",
+          "outcome",
+          "resolvedAt"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "promptId": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "answered",
+              "expired"
+            ]
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunInputResult": {
+        "type": "object",
+        "required": [
+          "runId",
+          "chatId",
+          "mode",
+          "status",
+          "committed"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ]
+          },
+          "status": {
+            "enum": [
+              "admitted",
+              "rejected"
+            ]
+          },
+          "queue": {
+            "enum": [
+              "steer",
+              "follow-up"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "run_not_active",
+              "cancelled",
+              "capacity",
+              "invalid"
+            ]
+          },
+          "committed": {
+            "type": "boolean"
+          },
+          "messageId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatMessagesWindow": {
+        "type": "object",
+        "x-aiden-max-json-response-bytes": 1048576,
+        "required": [
+          "chatId",
+          "revision",
+          "messages",
+          "hasOlder"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "messages": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Oldest first."
+          },
+          "hasOlder": {
+            "type": "boolean",
+            "description": "True when older visible messages exist before the first returned message."
+          }
+        },
         "additionalProperties": false
       }
     }

@@ -7,6 +7,11 @@ import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
+  AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
+  AIDEN_REMOTE_RUN_EVENT_TYPES,
+  AIDEN_REMOTE_RUN_STATES,
   AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
   AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
   AIDEN_REMOTE_ERROR_CODES,
@@ -91,15 +96,19 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
-// Simulator control is a desktop-to-desktop grant: pairing never issues it and
-// phones are never told it exists, so the shared mobile fixture omits it.
-const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
+// Simulator control is a desktop-to-desktop grant that pairing never issues.
+const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
   (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+);
+// Host-wide grants are issued to desktops only, so phones are never told they
+// exist either and the shared mobile fixture omits both families.
+const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
+  (capability) => !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
 );
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 18);
+  assert.equal(fixture.contractRevision, 19);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -216,6 +225,84 @@ test("agent interrupt fixture stops one current-turn agent and rejects rosters t
   const server = record(unadvertised.server, "server");
   server.features = (server.features as string[]).filter((feature) => feature !== "chat-agent-interrupt-v1");
   assert.throws(() => parseAidenRemoteContractFixture(unadvertised), /chat agent interrupt/u);
+});
+
+test("revision 19 fixtures carry host health, host feed, run stream and run control shapes that fail closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  assert.equal(fixture.hostHealth?.instanceId, fixture.pairingBootstrap.instanceId);
+  assert.equal(fixture.hostHealth?.contractRevision, fixture.contractRevision);
+  assert.equal(fixture.hostFeedEvents?.[0]?.type, "snapshot");
+  const runEvents = fixture.runEvents ?? [];
+  const ended = runEvents[runEvents.length - 1];
+  assert.equal(ended?.type, "run.ended");
+  assert.equal(ended?.terminal, true);
+  // run.ended reuses the last content sequence so a resumed cursor stays valid.
+  assert.equal(ended?.sequence, runEvents[runEvents.length - 2]?.sequence);
+  assert.equal(fixture.runControlError?.error.code, "approval_resolved");
+  assert.equal(fixture.runControlError?.error.details?.decision, "deny");
+  // Phones keep their mobile-only grants: the shared fixture never offers host grants.
+  for (const capability of AIDEN_REMOTE_HOST_CAPABILITIES) {
+    assert.equal(fixture.capabilities.includes(capability), false, capability);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const snapshotWorkspace = (copy: Record<string, unknown>) => {
+    const events = copy.hostFeedEvents as Record<string, unknown>[];
+    const payload = record(events[0]!.payload, "snapshot payload");
+    return (payload.workspaces as Record<string, unknown>[])[0]!;
+  };
+  assert.throws(
+    mutate((copy) => {
+      snapshotWorkspace(copy).repository = {
+        canonicalKey: "https://user:token@github.com/example/aiden-fixture",
+        relativePath: "",
+      };
+    }),
+    /credential-free/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      snapshotWorkspace(copy).repository = { canonicalKey: "github.com/example/aiden-fixture", relativePath: "../escape" };
+    }),
+    /inside the repository/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(copy.hostHealth, "hostHealth").instanceId = "instance_other";
+    }),
+    /another instance/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(copy.hostHealth, "hostHealth").secret = "x";
+    }),
+    /unsupported field/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      (copy.hostFeedEvents as unknown[]).splice(1, 1);
+    }),
+    /one sequence at a time/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      const events = copy.runEvents as Record<string, unknown>[];
+      events.push(structuredClone(events[events.length - 1]!));
+    }),
+    /after run\.ended/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      const error = record(record(copy.runControlError, "runControlError").error, "error");
+      record(error.details, "details").decision = "maybe";
+    }),
+    /decision is invalid/u,
+  );
 });
 
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
@@ -350,6 +437,14 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/read-aloud",
     "/chats/{chatId}/read-aloud/stop",
     "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}",
+    "/host/events",
+    "/chats/{chatId}/messages",
+    "/chats/{chatId}/runs/current/events",
+    "/runs/{runId}/events",
+    "/runs/{runId}/cancel",
+    "/runs/{runId}/approvals/{approvalId}/respond",
+    "/runs/{runId}/questions/{promptId}/respond",
+    "/runs/{runId}/inputs",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -378,7 +473,46 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     ).capabilities,
     "PairingExchangeResponse capabilities",
   );
-  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, MOBILE_CAPABILITIES);
+  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, PAIRING_CAPABILITIES);
+  assert.deepEqual(
+    record(
+      record(
+        record(record(schemas.DeviceCapabilitiesUpdateRequest, "update request").properties, "update request properties")
+          .accepts,
+        "accepts",
+      ).items,
+      "accepts items",
+    ).enum,
+    AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
+  );
+  // Revision 19 vocabularies: the documented SSE envelopes enumerate exactly
+  // the event types and run states the host emits.
+  const hostFeedEvent = record(schemas.HostFeedEvent, "HostFeedEvent");
+  assert.deepEqual(
+    record(record(hostFeedEvent.properties, "HostFeedEvent properties").type, "host feed type").enum,
+    AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
+  );
+  const runEvent = record(schemas.RunEvent, "RunEvent");
+  assert.deepEqual(
+    record(record(runEvent.properties, "RunEvent properties").type, "run event type").enum,
+    AIDEN_REMOTE_RUN_EVENT_TYPES,
+  );
+  assert.deepEqual(record(schemas.RunState, "RunState").enum, AIDEN_REMOTE_RUN_STATES);
+  for (const route of [
+    "/runs/{runId}/cancel",
+    "/runs/{runId}/approvals/{approvalId}/respond",
+    "/runs/{runId}/questions/{promptId}/respond",
+    "/runs/{runId}/inputs",
+  ]) {
+    const post = record(record(paths[route], route).post, `${route} post`);
+    assert.equal(post["x-aiden-capability"], "runs:control", route);
+    assert(
+      (post.parameters as Array<Record<string, unknown>>).some(
+        (parameter) => parameter.$ref === "#/components/parameters/IdempotencyKey",
+      ),
+      `${route} requires an Idempotency-Key`,
+    );
+  }
   const serverSchema = record(schemas.Server, "Server");
   const serverProperties = record(
     serverSchema.properties,
