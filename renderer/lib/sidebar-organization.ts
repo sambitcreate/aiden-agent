@@ -323,6 +323,20 @@ export function visibleProjectChats<P extends SidebarProjectSummary, C extends S
 }
 
 /**
+ * The project's most recently active chat, whatever order its rows are shown
+ * in, so "Open latest chat" does not depend on the display sort.
+ */
+export function latestProjectChat<P extends SidebarProjectSummary, C extends SidebarChatSummary>(
+  group: SidebarProjectGroup<P, C>,
+): C | undefined {
+  const byActivity = chatComparator("last_activity");
+  return group.chats.reduce<C | undefined>(
+    (latest, chat) => (latest === undefined || byActivity(chat, latest) < 0 ? chat : latest),
+    undefined,
+  );
+}
+
+/**
  * Chat rows exactly as the active view displays them, section by section, so
  * jump shortcuts and previous/next navigation follow what is on screen.
  */

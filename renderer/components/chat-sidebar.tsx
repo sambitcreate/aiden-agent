@@ -93,6 +93,7 @@ import {
 import {
   canMoveProjectKey,
   displayedSidebarChats,
+  latestProjectChat,
   mergeProjectOrder,
   moveProjectKey,
   moveProjectKeyTo,
@@ -1536,7 +1537,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                                   ? "Choose New chat to start this workspace."
                                   : undefined
                               }
-                              onSelect={() => void openChat(group.chats[0]?.chat)}
+                              onSelect={() => void openChat(latestProjectChat(group)?.chat)}
                             >
                               Open latest chat
                             </DropdownMenuItem>

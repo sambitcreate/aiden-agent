@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canMoveProjectKey,
   displayedSidebarChats,
+  latestProjectChat,
   LOCAL_SIDEBAR_HOST_ID,
   mergeProjectOrder,
   moveProjectKey,
@@ -89,6 +90,24 @@ test("chats sort by creation time when chosen, with title and key breaking ties"
     "a-key",
     "b-key",
   ]);
+});
+
+test("the latest chat is the most recently active one under either chat sort", () => {
+  const chats = [
+    chat("newer", "local:alpha", { createdAt: 20, lastActivityAt: 20 }),
+    chat("ongoing", "local:alpha", { createdAt: 10, lastActivityAt: 100 }),
+    chat("undated", "local:alpha", { createdAt: 30 }),
+  ];
+  for (const chatSort of ["last_activity", "created"] as const) {
+    const alpha = organizeSidebar(input({ chatSort, chats })).projectGroups.find(
+      (group) => group.project.key === "local:alpha",
+    )!;
+    assert.equal(latestProjectChat(alpha)?.key, "ongoing", chatSort);
+  }
+  const beta = organizeSidebar(input({ chats })).projectGroups.find(
+    (group) => group.project.key === "local:beta",
+  )!;
+  assert.equal(latestProjectChat(beta), undefined);
 });
 
 test("workspaces sort by creation time or by identical names deterministically", () => {
