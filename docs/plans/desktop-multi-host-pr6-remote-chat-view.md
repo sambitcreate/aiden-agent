@@ -23,7 +23,7 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
   - A `truncated` subscription asks for a refetch before its events apply.
   - Terminal events and `run.started` also ask for a refetch, so the persisted turn replaces the stream.
 - **Adapter** (`renderer/lib/hosts/host-chat-adapter.ts` and `remote-host-adapter.ts`).
-  - `HostChatAdapter` exposes `capabilities`, `getMessagesWindow`, `observe` and `markRead`.
+  - `HostChatAdapter` exposes `capabilities`, `ready`, `status`/`onStatus`, `getMessagesWindow`, `observe` and `markRead`. `ready()` resolves once the host's first status is known, so the first read is fenced against a real generation.
   - The remote adapter wraps `peerHostsApi` behind an injectable transport.
   - It captures the supervisor generation when a read starts and drops a response that lands after the generation moves.
   - It filters live run frames by host and stream key.
@@ -33,6 +33,7 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
   - It handles Load older.
   - It marks offline hosts stale and refreshes after a reconnect.
   - A disposed session ignores everything.
+  - The last-known transcript is written to the host query cache under `messagesWindow(hostId, chatId)`, so reopening a chat, or opening it while its host is offline, shows it at once.
   - The React view reads it through `useSyncExternalStore`.
 - **View** (`renderer/main/remote-chat-view.tsx`). This replaces the 5b placeholder on `/host/$hostId/chat/$chatId`.
   - It reuses `MessageList` and `ScrollArea`.
@@ -41,7 +42,8 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
   - Pending approvals and questions are shown read-only, with no action buttons.
   - When the host is offline or blocked, the last-known transcript stays visible as stale, alongside the 5b Reconnect or Connections row.
   - There is no composer. A footer note explains that sending from this Mac arrives later.
-  - Local-only panels (terminal, Environment/browser, computer use, open in editor, reveal in Finder, BTW, compact, context meter) are not rendered, and no local API is called.
+  - Local-only panels (terminal, Environment/browser, computer use, open in editor, reveal in Finder, BTW, compact, context meter) are not rendered, and no local API is called. `EnvironmentWorkbench` takes a `suppressed` flag that hides its Environment and Quick View surfaces on a remote route without changing whether the user left them open.
+  - `RemoteChatView` owns the adapter and session in one effect keyed by host, grants and chat, and the route keys the view by `hostId/chatId`, so a late answer for a previous selection never reaches the open one. Only the open chat's run stream is subscribed.
 
 ## Decisions
 
