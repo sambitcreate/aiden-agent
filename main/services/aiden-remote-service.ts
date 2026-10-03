@@ -129,6 +129,8 @@ export interface AidenRemoteServiceOptions {
   notifyPairingChanged?: () => void;
   /** Simulator sharing relay (Simulator devices Phase 5); absent when the feature is off. */
   simulators?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["simulators"];
+  /** Host platform for the opt-in `/health?detail=host` descriptor. */
+  hostPlatform?: import("./aiden-remote-protocol.js").AidenRemoteHostPlatform;
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -138,7 +140,9 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"> & Partial<Pick<AidenRemoteChatService, "messagesWindow">>;
+        hostFeed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostFeed"];
+        hostRuns?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostRuns"];
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
@@ -184,7 +188,9 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"> & Partial<Pick<AidenRemoteChatService, "messagesWindow">>;
+        hostFeed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostFeed"];
+        hostRuns?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostRuns"];
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
@@ -516,6 +522,8 @@ export class AidenRemoteService {
     this.lastErrorCode = undefined;
     try {
       const tlsIdentity = await this.options.loadTlsIdentity();
+      const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
+      this.settleRemoteApi = workspaceApi?.settle;
       const pairing = new AidenRemotePairingService(
         state.instanceId,
         this.options.state,
@@ -523,9 +531,9 @@ export class AidenRemoteService {
         this.options.notifyPairingChanged,
         () => this.activeState?.displayName ?? state.displayName,
         this.options.botCapabilitiesSupported,
+        // Desktop pairing earns host-wide run authority only where it is served.
+        () => Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
       );
-      const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
-      this.settleRemoteApi = workspaceApi?.settle;
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
@@ -534,6 +542,7 @@ export class AidenRemoteService {
         pairing,
         ...(workspaceApi ?? {}),
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
+        ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
         now: this.now,
         log: (entry) => {

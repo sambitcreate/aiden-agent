@@ -672,9 +672,12 @@ const approvals = new ToolApprovalCoordinator(
     chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:approval", prompt);
   },
-  (approvalId) => {
+  (approvalId, outcome) => {
     chatActivityRegistry.resolveAttention(approvalId);
-    recordRunAttentionResolved(hostRunRegistry, approvalId);
+    recordRunAttentionResolved(hostRunRegistry, approvalId, {
+      kind: "approval",
+      decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
+    });
   },
 );
 const questionnaires = new AskUserQuestionCoordinator(
@@ -685,9 +688,12 @@ const questionnaires = new AskUserQuestionCoordinator(
     chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:questionnaire", prompt);
   },
-  (promptId) => {
+  (promptId, response) => {
     chatActivityRegistry.resolveAttention(promptId);
-    recordRunAttentionResolved(hostRunRegistry, promptId);
+    recordRunAttentionResolved(hostRunRegistry, promptId, {
+      kind: "question",
+      outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
+    });
   },
 );
 // A parent can be waiting for a child that is still constructing its tools.
@@ -3823,6 +3829,24 @@ export const llmClient = {
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload);
+  },
+
+  /**
+   * Host-authority approval for a paired controller holding `runs:control`.
+   * No owner-document check; the decision is still one-shot, so this returns
+   * false when the host UI, a phone or another controller already answered.
+   */
+  approveAsHost(
+    approvalId: string,
+    decision: ApprovalDecision,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
+    return approvals.decideAsHost(approvalId, decision === "allow", payload);
+  },
+
+  /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */
+  answerQuestionnaireAsHost(promptId: string, response: unknown): AskUserQuestionRespondOutcome {
+    return questionnaires.respondAsHost(promptId, response);
   },
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {

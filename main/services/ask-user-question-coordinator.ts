@@ -32,7 +32,7 @@ export class AskUserQuestionCoordinator {
   constructor(
     private readonly publish: (prompt: AskUserQuestionPromptV1) => void,
     /** Called once when a published prompt settles for any reason. */
-    private readonly withdraw?: (promptId: string) => void,
+    private readonly withdraw?: (promptId: string, response: AskUserQuestionResponseV1) => void,
   ) {}
 
   request(
@@ -80,7 +80,7 @@ export class AskUserQuestionCoordinator {
         if (response.timedOut) this.rememberExpired(prompt.promptId, ownerDocumentId);
         if (published) {
           try {
-            this.withdraw?.(prompt.promptId);
+            this.withdraw?.(prompt.promptId, response);
           } catch {
             // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
           }
@@ -134,6 +134,17 @@ export class AskUserQuestionCoordinator {
     if (!response) return "rejected";
     entry.settle(response);
     return "answered";
+  }
+
+  /**
+   * Host-authority answer for a paired controller holding `runs:control`.
+   * Skips the owner-document check; the settlement stays one-shot, so a
+   * prompt already settled elsewhere reports `rejected`.
+   */
+  respondAsHost(promptId: string, value: unknown): AskUserQuestionRespondOutcome {
+    const entry = this.pending.get(promptId);
+    if (!entry) return "rejected";
+    return this.respondWithOutcome(promptId, value, entry.ownerDocumentId);
   }
 
   /** True when the prompt is no longer waiting because of this owner's call. */

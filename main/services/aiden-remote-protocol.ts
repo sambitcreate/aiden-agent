@@ -20,6 +20,11 @@ import type {
 } from "./aiden-remote-chats.js";
 
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
+/**
+ * Contract revision of the v1 wire contract. Additive revisions keep protocol
+ * version 1; the revision is published on `/health` and in the shared fixture.
+ */
+export const AIDEN_REMOTE_CONTRACT_REVISION = 19 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -87,10 +92,27 @@ export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
 export type AidenRemoteSimulatorCapability =
   (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
 
+/**
+ * Desktop-only host-wide authority for multi-host control (contract revision
+ * 19). `host:events` reads the host feed, `runs:observe` streams any run in a
+ * visible chat whatever started it, and `runs:control` stops runs, answers
+ * their approvals and questions, and steers them. Only `mac` and `linux`
+ * device records may hold these grants; phones keep device-scoped access.
+ */
+export const AIDEN_REMOTE_HOST_CAPABILITIES = [
+  "host:events",
+  "runs:observe",
+  "runs:control",
+] as const;
+
+export type AidenRemoteHostCapability =
+  (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number];
+
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -101,6 +123,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -150,6 +173,86 @@ export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
  * servers omit the token and clients must keep the roster read-only.
  */
 export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1" as const;
+
+/**
+ * Server feature token for `GET /chats/{chatId}/messages?before=&limit=`, a
+ * bounded (at most 1 MiB) window of a chat's newest messages with a truthful
+ * `hasOlder` flag. `GET /chats/{chatId}` is unchanged for older clients.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1" as const;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT = 50;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT = 200;
+
+/** Server feature token for the `GET /host/events` host feed (`host:events`). */
+export const AIDEN_REMOTE_HOST_EVENTS_FEATURE = "host-events-v1" as const;
+/** Server feature token for the `/runs/{runId}/events` run streams (`runs:observe`). */
+export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
+/** Server feature token for the `/runs/{runId}/*` control routes (`runs:control`). */
+export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
+
+/** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
+export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
+export const AIDEN_REMOTE_HOST_FEED_MAX_BYTES = 8 * 1_048_576;
+export const AIDEN_REMOTE_SSE_HEARTBEAT_MS = 15_000;
+
+/** Host platforms published by the opt-in `GET /health?detail=host` descriptor. */
+export const AIDEN_REMOTE_HOST_PLATFORMS = ["mac", "linux", "windows"] as const;
+export type AidenRemoteHostPlatform = (typeof AIDEN_REMOTE_HOST_PLATFORMS)[number];
+
+export function aidenRemoteHostPlatform(platform: NodeJS.Platform): AidenRemoteHostPlatform | undefined {
+  if (platform === "darwin") return "mac";
+  if (platform === "linux") return "linux";
+  if (platform === "win32") return "windows";
+  return undefined;
+}
+
+/** Event types on `GET /host/events`. */
+export const AIDEN_REMOTE_HOST_FEED_EVENT_TYPES = [
+  "snapshot",
+  "chat.upsert",
+  "chat.remove",
+  "workspace.upsert",
+  "workspace.remove",
+  "bot.upsert",
+  "bot.remove",
+  "run.state",
+] as const;
+export type AidenRemoteHostFeedEventType = (typeof AIDEN_REMOTE_HOST_FEED_EVENT_TYPES)[number];
+
+/**
+ * Event types on the run streams. Content events share the vocabulary of
+ * `/streams/{streamId}/events`; `run.started`, `run.ended` and the two
+ * resolution events exist only on run streams.
+ */
+export const AIDEN_REMOTE_RUN_EVENT_TYPES = [
+  "snapshot",
+  "run.started",
+  "status",
+  "text_delta",
+  "reasoning_delta",
+  "tool_started",
+  "tool_finished",
+  "timeline",
+  "approval_required",
+  "approval_resolved",
+  "question_required",
+  "question_resolved",
+  "done",
+  "error",
+  "cancelled",
+  "run.ended",
+] as const;
+export type AidenRemoteRunEventType = (typeof AIDEN_REMOTE_RUN_EVENT_TYPES)[number];
+
+export const AIDEN_REMOTE_RUN_STATES = [
+  "working",
+  "needs_approval",
+  "needs_input",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+export type AidenRemoteRunState = (typeof AIDEN_REMOTE_RUN_STATES)[number];
 
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
@@ -206,7 +309,9 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "handle_capacity",
   "turn_already_active",
   "stream_gone",
+  "run_gone",
   "approval_already_resolved",
+  "approval_resolved",
   "approval_expired",
   "question_already_resolved",
   "question_expired",
@@ -235,9 +340,18 @@ export interface AidenRemoteErrorEnvelope {
       minimumClientVersion?: string;
       limit?: number;
       field?: string;
+      /** The winning decision on `approval_resolved` (run control only). */
+      decision?: AidenRemoteResolvedApprovalDecision;
+      /** The winning outcome on a run-control `question_already_resolved`. */
+      outcome?: AidenRemoteResolvedQuestionOutcome;
+      /** When the winning resolution was committed, on either of the above. */
+      resolvedAt?: string;
     };
   };
 }
+
+export type AidenRemoteResolvedApprovalDecision = "allow" | "deny" | "expired" | "cancelled";
+export type AidenRemoteResolvedQuestionOutcome = "answered" | "expired" | "cancelled";
 
 export interface AidenRemoteStreamEvent {
   protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
