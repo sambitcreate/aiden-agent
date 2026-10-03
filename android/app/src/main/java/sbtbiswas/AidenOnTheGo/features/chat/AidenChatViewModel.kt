@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -43,6 +42,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
+import sbtbiswas.AidenOnTheGo.notifications.throttleLatest
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
@@ -303,7 +303,9 @@ class AidenChatViewModel(
         viewModelScope.launch {
             combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
                 Triple(state, text, timeline)
-            }.debounce(400).collect { (state, text, timeline) ->
+            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { (state, _, _) ->
+                state == null || state.isTerminal || state == AidenStreamState.WAITING_FOR_APPROVAL
+            }.collect { (state, text, timeline) ->
                 publishLiveNotification(state, text, timeline)
             }
         }
@@ -2156,6 +2158,8 @@ class AidenChatViewModel(
 
     companion object {
         private const val MAX_AGENT_ROSTER_HISTORY = 8
+        /** Ongoing-notification cadence; terminal and approval states skip it. */
+        private const val LIVE_NOTIFICATION_PERIOD_MILLIS = 1_000L
 
         fun factory(
             chatId: String,
