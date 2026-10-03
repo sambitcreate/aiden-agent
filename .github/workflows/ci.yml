@@ -235,12 +235,18 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: npm run test:native
 
+  # One macOS job compiles for device hardware, then builds the simulator tests
+  # once and runs them without rebuilding. Hosted simulator XCTest is
+  # regression evidence only; physical-device acceptance (ios/AGENTS.md) still
+  # runs separately on real hardware.
   ios:
-    name: iOS app and test compilation
+    name: iOS build and simulator tests
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' }}
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 50
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -256,10 +262,14 @@ jobs:
       - name: Verify iOS shipping and TestFlight policies
         if: ${{ needs.changes.outputs.desktop == 'false' }}
         run: npm run test:ios-release
-      # Physical-device XCTest acceptance stays separate from hosted compilation.
+      # Only the resolved Swift package checkouts are cached. Build products
+      # stay uncached because a fresh checkout invalidates them anyway.
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/AidenOnTheGoSourcePackages
+          key: ios-spm-xcode-26.6-${{ hashFiles('ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       - name: Compile Aiden On The Go tests for generic iOS hardware
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: >-
           xcodebuild build-for-testing -quiet
           -project ios/AidenOnTheGo.xcodeproj
@@ -267,21 +277,8 @@ jobs:
           -configuration Debug
           -destination 'generic/platform=iOS'
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
-
-  # Hosted simulator XCTest is regression evidence only; physical-device
-  # acceptance (ios/AGENTS.md) still runs separately on real hardware.
-  ios-simulator:
-    name: iOS simulator tests
-    needs: changes
-    if: ${{ needs.changes.outputs.ios == 'true' }}
-    runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Select the newest available iPhone simulator
         id: simulator
         shell: bash
@@ -304,14 +301,25 @@ jobs:
             exit 1
           fi
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
-      - name: Run Aiden On The Go XCTest on the simulator
+      - name: Build Aiden On The Go tests for the simulator
         run: >-
-          xcodebuild test -quiet
+          xcodebuild build-for-testing -quiet
           -project ios/AidenOnTheGo.xcodeproj
           -scheme AidenOnTheGo
           -configuration Debug
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
-          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoSimulatorDerivedData'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run Aiden On The Go XCTest on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
 
@@ -446,7 +454,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, verify, unit, e2e, apple, ios, ios-simulator, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, verify, unit, e2e, apple, ios, android, cli-linux, cli-playground]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

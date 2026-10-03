@@ -201,9 +201,11 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
-  assert.ok(jobs.ios.steps.some((step) => step.run?.includes("xcodebuild build-for-testing")));
-  const simulator = jobs["ios-simulator"];
-  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test"));
+  const iosBuilds = jobs.ios.steps.filter((step) => step.run?.includes("xcodebuild build-for-testing"));
+  assert.ok(iosBuilds.some((step) => step.run.includes("generic/platform=iOS")), "device build must stay covered");
+  const simulator = jobs.ios;
+  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
+  assert.ok(simulator.steps.indexOf(simulatorTest) > simulator.steps.indexOf(iosBuilds.at(-1)));
   const simulatorResults = simulator.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
   assert.equal(simulatorTest["continue-on-error"], undefined);
