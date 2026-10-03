@@ -103,6 +103,7 @@ const FEATURE_ILLUSTRATIONS = {
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
   voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
+  chatControls: new URL("../assets/onboarding/features/chat-controls.png", import.meta.url).href,
   commands: new URL("../assets/onboarding/features/command-palette.png", import.meta.url).href,
   usage: new URL("../assets/onboarding/features/usage-profile.png", import.meta.url).href,
   permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
@@ -185,6 +186,11 @@ const featureGroups: ReadonlyArray<{ id: FeatureGroupId; title: string }> = [
 ];
 
 const featureBentos: FeatureBento[] = [
+  {
+    id: "chatControls", group: "control", title: "Settings in chat",
+    description: "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; paired host controls start off until you allow them in Appearance.",
+    icon: MessageSquare, imageUrl: FEATURE_ILLUSTRATIONS.chatControls, size: "standard",
+  },
   {
     id: "workspace",
     group: "create",

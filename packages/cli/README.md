@@ -142,3 +142,12 @@ prebuilt exists. macOS builds use Xcode Command Line Tools; Linux source builds 
 compiler and OpenSSL development headers. Windows native helper support is outside this
 implementation. No model catalogs, credentials, speech weights, or private history are
 fetched into the image.
+
+
+### Product help and settings in chat
+
+Ask what Aiden can do or how its agent works: `aiden_help` reads bundled help offline. `/help-aiden memory` works without workspace file access. `/aiden-app` loads the immutable product skill; `--no-skills` disables that command and its `skill_aiden_app` tool. The pinned Pi public main API does not inject a built-in skill resource, so this owned command is the supported entry point.
+
+`/aiden-settings appearance|memory|web-search|skills` opens Pi's native settings selector inside the conversation. Theme changes use Pi's real theme API and verify the saved terminal default. Memory and Web Search switches persist in this CLI's actual agent directory; restart the CLI to rebuild feature tools after enablement. Desktop chat width, workspace memory and the desktop Skills gate are shown as unsupported. Nothing changes just by displaying a card, and no app operation controls an open Electron window.
+
+For explicit headless administration, use `aiden app help [query]`, `aiden app status`, `aiden app get memory`, then `aiden app set memory.enabled false <revision> [operation-id]`. Supply the revision returned by the read; retry an uncertain request with the same operation ID. Headless agent tool calls cannot mutate app preferences. Set `appControlPolicy` in device-local `aiden.json` to `disabled`, `ask`, or `safe`; interactive enablement always requires a foreground choice.

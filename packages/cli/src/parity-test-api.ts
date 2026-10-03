@@ -39,3 +39,7 @@ export { createCliProviderCredentials } from "./provider-credentials.ts";
 export { runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
+
+export * from "./app-controls.ts";
+export * from "./extensions/app.ts";
+export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";

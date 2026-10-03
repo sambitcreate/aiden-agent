@@ -2928,3 +2928,30 @@ test("custom model overrides survive restart and reset through the config store"
   assert.equal(reset?.modelMetadata?.["qwen3-8b"].overrides, undefined);
   assert.equal(reset?.customModelOptions, undefined);
 });
+
+
+test("chat appearance mutations merge inside the settings lease and reject stale controls", async (t) => {
+  const h = await harness(t);
+  const { appControlRevision } = await import("./app-controls-core.js");
+  const { normalizeAppearanceConfig } = await import("../../renderer/shared/appearance.js");
+  await h.store.setSettings({ appControlPolicy: "safe" });
+  const state = { settings: await h.store.getSettings() };
+  const operation = { control: "appearance.mode" as const, value: "dark", expectedRevision: appControlRevision(state, "appearance.mode"), operationId: "first" };
+  await h.store.setSettings({ appearance: { ...normalizeAppearanceConfig(state.settings.appearance), chatWidth: "wide" } });
+  await h.store.updateAppControl(operation, () => true);
+  const saved = await h.store.getSettings();
+  assert.equal(saved.appearance?.mode, "dark");
+  assert.equal(saved.appearance?.chatWidth, "wide");
+  await assert.rejects(h.store.updateAppControl({ ...operation, value: "light" }, () => true), /Settings changed/u);
+});
+
+test("chat controls cannot widen a disabled or revoked paired-host policy", async (t) => {
+  const h = await harness(t);
+  const { appControlRevision } = await import("./app-controls-core.js");
+  await h.store.setSettings({ appControlPolicy: "safe", memoryEnabled: true });
+  const operation = { control: "memory.enabled" as const, value: false, expectedRevision: appControlRevision({ settings: await h.store.getSettings() }, "memory.enabled"), operationId: "first" };
+  await assert.rejects(h.store.updateAppControl(operation, () => true, true), /Paired-host/u);
+  await assert.rejects(h.store.updateAppControl(operation, () => false), /cancel|current|authority|no longer active/iu);
+  await assert.rejects(h.store.updateAppControl(operation, () => true, false, async () => { throw new Error("Chat access revoked"); }), /Chat access revoked/u);
+  assert.equal((await h.store.getSettings()).memoryEnabled, true);
+});

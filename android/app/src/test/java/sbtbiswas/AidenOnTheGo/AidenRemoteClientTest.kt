@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -103,6 +104,24 @@ class AidenRemoteClientTest {
         assertEquals("test_instance", serverInfo.instanceId)
         assertEquals("Sambit's Mac", serverInfo.name)
         assertTrue(serverInfo.capabilities.contains(AidenRemoteCapability.CHAT_READ))
+    }
+
+    @Test
+    fun testAppControlsUseScopedRoutesAndVerifyTheOriginalOperationReceipt() = runBlocking {
+        val source = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonObject.getValue("appControls").jsonObject }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(source.getValue("snapshot").toString()))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(source.getValue("receipt").toString()))
+        val snapshot = client.appControls("chat_fixture_01", "panel_fixture_01")
+        assertEquals(1, snapshot.rows.size)
+        assertEquals("/api/aiden/v1/chats/chat_fixture_01/controls/panel_fixture_01", server.takeRequest().path)
+        val operation = Json.decodeFromJsonElement<sbtbiswas.AidenOnTheGo.models.AidenAppControlOperation>(source.getValue("operation"))
+        val receipt = client.applyAppControl("chat_fixture_01", "panel_fixture_01", operation)
+        assertEquals("applied", receipt.status)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("operation_fixture_01", body.getValue("operationId").jsonPrimitive.content)
+        assertEquals("false", body.getValue("value").jsonPrimitive.content)
     }
 
     @Test
@@ -338,7 +357,7 @@ class AidenRemoteClientTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """
-                {"capabilities":["chat:read","chat:write","bot:read","bot:write","tasks:read","agents:read","questions:respond","skills:invoke"]}
+                {"capabilities":["chat:read","chat:write","bot:read","bot:write","tasks:read","agents:read","questions:respond","skills:invoke","app-controls:read","app-controls:respond"]}
                 """.trimIndent()
             )
         )

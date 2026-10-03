@@ -594,6 +594,7 @@ data class AidenChatMessage(
     val reasoning: String? = null,
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
+    @Serializable(with = AidenAppPanelsSerializer::class) val appPanels: List<AidenAppControlPanel>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant

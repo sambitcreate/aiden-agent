@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { createCliAppControls } from "./app-controls.ts";
+import { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";
+import { isAppControlId, isAppControlTopic } from "../../../renderer/shared/app-controls.js";
 import { onboardingProgressState } from "../../../main/services/onboarding-state-core.js";
 import { readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -21,6 +25,7 @@ import { renderPairingTerminal } from "./pairing-display.ts";
 import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
 
 export const CLI_COMMAND_HELP = `Aiden commands:
+  app help|status|get <topic>|set <control> <value> <revision> [operation-id]
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers
   search <query>                            Search all session titles/previews
   import <desktop-journal|aiden-chat.json>   Copy a conversation into a new CLI session
@@ -47,6 +52,18 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
   const [command, ...rest] = args;
   let result: unknown;
   switch (command) {
+    case "app": {
+      const [action = "help", subject = "overview", rawValue, revision, operationId] = rest;
+      if (action === "help") { result = readAidenHelp(rest.slice(1).join(" ") || "overview"); break; }
+      const controls = createCliAppControls(agentDir, () => undefined);
+      if (action === "status") { result = await Promise.all(["appearance", "memory", "web-search", "skills"].map((topic) => controls.snapshot(topic as "appearance", false))); break; }
+      if (action === "get" && isAppControlTopic(subject)) { result = await controls.snapshot(subject, false); break; }
+      if (action === "set" && isAppControlId(subject) && rawValue !== undefined && revision && rest.length <= 5) {
+        const value = rawValue === "true" ? true : rawValue === "false" ? false : rawValue;
+        result = await controls.apply({ control: subject, value, expectedRevision: revision, operationId: operationId ?? randomUUID() }, false, true, true); break;
+      }
+      throw new Error("Usage: aiden app help [query] | status | get <topic> | set <control> <value> <revision> [operation-id]");
+    }
     case "workspace": result = await workspaceCommand(agentDir, rest); break;
     case "search": result = await searchSessions(agentDir, rest.join(" ")); break;
     case "import": if (!rest[0]) throw new Error("Provide an Aiden export or session journal."); result = await importSession(agentDir, cwd, rest[0]); break;

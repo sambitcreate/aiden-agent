@@ -52,6 +52,7 @@ export interface WorkspaceApplicationDependencies {
 
 export interface WorkspaceApplicationMutationOptions {
   assertCurrent?: (workspace: Workspace) => void;
+  beforeSave?: (workspace: Workspace | undefined) => void | Promise<void>;
 }
 
 export interface WorkspaceFolderCreationOptions {
@@ -203,7 +204,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
-          return await deps.configStore.saveWorkspace(next);
+          return await deps.configStore.saveWorkspace(next, options.beforeSave);
         }
         return await withWorkspaceScheduleRestoration(
           {
@@ -222,7 +223,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             deps.browserService?.closeForWorkspace(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
-            const saved = await deps.configStore.saveWorkspace(next);
+            options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
+            const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
             if (saved.permission !== "none") {
               ensureResumedOnExit();
               await deps.scheduleService.resumeWorkspace(saved.id);

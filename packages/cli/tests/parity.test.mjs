@@ -662,3 +662,72 @@ test("the subagent rollback switch registers no tool and opens no history", asyn
   await api.createSubagentsExtension(temporary(t)).factory({ registerTool() { registered++; } });
   assert.equal(registered, 0);
 });
+
+
+test("owned CLI controls persist verified values once and headless agents cannot write", async (t) => {
+  const dir = temporary(t),
+    controls = api.createCliAppControls(dir, () => undefined);
+  assert.match(JSON.stringify(api.readAidenHelp("memory")), /does not delete/i);
+  const state = await controls.snapshot("memory", false);
+  const row = state.rows.find((row) => row.id === "memory.enabled");
+  assert.equal(row.value, true);
+  const operation = {
+    control: row.id,
+    value: false,
+    expectedRevision: row.revision,
+    operationId: "human_cli_operation",
+  };
+  await assert.rejects(controls.apply(operation, false, false), /interactive CLI/);
+  assert.equal(existsSync(join(dir, "aiden.json")), false);
+  const result = await controls.apply(operation, false, true, true);
+  assert.equal(result.status, "applied");
+  assert.equal(result.effective, "next_session");
+  assert.equal(JSON.parse(readFileSync(join(dir, "aiden.json"), "utf8")).memoryEnabled, false);
+  assert.deepEqual(await controls.apply(operation, false, true, true), result);
+  assert.equal(
+    api.isOwnedAppTool(
+      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "/untrusted/app.ts" } }] },
+      "aiden_help",
+    ),
+    false,
+  );
+  assert.equal(
+    api.isOwnedAppTool(
+      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "<inline:aiden-app>" } }] },
+      "aiden_help",
+    ),
+    true,
+  );
+});
+
+test("CLI controls require a current owner and terminal receipts confirm Pi persistence", async (t) => {
+  const dir = temporary(t);
+  let theme = "dark";
+  const controls = api.createCliAppControls(dir, () => ({
+    currentTheme: () => theme,
+    themes: () => ["dark", "light"],
+    setTheme(value) {
+      theme = value;
+      api.atomicJson(join(dir, "settings.json"), { theme: value });
+      return { success: true };
+    },
+  }));
+  const state = await controls.snapshot("appearance", true);
+  const row = state.rows[0];
+  const operation = {
+    control: row.id,
+    value: "light",
+    expectedRevision: row.revision,
+    operationId: "terminal_saved_operation",
+  };
+  await assert.rejects(
+    controls.apply(operation, true, true, false, () => false),
+    /no longer available/i,
+  );
+  assert.equal(theme, "dark");
+  assert.equal(existsSync(join(dir, "settings.json")), false);
+  const receipt = await controls.apply(operation, true, true);
+  assert.equal(receipt.status, "applied");
+  assert.equal(receipt.effective, "now");
+  assert.equal(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).theme, "light");
+});

@@ -1,3 +1,4 @@
+import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   ChatRunInputMode,
@@ -70,6 +71,8 @@ export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
   "agents:read",
   "questions:respond",
   "skills:invoke",
+  "app-controls:read",
+  "app-controls:respond",
 ] as const;
 
 export type AidenRemoteProgressCapability =
@@ -2114,6 +2117,7 @@ export function parseAidenRemoteChatProjection(
               ),
             }
           : {}),
+        ...(hasOwn(entry, "appPanels") ? { appPanels: parseAppControlPanels(entry.appPanels) } : {}),
         ...(hasOwn(entry, "htmlArtifacts")
           ? {
               htmlArtifacts: parseChatHtmlArtifactsProjection(
@@ -3489,7 +3493,7 @@ export function parseAidenRemoteChatAgentRoster(
  * workspace- and registry-revision-bound and may only be redeemed on the turn
  * route by a device holding `skills:invoke`.
  */
-export const AIDEN_REMOTE_SKILL_SOURCES = ["configured", "workspace", "global"] as const;
+export const AIDEN_REMOTE_SKILL_SOURCES = ["builtin", "configured", "workspace", "global"] as const;
 export type AidenRemoteSkillSource = (typeof AIDEN_REMOTE_SKILL_SOURCES)[number];
 export const AIDEN_REMOTE_SKILL_MAX_ENTRIES = 500;
 export const AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH = 64;

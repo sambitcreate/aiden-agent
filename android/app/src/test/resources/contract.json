@@ -1,5 +1,5 @@
 {
-  "contractRevision": 18,
+  "contractRevision": 19,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -22,7 +22,9 @@
     "tasks:read",
     "agents:read",
     "questions:respond",
-    "skills:invoke"
+    "skills:invoke",
+    "app-controls:read",
+    "app-controls:respond"
   ],
   "health": { "ok": true, "protocolVersion": 1 },
   "pairingBootstrap": {
@@ -49,8 +51,8 @@
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
     "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1"],
+    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke", "app-controls:read", "app-controls:respond"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1", "chat-ui-panels-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -1101,5 +1103,44 @@
     "segmentBytes": 2,
     "nextOffset": 2,
     "complete": true
+  },
+  "appControls": {
+    "panel": {
+      "version": 1,
+      "id": "panel_fixture_01",
+      "topic": "memory",
+      "fallback": "Memory settings on the paired host.",
+      "workspaceId": "workspace_fixture_01"
+    },
+    "snapshot": {
+      "version": 1,
+      "title": "Memory",
+      "target": "Paired host",
+      "policy": "safe",
+      "rows": [
+        {
+          "id": "memory.enabled",
+          "label": "Memory",
+          "description": "Turning memory off does not delete facts.",
+          "scope": "Paired host",
+          "value": true,
+          "revision": "revision_fixture_01"
+        }
+      ]
+    },
+    "operation": {
+      "control": "memory.enabled",
+      "value": false,
+      "expectedRevision": "revision_fixture_01",
+      "operationId": "operation_fixture_01"
+    },
+    "receipt": {
+      "status": "applied",
+      "operationId": "operation_fixture_01",
+      "control": "memory.enabled",
+      "value": false,
+      "scope": "Paired host",
+      "effective": "next_turn"
+    }
   }
 }

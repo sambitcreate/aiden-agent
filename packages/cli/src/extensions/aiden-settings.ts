@@ -17,6 +17,8 @@ export interface AidenVoiceSettings {
 
 export interface AidenCliSettings {
 	memoryEnabled?: boolean;
+	skillsEnabled?: boolean;
+	appControlPolicy?: "disabled" | "ask" | "safe";
 	voice?: AidenVoiceSettings;
 }
 
@@ -33,6 +35,8 @@ function normalizeSettings(value: unknown): AidenCliSettings {
 	if (typeof source.memoryEnabled === "boolean") {
 		settings.memoryEnabled = source.memoryEnabled;
 	}
+	if (typeof source.skillsEnabled === "boolean") settings.skillsEnabled = source.skillsEnabled;
+	if (source.appControlPolicy !== undefined) settings.appControlPolicy = ["disabled", "ask", "safe"].includes(String(source.appControlPolicy)) ? source.appControlPolicy as AidenCliSettings["appControlPolicy"] : "disabled";
 	if (typeof source.voice === "object" && source.voice !== null) {
 		const voice = source.voice as Record<string, unknown>;
 		const provider = voice.provider;

@@ -824,6 +824,9 @@ fun AidenChatDetailScreen(
                             onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
+                            appControlsAvailable = viewModel.canReadAppControls,
+                            loadAppControls = viewModel::loadAppControls,
+                            applyAppControl = viewModel::applyAppControl,
                             onOpenUrl = onOpenMessageUrl
                         )
                     }
@@ -1051,6 +1054,9 @@ private fun AssistantMessageRow(
     onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
+    appControlsAvailable: Boolean = false,
+    loadAppControls: suspend (AidenAppControlPanel) -> AidenAppControlSnapshot,
+    applyAppControl: suspend (AidenAppControlPanel, AidenAppControlOperation) -> AidenAppControlReceipt,
     onOpenUrl: (String) -> Unit
 ) {
     val projection = if (isBotChat) {
@@ -1185,6 +1191,9 @@ private fun AssistantMessageRow(
                     )
                 }
             }
+        }
+        message.appPanels.orEmpty().filter { it.isWireSafe }.forEach { panel ->
+            key(panel.id) { NativeAppControlPanel(panel, appControlsAvailable, palette, loadAppControls, applyAppControl) }
         }
         message.htmlArtifacts.orEmpty().forEach { artifact ->
             Spacer(modifier = Modifier.height(8.dp))

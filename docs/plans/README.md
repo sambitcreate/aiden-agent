@@ -4,7 +4,11 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merges). "On main" means merged after 0.51.0 and not yet in a release.
 
+Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inventory and improvement audit](aiden-pr-improvement-audit-20261003.md), proposed built-in Aiden knowledge/actions plan, and [json-render research and interactive chat controls specification](aiden-chat-controls-json-render-research.md). The expanded MVP includes desktop, iOS, Android and CLI TUI controls. This adds research; older release-status rows have not been globally reconciled. The eight Pi 1.0 PRs remain open, while main still pins Pi 0.87.1.
+
 ## Active and partial
+
+- [Built-in Aiden knowledge and app actions](aiden-app-knowledge-actions-plan.md) — MVP implemented; PR/hosted validation in progress, physical release acceptance open. Bundled offline help and owned skill, real json-render desktop cards, native iOS/Android paired-host controls and Pi CLI selectors/admin commands. Remote revision 19, explicit owner consent, domain gates, replay receipts and registered behavioral tests. Uses pinned Pi 0.87.1; Pi 1.0 integration and wider actions remain separate follow-ups. [Contract research](aiden-chat-controls-json-render-research.md).
 
 - [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; the Linux branch merged to main in PR #71 (2026-09-26) and shipped in 0.50.0. Linux runtime smoke, Linux CI burn-in, Gemini Live orb and managed-worktree checks on real Linux remain. Enforcing Fedora GNOME VM validated the SELinux file-descriptor probes, Electron role transitions, protected-socket transfer, payload inventory, root-managed generation staging, and fail-closed security-label preservation. Release provenance and cross-platform installer delivery are implemented. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. Computer Use remains disabled on Linux.
 - [Durable Bot and chat runs](durable-jobs-leases-plan.md) — Foundation (P0) merged in PR #243 and shipped in 0.50.0: SQLite admission/leases/controls and conservative runtime recovery port. Production Bot runtime, desktop and Remote/native rollout remain pending. No Comfy/Design integration.

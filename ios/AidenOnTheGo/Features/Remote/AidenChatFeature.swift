@@ -2741,6 +2741,30 @@ final class AidenChatViewModel {
         }
     }
 
+    var canReadAppControls: Bool {
+        guard !isReadOnlyFixture, chat.botId == nil,
+              coordinator.server?.features.contains("chat-ui-panels-enabled-v1") == true,
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == instanceId else { return false }
+        return installation.hasNegotiatedAccess(to: .appControlsRead)
+    }
+    func loadAppControls(_ panel: AidenAppControlPanel) async throws -> AidenAppControlSnapshot {
+        guard canReadAppControls else { throw AidenRemoteClientError.invalidResponse }
+        let context = try coordinator.requestContext(for: instanceId)
+        let client = try coordinator.remoteClient(for: context)
+        let value = try await client.appControls(chatId: chat.id, panelId: panel.id)
+        guard coordinator.isCurrent(context), canReadAppControls, panel.workspaceId == chat.workspaceId else { throw CancellationError() }
+        return value
+    }
+    func applyAppControl(_ panel: AidenAppControlPanel, operation: AidenAppControlOperation) async throws -> AidenAppControlReceipt {
+        guard canReadAppControls, coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .appControlsRespond) == true, panel.workspaceId == chat.workspaceId else { throw AidenRemoteClientError.invalidResponse }
+        let context = try coordinator.requestContext(for: instanceId)
+        let client = try coordinator.remoteClient(for: context)
+        let value = try await client.applyAppControl(chatId: chat.id, panelId: panel.id, operation: operation)
+        guard coordinator.isCurrent(context), canReadAppControls else { throw CancellationError() }
+        return value
+    }
+
     // MARK: - Slice G composer power
 
     /// Skills require the negotiated grant in addition to the advertised
@@ -4348,6 +4372,7 @@ struct AidenChatDetailView: View {
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
+                appControlsAvailable: model.canReadAppControls,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
                     if model.askAbout(selection) { composerIsFocused = true }
                 }
@@ -4733,6 +4758,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    var appControlsAvailable = false
     /// Quotes a selection into the composer; nil while the chat is read-only.
     /// Closure identity is excluded from equality like the stable `model`.
     var onAskAbout: ((String) -> Void)? = nil
@@ -4744,7 +4770,7 @@ private struct AidenSettledMessageRows: View, Equatable {
         // body renders — `chat`, the Read Aloud state — and the presentation style.
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
-            lhs.readAloudActiveID == rhs.readAloudActiveID
+            lhs.readAloudActiveID == rhs.readAloudActiveID && lhs.appControlsAvailable == rhs.appControlsAvailable
     }
 
     var body: some View {
@@ -4771,7 +4797,10 @@ private struct AidenSettledMessageRows: View, Equatable {
             readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
             readAloudActive: readAloudActiveID == message.id,
             showsFooter: showsFooter,
-            onAskAbout: onAskAbout
+            onAskAbout: onAskAbout,
+            appControlsAvailable: appControlsAvailable,
+            loadAppControls: { try await model.loadAppControls($0) },
+            applyAppControl: { try await model.applyAppControl($0, operation: $1) }
         )
         .equatable()
         .padding(.top, topPadding)
@@ -4787,6 +4816,9 @@ private struct AidenMessageView: View, Equatable {
     var readAloudActive = false
     var showsFooter = true
     var onAskAbout: ((String) -> Void)? = nil
+    var appControlsAvailable = false
+    var loadAppControls: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)? = nil
+    var applyAppControl: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -4796,7 +4828,7 @@ private struct AidenMessageView: View, Equatable {
         lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle &&
             (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
             lhs.readAloudActive == rhs.readAloudActive &&
-            lhs.showsFooter == rhs.showsFooter &&
+            lhs.showsFooter == rhs.showsFooter && lhs.appControlsAvailable == rhs.appControlsAvailable &&
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil)
     }
 
@@ -4971,6 +5003,11 @@ private struct AidenMessageView: View, Equatable {
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                     )
                     .accessibilityElement(children: .combine)
+                }
+            }
+            if message.role == .assistant, let panels = message.appPanels {
+                ForEach(panels) { panel in
+                    AidenNativeAppControlPanel(panel: panel, available: appControlsAvailable, load: loadAppControls, apply: applyAppControl)
                 }
             }
             if message.role == .assistant, let artifacts = message.htmlArtifacts, !artifacts.isEmpty {
@@ -7585,5 +7622,73 @@ final class AidenReadAloudPlayback {
                 if self.generation == epoch && current() { self.errorMessage = error.localizedDescription }
             }
         }
+    }
+}
+
+
+private struct AidenNativeAppControlPanel: View {
+    @Environment(\.aidenPalette) private var palette
+    let panel: AidenAppControlPanel
+    let available: Bool
+    let load: ((AidenAppControlPanel) async throws -> AidenAppControlSnapshot)?
+    let apply: ((AidenAppControlPanel, AidenAppControlOperation) async throws -> AidenAppControlReceipt)?
+    @State private var snapshot: AidenAppControlSnapshot?
+    @State private var pending = false
+    @State private var status = ""
+    @State private var confirmation: AidenAppControlOperation?
+    @State private var retryOperation: AidenAppControlOperation?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(snapshot?.title ?? "Aiden settings").font(.headline)
+            Text("Paired host · These controls change the serving app, not this phone.").font(.caption).foregroundStyle(palette.secondary)
+            if available, let snapshot {
+                ForEach(snapshot.rows) { row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let options = row.options {
+                            Picker(row.label, selection: Binding(get: { row.value.label }, set: { propose(row, .text($0)) })) {
+                                ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
+                            }.disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
+                        } else if case .boolean(let flag) = row.value {
+                            Toggle(row.label, isOn: Binding(get: { flag }, set: { propose(row, .boolean($0)) }))
+                                .disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
+                        }
+                        Text(row.description).font(.caption).foregroundStyle(palette.secondary)
+                        Text(row.scope).font(.caption2).foregroundStyle(palette.secondary)
+                        if let reason = row.disabledReason { Text(reason).font(.caption).foregroundStyle(palette.secondary) }
+                    }
+                }
+            } else { Text(panel.fallback).font(.subheadline) }
+            if !status.isEmpty { Text(status).font(.caption).accessibilityAddTraits(.updatesFrequently) }
+            HStack {
+                Button("Refresh") { Task { await refresh() } }.disabled(pending || !available)
+                if retryOperation != nil { Button("Check change") { if let operation = retryOperation { Task { await commit(operation) } } }.disabled(pending || !available) }
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .task(id: available) { snapshot = nil; confirmation = nil; if available { await refresh() } }
+        .confirmationDialog("Change this preference on the paired host?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
+            Button("Apply change") { if let operation = confirmation { confirmation = nil; Task { await commit(operation) } } }
+            Button("Cancel", role: .cancel) { confirmation = nil }
+        } message: { Text(snapshot?.rows.first { $0.id == confirmation?.control }?.scope ?? "Paired host") }
+    }
+    private func propose(_ row: AidenAppControlRow, _ value: AidenAppControlValue) {
+        guard !pending, row.disabledReason == nil, value != row.value else { return }
+        confirmation = AidenAppControlOperation(control: row.id, value: value, expectedRevision: row.revision, operationId: UUID().uuidString)
+    }
+    @MainActor private func refresh() async {
+        do { guard available, let load else { return }; snapshot = try await load(panel) }
+        catch { snapshot = nil; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop." }
+    }
+    @MainActor private func commit(_ operation: AidenAppControlOperation) async {
+        guard !pending, available, let apply else { return }
+        pending = true; retryOperation = operation
+        defer { pending = false }
+        do {
+            let receipt = try await apply(panel, operation)
+            if receipt.status == "outcome_unknown" { status = "The change could not be confirmed. Refresh its current value; checking the change will not repeat it." }
+            else { retryOperation = nil; status = receipt.warning ?? (receipt.effective == "now" ? "Saved." : "Saved. Applies to subsequent agent work.") }
+            await refresh()
+        } catch { snapshot = nil; status = "The change could not be confirmed. Check the change after reconnecting." }
     }
 }

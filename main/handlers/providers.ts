@@ -6,7 +6,6 @@ import { ipcMain } from "../platform.js";
 import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
 import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
-import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import {
@@ -35,7 +34,7 @@ import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
 } from "../services/provider-list-core.js";
-import { AppearancePreviewState } from "../services/appearance-preview-core.js";
+import { appearancePreview, applySettingsEffects } from "../services/settings-application-effects.js";
 import {
   removeProviderWithCredentialCleanup,
   saveProviderWithCredentialRotation,
@@ -71,7 +70,6 @@ import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.j
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
 
-const appearancePreview = new AppearancePreviewState();
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -510,6 +508,14 @@ export function registerProviderHandlers(): void {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
     const next: Partial<import("../services/types.js").AppSettings> = {};
+    if (p.remoteAppControlsEnabled !== undefined) {
+      if (typeof p.remoteAppControlsEnabled !== "boolean") throw new Error("Invalid paired controls setting.");
+      next.remoteAppControlsEnabled = p.remoteAppControlsEnabled;
+    }
+    if (p.appControlPolicy !== undefined) {
+      if (!["disabled", "ask", "safe"].includes(p.appControlPolicy as string)) throw new Error("Invalid app controls policy.");
+      next.appControlPolicy = p.appControlPolicy as import("../../renderer/shared/app-controls.js").AppControlPolicy;
+    }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
@@ -551,27 +557,7 @@ export function registerProviderHandlers(): void {
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
-    if (next.localVoiceIdleUnloadMinutes !== undefined) {
-      const { reconfigureParakeetIdleUnload } = await import("../services/parakeet.js");
-      void reconfigureParakeetIdleUnload();
-    }
-    if (next.skillsEnabled !== undefined) {
-      skillRegistry.invalidate();
-      invalidateBotRuntimeInventoryAuthority("skill_configuration");
-      if (!next.skillsEnabled) {
-        const { llmClient } = await import("../services/llm-client.js");
-        llmClient.cancelForSkillsDisabled();
-        const { contextLifecycleService } =
-          await import("../services/context-lifecycle-service-main.js");
-        contextLifecycleService.cancelForSkillsDisabled();
-      }
-      const { telegramService } = await import("../services/telegram/telegram-service.js");
-      void telegramService.refreshCommands();
-    }
-    if (next.appearance) {
-      const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
-      ipcMain.broadcast("settings:appearance-changed", appearance);
-    }
+    await applySettingsEffects(saved, next);
     return saved;
   });
 }

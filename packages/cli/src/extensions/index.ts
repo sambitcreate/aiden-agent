@@ -19,6 +19,7 @@ import { createBtwInlineExtension } from "./btw.ts";
 import { createUsageInlineExtension } from "./usage.ts";
 import { createVoiceInlineExtension } from "./voice.ts";
 
+import { createAppExtension } from "./app.ts";
 import { createSessionParityExtension } from "./session-parity.ts";
 import { createProviderParityExtension } from "../providers.ts";
 
@@ -306,7 +307,7 @@ export async function createAidenInlineExtensions(): Promise<InlineExtension[]> 
 		},
 	];
 
-	const extensions: InlineExtension[] = [captureExtension, createProviderParityExtension(agentDir), createSessionParityExtension(agentDir)];
+	const extensions: InlineExtension[] = [captureExtension, createProviderParityExtension(agentDir), createSessionParityExtension(agentDir), createAppExtension(agentDir)];
 	if (process.env.AIDEN_CHILD === "1") return extensions;
 	extensions.push(createSubagentsExtension(agentDir), createOnboardingExtension(agentDir), createWorkflowCommands(agentDir), createArtifactsExtension(agentDir), createMcpExtension(agentDir), createScheduleExtension(agentDir));
 	for (const candidate of candidates) {

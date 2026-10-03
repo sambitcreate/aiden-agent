@@ -95,6 +95,10 @@ export function projectAidenChatExport(
     if (messages.length >= MAX_EXPORT_MESSAGES) {
       throw new Error("This chat has too many messages to export safely.");
     }
+    if (message.appPanels?.length) {
+      message.content = [message.content, ...message.appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n");
+      delete message.appPanels;
+    }
     budget.chargeMessage(message);
     messages.push(message);
   }

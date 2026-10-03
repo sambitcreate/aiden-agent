@@ -598,6 +598,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",
+    "remoteAppControlsEnabled",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
@@ -630,6 +631,9 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (settings[key] !== undefined && typeof settings[key] !== "string") {
       delete normalized[key];
     }
+  }
+  if (settings.appControlPolicy !== undefined) {
+    normalized.appControlPolicy = ["disabled", "ask", "safe"].includes(settings.appControlPolicy as string) ? settings.appControlPolicy : "disabled";
   }
   // Assistant, appearance, and keybindings are versioned/tolerant nested
   // documents. Runtime consumers project supported values separately; the

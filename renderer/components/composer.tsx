@@ -266,6 +266,7 @@ const PERMISSION_META: Record<
 const PERMISSION_ORDER: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
 function skillSourceLabel(source: SkillSource): string {
+  if (source === "builtin") return "Built-in";
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
 }
 

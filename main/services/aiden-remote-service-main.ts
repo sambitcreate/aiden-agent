@@ -1,3 +1,4 @@
+import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
@@ -393,6 +394,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        appControls: typeof remoteAppControls;
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
@@ -824,6 +826,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             files,
             git,
             schedules,
+            appControls: remoteAppControls,
             memorySettings,
             usage: usageStore,
             speech,

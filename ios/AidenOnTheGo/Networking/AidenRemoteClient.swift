@@ -770,7 +770,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -783,6 +783,18 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: DeviceCapabilitiesUpdateRequest(accepts: accepts)
         )
         return response.capabilities
+    }
+
+    func appControls(chatId: String, panelId: String) async throws -> AidenAppControlSnapshot {
+        let value: AidenAppControlSnapshot = try await send(method: "GET", path: ["chats", chatId, "controls", panelId])
+        guard value.isWireSafe else { throw AidenRemoteClientError.invalidResponse }
+        return value
+    }
+    func applyAppControl(chatId: String, panelId: String, operation: AidenAppControlOperation) async throws -> AidenAppControlReceipt {
+        guard operation.isWireSafe else { throw AidenRemoteClientError.invalidResponse }
+        let value: AidenAppControlReceipt = try await send(method: "POST", path: ["chats", chatId, "controls", panelId], body: operation)
+        guard value.isWireSafe, value.operationId == operation.operationId, value.control == operation.control, value.value == operation.value else { throw AidenRemoteClientError.invalidResponse }
+        return value
     }
 
     func taskProgress(chatId: String) async throws -> AidenRemoteChatTaskProgress {

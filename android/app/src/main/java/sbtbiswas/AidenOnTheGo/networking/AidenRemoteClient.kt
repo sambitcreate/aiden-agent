@@ -563,6 +563,18 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun appControls(chatId: String, panelId: String): AidenAppControlSnapshot = executeRequest("/chats/$chatId/controls/$panelId") { bytes ->
+        json.decodeFromString<AidenAppControlSnapshot>(String(bytes, Charsets.UTF_8)).also { require(it.isWireSafe) { "Invalid controls response" } }
+    }
+    suspend fun applyAppControl(chatId: String, panelId: String, operation: AidenAppControlOperation): AidenAppControlReceipt {
+        require(operation.isWireSafe)
+        return executeRequest("/chats/$chatId/controls/$panelId", method = "POST", bodyJson = json.encodeToString(operation)) { bytes ->
+            json.decodeFromString<AidenAppControlReceipt>(String(bytes, Charsets.UTF_8)).also {
+                require(it.isWireSafe && it.operationId == operation.operationId && it.control == operation.control && it.value == operation.value) { "Invalid control receipt" }
+            }
+        }
+    }
+
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))

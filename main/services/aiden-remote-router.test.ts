@@ -25,6 +25,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  appControls?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["appControls"];
   readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
@@ -127,6 +128,7 @@ async function fixture(options: {
   };
   const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
     readAloud: options.readAloud,
+    appControls: options.appControls,
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
@@ -3815,4 +3817,23 @@ test("the simulator vocabulary is advertised only to paired desktops", async () 
       await server.close();
     }
   }
+});
+
+
+test("chat controls require both scoped grants and advertise owner-enabled negotiation separately", async () => {
+  let reads = 0, writes = 0;
+  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
+  const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.ok(server.features.includes("chat-ui-panels-v1"));
+    assert.equal(server.features.includes("chat-ui-panels-enabled-v1"), false);
+    const denied = await fetch(`${app.base}/chats/chat-1/controls/panel-1`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ control: "memory.enabled", value: false, expectedRevision: "rev", operationId: "op" }) });
+    assert.equal(denied.status, 403);
+    assert.equal(writes, 0);
+    const upgrade = await fetch(`${app.base}/device/capabilities`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["app-controls:respond"] }) });
+    assert.equal(upgrade.status, 403);
+    assert.equal(reads, 0);
+  } finally { await app.close(); }
 });

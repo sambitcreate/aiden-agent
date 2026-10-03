@@ -644,6 +644,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     static let tasksRead = Self(rawValue: "tasks:read")
     static let agentsRead = Self(rawValue: "agents:read")
     static let questionsRespond = Self(rawValue: "questions:respond")
+    static let appControlsRead = Self(rawValue: "app-controls:read")
+    static let appControlsRespond = Self(rawValue: "app-controls:respond")
     static let skillsInvoke = Self(rawValue: "skills:invoke")
 
     static let v1Known: [Self] = [
@@ -651,7 +653,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         .workspaceRead, .workspaceBrowse, .workspaceManage,
         .filesRead, .filesWrite, .gitRead, .gitWrite,
         .scheduleRead, .scheduleWrite, .botRead, .botWrite, .tasksRead, .agentsRead,
-        .questionsRespond, .skillsInvoke,
+        .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
     ]
 
     init(from decoder: Decoder) throws {
@@ -2004,6 +2006,7 @@ struct AidenRemoteChatAgentRoster: Decodable, Equatable, Sendable {
 /// opaque invocation lease plus safe display metadata — never skill paths,
 /// instructions, fingerprints, or registry internals.
 enum AidenRemoteSkillSource: String, Codable, Sendable {
+    case builtin
     case configured
     case workspace
     case global
@@ -2126,7 +2129,7 @@ struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendabl
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accepts = try values.decode([AidenRemoteCapability].self, forKey: .accepts)
         let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
               accepts.count <= allowed.count,

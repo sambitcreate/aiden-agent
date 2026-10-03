@@ -27,7 +27,8 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
     configStore: {
       listWorkspaces: async () => existing ? [existing] : [],
       getWorkspace: async () => existing,
-      saveWorkspace: async (value: Workspace) => {
+      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+        await guard?.(existing ?? undefined);
         events.push("save");
         if (options.saveError) throw options.saveError;
         existing = value;
@@ -191,4 +192,16 @@ test("shared folder creation revalidates selected identity before persistence", 
     /selected folder changed/u,
   );
   assert.equal(application.saved.length, 0);
+});
+
+
+test("workspace authority revoked during cancellation is checked inside persistence and never saves", async () => {
+  const application = fixture(); let current = true;
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () => { application.events.push("cancel-generations"); current = false; };
+  await assert.rejects(application.service.update("workspace-1", { memoryEnabled: false }, {
+    assertCurrent: () => { if (!current) throw new Error("revoked"); },
+    beforeSave: () => { if (!current) throw new Error("revoked"); },
+  }), /revoked/);
+  assert.equal(application.saved.length, 0);
+  assert.equal(application.events.includes("save"), false);
 });

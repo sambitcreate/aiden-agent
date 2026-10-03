@@ -1549,6 +1549,26 @@ class AidenChatViewModel(
         }
     }
 
+    val canReadAppControls: Boolean
+        get() = !isReadOnlyPresentation && _chat.value?.botId == null &&
+            coordinator.serverInfo.value?.features?.contains("chat-ui-panels-enabled-v1") == true &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_READ) == true
+
+    suspend fun loadAppControls(panel: AidenAppControlPanel): AidenAppControlSnapshot {
+        check(canReadAppControls && panel.workspaceId == _chat.value?.workspaceId)
+        val client = activeClient() ?: error("Host disconnected")
+        val result = client.appControls(chatId, panel.id)
+        check(activeClient() === client && canReadAppControls) { "Host changed" }
+        return result
+    }
+    suspend fun applyAppControl(panel: AidenAppControlPanel, operation: AidenAppControlOperation): AidenAppControlReceipt {
+        check(canReadAppControls && panel.workspaceId == _chat.value?.workspaceId && installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.APP_CONTROLS_RESPOND) == true)
+        val client = activeClient() ?: error("Host disconnected")
+        val result = client.applyAppControl(chatId, panel.id, operation)
+        check(activeClient() === client && canReadAppControls) { "Host changed" }
+        return result
+    }
+
     // MARK: - Slice G composer power
 
     /** Skills require the negotiated grant in addition to the advertised

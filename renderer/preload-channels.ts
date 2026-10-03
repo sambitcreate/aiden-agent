@@ -58,6 +58,7 @@ export const NATIVE_INVOKE_CHANNELS = {
 } as const;
 
 export const NOTIFICATION_CHANNEL_VALUES = [
+  "settings:controls-changed",
   "app:config-externally-changed",
   "app:command",
   "app:navigate",

@@ -615,6 +615,7 @@ export interface ChatMessage {
   reasoning?: string;
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
+  appPanels?: import("../shared/app-controls").AppControlPanel[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
@@ -869,6 +870,8 @@ export interface AssistantConfigSnapshot {
 }
 
 export interface AppSettings {
+  appControlPolicy?: import("../shared/app-controls").AppControlPolicy;
+  remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;
   lastProviderId?: string;
   lastModel?: string;

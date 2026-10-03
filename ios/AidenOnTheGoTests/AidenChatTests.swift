@@ -7,6 +7,26 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testChatControlsSharedFixtureAndMalformedAdditiveFallback() throws {
+        struct Controls: Decodable { let panel: AidenAppControlPanel; let snapshot: AidenAppControlSnapshot; let operation: AidenAppControlOperation; let receipt: AidenAppControlReceipt }
+        struct Fixture: Decodable { let appControls: Controls }
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url)).appControls
+        XCTAssertEqual(fixture.panel.topic, "memory")
+        XCTAssertTrue(fixture.panel.isWireSafe)
+        XCTAssertTrue(fixture.snapshot.isWireSafe)
+        XCTAssertEqual(fixture.snapshot.rows.first?.value, .boolean(true))
+        XCTAssertTrue(fixture.operation.isWireSafe)
+        XCTAssertEqual(fixture.receipt.value, .boolean(false))
+        XCTAssertTrue(fixture.receipt.isWireSafe)
+        let message = #"{"id":"m","role":"assistant","text":"Readable answer","createdAt":"2026-10-03T00:00:00Z","appPanels":[{"version":999,"id":"bad","topic":"arbitrary","fallback":"ignored"}]}"#
+        let decoded = try JSONDecoder.aidenRemote().decode(AidenChatMessage.self, from: Data(message.utf8))
+        XCTAssertEqual(decoded.text, "Readable answer")
+        XCTAssertNil(decoded.appPanels)
+        let forged = #"{"control":"shell","value":true,"expectedRevision":"rev","operationId":"op"}"#
+        XCTAssertFalse(try JSONDecoder().decode(AidenAppControlOperation.self, from: Data(forged.utf8)).isWireSafe)
+    }
+
     func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
             let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",

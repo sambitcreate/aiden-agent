@@ -137,3 +137,11 @@ test("a dotfile-titled chat exports under a visible name without changing its ti
   assert.deepEqual(await fs.readdir(directory), ["env setup.aiden-chat.json"]);
   assert.equal(JSON.parse(await fs.readFile(target, "utf8")).chat.title, titledChat.title);
 });
+
+
+test("export keeps readable control fallback and strips interactive descriptors", () => {
+  const exported = projectAidenChatExport({ ...chat, messages: [{ id: "panel-message", role: "assistant", content: "Here are your settings.", createdAt: 3,
+    appPanels: [{ version: 1, id: "panel", topic: "memory", fallback: "Memory controls on this desktop." }] }] });
+  assert.equal(exported.chat.messages[0].content, "Here are your settings.\n\nMemory controls on this desktop.");
+  assert.equal("appPanels" in exported.chat.messages[0], false);
+});

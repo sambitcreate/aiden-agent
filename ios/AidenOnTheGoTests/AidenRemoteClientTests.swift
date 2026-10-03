@@ -465,6 +465,7 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatSkillsFeature,
             AidenServer.chatAgentInterruptFeature,
             AidenServer.chatReadStateFeature,
+            "chat-ui-panels-v1",
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
@@ -2488,6 +2489,29 @@ final class AidenRemoteClientTests: XCTestCase {
             try await client.interruptAgent(chatId: "chat_other", agentId: "agent_fixture_01")
         }
         XCTAssertEqual(requests.count, 2, "Only the mismatched-chat call reaches the network")
+    }
+
+    func testChatControlsUseScopedPathsAndVerifyReceiptIdentity() async throws {
+        let client = makeClient()
+        let snapshot = try botFixtureData(at: ["appControls", "snapshot"])
+        let receipt = try botFixtureData(at: ["appControls", "receipt"])
+        var requests: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            requests.append("\(request.httpMethod ?? "?") \(request.url?.path ?? "")")
+            if request.httpMethod == "POST" {
+                let body = try Self.jsonBody(request)
+                XCTAssertEqual(body["control"] as? String, "memory.enabled")
+                XCTAssertEqual(body["value"] as? Bool, false)
+                XCTAssertEqual(body["operationId"] as? String, "operation_fixture_01")
+            }
+            return Self.response(for: request, status: 200, data: request.httpMethod == "POST" ? receipt : snapshot)
+        }
+        let loaded = try await client.appControls(chatId: "chat_fixture_01", panelId: "panel_fixture_01")
+        XCTAssertEqual(loaded.rows.count, 1)
+        let operation = AidenAppControlOperation(control: "memory.enabled", value: .boolean(false), expectedRevision: "revision_fixture_01", operationId: "operation_fixture_01")
+        let value = try await client.applyAppControl(chatId: "chat_fixture_01", panelId: "panel_fixture_01", operation: operation)
+        XCTAssertEqual(value.status, "applied")
+        XCTAssertEqual(requests, ["GET /api/aiden/v1/chats/chat_fixture_01/controls/panel_fixture_01", "POST /api/aiden/v1/chats/chat_fixture_01/controls/panel_fixture_01"])
     }
 
     func testSkillCatalogEndpointAndProgressVocabularyNegotiation() async throws {

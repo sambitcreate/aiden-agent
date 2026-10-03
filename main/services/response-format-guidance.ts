@@ -7,4 +7,4 @@ export const RESPONSE_FORMAT_GUIDANCE = [
 ].join(" ");
 
 export const PI_CHAT_SYSTEM_PROMPT =
-  `You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code. ${RESPONSE_FORMAT_GUIDANCE}`;
+  `You are Aiden, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code. ${RESPONSE_FORMAT_GUIDANCE}`;

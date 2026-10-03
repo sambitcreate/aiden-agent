@@ -35,6 +35,7 @@ export interface SkillRegistrySnapshot {
 }
 
 export interface SkillRegistryDependencies {
+  listBuiltin(): Promise<SkillRegistryCandidate[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   isEnabled(): Promise<boolean>;
   listConfigured(): Promise<Skill[]>;
@@ -131,6 +132,7 @@ export class SkillRegistry {
       cacheTtlMs: DEFAULT_CACHE_TTL_MS,
       cacheLimit: DEFAULT_CACHE_LIMIT,
       onInvalidate: () => {},
+      listBuiltin: async () => [],
       ...dependencies,
     };
     if (this.#dependencies.invocationKey.byteLength < 32) {
@@ -243,17 +245,19 @@ export class SkillRegistry {
     workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
   ): Promise<SkillRegistrySnapshot> {
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
-    const [configured, discovered] = await Promise.all([
+    const [configured, discovered, builtin] = await Promise.all([
       this.#dependencies.listConfigured(),
       // No Access is also a discovery boundary: do not read workspace skill
       // files merely to mark them unavailable in a renderer catalog.
       this.#dependencies.discover(
         workspace.permission === "none" ? undefined : workspace.folderPath,
       ),
+      this.#dependencies.listBuiltin(),
     ]);
     // A disable may race an in-flight disk scan. Never publish that snapshot.
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const resolved = resolveSkillCandidates([
+      ...builtin,
       ...configured.map(configuredCandidate),
       ...discovered.map((skill) => discoveredCandidate(skill, workspace.permission)),
     ]);
