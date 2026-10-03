@@ -4429,7 +4429,8 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
+          "description": "Always the empty JSON object {} sent as application/json.",
           "content": {
             "application/json": {
               "schema": {
