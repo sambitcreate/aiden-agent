@@ -376,7 +376,7 @@ export function applyRemoteRunStreamState(current: RemoteRunView, state: PeerRun
 
 /** The refetched window already ends in the failed turn, which renders its own notice. */
 function failureIsPersisted(messages: readonly ChatMessage[]): boolean {
-  const last = messages.at(-1);
+  const last = messages[messages.length - 1];
   return last?.role === "assistant" && (last.providerFailure !== undefined || last.timeline?.status === "failed");
 }
 

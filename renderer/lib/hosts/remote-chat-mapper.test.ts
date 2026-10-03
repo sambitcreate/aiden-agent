@@ -144,7 +144,7 @@ test("a large chat is read newest first and paged back to the beginning without 
   const all = numbered(130);
   let transcript: RemoteTranscript = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 50 }));
   assert.equal(transcript.messages.length, 50);
-  assert.equal(transcript.messages.at(-1)?.id, "m129");
+  assert.equal(transcript.messages[transcript.messages.length - 1]?.id, "m129");
   assert.equal(transcript.hasOlder, true);
 
   while (transcript.hasOlder) {
