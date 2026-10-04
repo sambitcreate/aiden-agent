@@ -31,7 +31,7 @@ import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
-import { ShieldQuestion, TerminalSquare } from "lucide-react";
+import { TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
@@ -45,28 +45,14 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
-import {
-  rememberableApprovalScopes,
-  toolApprovalScopeLabel,
-  type ToolApprovalScope,
-} from "../shared/tool-approval-scope";
+import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import {
-  SubagentWorkspaceWriteApproval,
-  subagentWorkspaceWriteOperationLabel,
-} from "../components/subagent-workspace-write-approval";
-import {
-  SubagentMcpMutationApproval,
-  subagentMcpMutationAllowLabel,
-} from "../components/subagent-mcp-mutation-approval";
-import { SubagentShellApproval } from "../components/subagent-shell-approval";
-import { SubagentRunGrantApproval } from "../components/subagent-run-grant-approval";
-import { FormFillApproval } from "../components/form-fill-approval";
+import { ChatApprovalCard } from "../components/chat-approval-card";
 import {
   chatsApi,
   aidenRemoteApi,
@@ -163,11 +149,6 @@ import {
 } from "../lib/chat-terminal-sync";
 import {
   ASSISTANT_WORKSPACE_ID,
-  isFormFillBatchApprovalDetails,
-  isSubagentMcpMutationApprovalDetails,
-  isSubagentShellApprovalDetails,
-  isSubagentRunGrantApprovalDetails,
-  isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
@@ -193,18 +174,6 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
-
-const TOOL_LABELS: Record<string, string> = {
-  edit_file: "Edit file",
-  run_command: "Run command",
-  write_file: "Write file",
-  computer_use: "Computer Use",
-  form_fill: "Form fill",
-};
-
-function toolLabel(toolName: string): string {
-  return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
-}
 
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
@@ -2209,66 +2178,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
-  const pendingDetails = pending?.details as unknown;
-  const pendingWorkspaceWriteClaim =
-    typeof pendingDetails === "object" &&
-    pendingDetails !== null &&
-    !Array.isArray(pendingDetails) &&
-    (pendingDetails as Record<string, unknown>).kind === "subagent-workspace-write";
-  const pendingWorkspaceWrite =
-    pending && isSubagentWorkspaceWriteApprovalDetails(pending.details)
-      ? pending.details
-      : undefined;
-  const invalidPendingWorkspaceWrite =
-    pendingWorkspaceWriteClaim && pendingWorkspaceWrite === undefined;
-  const pendingMcpMutationClaim =
-    typeof pendingDetails === "object" &&
-    pendingDetails !== null &&
-    !Array.isArray(pendingDetails) &&
-    (pendingDetails as Record<string, unknown>).kind === "subagent-mcp-mutation";
-  const pendingMcpMutation =
-    pending && isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
-  const invalidPendingMcpMutation = pendingMcpMutationClaim && pendingMcpMutation === undefined;
-  const pendingShellClaim =
-    typeof pendingDetails === "object" &&
-    pendingDetails !== null &&
-    !Array.isArray(pendingDetails) &&
-    (pendingDetails as Record<string, unknown>).kind === "subagent-shell";
-  const pendingShell =
-    pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
-  const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
-  const pendingRunGrantClaim =
-    typeof pendingDetails === "object" && pendingDetails !== null &&
-    !Array.isArray(pendingDetails) &&
-    (pendingDetails as Record<string, unknown>).kind === "subagent-run-grant";
-  const pendingRunGrant = pending && isSubagentRunGrantApprovalDetails(pending.details)
-    ? pending.details : undefined;
-  const invalidPendingRunGrant = pendingRunGrantClaim && pendingRunGrant === undefined;
-  const pendingFormFillClaim =
-    typeof pendingDetails === "object" &&
-    pendingDetails !== null &&
-    !Array.isArray(pendingDetails) &&
-    (pendingDetails as Record<string, unknown>).kind === "form-fill-batch";
-  const pendingFormFill =
-    pending && isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
-  const invalidPendingFormFill = pendingFormFillClaim && pendingFormFill === undefined;
-  const invalidPendingPrivilegedApproval =
-    invalidPendingWorkspaceWrite ||
-    invalidPendingMcpMutation ||
-    invalidPendingShell ||
-    invalidPendingRunGrant ||
-    invalidPendingFormFill;
-  const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
-  React.useEffect(() => {
-    setFormFillExcludedOrders([]);
-  }, [pending?.approvalId]);
-  const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
-  // Only plain workspace writes and shell commands can be remembered; the main
-  // process offers scopes solely for those, and specialized cards keep once.
-  const pendingRememberScopes =
-    pending && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
-      ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
-      : [];
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2486,156 +2395,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               className="aiden-dock-inset chat-content-column pb-2"
             >
               {pending ? (
-                <div>
-                  <p className="sr-only" role="status">
-                    {invalidPendingPrivilegedApproval
-                      ? "Invalid privileged approval blocked"
-                      : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
-                  </p>
-                  <section
-                    ref={approvalCardRef}
-                    aria-labelledby={`approval-title-${pending.approvalId}`}
-                    aria-describedby={`approval-summary-${pending.approvalId}`}
-                    className="rounded-card bg-popover p-3 shadow-popover"
-                  >
-                    <div className="flex items-start gap-2.5">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
-                        <ShieldQuestion className="size-4" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <Text
-                          variant="small-strong"
-                          as="p"
-                          id={`approval-title-${pending.approvalId}`}
-                        >
-                          {invalidPendingPrivilegedApproval
-                            ? "Invalid privileged approval blocked"
-                            : pendingWorkspaceWrite
-                              ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
-                                  pendingWorkspaceWrite.operation,
-                                ).toLocaleLowerCase("en-US")}`
-                              : pendingMcpMutation
-                                ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
-                                : pendingShell
-                                  ? `${pendingShell.childLabel} wants to run a full-host command`
-                                  : pendingRunGrant
-                                    ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                                  : `${toolLabel(pending.toolName)} needs approval`}
-                        </Text>
-                        <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                          {invalidPendingPrivilegedApproval
-                            ? "This malformed privileged action cannot be allowed. Deny it to continue."
-                            : pendingWorkspaceWrite
-                              ? "Review this one exact file change before Aiden continues."
-                              : pendingMcpMutation
-                                ? "Review this one exact external mutation before Aiden continues."
-                                : pendingShell
-                                  ? "Review this one exact full-host command before Aiden continues."
-                                  : pendingRunGrant
-                                    ? "Review this grant for the entire subagent run."
-                                  : "Review this one action before Aiden continues."}
-                        </Text>
-                      </div>
-                    </div>
-                    {!pendingCanAllow ? (
-                      <Text
-                        variant="small"
-                        as="p"
-                        id={`approval-summary-${pending.approvalId}`}
-                        className="mt-2.5 rounded-control bg-well px-3 py-2"
-                      >
-                        Aiden cannot safely authorize this action from this view. Deny it here or
-                        review the exact action on the device that owns this chat.
-                      </Text>
-                    ) : pendingWorkspaceWrite ? (
-                      <SubagentWorkspaceWriteApproval
-                        details={pendingWorkspaceWrite}
-                        descriptionId={`approval-summary-${pending.approvalId}`}
-                      />
-                    ) : pendingMcpMutation ? (
-                      <SubagentMcpMutationApproval
-                        details={pendingMcpMutation}
-                        descriptionId={`approval-summary-${pending.approvalId}`}
-                      />
-                    ) : pendingShell ? (
-                      <SubagentShellApproval
-                        details={pendingShell}
-                        descriptionId={`approval-summary-${pending.approvalId}`}
-                      />
-                    ) : pendingRunGrant ? (
-                      <SubagentRunGrantApproval
-                        details={pendingRunGrant}
-                        descriptionId={`approval-summary-${pending.approvalId}`}
-                      />
-                    ) : pendingFormFill ? (
-                      <FormFillApproval
-                        details={pendingFormFill}
-                        descriptionId={`approval-summary-${pending.approvalId}`}
-                        onDeselectChange={setFormFillExcludedOrders}
-                      />
-                    ) : (
-                      <Text
-                        variant="small"
-                        as="p"
-                        id={`approval-summary-${pending.approvalId}`}
-                        className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
-                      >
-                        {pending.summary}
-                      </Text>
-                    )}
-                    <div className="mt-2.5 flex justify-end gap-2">
-                      <Button
-                        ref={approvalDenyRef}
-                        variant="transparent"
-                        size="small"
-                        disabled={decidingApprovalId === pending.approvalId}
-                        onClick={() => void decideApproval(pending, "deny")}
-                      >
-                        {pendingFormFill ? "Cancel" : "Deny"}
-                      </Button>
-                      {pendingRememberScopes.map((scope) => (
-                        <Button
-                          key={scope}
-                          variant="transparent"
-                          size="small"
-                          disabled={decidingApprovalId === pending.approvalId}
-                          title={
-                            scope === "always"
-                              ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
-                              : "Remember this exact action in this chat until Aiden quits."
-                          }
-                          onClick={() => void decideApproval(pending, "allow", { scope })}
-                        >
-                          {toolApprovalScopeLabel(scope)}
-                        </Button>
-                      ))}
-                      {pendingCanAllow ? (
-                        <Button
-                          variant="accent"
-                          size="small"
-                          disabled={decidingApprovalId === pending.approvalId}
-                          onClick={() =>
-                            void decideApproval(
-                              pending,
-                              "allow",
-                              pendingFormFill ? { formFillExcludedOrders } : undefined,
-                            )
-                          }
-                        >
-                          {decidingApprovalId === pending.approvalId
-                            ? "Sending…"
-                            : pendingFormFill
-                              ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
-                              : pendingMcpMutation
-                                ? subagentMcpMutationAllowLabel(pendingMcpMutation)
-                                : pendingRunGrant
-                                  ? "Allow for run"
-                                : "Allow once"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </section>
-                </div>
+                <ChatApprovalCard
+                  pending={pending}
+                  deciding={decidingApprovalId === pending.approvalId}
+                  onDecide={(decision, options) => void decideApproval(pending, decision, options)}
+                  cardRef={approvalCardRef}
+                  denyRef={approvalDenyRef}
+                />
               ) : null}
             </EventPresence>
             <TodoPanel snapshot={todoSnapshot} />
