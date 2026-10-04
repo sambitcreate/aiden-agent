@@ -1,6 +1,6 @@
 # Desktop multi-host control: shipped architecture — 2026-10-04
 
-Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1–8 task plans beside it). PR 1 (#310) is on main. PRs 2–9 are a stack: #313 → #314 (+ #315 merged into #318) → #318, #311 → #316 → #317 → #319 → #336 → #337 (`feat/multi-host-pr9-acceptance`). Per-PR notes: `.memory/multi-host-pr8-remote-new-chat.md`.
+Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1–8 task plans beside it). All nine PRs are on main and ship in 0.53.0: #310, #311, then the stack #313 → #314 → #316 → #317 → #319 → #336 → #337, merged with merge commits on 2026-10-04. The side branches #315 and #318 conflicted with the main line alone; #337 carried their resolutions, so GitHub marked them merged with it. Per-PR notes: `.memory/multi-host-pr8-remote-new-chat.md`.
 
 ## Shape
 
