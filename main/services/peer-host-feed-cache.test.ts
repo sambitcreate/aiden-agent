@@ -270,6 +270,79 @@ test("the cache keeps the newest 2,000 chats and evicts the least recently updat
   }
 });
 
+/** What a window rebuilds from one snapshot plus every broadcast change. */
+class WindowMirror {
+  summaries = new Map<string, unknown>();
+  runs = new Map<string, unknown>();
+  apply(changes: PeerHostFeedChange[]): void {
+    for (const change of changes) {
+      if (change.type === "reset") {
+        this.summaries = new Map(change.summaries.map((item) => [item.id, item]));
+        this.runs = new Map(change.runs.map((item) => [item.runId, item]));
+      } else if (change.type === "chat.upsert") {
+        this.summaries.set(change.row.id, change.row);
+      } else if (change.type === "chat.remove") {
+        // A removed chat takes its runs with it.
+        this.summaries.delete(change.id);
+        for (const [runId, item] of this.runs)
+          if ((item as { chatId: string }).chatId === change.id) this.runs.delete(runId);
+      } else if (change.type === "run.state") {
+        this.runs.set(change.run.runId, change.run);
+      }
+    }
+  }
+}
+
+test("a window rebuilt from broadcast changes matches the cache when it drops runs of chats it never kept", async () => {
+  const many = Array.from({ length: PEER_FEED_MAX_CHATS + 50 }, (_, index) =>
+    summary(`chat-${index}`, 10_000 + index),
+  );
+  const { feed, state } = host("epoch_a", { ...initial(), summaries: many });
+  const wire = await subscribe(feed);
+  try {
+    const cache = new PeerHostFeedCache("host-1");
+    const window = new WindowMirror();
+    const step = async () => {
+      await feed.refresh();
+      window.apply(feedInto(cache, wire.drain()));
+      const view = cache.snapshot();
+      assert.deepEqual([...window.summaries.keys()].sort(), ids(view.summaries));
+      assert.deepEqual(
+        [...window.runs.values()],
+        view.runs,
+        "the window's runs match the cache's",
+      );
+    };
+    await step();
+    // chat-10 and chat-20 are older than the newest 2,000, yet their runs are still learned.
+    feed.noteRun(run("run-10", "chat-10"), false);
+    feed.noteRun(run("run-20", "chat-20"), false);
+    await step();
+    assert.equal(cache.run("run-10")?.chatId, "chat-10");
+    assert.equal(cache.run("run-20")?.chatId, "chat-20");
+
+    // The host deletes chat-10.
+    state.current = { ...state.current, summaries: state.current.summaries.filter((item) => item.id !== "chat-10") };
+    feed.invalidate();
+    await step();
+    assert.equal(cache.run("run-10"), undefined);
+
+    // chat-20 changes but is still too old to keep.
+    state.current = {
+      ...state.current,
+      summaries: state.current.summaries.map((item) =>
+        item.id === "chat-20" ? summary("chat-20", 10_020, "Renamed chat") : item,
+      ),
+    };
+    feed.invalidate();
+    await step();
+    assert.equal(cache.run("run-20"), undefined);
+    assert.equal(cache.snapshot().summaries.length, PEER_FEED_MAX_CHATS);
+  } finally {
+    feed.close();
+  }
+});
+
 test("future vocabulary is skipped in place and a different protocol version blocks", () => {
   const cache = new PeerHostFeedCache("host-1");
   const envelope = (sequence: number, type: string, payload: unknown, protocolVersion = 1) =>
