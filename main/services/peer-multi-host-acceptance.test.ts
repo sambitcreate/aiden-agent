@@ -356,10 +356,13 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   host.dropConnections();
   await until(() => status()?.kind !== "connected", undefined, "the dropped link");
   assert.equal((await sidebar()).host.availability === "online", false);
-  await until(() => status()?.kind === "connected", timers, "the reconnect");
-  const resume = host.received
-    .slice(receivedBefore)
-    .find((entry) => entry.line.startsWith("GET /api/aiden/v1/host/events"));
+  // The host is connected once its identity checks out; the feed request follows.
+  const feedResume = () =>
+    host.received
+      .slice(receivedBefore)
+      .find((entry) => entry.line.startsWith("GET /api/aiden/v1/host/events"));
+  await until(() => status()?.kind === "connected" && feedResume() !== undefined, timers, "the reconnect");
+  const resume = feedResume();
   assert.equal(
     resume?.headers["last-event-id"],
     `${supervisor.feedSnapshot(paired.id)!.epoch}:${sequenceBefore}`,
