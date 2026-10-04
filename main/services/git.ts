@@ -6558,8 +6558,6 @@ export const gitManagedWorktreeDeletionPending = (
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
 export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyState(folderPath, worktreePath);
-export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
-  gitService.managedWorktreeBranchHead(folderPath, branch);
 export const gitCaptureManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,

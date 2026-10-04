@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -140,8 +139,3 @@ export function createKagiWebSearchAdapter(
 }
 
 export const kagiWebSearchAdapterFactory = createKagiWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireKagiWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "kagi");
-}

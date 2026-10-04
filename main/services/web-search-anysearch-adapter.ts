@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -178,6 +177,3 @@ export function createAnySearchWebSearchAdapter(
 export const anySearchWebSearchAdapterFactory = createAnySearchWebSearchAdapter;
 
 /** Validate an API-key request credential at a call site without I/O. */
-export function requireAnySearchWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "anysearch");
-}

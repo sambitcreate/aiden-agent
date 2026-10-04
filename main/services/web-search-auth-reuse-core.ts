@@ -26,9 +26,6 @@ export const WEB_SEARCH_EXISTING_AUTH_SOURCE_PROVIDER_IDS = ["openai", "openai-c
  */
 export const WEB_SEARCH_EXISTING_AUTH_SUPPORTED_SOURCE_PROVIDER_IDS = ["openai"] as const;
 
-export const WEB_SEARCH_EXISTING_AUTH_OPENAI_CONSENT_COPY =
-  "Allow Web Search to use the saved OpenAI API key. Searches use your OpenAI API quota and billing; the key stays encrypted on this device and is never copied into Web Search settings." as const;
-
 export type WebSearchExistingAuthSourceProviderId =
   (typeof WEB_SEARCH_EXISTING_AUTH_SOURCE_PROVIDER_IDS)[number];
 
@@ -286,16 +283,6 @@ export function normalizeWebSearchExistingAuthBindingDocument(
     version: WEB_SEARCH_EXISTING_AUTH_BINDING_VERSION,
     bindings: binding ? { openai: binding } : {},
   };
-}
-
-export function parseWebSearchExistingAuthBindingDocument(
-  value: unknown,
-): WebSearchExistingAuthBindingDocument | null {
-  try {
-    return normalizeWebSearchExistingAuthBindingDocument(value);
-  } catch {
-    return null;
-  }
 }
 
 export function emptyWebSearchExistingAuthBindingDocument(): WebSearchExistingAuthBindingDocument {

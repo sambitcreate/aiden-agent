@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -138,8 +137,3 @@ export function createSerperWebSearchAdapter(
 }
 
 export const serperWebSearchAdapterFactory = createSerperWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireSerperWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "serper");
-}

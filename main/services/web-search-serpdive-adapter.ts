@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -180,21 +179,3 @@ export function createSerpDiveWebSearchAdapter(
 }
 
 export const serpDiveWebSearchAdapterFactory = createSerpDiveWebSearchAdapter;
-
-// Keep the provider's display-name casing available to main-only integrations
-// that use the API's SERPdive spelling.
-export const createSERPdiveWebSearchAdapter = createSerpDiveWebSearchAdapter;
-export const createSerpdiveWebSearchAdapter = createSerpDiveWebSearchAdapter;
-export const serpdiveWebSearchAdapterFactory = createSerpDiveWebSearchAdapter;
-export const buildSERPdiveWebSearchRequest = buildSerpDiveWebSearchRequest;
-export const buildSerpdiveWebSearchRequest = buildSerpDiveWebSearchRequest;
-export const parseSERPdiveWebSearchResponse = parseSerpDiveWebSearchResponse;
-export const parseSerpdiveWebSearchResponse = parseSerpDiveWebSearchResponse;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireSerpDiveWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "serpdive");
-}
-
-export const requireSERPdiveWebSearchApiKey = requireSerpDiveWebSearchApiKey;
-export const requireSerpdiveWebSearchApiKey = requireSerpDiveWebSearchApiKey;

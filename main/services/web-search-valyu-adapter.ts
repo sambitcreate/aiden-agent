@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -153,8 +152,3 @@ export function createValyuWebSearchAdapter(
 }
 
 export const valyuWebSearchAdapterFactory = createValyuWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireValyuWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "valyu");
-}

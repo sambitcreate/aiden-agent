@@ -4,7 +4,6 @@ import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -149,10 +148,4 @@ export function createXCrawlWebSearchAdapter(
   return createWebSearchJsonAdapter(XCRAWL_DEFINITION, options);
 }
 
-export const xCrawlWebSearchAdapterFactory = createXCrawlWebSearchAdapter;
 export const xcrawlWebSearchAdapterFactory = createXCrawlWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireXCrawlWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "xcrawl");
-}
