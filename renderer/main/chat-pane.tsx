@@ -27,6 +27,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
 import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
@@ -2941,24 +2942,51 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       >
         {chat.isLoading || providers.isLoading ? (
-          <div
-            className="flex min-h-full items-center justify-center"
-            aria-label="Loading conversation"
-          >
+          <div role="status" className="flex min-h-full items-center justify-center">
             <Text variant="small" color="secondary">
-              Loading…
+              Loading conversation…
             </Text>
+          </div>
+        ) : chat.isError && messages.length === 0 ? (
+          <div className="flex min-h-full items-center justify-center">
+            <EmptyState
+              role="alert"
+              title="This chat couldn’t be loaded"
+              description="Your messages are still saved. Try loading the chat again."
+              action={
+                <Button
+                  variant="filled"
+                  size="small"
+                  onClick={() => void persistedChat.refetch()}
+                >
+                  Try again
+                </Button>
+              }
+            />
           </div>
         ) : messages.length === 0 && displayedStreamingText === null ? (
           <div className="flex min-h-full items-center justify-center">
-            <EmptyState
-              title="What would you like to work on?"
-              description={
-                (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
-                  ? undefined
-                  : "Set up a provider in Settings to start."
-              }
-            />
+            {(providers.data ?? []).some(
+              (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
+            ) ? (
+              <EmptyState title="What would you like to work on?" />
+            ) : (
+              <EmptyState
+                title="What would you like to work on?"
+                description={`${CONNECT_PROVIDER_ACTION} in ${PROVIDER_SETTINGS_LABEL} to start.`}
+                action={
+                  <Button
+                    variant="filled"
+                    size="small"
+                    onClick={() =>
+                      void navigate({ to: "/settings", search: { section: "providers" } })
+                    }
+                  >
+                    {CONNECT_PROVIDER_ACTION}
+                  </Button>
+                }
+              />
+            )}
           </div>
         ) : (
           <MessageList

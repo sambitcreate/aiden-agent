@@ -115,6 +115,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
+import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -2015,7 +2016,7 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? CONNECT_PROVIDER_ACTION : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
