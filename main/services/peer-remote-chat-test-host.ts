@@ -19,6 +19,7 @@ import { PeerEventFrames, PeerTransportError, parsePeerErrorEnvelope, type PeerR
 import type { PeerHostStatus, PeerRunFrameMessage } from "../../renderer/shared/peer-host.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
 import { RemoteHostAdapter, type PeerHostTransport } from "../../renderer/lib/hosts/remote-host-adapter.js";
+import type { FrameScheduler } from "../../renderer/lib/hosts/frame-scheduler.js";
 import { RemoteChatSession } from "../../renderer/lib/hosts/remote-chat-session.js";
 import { remoteRunTranscript } from "../../renderer/lib/hosts/remote-stream-translator.js";
 
@@ -481,7 +482,7 @@ class FakeDocument implements PeerHostLiveOwner {
  * host's chat. Two calls with different device IDs are two Macs controlling
  * the same host.
  */
-export async function setup(host: FakeHost, deviceId = "desktop") {
+export async function setup(host: FakeHost, deviceId = "desktop", options: { frame?: FrameScheduler } = {}) {
   const timers = new FakeTimers();
   let saved: StoredPeerHost[] = [
     {
@@ -563,7 +564,7 @@ export async function setup(host: FakeHost, deviceId = "desktop") {
   const [view] = await registry.list();
   const adapter = new RemoteHostAdapter(view!, transport);
   await adapter.ready();
-  const session = new RemoteChatSession({ adapter, chatId: "chat-1" });
+  const session = new RemoteChatSession({ adapter, chatId: "chat-1", frame: options.frame });
   const open = async () => {
     session.start();
     await settle();

@@ -5,9 +5,10 @@ import test from "node:test";
 import { AidenRemoteHostFeedService, type AidenRemoteHostFeedState } from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import { HostRunRegistry } from "./host-run-registry.js";
+import { PEER_FEED_MAX_CHATS } from "./peer-host-feed-cache.js";
 import { PeerHostRegistry, type PeerClient, type StoredPeerHost } from "./peer-host-registry.js";
 import {
   PEER_BACKOFF_STEPS_MS,
@@ -139,6 +140,8 @@ function peerError(error: unknown): unknown {
  */
 class FakeHost {
   readonly calls: string[] = [];
+  /** Every SSE chunk the host wrote, by request path. */
+  readonly written: { path: string; chunk: string }[] = [];
   readonly sessions = new Set<Session>();
   readonly runs: HostRunRegistry;
   readonly service: AidenRemoteHostRunService;
@@ -247,6 +250,7 @@ class FakeHost {
       const wire = new Wire({
         write: (chunk) => {
           if (done) return;
+          this.written.push({ path: input.path, chunk });
           if (opened) deliver(chunk);
           else pending.push(chunk);
         },
@@ -527,16 +531,20 @@ test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds 
   assert.equal(peerBackoffDelay(9, () => 0.5), 30_000);
 });
 
-test("Reconnect restarts a backing-off host at once and leaves a blocked host alone", async () => {
+test("Reconnect restarts a backing-off or outdated host at once and leaves a host blocked on trust alone", async () => {
   const offline = new FakeHost("host_a", "Plans");
   const blocked = new FakeHost("host_b", "Other");
+  const outdated = new FakeHost("host_c", "Older");
   offline.server = () => {
     throw new PeerTransportError("unavailable");
   };
   blocked.server = () => {
     throw new PeerTransportError("identity_changed");
   };
-  const harness = setup([offline, blocked]);
+  outdated.server = () => {
+    throw new PeerTransportError("unsupported_protocol");
+  };
+  const harness = setup([offline, blocked, outdated]);
   try {
     await harness.manager.whenReady();
     await settle();
@@ -558,6 +566,14 @@ test("Reconnect restarts a backing-off host at once and leaves a blocked host al
     await harness.advance(10 * 60_000);
     assert.deepEqual(blocked.calls, ["GET /server"], "a blocked host is never retried");
     assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "identity_changed" });
+
+    // A version mismatch waits too, until the person updates and asks again.
+    assert.deepEqual(harness.status("host_c").state, { kind: "blocked", reason: "protocol" });
+    assert.deepEqual(outdated.calls, ["GET /server"]);
+    outdated.server = () => ({ protocolVersion: 1, instanceId: "host_c", capabilities: CAPABILITIES, features: FEATURES });
+    await harness.manager.reconnect("host_c");
+    await settle();
+    assert.equal(harness.status("host_c").state.kind, "connected");
 
     // A connected host is not torn down by a stray reconnect.
     const generation = harness.status("host_a").generation;
@@ -950,3 +966,100 @@ test("a request admitted by a superseded connection cannot block the reconnected
     harness.close();
   }
 });
+
+/** The SSE frames a host wrote on one path, as sent. */
+function sseFrames(host: FakeHost, path: string): string[] {
+  return host.written
+    .filter((entry) => entry.path === path)
+    .map((entry) => entry.chunk)
+    .join("")
+    .split("\n\n")
+    .filter((frame) => frame.length > 0)
+    .map((frame) => `${frame}\n\n`);
+}
+
+/** A host with more chats than one Mac keeps; chat-i was last active at 10,000 + i. */
+function crowdedHost(id: string, chats: number): FakeHost {
+  const host = new FakeHost(id, "Crowded");
+  host.state.current = {
+    ...host.state.current,
+    summaries: Array.from({ length: chats }, (_, index) =>
+      summary(`chat-${index}`, `Chat ${index} on ${id}`, 10_000 + index),
+    ),
+  };
+  return host;
+}
+
+for (const hostCount of [1, 5, 10]) {
+  test(`${hostCount} crowded host(s) each cost one bounded snapshot and keep only their newest chats`, async () => {
+    const chats = PEER_FEED_MAX_CHATS + 500;
+    const hosts = Array.from({ length: hostCount }, (_, index) => crowdedHost(`host_${index}`, chats));
+    const harness = setup(hosts);
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      const newest = new Set(Array.from({ length: PEER_FEED_MAX_CHATS }, (_, index) => `chat-${chats - 1 - index}`));
+      const perHostBytes = new Set<number>();
+      for (const host of hosts) {
+        // The sidebar is built from the feed alone: no transcript or list reads.
+        assert.deepEqual(host.traffic(), ["EVENTS /host/events"]);
+        const snapshot = harness.manager.feedSnapshot(host.id);
+        assert.ok(snapshot);
+        assert.equal(snapshot.summaries.length, PEER_FEED_MAX_CHATS);
+        assert.ok(snapshot.summaries.every((row) => newest.has(row.id)), "the oldest chats are the ones left out");
+        // One reset reaches the windows per host, however many hosts there are.
+        const resets = harness.feed(host.id).filter((message) => message.change.type === "reset");
+        assert.equal(resets.length, 1);
+
+        const frames = sseFrames(host, "/host/events").filter((frame) => frame.includes("event: snapshot"));
+        const bytes = frames.map((frame) => Buffer.byteLength(frame));
+        // Every snapshot frame fits the chunk budget plus its envelope, far
+        // inside the transport's 1 MiB frame limit, and only the last has an id.
+        assert.ok(frames.length > 1, "a crowded host's snapshot is split");
+        for (const size of bytes) assert.ok(size <= AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES + 4_096, `${size}`);
+        assert.deepEqual(
+          frames.map((frame) => frame.startsWith("id: ")),
+          frames.map((_, index) => index === frames.length - 1),
+        );
+        perHostBytes.add(bytes.reduce((sum, size) => sum + size, 0));
+      }
+      // A host's wire cost does not depend on how many other hosts are paired.
+      assert.equal(perHostBytes.size, 1);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test(`one wake reconnects ${hostCount} host(s) with one identity check and one feed resume each`, async () => {
+    const hosts = Array.from({ length: hostCount }, (_, index) => new FakeHost(`host_${index}`, `Chat ${index}`));
+    const off = new FakeHost("host_off", "Off");
+    const harness = setup(
+      [...hosts, off],
+      [...hosts.map((host) => stored(host.id)), stored(off.id, false)],
+    );
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      for (const host of hosts) host.calls.length = 0;
+      // Sleep, unlock and a network change land together.
+      harness.manager.wake();
+      await harness.advance(100);
+      harness.manager.wake();
+      harness.manager.wake();
+      await harness.advance(PEER_WAKE_COALESCE_MS);
+      const requests = hosts.flatMap((host) => host.calls);
+      assert.equal(requests.length, 2 * hostCount, requests.join("\n"));
+      for (const host of hosts) {
+        assert.equal(host.calls.length, 2, host.calls.join("\n"));
+        assert.equal(host.calls[0], "GET /server");
+        assert.match(host.calls[1]!, /^EVENTS \/host\/events @epoch_host_\d+:\d+$/u);
+        // The feed resumed from its cursor rather than reading a new snapshot.
+        assert.equal(harness.feed(host.id).filter((message) => message.change.type === "reset").length, 1);
+        assert.equal(harness.status(host.id).state.kind, "connected");
+      }
+      assert.deepEqual(off.calls, []);
+    } finally {
+      harness.close();
+    }
+  });
+}

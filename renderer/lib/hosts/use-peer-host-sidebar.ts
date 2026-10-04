@@ -8,8 +8,9 @@ import type {
   PeerRepositoryIdentity,
 } from "../../shared/peer-host";
 import { hostQueryKeys } from "./host-query-keys";
+import { animationFrame } from "./frame-scheduler";
 import {
-  applyPeerHostFeedMessage,
+  createPeerHostFeedBatcher,
   createPeerHostStatusSync,
   FEED_RESYNC,
   replayPeerHostFeedMessages,
@@ -39,7 +40,7 @@ function feedsByHost(
 /**
  * Renderer store for paired hosts in the sidebar. It reads the registry list,
  * which never starts host supervision, and asks for statuses and feeds only
- * once an enabled host exists. Feed broadcasts are applied with the pure
+ * once an enabled host exists. Feed broadcasts are applied once per frame with the pure
  * reducer; any gap it cannot bridge triggers a fresh snapshot read.
  */
 export function usePeerHostSidebar(): PeerHostSidebarData {
@@ -91,14 +92,16 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
   useEffect(() => {
     if (!supervised) return;
     const unsubscribeState = peerHostsApi.onHostState(statusSync.receive);
+    // Each host's rows change at most once per frame, so a burst of feed
+    // messages re-organizes the sidebar once.
+    const batcher = createPeerHostFeedBatcher(animationFrame, {
+      read: (hostId) => queryClient.getQueryData<PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId)),
+      write: (hostId, next) => queryClient.setQueryData(hostQueryKeys.feed(hostId), next),
+      resync: (hostId) => void queryClient.invalidateQueries({ queryKey: hostQueryKeys.feed(hostId) }),
+    });
     const unsubscribeFeed = peerHostsApi.onHostFeed((message) => {
       pending.current.get(message.hostId)?.push(message);
-      const key = hostQueryKeys.feed(message.hostId);
-      const current = queryClient.getQueryData<PeerHostFeedSnapshot | null>(key);
-      if (!current) return;
-      const next = applyPeerHostFeedMessage(current, message);
-      if (next === FEED_RESYNC) void queryClient.invalidateQueries({ queryKey: key });
-      else if (next !== current) queryClient.setQueryData(key, next);
+      batcher.push(message);
     });
     // Statuses and feeds cached while an earlier listener was installed may
     // have missed broadcasts since it went away. Mark them stale without
@@ -109,6 +112,7 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     return () => {
       unsubscribeState();
       unsubscribeFeed();
+      batcher.dispose();
       setListening(false);
     };
   }, [queryClient, statusSync, supervised]);

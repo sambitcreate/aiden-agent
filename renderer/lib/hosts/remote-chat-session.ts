@@ -1,3 +1,4 @@
+import type { FrameScheduler } from "./frame-scheduler";
 import type { HostChatAdapter, HostChatError, HostChatStatus } from "./host-chat-adapter";
 import {
   emptyRemoteTranscript,
@@ -22,6 +23,10 @@ import {
  *
  * Window reads and stream events go through one queue, so a refetch asked
  * for by an event completes before the next event applies.
+ *
+ * With a `frame` scheduler, run-stream updates notify the view once per
+ * frame however many tokens arrive in it; any other change notifies at once
+ * and carries the pending run with it.
  */
 
 export interface RemoteChatSnapshot {
@@ -51,6 +56,8 @@ export interface RemoteChatSessionOptions {
   adapter: HostChatAdapter;
   chatId: string;
   cache?: RemoteTranscriptCache;
+  /** Batches run-stream notifications per frame; without it every update notifies at once. */
+  frame?: FrameScheduler;
 }
 
 function isRevisionConflict(error: HostChatError): boolean {
@@ -68,11 +75,15 @@ export class RemoteChatSession {
   private started = false;
   private lastMarked: string | null = null;
   private readonly cleanups: (() => void)[] = [];
+  private readonly frame: FrameScheduler | undefined;
+  private framePending = false;
+  private cancelFrame: (() => void) | null = null;
 
-  constructor({ adapter, chatId, cache }: RemoteChatSessionOptions) {
+  constructor({ adapter, chatId, cache, frame }: RemoteChatSessionOptions) {
     this.adapter = adapter;
     this.chatId = chatId;
     this.cache = cache;
+    this.frame = frame;
     const cached = cache?.read();
     const status = adapter.status();
     this.snapshot = {
@@ -154,6 +165,7 @@ export class RemoteChatSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.unscheduleFrame();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.listeners.clear();
   }
@@ -174,7 +186,7 @@ export class RemoteChatSession {
 
   private async applyRun(step: (run: RemoteRunView) => RemoteRunStep): Promise<void> {
     const next = step(this.snapshot.run);
-    if (next.view !== this.snapshot.run) this.update({ run: next.view });
+    if (next.view !== this.snapshot.run) this.update({ run: next.view }, "frame");
     if (next.refetch) await this.refreshNewest();
   }
 
@@ -230,9 +242,34 @@ export class RemoteChatSession {
     });
   }
 
-  private update(patch: Partial<RemoteChatSnapshot>): void {
+  private update(patch: Partial<RemoteChatSnapshot>, timing: "now" | "frame" = "now"): void {
     if (this.disposed) return;
     this.snapshot = { ...this.snapshot, ...patch };
+    if (timing === "frame" && this.frame) {
+      if (this.framePending) return;
+      this.framePending = true;
+      const cancel = this.frame(() => {
+        this.framePending = false;
+        this.cancelFrame = null;
+        this.notify();
+      });
+      // A scheduler may flush at once; only a frame still pending can be cancelled.
+      if (this.framePending) this.cancelFrame = cancel;
+      return;
+    }
+    // This notification shows the pending run too.
+    this.unscheduleFrame();
+    this.notify();
+  }
+
+  private unscheduleFrame(): void {
+    this.framePending = false;
+    this.cancelFrame?.();
+    this.cancelFrame = null;
+  }
+
+  private notify(): void {
+    if (this.disposed) return;
     for (const listener of [...this.listeners]) listener();
   }
 }

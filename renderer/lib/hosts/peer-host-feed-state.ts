@@ -99,6 +99,96 @@ export function replayPeerHostFeedMessages(
   return current;
 }
 
+/** Messages held for one host before the batch gives up and reads a fresh snapshot instead. */
+export const PEER_FEED_BATCH_MAX_MESSAGES = 512;
+
+export interface PeerHostFeedBatchTarget {
+  /** The host's rows as last applied, or nothing while no snapshot is loaded. */
+  read(hostId: string): PeerHostFeedSnapshot | null | undefined;
+  /** Replaces the host's rows; called at most once per host per flush. */
+  write(hostId: string, snapshot: PeerHostFeedSnapshot): void;
+  /** The host's rows cannot follow the batch; read a fresh snapshot. */
+  resync(hostId: string): void;
+}
+
+export interface PeerHostFeedBatcher {
+  push(message: PeerHostFeedMessage): void;
+  /** Drops anything held and cancels the scheduled frame. */
+  dispose(): void;
+}
+
+/**
+ * Coalesces feed broadcasts so each host's rows change at most once per
+ * frame, however many messages arrive in it: the sidebar re-organizes once
+ * per frame rather than once per message. A host that sends more than
+ * `PEER_FEED_BATCH_MAX_MESSAGES` before a frame comes (a hidden window gets
+ * none) stops holding them and reads one fresh snapshot instead, so a hidden
+ * window's memory stays bounded.
+ */
+export function createPeerHostFeedBatcher(
+  schedule: (flush: () => void) => () => void,
+  target: PeerHostFeedBatchTarget,
+): PeerHostFeedBatcher {
+  const held = new Map<string, PeerHostFeedMessage[] | typeof FEED_RESYNC>();
+  let scheduled = false;
+  let cancel: (() => void) | null = null;
+  const unschedule = () => {
+    scheduled = false;
+    cancel?.();
+    cancel = null;
+  };
+
+  const applyHost = (hostId: string, messages: PeerHostFeedMessage[] | typeof FEED_RESYNC) => {
+    const current = target.read(hostId);
+    // No snapshot yet: the read in flight replays what it missed.
+    if (!current) return;
+    if (messages === FEED_RESYNC) {
+      target.resync(hostId);
+      return;
+    }
+    let next = current;
+    let behind = false;
+    for (const message of messages) {
+      const applied = applyPeerHostFeedMessage(next, message);
+      if (applied === FEED_RESYNC) {
+        // A later reset in the same batch still brings the rows back in step.
+        behind = true;
+        continue;
+      }
+      if (message.change.type === "reset") behind = false;
+      next = applied;
+    }
+    if (behind) target.resync(hostId);
+    else if (next !== current) target.write(hostId, next);
+  };
+
+  const flush = () => {
+    unschedule();
+    const batch = [...held];
+    held.clear();
+    for (const [hostId, messages] of batch) applyHost(hostId, messages);
+  };
+
+  return {
+    push(message) {
+      const messages = held.get(message.hostId);
+      if (messages === FEED_RESYNC) return;
+      if (!messages) held.set(message.hostId, [message]);
+      else if (messages.length >= PEER_FEED_BATCH_MAX_MESSAGES) held.set(message.hostId, FEED_RESYNC);
+      else messages.push(message);
+      if (scheduled) return;
+      scheduled = true;
+      const cancelFrame = schedule(flush);
+      // A scheduler may flush at once; only a frame still pending can be cancelled.
+      if (scheduled) cancel = cancelFrame;
+    },
+    dispose() {
+      unschedule();
+      held.clear();
+    },
+  };
+}
+
 /**
  * Keeps the newest status per host by generation, so statuses only move
  * forward. A full list (`complete`) also drops hosts it no longer names.

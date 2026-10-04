@@ -30,7 +30,6 @@ export interface PeerPairingHandlerDependencies<Event> {
   owner(event: Event): PeerPairingOwner;
   discovery(): PeerPairingDiscovery;
   registry(): PeerPairingRegistry;
-  /** Restart supervision of a host, as after a re-pair. */
   /** Supervise a re-paired host again at once, clearing its old block. */
   reconnectRepaired(hostId: string): Promise<void>;
 }
