@@ -22,8 +22,14 @@ import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
 export function ChatLayout() {
-  const params = useParams({ strict: false }) as { chatId?: string };
+  const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  // A paired host's chat is selected separately so its ID never matches a local chat.
+  const activeRemoteChat = React.useMemo(
+    () =>
+      params.hostId && params.chatId ? { hostId: params.hostId, chatId: params.chatId } : null,
+    [params.chatId, params.hostId],
+  );
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -70,7 +76,13 @@ export function ChatLayout() {
   return (
     <SplitView
       storageKey="aiden-agent"
-      sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
+      sidebar={
+        <ChatSidebar
+          activeChatId={activeRemoteChat ? undefined : params.chatId}
+          activeRemoteChat={activeRemoteChat}
+          titleReveal={titleReveal}
+        />
+      }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
       <EnvironmentWorkbench>
@@ -80,6 +92,7 @@ export function ChatLayout() {
           </div>
           {pathname === "/profile" ||
           pathname === "/scheduled" ||
+          activeRemoteChat !== null ||
           (pathname.startsWith("/bots") && !params.chatId) ? null : (
             <TerminalDrawer />
           )}

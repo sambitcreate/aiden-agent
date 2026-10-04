@@ -213,6 +213,7 @@ import type {
   PeerHostStatus,
   PeerHostView,
   PeerOperationOutcome,
+  PeerRepositoryIdentity,
   PeerRunFrameMessage,
   PeerRunSubscription,
   PeerRunTarget,
@@ -236,6 +237,8 @@ export const peerHostsApi = {
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
   remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  /** Restarts a host that is backing off; a blocked host stays blocked. */
+  reconnect: (id: string) => invoke<void>("remote:peerReconnect", id),
   operation: (hostId: string, operation: PeerOperation) =>
     invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
@@ -710,6 +713,9 @@ export const workspacesApi = {
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
+  /** Credential-free repository identity, or null outside a repository with a network remote. */
+  repositoryIdentity: (workspaceId: string) =>
+    invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),

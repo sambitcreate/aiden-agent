@@ -13,6 +13,7 @@ import { ChatPane } from "./chat-pane";
 import type { QueryClient } from "@tanstack/react-query";
 import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
+import { RemoteChatPlaceholder } from "./remote-chat-placeholder";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
@@ -136,6 +137,18 @@ const botChatRoute = createRoute({
   staticData: { title: "Bot conversation" },
 });
 
+// A chat that lives on a paired host. The placeholder pane is replaced by the
+// remote chat pane; the route shape is the contract the sidebar links to.
+const hostChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/host/$hostId/chat/$chatId",
+  component: function HostChatRoute() {
+    const { hostId, chatId } = hostChatRoute.useParams();
+    return <RemoteChatPlaceholder hostId={hostId} chatId={chatId} />;
+  },
+  staticData: { title: "Remote chat" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -157,6 +170,7 @@ const routeTree = rootRoute.addChildren([
     botsRoute,
     botRoute,
     botChatRoute,
+    hostChatRoute,
   ]),
   settingsRoute,
 ]);

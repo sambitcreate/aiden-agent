@@ -211,6 +211,7 @@ test("only an active application document reaches the device supervisor", async 
       ["remote:peerRunUnsubscribe", ["sub_1"]],
       ["remote:peersSetEnabled", ["host_a", false]],
       ["remote:peersRemove", ["host_a"]],
+      ["remote:peerReconnect", ["host_a"]],
     ] as const) {
       await assert.rejects(invoke(channel, gone, ...args), /application document changed/u, channel);
       await assert.rejects(invoke(channel, null, ...args), /active application document/u, channel);

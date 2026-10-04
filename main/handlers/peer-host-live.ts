@@ -12,6 +12,7 @@ export type PeerHostLiveManager = Pick<
   | "releaseOwner"
   | "setEnabled"
   | "remove"
+  | "reconnect"
 >;
 
 /** The renderer document that made a request. */
@@ -106,6 +107,11 @@ export function registerPeerHostLiveHandlers<Event>(
   handle("remote:peersRemove", async (event, hostId) => {
     active(event);
     await dependencies.manager().remove(hostIdentifier(hostId));
+  });
+
+  handle("remote:peerReconnect", (event, hostId) => {
+    active(event);
+    dependencies.manager().reconnect(hostIdentifier(hostId));
   });
 
   handle("remote:peerRunSubscribe", async (event, hostId, target, afterSequence) => {

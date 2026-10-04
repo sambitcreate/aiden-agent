@@ -251,6 +251,18 @@ export class PeerHostManager {
     await this.sync();
   }
 
+  /**
+   * The user asked to reconnect one host now. Only a host waiting out a
+   * backoff restarts, with a fresh schedule. A blocked host stays blocked:
+   * that clears only by re-pairing or disabling and re-enabling it.
+   */
+  reconnect(hostId: unknown): void {
+    const sup = this.supervisors.get(hostIdentifier(hostId));
+    if (this.closed || !sup || sup.state.kind !== "backoff") return;
+    sup.failures = 0;
+    this.start(sup);
+  }
+
   /** Sleep/resume, unlock or a network change: reconnect every unblocked host once. */
   wake(): void {
     if (this.closed || this.wakeTimer !== undefined) return;

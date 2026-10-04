@@ -306,6 +306,8 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
     projectSort: "last_activity",
     projectOrder: [],
     expandedWorkspaceIds: [],
+    machineFilter: "all",
+    projectGrouping: "separate",
   };
   assert.deepEqual(parseSidebarPreferences(null), defaults);
   assert.deepEqual(parseSidebarPreferences("{"), defaults);
@@ -326,6 +328,33 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
   );
 });
 
+test("the machine filter and cross-machine grouping tolerate older and malformed stored values", () => {
+  // Builds from before multi-host stored neither field.
+  const older = parseSidebarPreferences(
+    JSON.stringify({ view: "recent", chatSort: "created", projectSort: "manual", projectOrder: [] }),
+  );
+  assert.equal(older.machineFilter, "all");
+  assert.equal(older.projectGrouping, "separate");
+  assert.equal(older.view, "recent");
+  for (const machineFilter of ["host:", "host:../escape", "remote:studio", "LOCAL", 7, null, ["local"]]) {
+    assert.equal(
+      parseSidebarPreferences(JSON.stringify({ machineFilter })).machineFilter,
+      "all",
+      JSON.stringify(machineFilter),
+    );
+  }
+  assert.equal(parseSidebarPreferences(JSON.stringify({ machineFilter: "local" })).machineFilter, "local");
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ machineFilter: "host:studio.mac-1" })).machineFilter,
+    "host:studio.mac-1",
+  );
+  assert.equal(parseSidebarPreferences(JSON.stringify({ projectGrouping: "machine" })).projectGrouping, "separate");
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ projectGrouping: "repository" })).projectGrouping,
+    "repository",
+  );
+});
+
 test("stored preferences round-trip, keep a downgrade-safe organization, and prune only local keys", () => {
   const stored = serializeSidebarPreferences({
     view: "attention",
@@ -333,6 +362,8 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     projectSort: "manual",
     projectOrder: ["local:beta", "local:removed", "studio:proj", "local:beta", "garbage", "local:bad%2Fid"],
     expandedWorkspaceIds: ["beta"],
+    machineFilter: "host:studio",
+    projectGrouping: "repository_path",
   });
   assert.equal(JSON.parse(stored).organization, "workspace");
   assert.deepEqual(parseSidebarPreferences(stored, ["alpha", "beta"]), {
@@ -341,6 +372,8 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     projectSort: "manual",
     projectOrder: ["local:beta", "studio:proj"],
     expandedWorkspaceIds: ["beta"],
+    machineFilter: "host:studio",
+    projectGrouping: "repository_path",
   });
   assert.equal(
     JSON.parse(serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" })).organization,

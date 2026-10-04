@@ -1,0 +1,210 @@
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { peerHostsApi, workspacesApi } from "../ipc";
+import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
+import type {
+  PeerHostFeedMessage,
+  PeerHostFeedSnapshot,
+  PeerRepositoryIdentity,
+} from "../../shared/peer-host";
+import { hostQueryKeys } from "./host-query-keys";
+import {
+  applyPeerHostFeedMessage,
+  createPeerHostStatusSync,
+  FEED_RESYNC,
+  replayPeerHostFeedMessages,
+} from "./peer-host-feed-state";
+
+/** A snapshot that keeps racing a reset is re-read at most this many times per fetch. */
+const MAX_FEED_READS = 3;
+
+export interface PeerHostSidebarData {
+  /** Enabled paired hosts with display labels and availability. Empty when none is paired. */
+  hosts: SidebarHost[];
+  /** Last-known feed snapshot per host ID. */
+  feeds: ReadonlyMap<string, PeerHostFeedSnapshot>;
+}
+
+const NO_FEEDS: ReadonlyMap<string, PeerHostFeedSnapshot> = new Map();
+
+/**
+ * Reads one host's feed snapshot and replays the broadcasts that arrived while
+ * it was in flight (the listener buffers them in `pending`).
+ */
+async function readPeerHostFeed(
+  pending: Map<string, PeerHostFeedMessage[]>,
+  hostId: string,
+): Promise<PeerHostFeedSnapshot | null> {
+  for (let read = 0; read < MAX_FEED_READS; read += 1) {
+    const buffered: PeerHostFeedMessage[] = [];
+    pending.set(hostId, buffered);
+    try {
+      const snapshot = await peerHostsApi.feed(hostId);
+      if (!snapshot) return null;
+      const replayed = replayPeerHostFeedMessages(snapshot, buffered);
+      if (replayed !== FEED_RESYNC) return replayed;
+    } finally {
+      if (pending.get(hostId) === buffered) pending.delete(hostId);
+    }
+  }
+  throw new Error("The host's rows kept changing while they were read.");
+}
+
+/** Stable `combine` for the feed queries; it reruns only when a result changes. */
+function feedsByHost(
+  results: readonly { data: PeerHostFeedSnapshot | null | undefined }[],
+): ReadonlyMap<string, PeerHostFeedSnapshot> {
+  const byHost = new Map<string, PeerHostFeedSnapshot>();
+  for (const { data } of results) if (data) byHost.set(data.hostId, data);
+  return byHost.size > 0 ? byHost : NO_FEEDS;
+}
+
+/**
+ * Renderer store for paired hosts in the sidebar. It reads the registry list,
+ * which never starts host supervision, and asks for statuses and feeds only
+ * once an enabled host exists. Feed broadcasts are applied with the pure
+ * reducer; any gap it cannot bridge triggers a fresh snapshot read.
+ */
+export function usePeerHostSidebar(): PeerHostSidebarData {
+  const queryClient = useQueryClient();
+  const list = useQuery({
+    queryKey: hostQueryKeys.list(),
+    queryFn: peerHostsApi.list,
+    staleTime: Infinity,
+  });
+  const enabledIds = useMemo(
+    () => (list.data ?? []).filter((host) => host.enabled).map((host) => host.id),
+    [list.data],
+  );
+  const supervised = enabledIds.length > 0;
+
+  useEffect(() => {
+    const unsubscribe = peerHostsApi.onChanged(() => {
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.list() });
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses() });
+    });
+    // A list cached by an earlier mount (before Settings replaced the chat
+    // shell) may have missed changes while nothing listened; read it again.
+    if (queryClient.getQueryData(hostQueryKeys.list()) !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.list() });
+    }
+    return unsubscribe;
+  }, [queryClient]);
+
+  // Drop cached rows for hosts that were unpaired or disabled.
+  useEffect(() => {
+    if (!list.data) return;
+    const kept = new Set(enabledIds);
+    for (const query of queryClient.getQueryCache().findAll({ queryKey: ["host"] })) {
+      const hostId = query.queryKey[1];
+      if (typeof hostId === "string" && !kept.has(hostId)) {
+        queryClient.removeQueries({ queryKey: hostQueryKeys.host(hostId) });
+      }
+    }
+  }, [enabledIds, list.data, queryClient]);
+
+  const statusSync = useMemo(
+    () => createPeerHostStatusSync(queryClient, peerHostsApi.statuses),
+    [queryClient],
+  );
+  // Messages that arrive while a snapshot read is in flight, per host.
+  const pending = useRef(new Map<string, PeerHostFeedMessage[]>());
+  // Status and feed reads wait for the broadcast listeners so no change can slip between them.
+  const [listening, setListening] = useState(false);
+  useEffect(() => {
+    if (!supervised) return;
+    const unsubscribeState = peerHostsApi.onHostState(statusSync.receive);
+    const unsubscribeFeed = peerHostsApi.onHostFeed((message) => {
+      pending.current.get(message.hostId)?.push(message);
+      const key = hostQueryKeys.feed(message.hostId);
+      const current = queryClient.getQueryData<PeerHostFeedSnapshot | null>(key);
+      if (!current) return;
+      const next = applyPeerHostFeedMessage(current, message);
+      if (next === FEED_RESYNC) void queryClient.invalidateQueries({ queryKey: key });
+      else if (next !== current) queryClient.setQueryData(key, next);
+    });
+    // Statuses and feeds cached while an earlier listener was installed may
+    // have missed broadcasts since it went away, so read them in full now that
+    // the listeners are back. The reads start here rather than waiting on a
+    // stale flag, which any broadcast landing before the queries enable would
+    // clear. Queries with nothing cached read once they are enabled below.
+    if (queryClient.getQueryData(hostQueryKeys.statuses()) !== undefined) {
+      void queryClient.prefetchQuery({
+        queryKey: hostQueryKeys.statuses(),
+        queryFn: statusSync.read,
+        staleTime: 0,
+      });
+    }
+    for (const query of queryClient.getQueryCache().findAll({ queryKey: ["host"] })) {
+      const [, hostId, kind] = query.queryKey;
+      if (kind !== "feed" || typeof hostId !== "string" || query.state.data === undefined) continue;
+      void queryClient.prefetchQuery({
+        queryKey: hostQueryKeys.feed(hostId),
+        queryFn: () => readPeerHostFeed(pending.current, hostId),
+        staleTime: 0,
+      });
+    }
+    setListening(true);
+    return () => {
+      unsubscribeState();
+      unsubscribeFeed();
+      setListening(false);
+    };
+  }, [queryClient, statusSync, supervised]);
+
+  const statuses = useQuery({
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: statusSync.read,
+    enabled: supervised && listening,
+    staleTime: Infinity,
+  });
+
+  const feeds = useQueries({
+    queries: enabledIds.map((hostId) => ({
+      queryKey: hostQueryKeys.feed(hostId),
+      queryFn: () => readPeerHostFeed(pending.current, hostId),
+      enabled: listening,
+      staleTime: Infinity,
+    })),
+    combine: feedsByHost,
+  });
+
+  const hosts = useMemo(
+    () => (supervised ? sidebarHosts(list.data ?? [], statuses.data ?? []) : []),
+    [list.data, statuses.data, supervised],
+  );
+  return { hosts, feeds };
+}
+
+const NO_IDENTITIES: ReadonlyMap<string, PeerRepositoryIdentity | null> = new Map();
+
+function identitiesById(
+  results: readonly {
+    data: { workspaceId: string; identity: PeerRepositoryIdentity | null } | undefined;
+  }[],
+): ReadonlyMap<string, PeerRepositoryIdentity | null> {
+  const byId = new Map<string, PeerRepositoryIdentity | null>();
+  for (const { data } of results) if (data) byId.set(data.workspaceId, data.identity);
+  return byId.size > 0 ? byId : NO_IDENTITIES;
+}
+
+/**
+ * This Mac's repository identity per workspace, read only while a
+ * cross-machine grouping needs it. Main answers from its cached repository read.
+ */
+export function useLocalRepositoryIdentities(
+  workspaceIds: readonly string[],
+  enabled: boolean,
+): ReadonlyMap<string, PeerRepositoryIdentity | null> {
+  return useQueries({
+    queries: (enabled ? workspaceIds : []).map((workspaceId) => ({
+      queryKey: ["repository-identity", workspaceId] as const,
+      queryFn: async () => ({
+        workspaceId,
+        identity: await workspacesApi.repositoryIdentity(workspaceId),
+      }),
+      staleTime: 60_000,
+    })),
+    combine: identitiesById,
+  });
+}

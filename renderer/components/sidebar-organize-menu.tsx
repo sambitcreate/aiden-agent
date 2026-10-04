@@ -8,12 +8,25 @@ import {
 } from "./ui";
 import {
   SIDEBAR_CHAT_SORTS,
+  SIDEBAR_PROJECT_GROUPINGS,
   SIDEBAR_PROJECT_SORTS,
   SIDEBAR_VIEWS,
   type SidebarChatSort,
+  type SidebarMachineFilter,
+  type SidebarProjectGrouping,
   type SidebarProjectSort,
   type SidebarView,
 } from "../lib/sidebar-organization";
+import { LOCAL_MACHINE_LABEL } from "../lib/sidebar-remote-groups";
+
+/** Machine choices; only offered while at least one paired host is enabled. */
+export interface SidebarMachineMenuOptions {
+  hosts: readonly { id: string; label: string }[];
+  filter: SidebarMachineFilter;
+  grouping: SidebarProjectGrouping;
+  onFilterChange: (filter: SidebarMachineFilter) => void;
+  onGroupingChange: (grouping: SidebarProjectGrouping) => void;
+}
 
 export interface SidebarOrganizeMenuItemsProps {
   view: SidebarView;
@@ -22,6 +35,7 @@ export interface SidebarOrganizeMenuItemsProps {
   onViewChange: (view: SidebarView) => void;
   onChatSortChange: (sort: SidebarChatSort) => void;
   onProjectSortChange: (sort: SidebarProjectSort) => void;
+  machines?: SidebarMachineMenuOptions;
 }
 
 const ICON_CLASS = "size-4 text-secondary group-data-[highlighted]:text-accent-foreground";
@@ -43,8 +57,13 @@ export function SidebarOrganizeMenuItems({
   onViewChange,
   onChatSortChange,
   onProjectSortChange,
+  machines,
 }: SidebarOrganizeMenuItemsProps) {
   const id = React.useId();
+  const showMachines = machines !== undefined && machines.hosts.length > 0;
+  const machineFilters: SidebarMachineFilter[] = showMachines
+    ? ["all", "local", ...machines.hosts.map((host) => `host:${host.id}` as const)]
+    : [];
   return (
     <>
       <DropdownMenuLabel id={`${id}-view`}>View</DropdownMenuLabel>
@@ -93,6 +112,42 @@ export function SidebarOrganizeMenuItems({
             <DropdownMenuRadioItem value="created">Created</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="manual">Manual</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
+        </>
+      ) : null}
+      {showMachines ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel id={`${id}-machines`}>Machines</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            aria-labelledby={`${id}-machines`}
+            value={machines.filter}
+            onValueChange={pick(machineFilters, machines.onFilterChange)}
+          >
+            <DropdownMenuRadioItem value="all">All machines</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="local">{LOCAL_MACHINE_LABEL}</DropdownMenuRadioItem>
+            {machines.hosts.map((host) => (
+              <DropdownMenuRadioItem key={host.id} value={`host:${host.id}`}>
+                <span className="min-w-0 truncate">{host.label}</span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          {view === "projects" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel id={`${id}-grouping`}>Group across machines</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                aria-labelledby={`${id}-grouping`}
+                value={machines.grouping}
+                onValueChange={pick(SIDEBAR_PROJECT_GROUPINGS, machines.onGroupingChange)}
+              >
+                <DropdownMenuRadioItem value="separate">Keep separate</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="repository">Same repository</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="repository_path">
+                  Same repository and path
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </>
+          ) : null}
         </>
       ) : null}
     </>
