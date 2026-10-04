@@ -96,6 +96,9 @@ class StubHost implements HostChatAdapter {
   onStatus() {
     return noop;
   }
+  onChatChanged() {
+    return noop;
+  }
   getMessagesWindow(): never {
     throw new Error("unused");
   }

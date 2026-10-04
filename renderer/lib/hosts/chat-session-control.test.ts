@@ -56,6 +56,9 @@ class FakeHost implements HostChatAdapter {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  onChatChanged() {
+    return () => {};
+  }
   getMessagesWindow(): never {
     throw new Error("unused");
   }

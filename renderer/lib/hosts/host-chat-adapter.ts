@@ -167,6 +167,12 @@ export interface HostChatAdapter {
   ready(): Promise<void>;
   status(): HostChatStatus;
   onStatus(listener: (status: HostChatStatus) => void): () => void;
+  /**
+   * Fires when a change made through this adapter left a chat's loaded
+   * revision stale (a rename, or a rename or delete the host refused as
+   * stale), so an open transcript rereads before the next guarded change.
+   */
+  onChatChanged(listener: (chatId: string) => void): () => void;
   getMessagesWindow(chatId: string, request?: HostChatWindowRequest): Promise<HostChatResult<RemoteMessagesWindow>>;
   /** Follows the chat's current run, wherever it was started. */
   observe(chatId: string, observer: HostChatObserver): () => void;

@@ -98,6 +98,11 @@ export class LocalHostAdapter implements HostChatAdapter {
     return () => {};
   }
 
+  onChatChanged(): () => void {
+    // Local chats are read from the store, which publishes its own changes.
+    return () => {};
+  }
+
   getMessagesWindow(): Promise<HostChatResult<RemoteMessagesWindow>> {
     return Promise.resolve({ ok: false, error: NOT_A_HOST_READ });
   }

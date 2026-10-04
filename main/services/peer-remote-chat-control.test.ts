@@ -239,6 +239,41 @@ test("answers and steering from this Mac reach the run on the host", async () =>
   }
 });
 
+test("a chat renamed from this Mac can be deleted from it next, and a stale delete rereads instead of overwriting", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const control = controlFor(harness);
+    // The pane guards each change with the revision of the transcript it shows.
+    const shown = () => harness.session.getSnapshot().transcript.revision ?? undefined;
+    const reread = async () => {
+      await settle();
+      await harness.session.idle();
+    };
+
+    await control.rename("Release checklist", shown());
+    assert.equal(host.chat.title, "Release checklist");
+    await reread();
+
+    // Someone renames it on the host before this Mac deletes it.
+    host.chat = { ...host.chat, title: "Renamed on the host", updatedAt: host.chat.updatedAt + 1 };
+    const stale = shown();
+    await assert.rejects(
+      control.remove(stale),
+      (error: unknown) => error instanceof HostChatControlError && error.remoteCode === "revision_conflict",
+    );
+    assert.equal(host.removed, false, "a delete against an older revision is refused, not forced");
+    await reread();
+    assert.notEqual(shown(), stale, "the open chat reread the host's current revision");
+
+    await control.remove(shown());
+    assert.equal(host.removed, true);
+  } finally {
+    harness.close();
+  }
+});
+
 test("an unreachable host refuses every mutation, and nothing is sent once it is back", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);

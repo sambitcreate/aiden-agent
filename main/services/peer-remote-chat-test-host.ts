@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import { registerPeerHostLiveHandlers, type PeerHostLiveOwner } from "../handlers/peer-host-live.js";
 import { AidenRemoteHostFeedService, type AidenRemoteHostFeedState } from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService, type AidenRemoteHostRunControls } from "./aiden-remote-host-runs.js";
+import { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenIdempotencyLedger } from "./aiden-remote-operation-contract.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -189,6 +190,10 @@ export class FakeHost {
   dropAcks = 0;
   /** The host is unreachable: every request fails before it arrives. */
   down = false;
+  /** The host deleted its chat. */
+  removed = false;
+  /** Renames and deletes, guarded by the chat's revision through the real host chat service. */
+  readonly chats: AidenRemoteChatService;
   private readonly ledger: AidenIdempotencyLedger;
   private readonly devices = new Map<string, Device>();
 
@@ -203,6 +208,27 @@ export class FakeHost {
       heartbeatMs: 3_600_000,
     });
     this.ledger = new AidenIdempotencyLedger(undefined, { ttlMs: 600_000, now });
+    const unused = {} as never;
+    this.chats = new AidenRemoteChatService({
+      application: {
+        list: async () => (this.removed ? [] : [{ id: this.chat.id, title: this.chat.title }]),
+        rename: async (_chatId: string, title: string, options: { assertCurrent?: (chat: Chat) => void } = {}) => {
+          options.assertCurrent?.(this.chat);
+          this.chat = { ...this.chat, title, updatedAt: this.chat.updatedAt + 1 };
+          return this.chat;
+        },
+        remove: async (_chatId: string, options: { assertCurrent?: (chat: Chat) => void } = {}) => {
+          options.assertCurrent?.(this.chat);
+          this.removed = true;
+        },
+      } as unknown as ConstructorParameters<typeof AidenRemoteChatService>[0]["application"],
+      chatStore: unused,
+      generation: unused,
+      streams: unused,
+      models: unused,
+      bots: unused,
+      botMutations: unused,
+    });
     const summary = {
       id: "chat-1",
       workspaceId: "ws",
@@ -293,6 +319,13 @@ export class FakeHost {
       });
       await this.windowGate?.();
       return JSON.parse(JSON.stringify(window));
+    }
+    if (url.pathname === "/chats/chat-1" && method === "PATCH") {
+      return JSON.parse(JSON.stringify(await this.chats.rename("chat-1", input.revision ?? "", input.body)));
+    }
+    if (url.pathname === "/chats/chat-1" && method === "DELETE") {
+      await this.chats.remove("chat-1", input.revision ?? "");
+      return undefined; // 204
     }
     if (url.pathname === "/chats/chat-1" && method === "GET") {
       return JSON.parse(JSON.stringify(projectAidenRemoteChat(this.chat)));

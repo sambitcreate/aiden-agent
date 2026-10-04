@@ -106,6 +106,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
   private readonly granted: ReadonlySet<HostChatCapability>;
   private current: HostChatStatus = { availability: "connecting", generation: -1 };
   private readonly listeners = new Set<(status: HostChatStatus) => void>();
+  private readonly chatListeners = new Set<(chatId: string) => void>();
   private readonly offHostState: () => void;
   private disposed = false;
   private readonly initial: Promise<void>;
@@ -139,6 +140,30 @@ export class RemoteHostAdapter implements HostChatAdapter {
   onStatus(listener: (status: HostChatStatus) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onChatChanged(listener: (chatId: string) => void): () => void {
+    this.chatListeners.add(listener);
+    return () => this.chatListeners.delete(listener);
+  }
+
+  private chatChanged(chatId: string): void {
+    if (this.disposed) return;
+    for (const listener of [...this.chatListeners]) listener(chatId);
+  }
+
+  /** Runs a revision-guarded change; a stale or unknown outcome means the loaded revision may be out of date. */
+  private async guarded<T>(chatId: string, change: () => Promise<T>): Promise<T> {
+    try {
+      return await change();
+    } catch (error) {
+      if (
+        error instanceof HostChatControlError &&
+        (error.code === "outcome_unknown" || error.remoteCode === "revision_conflict" || error.status === 409)
+      )
+        this.chatChanged(chatId);
+      throw error;
+    }
   }
 
   private acceptStatus(status: PeerHostStatus): void {
@@ -320,12 +345,18 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   async rename(chatId: string, input: HostChatRenameInput): Promise<void> {
     if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before renaming it." });
-    await this.mutate("rename", { operation: "renameChat", resourceId: chatId, body: { title: input.title }, revision: input.revision });
+    const revision = input.revision;
+    await this.guarded(chatId, () =>
+      this.mutate("rename", { operation: "renameChat", resourceId: chatId, body: { title: input.title }, revision }),
+    );
+    // The rename gave the chat a new revision; reread it before another guarded change.
+    this.chatChanged(chatId);
   }
 
   async remove(chatId: string, input: { revision?: string } = {}): Promise<void> {
     if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before deleting it." });
-    await this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision: input.revision });
+    const revision = input.revision;
+    await this.guarded(chatId, () => this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision }));
   }
 
   observe(chatId: string, observer: HostChatObserver): () => void {
@@ -375,5 +406,6 @@ export class RemoteHostAdapter implements HostChatAdapter {
     this.disposed = true;
     this.offHostState();
     this.listeners.clear();
+    this.chatListeners.clear();
   }
 }
