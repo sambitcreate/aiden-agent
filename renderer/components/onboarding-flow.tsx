@@ -891,7 +891,7 @@ export function OnboardingFlow() {
             </div>
             {step === "provider" ? (
               <Button
-                className="no-drag h-7 px-2"
+                className="no-drag relative z-10 h-7 px-2"
                 size="small"
                 variant="transparent"
                 disabled={!stateReady || saving}
