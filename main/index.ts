@@ -62,6 +62,7 @@ import type {
 } from "../renderer/shared/app-update.js";
 import { devLogPath } from "./services/dev-log.js";
 import { flushDiagnosticJournal, writeDiagnosticEvent } from "./services/diagnostic-journal.js";
+import { openProcessStartupIpcAdmission } from "./services/startup-ipc-admission.js";
 import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
@@ -1033,12 +1034,16 @@ function refreshFoundationModelsStatus(force = false): void {
   void foundationModelsConnection.status(force ? { force: true } : undefined);
 }
 
-async function createMainWindow(): Promise<void> {
+async function createMainWindow(
+  options: { startupAdmissionHeld?: boolean } = {},
+): Promise<void> {
   let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
   // shortcut can all arrive while whenReady is still initializing. Never let
   // those alternate paths expose a renderer to a partial shortcut snapshot.
-  await shortcutInitializationPromise;
+  // The startup window may skip the wait: the startup IPC admission holds its
+  // renderer's invokes until shortcuts and reconciliation have finished.
+  if (!options.startupAdmissionHeld) await shortcutInitializationPromise;
   if (mainWindow && !mainWindow.isDestroyed()) {
     const existingWindow = mainWindow;
     await mainWindowLoads.wait();
@@ -1671,6 +1676,8 @@ if (!ownsSingleInstanceLock) {
       ),
   );
 
+  let initialMainWindow: Promise<void> = Promise.resolve();
+  let startupIpcAdmitted = false;
   app
     .whenReady()
     .then(async () => {
@@ -1715,6 +1722,16 @@ if (!ownsSingleInstanceLock) {
           crashDumpsPath: runtimeProfile.crashDumpsPath,
         });
       }
+      // Start the main window now so the renderer bundle loads in parallel
+      // with the reconcile chain below. The startup IPC admission (installed in
+      // bootstrap.ts) holds every renderer invoke until that chain finishes,
+      // so no renderer reads or writes state before reconciliation.
+      nativeTheme.themeSource = normalizeAppearanceConfig(
+        (await configStore.getSettings()).appearance,
+      ).mode;
+      initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
+      // Observed below after reconciliation; never an unhandled rejection.
+      initialMainWindow.catch(() => undefined);
       try {
         terminalService.installHistoryStore(
           await TerminalHistoryStore.create(),
@@ -1765,7 +1782,9 @@ if (!ownsSingleInstanceLock) {
         );
       }
       await subagentRunStore.initialize();
-      await toolOutputStore.pruneExpired().catch(() => {
+      // Expiry cleanup is not part of reconciliation; let it run alongside
+      // the rest of startup instead of delaying the first window.
+      void toolOutputStore.pruneExpired().catch(() => {
         logger.warn("pi", "Expired tool output cleanup could not complete.");
       });
       const toolOutputCleanup = setInterval(() => {
@@ -2028,7 +2047,15 @@ if (!ownsSingleInstanceLock) {
         );
       }
 
-      await createMainWindow();
+      openProcessStartupIpcAdmission();
+      startupIpcAdmitted = true;
+      writeDiagnosticEvent({
+        level: "info",
+        area: "app",
+        event: "startup-reconciled",
+        outcome: "completed",
+      });
+      await initialMainWindow;
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
@@ -2067,6 +2094,10 @@ if (!ownsSingleInstanceLock) {
     })
     .catch((error: unknown) => {
       logger.error("main", "Failed to start Aiden Agent", error);
+      // A startup window whose renderer was never admitted holds no user
+      // state, and its held invokes could never answer a close handshake.
+      if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed())
+        mainWindow.destroy();
       void shutdownAndQuit();
     });
 }

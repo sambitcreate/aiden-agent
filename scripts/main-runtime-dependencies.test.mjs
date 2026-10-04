@@ -12,6 +12,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 // Packages that main loads through createRequire at runtime, which esbuild's
 // metafile cannot see. Each must still ship in app.asar.
 const RUNTIME_LOADED = new Map([
+  ["electron-updater", "app-updater.ts loads it on first update use via createRequire"],
   ["minimatch", "coding-tool-matcher resolves it for glob matching in a worker"],
   ["node-pty", "terminal.ts resolves its package directory for the spawn helper"],
   ["sherpa-onnx-node", "parakeet-engine.ts requires the native transcription addon"],

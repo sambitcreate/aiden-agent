@@ -1,6 +1,5 @@
-import Ajv2020, { type ValidateFunction } from "ajv/dist/2020.js";
-import addFormats from "ajv-formats";
-import protocol from "../../protocol/aiden-remote/v1/openapi.json";
+import type Ajv2020 from "ajv/dist/2020.js";
+import type { ValidateFunction } from "ajv/dist/2020.js";
 import type { PeerOperation } from "../../renderer/shared/peer-operation.js";
 
 const operationIds: Record<PeerOperation["operation"], string> = {
@@ -25,25 +24,50 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   selectFolder: "createWorkspaceSelection",
   createWorkspace: "createWorkspace",
 };
-let ajv: Ajv2020 | undefined;
+type PeerProtocol = typeof import("../../protocol/aiden-remote/v1/openapi.json");
+interface PeerContract {
+  ajv: Ajv2020;
+  protocol: PeerProtocol;
+}
+
+// The checked-in OpenAPI contract (~289 KB) and its validator load on the
+// first peer response rather than on the main-process startup path.
+let contractLoading: Promise<PeerContract> | null = null;
+function peerContract(): Promise<PeerContract> {
+  contractLoading ??= Promise.all([
+    import("ajv/dist/2020.js"),
+    import("ajv-formats"),
+    import("../../protocol/aiden-remote/v1/openapi.json"),
+  ]).then(
+    ([{ default: Ajv }, { default: addFormats }, { default: protocol }]) => {
+      const ajv = new Ajv({
+        strict: false,
+        allErrors: false,
+        validateFormats: true,
+      });
+      addFormats(ajv);
+      ajv.addSchema({
+        $id: "urn:aiden:peer",
+        components: protocol.components,
+        paths: protocol.paths,
+      });
+      return { ajv, protocol };
+    },
+    (error: unknown) => {
+      contractLoading = null;
+      throw error;
+    },
+  );
+  return contractLoading;
+}
+
 const validators = new Map<string, ValidateFunction | null>();
-function validator(operation: string): ValidateFunction | null {
+async function validator(operation: string): Promise<ValidateFunction | null> {
   if (!Object.prototype.hasOwnProperty.call(operationIds, operation))
     throw new Error("Unsupported peer operation.");
   if (validators.has(operation)) return validators.get(operation)!;
-  if (!ajv) {
-    ajv = new Ajv2020({
-      strict: false,
-      allErrors: false,
-      validateFormats: true,
-    });
-    addFormats(ajv);
-    ajv.addSchema({
-      $id: "urn:aiden:peer",
-      components: protocol.components,
-      paths: protocol.paths,
-    });
-  }
+  const { ajv, protocol } = await peerContract();
+  if (validators.has(operation)) return validators.get(operation)!;
   const id = operationIds[operation as PeerOperation["operation"]];
   for (const [path, methods] of Object.entries(protocol.paths)) {
     for (const [method, endpoint] of Object.entries(methods)) {
@@ -77,7 +101,10 @@ function validator(operation: string): ValidateFunction | null {
 }
 
 /** Validate the entire protocol envelope; content fields are not scanned for secret-like words. */
-export function validatePeerResponse(operation: string, value: unknown): void {
+export async function validatePeerResponse(
+  operation: string,
+  value: unknown,
+): Promise<void> {
   let nodes = 0;
   let bytes = 0;
   const visit = (node: unknown, depth: number): void => {
@@ -101,7 +128,7 @@ export function validatePeerResponse(operation: string, value: unknown): void {
       throw new Error("Peer response exceeds its byte limit.");
   };
   visit(value, 0);
-  const check = validator(operation);
+  const check = await validator(operation);
   if (check === null ? value !== undefined : !check(value))
     throw new Error("Invalid peer response contract.");
 }

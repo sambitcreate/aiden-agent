@@ -9,12 +9,12 @@ import {
 } from "./aiden-remote-protocol.js";
 
 /** Pairing credentials never cross back into renderer operation results. */
-export function peerOperationResult(
+export async function peerOperationResult(
   operation: unknown,
   value: unknown,
-): unknown {
+): Promise<unknown> {
   const input = peerRecord(operation);
-  validatePeerResponse(peerText(input.operation, 40), value);
+  await validatePeerResponse(peerText(input.operation, 40), value);
   if (input.operation === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
   if (

@@ -73248,7 +73248,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6438,
+          "input": 0.5964,
           "output": 13,
           "cache_read": 0.45
         }
@@ -76286,7 +76286,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
           "input": 1.4,
@@ -80650,7 +80650,7 @@
         "attachment": true,
         "reasoning": false,
         "tool_call": true,
-        "structured_output": false,
+        "structured_output": true,
         "temperature": true,
         "release_date": "2025-03-17",
         "last_updated": "2025-03-17",
@@ -110561,7 +110561,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6518,
+          "input": 0.5914,
           "output": 13,
           "cache_read": 0.45
         }
@@ -112112,9 +112112,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.85,
-          "output": 5,
-          "cache_read": 0.7
+          "input": 0.55,
+          "output": 4.2,
+          "cache_read": 0.45
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -113660,12 +113660,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
-          "input": 0.38,
-          "output": 3.49,
-          "cache_read": 0.26
+          "input": 0.064,
+          "output": 8,
+          "cache_read": 0.064
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -118382,7 +118382,7 @@
         "attachment": true,
         "reasoning": false,
         "tool_call": true,
-        "structured_output": false,
+        "structured_output": true,
         "temperature": true,
         "knowledge": "2023-10-31",
         "release_date": "2025-03-17",
