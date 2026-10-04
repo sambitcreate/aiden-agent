@@ -1909,3 +1909,101 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
     assert.equal(events[index]!.sequence, events[index - 1]!.sequence + 1);
   }
 });
+
+function persistenceFixture(persistCoalesceMs: number) {
+  const writes: ReturnType<AidenRemoteStreamService["snapshot"]>[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistCoalesceMs,
+    persist: async (snapshot) => {
+      writes.push(structuredClone(snapshot));
+    },
+  });
+  const lastWrittenEvents = () => writes[writes.length - 1]?.streams[0]?.events ?? [];
+  return { service, writes, lastWrittenEvents };
+}
+
+// Lets an already-started persistence write settle without firing timers.
+const afterPendingWrites = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("streaming deltas are coalesced into a bounded number of journal writes", async () => {
+  const app = persistenceFixture(60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  // Provider deltas arrive on separate turns of the event loop, so the
+  // single-flight writer alone would journal (nearly) every one of them.
+  for (let index = 0; index < 500; index++) {
+    owner.owner.send("chat:delta", { delta: "x" });
+    await afterPendingWrites();
+  }
+  await app.service.settlePersistence();
+
+  assert.ok(app.writes.length <= 3, `expected at most 3 journal writes, saw ${app.writes.length}`);
+  const deltas = app.lastWrittenEvents().filter((event) => event.type === "text_delta");
+  assert.equal(deltas.length, 500);
+  assert.equal(app.lastWrittenEvents()[app.lastWrittenEvents().length - 1]?.type, "text_delta");
+});
+
+test("a terminal event is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  for (let index = 0; index < 20; index++) {
+    owner.owner.send("chat:delta", { delta: "x" });
+  }
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  // An hour-long window cannot elapse here, so only an immediate write can
+  // have produced the terminal journal entry.
+  await afterPendingWrites();
+
+  const events = app.lastWrittenEvents();
+  assert.equal(events[events.length - 1]?.type, "done");
+  assert.equal(events[events.length - 1]?.terminal, true);
+  assert.equal(events.filter((event) => event.type === "text_delta").length, 20);
+  const writesBeforeSettle = app.writes.length;
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, writesBeforeSettle, "the boundary write already covered the pending deltas");
+});
+
+test("an approval prompt is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  owner.owner.send("chat:delta", { delta: "Checking" });
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-1",
+    summary: "Run a command",
+    toolCallId: "tool-call-1",
+    toolName: "run_command",
+  });
+  await afterPendingWrites();
+
+  const events = app.lastWrittenEvents();
+  assert.equal(events[events.length - 1]?.type, "approval_required");
+  assert.equal(events[events.length - 2]?.type, "text_delta");
+  assert.equal(app.writes[app.writes.length - 1]?.streams[0]?.state, "waiting_for_approval");
+});
+
+test("settling persistence flushes a pending coalesced write exactly once", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  await app.service.settlePersistence();
+  const settledWrites = app.writes.length;
+
+  owner.owner.send("chat:delta", { delta: "first" });
+  owner.owner.send("chat:delta", { delta: "second" });
+  await afterPendingWrites();
+  assert.equal(app.writes.length, settledWrites, "deltas wait for the coalescing window");
+
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, settledWrites + 1);
+  assert.deepEqual(
+    app.lastWrittenEvents().filter((event) => event.type === "text_delta").map((event) => event.payload.text),
+    ["first", "second"],
+  );
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, settledWrites + 1, "a settled journal is not rewritten");
+});

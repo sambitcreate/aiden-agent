@@ -14743,7 +14743,8 @@
         },
         "cost": {
           "input": 0.1,
-          "output": 0.3
+          "output": 0.3,
+          "cache_read": 0.05
         },
         "canonical_model_id": "google/gemma-4-26b-a4b-it"
       },
@@ -30498,6 +30499,50 @@
         },
         "canonical_model_id": "sakana/fugu-ultra"
       },
+      "sakana/sakana-namazu": {
+        "id": "sakana/sakana-namazu",
+        "name": "Sakana Namazu",
+        "description": "Japanese-specialized reasoning model based on Kimi K2.6 and tuned for Japanese language, culture, and business workflows",
+        "family": "sakana-namazu",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-03",
+        "last_updated": "2026-08-03",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 65536
+        },
+        "cost": {
+          "input": 0.95,
+          "output": 4,
+          "cache_read": 0.15
+        },
+        "canonical_model_id": "sakana/sakana-namazu"
+      },
       "sakana/fugu-ultra-v1.1": {
         "id": "sakana/fugu-ultra-v1.1",
         "name": "Fugu Ultra v1.1",
@@ -32457,37 +32502,6 @@
           "input": 0.493,
           "output": 0.493,
           "cache_read": 0.2465
-        }
-      },
-      "kitani/clover-1-150b": {
-        "id": "kitani/clover-1-150b",
-        "name": "Clover 1 150B Preview",
-        "description": "Kitani's 150B multimodal reasoning model for coding, tool use, and everyday assistance. This is a preview release and may have reliability issues.",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": false,
-        "release_date": "2026-09-24",
-        "last_updated": "2026-09-24",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "input": 200000,
-          "output": 100000
-        },
-        "cost": {
-          "input": 0.15,
-          "output": 0.8
         }
       },
       "soob3123/GrayLine-Qwen3-8B": {
@@ -73143,7 +73157,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 1,
+          "input": 0.75,
           "output": 11.357,
           "cache_read": 0.29
         }
@@ -74622,7 +74636,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 943718
         },
         "cost": {
           "input": 1.32,
@@ -75221,9 +75235,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.83,
-          "output": 2.5,
-          "cache_read": 0.04
+          "input": 0.7506,
+          "output": 2.2509,
+          "cache_read": 0.0378
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -77314,12 +77328,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
-          "input": 0.02625,
-          "output": 0.928749,
-          "cache_read": 0.01125
+          "input": 0.035,
+          "output": 0.5,
+          "cache_read": 0.035
         }
       },
       "~z-ai/glm-latest": {
@@ -78455,9 +78469,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.015,
-          "output": 0.676999,
-          "cache_read": 0.002115
+          "input": 0.02,
+          "output": 0.6,
+          "cache_read": 0.01
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -78494,12 +78508,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 943718
         },
         "cost": {
-          "input": 0.132,
-          "output": 0.396,
-          "cache_read": 0.0042
+          "input": 0.22,
+          "output": 4.2,
+          "cache_read": 0.14
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -78539,9 +78553,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0051,
+          "input": 0.0188,
           "output": 1.28,
-          "cache_read": 0.0051
+          "cache_read": 0.0188
         }
       },
       "~x-ai/grok-latest": {
@@ -81075,9 +81089,10 @@
           "output": 943718
         },
         "cost": {
-          "input": 2.7,
-          "output": 13.5,
-          "cache_read": 0.27
+          "input": 3,
+          "output": 15,
+          "cache_read": 0.3,
+          "cache_write": 3.75
         },
         "canonical_model_id": "moonshotai/kimi-k3"
       },
@@ -81118,9 +81133,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.43415,
-          "output": 1.828,
-          "cache_read": 0.07312
+          "input": 0.95,
+          "output": 4,
+          "cache_read": 0.16
         },
         "canonical_model_id": "moonshotai/kimi-k2.6"
       },
@@ -81704,7 +81719,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 32768
+          "output": 131072
         },
         "cost": {
           "input": 0.039,
@@ -82040,9 +82055,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.435,
+          "input": 0.43,
           "output": 0.87,
-          "cache_read": 0.004
+          "cache_read": 0.0036
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-pro"
       },
@@ -82253,9 +82268,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.12,
+          "input": 0.11,
           "output": 0.28,
-          "cache_read": 0.0028
+          "cache_read": 0.09
         },
         "canonical_model_id": "xiaomi/mimo-v2.6-flash"
       },
@@ -83658,8 +83673,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 262144,
-          "output": 235929
+          "context": 131072,
+          "output": 32768
         },
         "cost": {
           "input": 0.15,
@@ -91542,8 +91557,8 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.375,
-          "output": 1.5,
+          "input": 0.3,
+          "output": 1.2,
           "cache_read": 0.0075
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
@@ -110456,7 +110471,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 1,
+          "input": 0.75,
           "output": 11.357,
           "cache_read": 0.29
         }
@@ -111801,9 +111816,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0051,
+          "input": 0.0188,
           "output": 1.28,
-          "cache_read": 0.0051
+          "cache_read": 0.0188
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -112004,12 +112019,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 943718
         },
         "cost": {
-          "input": 0.66,
-          "output": 1.98,
-          "cache_read": 0.022
+          "input": 0.22,
+          "output": 4.2,
+          "cache_read": 0.14
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -113598,9 +113613,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.9646,
-          "output": 3.0316,
-          "cache_read": 0.17914
+          "input": 1.4,
+          "output": 4.4,
+          "cache_read": 0.26
         },
         "canonical_model_id": "zhipuai/glm-5.1"
       },
@@ -114727,12 +114742,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
-          "input": 0.02625,
-          "output": 0.928749,
-          "cache_read": 0.01125
+          "input": 0.035,
+          "output": 0.5,
+          "cache_read": 0.035
         }
       },
       "~z-ai/glm-latest": {
@@ -116039,9 +116054,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.015,
-          "output": 0.676999,
-          "cache_read": 0.002115
+          "input": 0.02,
+          "output": 0.6,
+          "cache_read": 0.01
         }
       },
       "~deepseek/deepseek-pro-latest": {
@@ -116080,12 +116095,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 943718
         },
         "cost": {
-          "input": 0.132,
-          "output": 0.396,
-          "cache_read": 0.0042
+          "input": 0.22,
+          "output": 4.2,
+          "cache_read": 0.14
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -116127,9 +116142,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0051,
+          "input": 0.0188,
           "output": 1.28,
-          "cache_read": 0.0051
+          "cache_read": 0.0188
         }
       },
       "~x-ai/grok-latest": {
@@ -118825,9 +118840,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 2.7,
-          "output": 13.5,
-          "cache_read": 0.27
+          "input": 0.99,
+          "output": 13,
+          "cache_read": 0.8
         },
         "canonical_model_id": "moonshotai/kimi-k3"
       },
@@ -118867,9 +118882,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.43415,
-          "output": 1.828,
-          "cache_read": 0.07312
+          "input": 0.95,
+          "output": 4,
+          "cache_read": 0.16
         },
         "canonical_model_id": "moonshotai/kimi-k2.6"
       },
@@ -119248,12 +119263,12 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 32768
+          "output": 131072
         },
         "cost": {
-          "input": 0.06,
-          "output": 0.16,
-          "cache_read": 0.03
+          "input": 0.0595,
+          "output": 0.17,
+          "cache_read": 0.02975
         },
         "canonical_model_id": "nvidia/nemotron-3.5-lightning"
       },
@@ -121045,7 +121060,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 235929
+          "output": 32768
         },
         "cost": {
           "input": 0.15,
@@ -259477,6 +259492,47 @@
         },
         "canonical_model_id": "openai/gpt-oss-20b"
       },
+      "tencent/step-5-preview": {
+        "id": "tencent/step-5-preview",
+        "name": "Step 5 Preview (Tencent)",
+        "description": "StepFun's next-generation flagship base model for coding and professional knowledge work, with native text, image, and video input and a 1M-token context window",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": false,
+        "structured_output": false,
+        "release_date": "2026-09-16",
+        "last_updated": "2026-09-20",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "input": 1000000,
+          "output": 1000000
+        },
+        "cost": {
+          "input": 1,
+          "output": 2.7,
+          "cache_read": 0.05
+        },
+        "canonical_model_id": "stepfun/step-5-preview"
+      },
       "tencent/deepseek-v4-pro-0813": {
         "id": "tencent/deepseek-v4-pro-0813",
         "name": "DeepSeek V4 Pro 0813 (Tencent)",
@@ -260096,6 +260152,50 @@
           "cache_read": 0.009
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
+      },
+      "flexai/DeepSeek-V4.1-Flash": {
+        "id": "flexai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash (FlexAI)",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.42,
+          "cache_read": 0.021
+        },
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
       "flexai/gpt-oss-20b": {
         "id": "flexai/gpt-oss-20b",
@@ -263377,6 +263477,48 @@
           "input_audio": 0.5
         },
         "canonical_model_id": "google/gemini-3.1-flash-lite"
+      },
+      "greenference/gpt-oss-20b": {
+        "id": "greenference/gpt-oss-20b",
+        "name": "GPT OSS 20B (Greenference)",
+        "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+        "family": "gpt-oss",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": false,
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2025-08-05",
+        "last_updated": "2025-08-05",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 131072,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.009,
+          "output": 0.045,
+          "cache_read": 0.0045
+        },
+        "canonical_model_id": "openai/gpt-oss-20b"
       },
       "perplexityai/sonar-pro": {
         "id": "perplexityai/sonar-pro",
