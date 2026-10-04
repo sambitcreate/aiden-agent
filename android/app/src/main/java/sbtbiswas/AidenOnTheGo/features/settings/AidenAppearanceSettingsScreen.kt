@@ -41,6 +41,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun AidenAppearanceSettingsScreen(
@@ -53,7 +54,7 @@ fun AidenAppearanceSettingsScreen(
     val palette = AidenTheme.palette
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val voiceMode by voiceInputStore.mode.collectAsState()
+    val voiceMode by voiceInputStore.mode.collectAsStateWithLifecycle()
     var speechStatus by remember { mutableStateOf<AidenSpeechStatus?>(null) }
     var speechError by remember { mutableStateOf<String?>(null) }
     var readAloudStatus by remember(remoteClient) { mutableStateOf<AidenReadAloudStatus?>(null) }

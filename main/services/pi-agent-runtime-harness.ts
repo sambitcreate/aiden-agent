@@ -597,14 +597,6 @@ export function resolvePiAgentRuntimeStaticContributions(
   };
 }
 
-export function resolvePiAgentRuntimeResources(
-  resources: AgentHarnessResources,
-  extensions: readonly PiAgentRuntimeExtension[],
-): AgentHarnessResources {
-  validateExtensions(extensions);
-  return composeResources(resources, extensions);
-}
-
 export function resolvePiAgentRuntimeContributionSnapshot(
   systemPrompt: string,
   tools: readonly AgentTool[],

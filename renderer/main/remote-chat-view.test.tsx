@@ -169,8 +169,15 @@ function render(props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, 
   const button = (label: RegExp) =>
     buttons.find((node) => label.test(node.textContent ?? "") || label.test(node.getAttribute("aria-label") ?? ""));
   const typing = all.filter((node) => ["textarea", "input"].includes(node.tagName.toLowerCase()));
+  // A question's options are the buttons in its labelled group.
+  const inLabelledGroup = (node: Element) => {
+    for (let parent = node.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
+      if (parent.getAttribute("role") === "group" && parent.getAttribute("aria-label")) return true;
+    }
+    return false;
+  };
   const choices = buttons
-    .filter((node) => node.getAttribute("role") === "radio")
+    .filter(inLabelledGroup)
     .map((node) => node.getElementsByTagName("span")[1]?.firstChild?.textContent ?? "");
   return { markup, all, text, buttons, button, typing, choices };
 }

@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,7 +42,7 @@ fun AidenWorkspaceEnvironmentScreen(
     onNavigateBack: () -> Unit,
     initialReference: String? = null
 ) {
-    val currentClient = coordinator.client.collectAsState().value
+    val currentClient = coordinator.client.collectAsStateWithLifecycle().value
     key(workspaceId, coordinator.activeInstanceId, currentClient) {
         AidenWorkspaceFilesContent(workspaceId, coordinator, onNavigateBack, initialReference)
     }
@@ -51,8 +53,8 @@ fun AidenWorkspaceEnvironmentScreen(
 private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRemoteCoordinator, onNavigateBack: () -> Unit, initialReference: String?) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
-    val connectionState = coordinator.connectionState.collectAsState().value
+    val client = coordinator.client.collectAsStateWithLifecycle().value
+    val connectionState = coordinator.connectionState.collectAsStateWithLifecycle().value
     val cache = coordinator.workspaceCache
     val activeInstanceId = coordinator.activeInstanceId
 
@@ -77,6 +79,10 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
 
     // Dialog States
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
+    // System back mirrors the toolbar: leave an open file first, confirming unsaved edits.
+    BackHandler(enabled = selectedFile != null) {
+        if (isDirty) showDiscardConfirmDialog = true else selectedFile = null
+    }
     var showConflictDialog by remember { mutableStateOf(false) }
     fun availability() = AidenWorkspaceFileAvailability(
         isOfflineIndex, isOfflineDocument, connectionState == AidenConnectionState.CONNECTED

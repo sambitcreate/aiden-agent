@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -23,6 +24,7 @@ enum class AidenAttachmentKind {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageAttachment(
     val id: String,
     val name: String,
@@ -151,6 +153,7 @@ enum class AidenMessageOutcomeStatus {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageOutcome(
     val status: AidenMessageOutcomeStatus,
     val category: String? = null,
@@ -187,25 +190,37 @@ enum class AidenAgentStepStatus {
         get() = this == FAILED || this == BLOCKED || this == CANCELLED
 }
 
+/** Patterns compiled once; transcript validation runs on every streamed frame. */
+private object AidenChatPatterns {
+    val DRIVE_PREFIX = Regex("^[A-Za-z]:/")
+    val TOOL_STEP_ID = Regex("^tool-[1-9][0-9]*$")
+    val TOOL_CALL_ID = Regex("^call-[1-9][0-9]*$")
+    val THINKING_STEP_ID = Regex("^think-[1-9][0-9]*$")
+    val WHITESPACE = Regex("\\s+")
+}
+
 @Serializable
+@Immutable
 data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
     fun isValid(toolName: String?): Boolean {
         val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
         return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
             !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
-            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            !AidenChatPatterns.DRIVE_PREFIX.containsMatchIn(relativePath) &&
             relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
             relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
     }
 }
 
 @Serializable
+@Immutable
 data class AidenAgentLineChanges(
     val additions: Int,
     val deletions: Int
 )
 
 @Serializable
+@Immutable
 data class AidenAgentStep(
     val id: String,
     val order: Int,
@@ -236,6 +251,7 @@ data class AidenAgentStep(
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
 }
 
+@Immutable
 data class AidenChronologicalRow(
     val id: String,
     val kind: Kind,
@@ -313,6 +329,7 @@ enum class AidenGenerationCancellationOrigin {
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationClaimCheck(
     val kind: Kind,
     val stepIds: List<String>
@@ -324,6 +341,7 @@ data class AidenGenerationClaimCheck(
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationTimeline(
     val version: Int,
     val generationId: String,
@@ -393,14 +411,14 @@ data class AidenGenerationTimeline(
 
             when (step.kind) {
                 AidenAgentStep.Kind.TOOL -> {
-                    if (!step.id.matches(Regex("^tool-[1-9][0-9]*$")) || step.id.length > 128 ||
+                    if (!step.id.matches(AidenChatPatterns.TOOL_STEP_ID) || step.id.length > 128 ||
                         step.toolCallId == null || step.toolCallId.length > 128 ||
-                        !step.toolCallId.matches(Regex("^call-[1-9][0-9]*$")) ||
+                        !step.toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID) ||
                         step.toolName == null || step.label == null || step.status == null
                     ) return false
                 }
                 AidenAgentStep.Kind.THINKING -> {
-                    if (version == 1 || step.id.length > 128 || !step.id.matches(Regex("^think-[1-9][0-9]*$"))) {
+                    if (version == 1 || step.id.length > 128 || !step.id.matches(AidenChatPatterns.THINKING_STEP_ID)) {
                         return false
                     }
                 }
@@ -587,6 +605,7 @@ object AidenAgentActivityPresentation {
 }
 
 @Serializable
+@Immutable
 data class AidenChatMessage(
     val id: String,
     val role: AidenChatRole,
@@ -614,6 +633,7 @@ data class AidenChatMessage(
 }
 
 @Serializable
+@Immutable
 data class AidenHtmlArtifact(
     val id: String,
     val title: String
@@ -1121,7 +1141,7 @@ object AidenApprovalPresentation {
     private val automationTools = setOf("schedule_task", "edit_automation")
 
     fun oneLineSummary(summary: String): String {
-        val collapsed = summary.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val collapsed = summary.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
         return if (collapsed.isEmpty()) "Review requested action" else collapsed
     }
 
@@ -1321,7 +1341,7 @@ data class AidenBotReplyProjection(
             for (paragraph in paragraphs) {
                 val cleaned = paragraph.trim()
                 if (cleaned.isEmpty()) continue
-                val identity = cleaned.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+                val identity = cleaned.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
                 if (seen.add(identity)) {
                     result.add(cleaned)
                 }
@@ -1349,9 +1369,16 @@ class AidenTerminalReplayGate {
 }
 
 object AidenTerminalReconciliation {
-    fun retryDelayMilliseconds(attempt: Int): Long {
+    /**
+     * Exponential backoff (1 s doubling to a 30 s cap) with equal jitter: the
+     * delay falls in the upper half of the step, so many devices that lost the
+     * same Mac at once do not reconnect in lockstep.
+     */
+    fun retryDelayMilliseconds(attempt: Int, random: kotlin.random.Random = kotlin.random.Random.Default): Long {
         val safeAttempt = maxOf(0, minOf(attempt, 5))
-        return minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val ceiling = minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val floor = ceiling / 2
+        return floor + random.nextLong(ceiling - floor + 1)
     }
 
     fun isDefinitiveMissingStream(error: Throwable): Boolean {
