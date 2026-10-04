@@ -25,6 +25,7 @@ import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 fun aidenBotCustomAccessIsDirty(
     draft: AidenBotCustomAccessDraft?,
@@ -90,7 +91,7 @@ fun AidenBotCustomAccessFlowScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client by coordinator.client.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
 
     var bots by remember { mutableStateOf<List<AidenBotSummary>>(emptyList()) }
     var selectedBotId by remember { mutableStateOf(botId) }

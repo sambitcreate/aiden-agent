@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { MAX_IMAGE_BYTES, imageBytesMatchMime } from "./attachments.js";
@@ -16,11 +17,6 @@ export interface ShareImageToolDependencies {
   /** Bot callers use a workspace-only path contract; ordinary callers retain existing behavior. */
   scopeToWorkspace?: boolean;
   expectedWorkspaceIdentity?: { readonly device: string; readonly inode: string };
-}
-
-function pathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function verifyScopedWorkspace(
@@ -137,7 +133,7 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
         ? path.normalize(suppliedPath)
         : path.resolve(scopedRoot ?? dependencies.workspaceRoot, suppliedPath);
       const image = await readVerifiedImage(requestedPath, signal);
-      if (scopedRoot && !pathInside(scopedRoot, image.resolvedPath)) {
+      if (scopedRoot && !isPathInside(scopedRoot, image.resolvedPath)) {
         throw new Error("Bot images must come from this Bot's folder.");
       }
       if (scopedRoot) await verifyScopedWorkspace(dependencies, signal);
