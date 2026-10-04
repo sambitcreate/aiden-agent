@@ -204,6 +204,59 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
   return items.length > 0 ? <TurnFooter items={items} /> : undefined;
 }
 
+interface SettledMessageRowProps {
+  message: ChatMessage;
+  readAloud?: ReadAloudActionProps;
+  richLinks: boolean;
+  subagentsEnabled: boolean;
+  onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
+}
+
+/**
+ * One persisted transcript message. Memoized so streaming frames, which change
+ * only the live row, do not re-render or re-derive settled history.
+ */
+const SettledMessageRow = React.memo(function SettledMessageRow({
+  message,
+  readAloud,
+  richLinks,
+  subagentsEnabled,
+  onOpenSubagent,
+}: SettledMessageRowProps) {
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      {message.role === "assistant" ? (
+        <>
+          <AssistantResponse
+            content={message.content}
+            timeline={message.timeline}
+            reasoning={message.reasoning}
+            attachments={message.attachments}
+            readAloud={readAloud}
+            richLinks={richLinks}
+            footer={settledTurnFooter(message)}
+            subagentChips={
+              subagentsEnabled && message.subagents ? (
+                <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
+              ) : undefined
+            }
+          />
+          {message.providerFailure ? (
+            <ProviderFailureCallout failure={message.providerFailure} />
+          ) : null}
+        </>
+      ) : (
+        <SafeMessageBubble
+          role={message.role}
+          content={message.content}
+          attachments={message.attachments}
+          skill={message.skill}
+        />
+      )}
+    </div>
+  );
+});
+
 export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1 }) {
   const presentation = providerFailurePresentation(failure);
   return (
@@ -338,6 +391,11 @@ export function MessageList({
   React.useLayoutEffect(() => {
     const root = transcriptRef.current;
     if (!root) return;
+    // Nothing to hand off while no chip owns focus or the focused chip is still
+    // mounted; skip the transcript-wide query on ordinary streaming renders.
+    const capture = chipFocusCaptureRef.current;
+    if (!capture) return;
+    if (capture.element.isConnected) return;
     const handoff = resolveSubagentChipFocusHandoff(
       chipFocusCaptureRef.current,
       document.activeElement,
@@ -366,36 +424,14 @@ export function MessageList({
   const transcriptRows: React.ReactNode[] = [];
   for (const message of messages) {
     transcriptRows.push(
-      <div key={`message:${message.id}`} className="flex min-w-0 flex-col gap-3">
-        {message.role === "assistant" ? (
-          <>
-            <AssistantResponse
-              content={message.content}
-              timeline={message.timeline}
-              reasoning={message.reasoning}
-              attachments={message.attachments}
-              readAloud={readAloudMessageId === message.id ? readAloud : undefined}
-              richLinks={message.id !== richLinkHandoffDuplicateId}
-              footer={settledTurnFooter(message)}
-              subagentChips={
-                subagentsEnabled && message.subagents ? (
-                  <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
-                ) : undefined
-              }
-            />
-            {message.providerFailure ? (
-              <ProviderFailureCallout failure={message.providerFailure} />
-            ) : null}
-          </>
-        ) : (
-          <SafeMessageBubble
-            role={message.role}
-            content={message.content}
-            attachments={message.attachments}
-            skill={message.skill}
-          />
-        )}
-      </div>,
+      <SettledMessageRow
+        key={`message:${message.id}`}
+        message={message}
+        readAloud={readAloudMessageId === message.id ? readAloud : undefined}
+        richLinks={message.id !== richLinkHandoffDuplicateId}
+        subagentsEnabled={subagentsEnabled}
+        onOpenSubagent={onOpenSubagent}
+      />,
     );
     transcriptRows.push(...artifactFrames(`message:${message.id}`));
   }
