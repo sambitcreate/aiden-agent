@@ -182,6 +182,12 @@ export class HostChatControlError extends Error {
   }
 }
 
+/** The value of a host read, or its failure as a thrown control error (for query functions). */
+export function hostResultValue<T>(result: HostChatResult<T>): T {
+  if (result.ok) return result.value;
+  throw new HostChatControlError(result.error);
+}
+
 export function isOutcomeUnknown(error: unknown): error is HostChatControlError {
   return error instanceof HostChatControlError && error.code === "outcome_unknown";
 }

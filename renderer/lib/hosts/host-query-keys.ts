@@ -17,4 +17,11 @@ export const hostQueryKeys = {
   /** The open remote chat's paged transcript (newest window plus older pages). */
   messagesWindow: (hostId: string, chatId: string) =>
     ["host", hostId, "chat", chatId, "messages"] as const,
+  /** The skills one chat on one host may invoke. */
+  skills: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId, "skills"] as const,
+  /** The models a host offers for new chats. */
+  models: (hostId: string) => ["host", hostId, "models"] as const,
+  /** The folders a host lets this Mac browse: its roots, or one page of a folder. */
+  browser: (hostId: string, location?: string, cursor?: string) =>
+    location ? (["host", hostId, "browser", location, cursor ?? ""] as const) : (["host", hostId, "browser"] as const),
 };

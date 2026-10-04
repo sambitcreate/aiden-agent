@@ -5,7 +5,10 @@ import type { HostChatCapability } from "./host-chat-adapter";
  * A remote chat hides them instead of quietly running them locally.
  */
 export interface ComposerSurfaces {
-  /** Attach button, file drop and image paste. Remote attachments arrive in a later update. */
+  /**
+   * Attach button, file drop and image paste. A remote chat reads the chosen
+   * files on this Mac and uploads them to its host, so it needs that grant.
+   */
   attachments: boolean;
   /** The slash palette: this Mac's skills, commands, `/btw`, compact, clone, fork and export. */
   slashCommands: boolean;
@@ -25,7 +28,17 @@ const REMOTE_COMPOSER_SURFACES: ComposerSurfaces = Object.freeze({
   localContext: false,
 });
 
-/** Only a chat whose host is this Mac gets the composer's local surfaces. */
+const REMOTE_ATTACHING_COMPOSER_SURFACES: ComposerSurfaces = Object.freeze({
+  ...REMOTE_COMPOSER_SURFACES,
+  attachments: true,
+});
+
+/**
+ * Only a chat whose host is this Mac gets the composer's local surfaces. A
+ * remote chat may attach files when its host stages uploads; its skills come
+ * from the host's own catalog, never from this Mac's slash palette.
+ */
 export function composerSurfacesFor(capabilities: ReadonlySet<HostChatCapability>): ComposerSurfaces {
-  return capabilities.has("localPanels") ? LOCAL_COMPOSER_SURFACES : REMOTE_COMPOSER_SURFACES;
+  if (capabilities.has("localPanels")) return LOCAL_COMPOSER_SURFACES;
+  return capabilities.has("attach") ? REMOTE_ATTACHING_COMPOSER_SURFACES : REMOTE_COMPOSER_SURFACES;
 }
