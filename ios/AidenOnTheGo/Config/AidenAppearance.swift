@@ -453,6 +453,7 @@ private struct AidenPaletteEnvironmentKey: EnvironmentKey {
 }
 
 private struct AidenReduceMotionEnvironmentKey: EnvironmentKey { static let defaultValue = false }
+private struct AidenLowPowerModeEnvironmentKey: EnvironmentKey { static let defaultValue = false }
 private struct AidenDiffMarkerEnvironmentKey: EnvironmentKey { static let defaultValue = AidenDiffMarkerPreference.symbols }
 private struct AidenSidebarTranslucencyEnvironmentKey: EnvironmentKey { static let defaultValue = true }
 private struct AidenCodeTypographyEnvironmentKey: EnvironmentKey {
@@ -479,6 +480,13 @@ extension EnvironmentValues {
         set { self[AidenReduceMotionEnvironmentKey.self] = newValue }
     }
 
+    /// True while the system Low Power Mode is on. Decorative, continuously
+    /// redrawn animations (orbs, shimmers) hold still to save power.
+    var aidenLowPowerMode: Bool {
+        get { self[AidenLowPowerModeEnvironmentKey.self] }
+        set { self[AidenLowPowerModeEnvironmentKey.self] = newValue }
+    }
+
     var aidenDiffMarkers: AidenDiffMarkerPreference {
         get { self[AidenDiffMarkerEnvironmentKey.self] }
         set { self[AidenDiffMarkerEnvironmentKey.self] = newValue }
@@ -500,6 +508,7 @@ struct AidenAppearanceRoot<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -515,6 +524,7 @@ struct AidenAppearanceRoot<Content: View>: View {
         content()
             .environment(\.aidenPalette, palette)
             .environment(\.aidenReduceMotion, appearance.resolvedReduceMotion(system: systemReduceMotion))
+            .environment(\.aidenLowPowerMode, lowPowerMode)
             .environment(\.aidenDiffMarkers, appearance.diffMarkers)
             .environment(\.aidenSidebarTranslucent, appearance.translucentSidebar(for: effectiveScheme))
             .environment(\.aidenCodeTypography, AidenCodeTypography(font: appearance.codeFont(for: effectiveScheme), size: appearance.codeFontSize))
@@ -522,6 +532,11 @@ struct AidenAppearanceRoot<Content: View>: View {
             .preferredColorScheme(appearance.mode.colorScheme)
             .tint(palette.accent)
             .background(palette.canvas.ignoresSafeArea())
+            .task {
+                for await _ in NotificationCenter.default.notifications(named: .NSProcessInfoPowerStateDidChange) {
+                    lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+                }
+            }
     }
 }
 

@@ -32,6 +32,7 @@ import {
   Monitor,
   MousePointer2,
   OctagonAlert,
+  Paperclip,
   Plus,
   ShieldQuestion,
   Square,
@@ -116,6 +117,8 @@ import {
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
+import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
+import { escapeStopsGeneration } from "../lib/composer-type-focus";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -441,8 +444,20 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
+  // A blocked send explains itself beside the composer, not in a toast, and the
+  // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
+  const [blockedSend, setBlockedSend] = React.useState<{
+    reason: string;
+    text: string;
+    attachments: Attachment[];
+    skill: typeof selectedSkill;
+    busyMode: typeof busyMode;
+    generating: boolean;
+    busy: boolean;
+  } | null>(null);
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  const [fileDragActive, setFileDragActive] = React.useState(false);
   React.useLayoutEffect(() => {
     if (!workspace?.id) return;
     const available = () => {
@@ -480,6 +495,7 @@ export function Composer({
     return () => operation.cancel();
   }, []);
   const attachmentDescriptionId = React.useId();
+  const sendBlockedId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
   const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
@@ -1464,6 +1480,7 @@ export function Composer({
   );
 
   const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+    setFileDragActive(false);
     if (!surfaces.attachments) return;
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
@@ -1474,7 +1491,17 @@ export function Composer({
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     // Not accepting the drag leaves the drop to the system, so nothing is read from this Mac.
     if (!surfaces.attachments) return;
-    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setFileDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    // Moving between children fires dragleave on the shell; only clear when the
+    // pointer actually leaves it.
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setFileDragActive(false);
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1512,23 +1539,44 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const sendBlockedReason =
+    blockedSend &&
+    blockedSend.text === text &&
+    blockedSend.attachments === attachments &&
+    blockedSend.skill === selectedSkill &&
+    blockedSend.busyMode === busyMode &&
+    blockedSend.generating === isGenerating &&
+    blockedSend.busy === (gitOperationBusy || attaching)
+      ? blockedSend.reason
+      : null;
+  const blockSend = (reason: string) =>
+    setBlockedSend({
+      reason,
+      text,
+      attachments,
+      skill: selectedSkill,
+      busyMode,
+      generating: isGenerating,
+      busy: gitOperationBusy || attaching,
+    });
+
   const submit = async (redirectConfirmed = false) => {
     if (redirectConfirmed && !isGenerating) {
-      toast.info("The previous response has finished. Send your message normally.");
+      blockSend("The previous response has finished. Send your message normally.");
       return;
     }
     if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current.isBusy || attaching) {
-      toast.info("Wait for the selected attachments to finish loading before sending.");
+      blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
     }
     if (gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before sending.");
+      blockSend("Wait for the current Git operation to finish before sending.");
       return;
     }
     const trimmed = text.trim();
     if (new TextEncoder().encode(trimmed).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
-      toast.info("Message text exceeds the 1 MB limit.");
+      blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
@@ -1538,12 +1586,12 @@ export function Composer({
         ? "queue"
         : undefined;
     if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
-      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
       return;
     }
     if (mode === "redirect" && !redirectConfirmed) {
       if (attachments.length > 0 || selectedSkill) {
-        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
+        blockSend("Redirect accepts text only. Remove attachments and the selected skill first.");
         return;
       }
       setConfirmRedirect(true);
@@ -1551,14 +1599,14 @@ export function Composer({
     }
     if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
-      toast.info(selectedSkillState.reason);
+      blockSend(selectedSkillState.reason);
       return;
     }
     if (
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
     ) {
-      toast.info("Switch to a vision-capable model before sending these images.");
+      blockSend("Switch to a vision-capable model before sending these images.");
       return;
     }
     try {
@@ -1639,6 +1687,21 @@ export function Composer({
           return;
         }
       }
+    }
+    if (
+      escapeStopsGeneration({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        isComposing: event.nativeEvent.isComposing,
+        repeat: event.repeat,
+        canStop: isGenerating && canStopGeneration,
+        draftEmpty: !text.trim() && attachments.length === 0 && !selectedSkill,
+      })
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onStop();
+      return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -1860,8 +1923,22 @@ export function Composer({
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
+            {surfaces.attachments && fileDragActive ? (
+              <div
+                aria-hidden="true"
+                data-composer-drop-target
+                className="composer-drop-overlay pointer-events-none absolute inset-0 z-30 grid place-items-center bg-popover"
+              >
+                <span className="composer-drop-overlay absolute inset-0 bg-status-accent-surface" />
+                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent">
+                  <Paperclip className="size-4" aria-hidden="true" />
+                  Drop to attach
+                </span>
+              </div>
+            ) : null}
             {surfaces.attachments ? (
               <span id={attachmentDescriptionId} className="sr-only">
                 Drag files here or paste an image to attach it. Use Attach files or images to choose
@@ -1990,7 +2067,11 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
-              aria-describedby={surfaces.attachments ? attachmentDescriptionId : undefined}
+              aria-describedby={
+                [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
               placeholder={composerPlaceholder({
@@ -2020,6 +2101,16 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
+            <Text
+              as="p"
+              id={sendBlockedId}
+              role="status"
+              variant="small"
+              color="secondary"
+              className={sendBlockedReason ? "px-1.5 pb-1" : "sr-only"}
+            >
+              {sendBlockedReason}
+            </Text>
             {voice.lastError ? (
               <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
                 <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
@@ -2030,7 +2121,7 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? CONNECT_PROVIDER_ACTION : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
@@ -2302,6 +2393,8 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
+                    aria-keyshortcuts="Escape"
+                    title="Stop generating (Esc from an empty message)"
                   >
                     <Square className="fill-current" />
                   </Button>

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "sourceScripts": [
-    "pretest",
-    "test"
+    "pretest:serial",
+    "test:serial"
   ],
   "lanes": [
     {
@@ -193,12 +193,17 @@
         "main/services/workspace-operation-registry.test.ts",
         "main/services/workspace-record-removal.test.ts",
         "main/services/workspace-schedule-restoration.test.ts",
+        "main/shared/bounded-body.test.ts",
+        "main/shared/guards.test.ts",
+        "main/shared/path-containment.test.ts",
+        "main/shared/redaction.test.ts",
         "main/windows/pill-window-security.test.ts",
         "scripts/check-ci-policy.test.mjs",
         "scripts/ci-changes.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
         "scripts/ci-required.test.mjs",
         "scripts/ci-test-registry.test.mjs",
+        "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/worktree-file-io.test.mjs"
       ],
@@ -368,6 +373,7 @@
         "main/services/subagents/approval-v2.test.ts",
         "main/services/subagents/authority-v2.test.ts",
         "main/services/subagents/background-lifecycle-v2.test.ts",
+        "main/services/subagents/background-subagent-coordinator-v2.test.ts",
         "main/services/subagents/capability-profile.test.ts",
         "main/services/subagents/forked-context-supervisor.test.ts",
         "main/services/subagents/forked-context.test.ts",

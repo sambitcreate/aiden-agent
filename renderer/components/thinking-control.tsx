@@ -1,3 +1,4 @@
+import * as React from "react";
 import { cn } from "../lib/ui-utils";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 
@@ -15,6 +16,7 @@ export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
   levels,
   canDisable = true,
   disabled = false,
+  disabledReason,
   providerLabel = "Gemini",
   onChange,
 }: {
@@ -22,15 +24,25 @@ export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
   levels: readonly TLevel[];
   canDisable?: boolean;
   disabled?: boolean;
+  /** Why the control is unavailable, announced and shown while disabled. */
+  disabledReason?: string;
   providerLabel?: string;
   onChange: (level: TLevel) => void;
 }) {
+  const reasonId = React.useId();
+  const reason = disabled ? disabledReason : undefined;
   return (
     <div className="group/thinking relative h-8 w-18 shrink-0">
+      {reason ? (
+        <span id={reasonId} className="sr-only">
+          {reason}
+        </span>
+      ) : null}
       <div
         role="radiogroup"
         aria-label={`${providerLabel} thinking level`}
         aria-disabled={disabled || undefined}
+        aria-describedby={reason ? reasonId : undefined}
         className="absolute bottom-0 right-0 z-20 flex min-w-18 flex-col items-stretch overflow-hidden rounded-dialog bg-transparent p-0.5 transition-[background-color,box-shadow] duration-150 ease-out group-hover/thinking:bg-popover group-hover/thinking:shadow-control-hover group-focus-within/thinking:bg-popover group-focus-within/thinking:shadow-control-hover"
       >
         {levels.map((value, index) => {
@@ -51,9 +63,10 @@ export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
               tabIndex={selected ? 0 : -1}
               aria-disabled={disabled || undefined}
               title={
-                hidesMinimumThinking
+                (hidesMinimumThinking
                   ? "Hide model thoughts (this model still uses its minimum thinking level)"
-                  : `${providerLabel} thinking: ${value === "off" ? "off" : value}`
+                  : `${providerLabel} thinking: ${value === "off" ? "off" : value}`) +
+                (reason ? ` · ${reason}` : "")
               }
               onClick={() => {
                 if (!disabled && !selected) onChange(value);

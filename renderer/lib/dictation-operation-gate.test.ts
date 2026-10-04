@@ -77,6 +77,14 @@ test("voice errors hide Electron wrappers and provide actionable setup copy", ()
     "Gemini needs an API key. Add it in Settings → Providers, then try again.",
   );
   assert.equal(
+    voiceErrorMessage(
+      new Error(
+        "Error invoking remote method 'voice:transcribe': Error: Set up OpenAI in Settings → Providers to use voice input.",
+      ),
+    ),
+    "OpenAI needs an API key for voice input. Add it in Settings → Providers, then try again.",
+  );
+  assert.equal(
     voiceErrorMessage(new Error("Gemini Live transcription timed out while finalizing.")),
     "Transcription took too long. Try again with a shorter recording.",
   );

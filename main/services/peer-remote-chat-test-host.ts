@@ -200,7 +200,9 @@ export class FakeHost {
   constructor(readonly id: string, messages: ChatMessage[], maxEventsPerRun?: number) {
     const now = () => 5_000;
     this.chat = { id: "chat-1", title: "Release notes", createdAt: 1, updatedAt: 2, workspaceId: "ws", messages };
-    this.runs = new HostRunRegistry({ now, epoch: `runs_${id}`, maxEventsPerRun });
+    // Every delta stays its own journal event, so a long reply can outgrow the
+    // journal the way a real token stream does under this frozen clock.
+    this.runs = new HostRunRegistry({ now, epoch: `runs_${id}`, maxEventsPerRun, deltaCoalesceMs: 0 });
     this.service = new AidenRemoteHostRunService({
       registry: this.runs,
       controls: hostControls(this.runs, this.effects),
