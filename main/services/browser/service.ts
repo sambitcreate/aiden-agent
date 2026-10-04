@@ -60,6 +60,9 @@ import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReser
 import type { BrowserApprovalTarget } from "./approval.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
+import { writeFileAtomic } from "../durable-fs.js";
+import { projectDiagnosticError } from "../diagnostics-contract.js";
+import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 
 type CommandContext = {
   owner?: RendererDocumentOwner;
@@ -242,12 +245,21 @@ export class BrowserService {
     this.persistence = this.persistence
       .catch(() => {})
       .then(async () => {
-        await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-        const temporary = `${target}.${randomUUID()}.tmp`;
-        await fs.writeFile(temporary, json, { mode: 0o600 });
-        await fs.rename(temporary, target);
+        await writeFileAtomic(target, json, { mode: 0o600, mkdirMode: 0o700 });
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        // Preferences stay in memory and the next change retries the save,
+        // but the failure is recorded instead of vanishing.
+        const projected = projectDiagnosticError(error);
+        writeDiagnosticEvent({
+          level: "warn",
+          area: "persistence",
+          event: "store-write-failed",
+          outcome: "degraded",
+          code: projected.code,
+          fields: { store: "browser-preferences", errorType: projected.errorType },
+        });
+      });
   }
   private workspace(id: string): WorkspaceBrowser {
     this.load();
@@ -1492,15 +1504,22 @@ export class BrowserService {
     }
     if (!current()) return;
     let pending = false;
+    let lastFrame = "";
     const frame = async () => {
       if (pending || !current()) return;
+      // A hidden or minimized preview has no viewer; skip the capture.
+      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
       pending = true;
       try {
         const image = await this.capture(tab);
-        if (current())
+        const source = `data:${image.mimeType};base64,${image.data}`;
+        // A static page re-encodes to the same frame; skip the repaint.
+        if (current() && source !== lastFrame) {
           await pip.webContents.executeJavaScript(
-            `document.querySelector('img').src=${JSON.stringify(`data:${image.mimeType};base64,${image.data}`)}`,
+            `document.querySelector('img').src=${JSON.stringify(source)}`,
           );
+          lastFrame = source;
+        }
       } catch {
         /* A cold or navigating page retries on the next frame. */
       } finally {

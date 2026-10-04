@@ -21,6 +21,7 @@ import {
   createBotAvatarStore,
   type BotAvatarNormalizer,
 } from "./bot-avatar-store-core.js";
+import { syncDirectory } from "./durable-fs.js";
 
 export const BOT_AVATAR_MANIFEST = "manifest.json";
 export const BOT_AVATAR_ASSETS_DIRECTORY = "assets";
@@ -66,15 +67,6 @@ function assetFilename(assetId: string): string {
     throw new BotAvatarStateError("The Bot avatar asset identity is invalid.");
   }
   return candidate;
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, constants.O_RDONLY);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 export function createFileBotAvatarStorage(

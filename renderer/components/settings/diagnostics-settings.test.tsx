@@ -46,3 +46,11 @@ test("diagnostic IPC surface does not retain the arbitrary devlog writer", () =>
   assert.match(source("main/index.ts"), /code: "renderer-crashed"/u);
   assert.doesNotMatch(index, /devlog:write|String\(message\)/u);
 });
+
+test("damaged chat files are reported only when some were set aside", async () => {
+  const { quarantinedChatsNotice } = await import("../../shared/diagnostics.js");
+  assert.equal(quarantinedChatsNotice(undefined), null);
+  assert.equal(quarantinedChatsNotice(0), null);
+  assert.match(quarantinedChatsNotice(1) ?? "", /^1 damaged chat file .*set it aside unchanged/u);
+  assert.match(quarantinedChatsNotice(3) ?? "", /^3 damaged chat files .*set them aside unchanged/u);
+});

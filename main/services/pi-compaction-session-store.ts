@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
+import { writeFileAtomic } from "./durable-fs.js";
 import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
 import type { PiPersistentSessionMetadata, PiSessionMetadata, PiSessionPort, PiSessionEntry, PiEntryProjector } from "./pi-session-port.js";
@@ -760,16 +761,46 @@ export class PiCompactionSessionStore {
     }
   }
 
+  /**
+   * Read the journal index. A missing file is an empty index; unparseable or
+   * malformed bytes are copied aside (content-addressed, so repeated reads do
+   * not multiply copies) before the next mutation replaces them. Any other
+   * read failure is rethrown: treating an unreadable index as empty would let
+   * the next mutation silently drop every other chat's journal paths.
+   */
   private async readIndex(root: string): Promise<JournalIndex> {
+    const target = path.join(root, JOURNAL_INDEX_FILE);
+    let bytes: Buffer;
     try {
-      const parsed = JSON.parse(
-        await readFile(path.join(root, JOURNAL_INDEX_FILE), "utf8"),
-      ) as Partial<JournalIndex>;
-      return parsed.version === 1 && parsed.chats && typeof parsed.chats === "object"
-        ? { version: 1, chats: parsed.chats as Record<string, string[]> }
-        : { version: 1, chats: {} };
-    } catch {
-      return { version: 1, chats: {} };
+      bytes = await readFile(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, chats: {} };
+      throw error;
+    }
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8")) as Partial<JournalIndex> | null;
+      if (
+        parsed?.version === 1 &&
+        parsed.chats &&
+        typeof parsed.chats === "object" &&
+        !Array.isArray(parsed.chats)
+      ) {
+        return { version: 1, chats: parsed.chats as Record<string, string[]> };
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    await this.preserveUnreadableIndex(target, bytes);
+    return { version: 1, chats: {} };
+  }
+
+  private async preserveUnreadableIndex(target: string, bytes: Buffer): Promise<void> {
+    const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+    const preserved = path.join(path.dirname(target), `.${path.basename(target)}.${digest}.corrupt`);
+    try {
+      await writeFileAtomic(preserved, bytes, { mode: 0o600, exclusive: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
   }
 
@@ -777,11 +808,7 @@ export class PiCompactionSessionStore {
     const operation = this.indexMutation.then(async () => {
       const index = await this.readIndex(root);
       mutation(index);
-      const target = path.join(root, JOURNAL_INDEX_FILE);
-      const temporary = `${target}.${randomUUID()}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(index)}\n`, { mode: 0o600 });
-      await rename(temporary, target);
-      await chmod(target, 0o600);
+      await writeFileAtomic(path.join(root, JOURNAL_INDEX_FILE), `${JSON.stringify(index)}\n`, { mode: 0o600 });
     });
     this.indexMutation = operation.catch(() => undefined);
     return operation;

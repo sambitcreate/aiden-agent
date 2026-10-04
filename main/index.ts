@@ -39,6 +39,7 @@ import { reloadPortableConfig } from "./services/portable-config.js";
 import {
   createLastSafeSnapshotReload,
   createPortableConfigWatcher,
+  createThrottledTrigger,
 } from "./services/portable-config-watch-core.js";
 import { setPortableCredentialSnapshotListener } from "./services/portable-credential-snapshot.js";
 import {
@@ -422,6 +423,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       terminalService.flushHistory(),
       browserService.shutdown(),
       shutdownDevices(),
+      // Bounded so a wedged server cannot hold quit; stdio children that miss
+      // the budget are still signalled by their transports' close.
+      mcpManager.closeAllWithin(2_000).then((closed) => {
+        if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
+      }),
     ]);
   } catch (error) {
     logger.error(
@@ -2003,10 +2009,13 @@ if (!ownsSingleInstanceLock) {
       // The active profile's portable config is user-editable, so pick
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
-      app.on(
-        "browser-window-focus",
+      // Focus can fire repeatedly while switching windows; a throttle keeps
+      // that to one re-read per interval plus one trailing pass.
+      const focusConfigRefresh = createThrottledTrigger(
         () => void portableConfigWatcher.refresh(),
+        2_000,
       );
+      app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {
@@ -2025,6 +2034,15 @@ if (!ownsSingleInstanceLock) {
         return;
       }
       try {
+        // Hold the startup catch-up burst while the screen is locked, and
+        // re-check it whenever the machine wakes or unlocks.
+        scheduleService.setCatchUpDeferPolicy(
+          () => powerMonitor.getSystemIdleState(1) === "locked",
+        );
+        powerMonitor.on("resume", () => scheduleService.reevaluateCatchUp());
+        powerMonitor.on("unlock-screen", () =>
+          scheduleService.reevaluateCatchUp(),
+        );
         await scheduleService.start();
       } catch (error) {
         logger.error(
