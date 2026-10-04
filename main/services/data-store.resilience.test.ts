@@ -239,11 +239,13 @@ test("DataStore preserves an unparseable file before overwriting it when asked",
 test("DataStore leaves no rescue copy for a regenerable cache", async (t) => {
   const dir = await tmpDir(t, "aiden-ds-corrupt-drop-");
   await fs.writeFile(path.join(dir, "config.json"), "{ nope", "utf-8");
-  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    preserveCorruptFile: false,
+  });
 
   await store.save({ count: 5 });
 
-  assert.deepEqual(await fs.readdir(dir), ["config.json"], "opt-in only; no litter by default");
+  assert.deepEqual(await fs.readdir(dir), ["config.json"], "an explicit cache opt-out leaves no litter");
 });
 
 test("DataStore only rescues the corrupt file once, not on every later write", async (t) => {
@@ -259,6 +261,73 @@ test("DataStore only rescues the corrupt file once, not on every later write", a
 
   const rescued = (await fs.readdir(dir)).filter((name) => name.includes(".invalid-"));
   assert.equal(rescued.length, 1);
+});
+
+async function rescuedCopies(dir: string): Promise<string[]> {
+  return (await fs.readdir(dir)).filter((name) => name.includes(".invalid-"));
+}
+
+test("DataStore keeps a torn (truncated) file by default before replacing it", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-truncated-");
+  const file = path.join(dir, "state.json");
+  const whole = JSON.stringify({ entries: Array.from({ length: 40 }, (_, index) => ({ index })) });
+  const torn = whole.slice(0, Math.floor(whole.length / 2));
+  await fs.writeFile(file, torn, "utf-8");
+  // No options: preservation is the default for every store.
+  const store = new DataStore<{ entries: unknown[] }>("state.json", { entries: [] }, () => dir);
+
+  assert.deepEqual(await store.load(), { entries: [] });
+  await store.update((draft) => void draft.entries.push({ index: -1 }));
+
+  const rescued = await rescuedCopies(dir);
+  assert.equal(rescued.length, 1);
+  assert.equal(await fs.readFile(path.join(dir, rescued[0]), "utf-8"), torn);
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { entries: [{ index: -1 }] });
+});
+
+test("DataStore keeps the original bytes of a file it could not read (EACCES)", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root bypasses file permissions");
+    return;
+  }
+  const dir = await tmpDir(t, "aiden-ds-eacces-");
+  const file = path.join(dir, "state.json");
+  const original = JSON.stringify({ count: 41, note: "hand-maintained" });
+  await fs.writeFile(file, original, { mode: 0o600 });
+  await fs.chmod(file, 0o000);
+  t.after(() => fs.chmod(file, 0o600).catch(() => undefined));
+  const store = new DataStore<{ count: number }>("state.json", { count: 0 }, () => dir);
+
+  assert.deepEqual(await store.load(), { count: 0 });
+  assert.equal(await store.loadedFromCorruptFile(), true);
+  await store.save({ count: 1 });
+
+  const rescued = await rescuedCopies(dir);
+  assert.equal(rescued.length, 1);
+  await fs.chmod(path.join(dir, rescued[0]), 0o600);
+  assert.equal(await fs.readFile(path.join(dir, rescued[0]), "utf-8"), original);
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { count: 1 });
+});
+
+test("DataStore refuses to replace an unreadable file it cannot set aside", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root bypasses directory permissions");
+    return;
+  }
+  const dir = await tmpDir(t, "aiden-ds-locked-dir-");
+  const file = path.join(dir, "state.json");
+  await fs.writeFile(file, "{ torn", "utf-8");
+  const store = new DataStore<{ count: number }>("state.json", { count: 0 }, () => dir);
+  await store.load();
+  // A read-only directory blocks the rescue link, copy, and rename alike.
+  await fs.chmod(dir, 0o500);
+  t.after(() => fs.chmod(dir, 0o700).catch(() => undefined));
+
+  await assert.rejects(store.save({ count: 1 }));
+
+  await fs.chmod(dir, 0o700);
+  assert.equal(await fs.readFile(file, "utf-8"), "{ torn");
+  assert.deepEqual(await fs.readdir(dir), ["state.json"]);
 });
 
 test("DataStore refreshes before a protected mutation and preserves a new JSON typo", async (t) => {

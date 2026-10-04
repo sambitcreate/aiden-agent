@@ -57,6 +57,7 @@ import {
   useGitBranches,
 } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
+import { chatPullRequestChipLabels, chatPullRequestListStatus } from "../lib/chat-pull-request-chip";
 
 export function openPullRequestExternal(url: string): void {
   window.open(url, "_blank", "noopener,noreferrer");
@@ -270,9 +271,29 @@ function PullRequestRow({
               disabled={busy !== null}
               onSelect={() => {
                 setBusy("unlink");
+                const ref = chatPullRequestRef(view);
+                const relinkSource =
+                  view.source === "branch-discovered" ? "branch-discovered" : "manual";
                 void pullRequestsApi
-                  .unlink(chatId, chatPullRequestRef(view))
-                  .then(onChanged)
+                  .unlink(chatId, ref)
+                  .then(() => {
+                    onChanged();
+                    toast.success(`Unlinked PR #${view.number} from this chat.`, {
+                      action: {
+                        label: "Undo",
+                        onClick: () => {
+                          void pullRequestsApi
+                            .linkRef(chatId, ref, relinkSource)
+                            .then(onChanged)
+                            .catch((error: unknown) =>
+                              toast.error(
+                                error instanceof Error ? error.message : "Couldn't link it again.",
+                              ),
+                            );
+                        },
+                      },
+                    });
+                  })
                   .catch((error: unknown) =>
                     toast.error(
                       error instanceof Error ? error.message : "Unlink failed.",
@@ -471,6 +492,7 @@ export function PullRequestLinkDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) onOpenChange(nextOpen);
@@ -865,14 +887,37 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     ]);
   }, [queryClient, chatId]);
 
-  // Opening the rail refreshes linked snapshots from GitHub.
-  React.useEffect(() => {
-    if (!open) return;
+  // Opening the rail refreshes linked snapshots from GitHub; failures keep saved details visible.
+  const [refresh, setRefresh] = React.useState<{
+    state: "idle" | "refreshing" | "failed";
+    message?: string;
+  }>({ state: "idle" });
+  const refreshAttempt = React.useRef(0);
+  const runRefresh = React.useCallback(() => {
+    const attempt = ++refreshAttempt.current;
+    setRefresh({ state: "refreshing" });
     void pullRequestsApi
       .refresh(chatId)
-      .then(invalidate)
-      .catch(() => undefined);
-  }, [open, chatId, invalidate]);
+      .then(() => {
+        if (attempt !== refreshAttempt.current) return;
+        setRefresh({ state: "idle" });
+        invalidate();
+      })
+      .catch((error: unknown) => {
+        if (attempt !== refreshAttempt.current) return;
+        setRefresh({
+          state: "failed",
+          message: error instanceof Error ? error.message : undefined,
+        });
+      });
+  }, [chatId, invalidate]);
+  React.useEffect(() => {
+    if (!open) return;
+    runRefresh();
+    return () => {
+      refreshAttempt.current += 1;
+    };
+  }, [open, runRefresh]);
 
   const views = links.data?.links ?? [];
   const openCount = views.filter((view) => view.state === "open").length;
@@ -888,14 +933,17 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     return merged;
   }, [views, currentView]);
 
-  const chipLabel =
-    views.length === 0
-      ? "Pull Requests"
-      : openCount > 0
-        ? `⑂ ${openCount} open · ${views.length} linked`
-        : `Pull Requests · ${views.length}`;
-
   const pendingCount = pending.data?.length ?? 0;
+  const chip = chatPullRequestChipLabels({
+    linked: views.length,
+    open: openCount,
+    pending: pendingCount,
+  });
+  const listStatus = chatPullRequestListStatus({
+    rows: rows.length,
+    linksLoaded: links.data !== undefined,
+    linksFailed: links.isError,
+  });
 
   return (
     <>
@@ -905,10 +953,10 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
             variant="transparent"
             size="small"
             className="h-7 shrink-0 gap-1.5 px-2 text-secondary"
-            aria-label={`${chipLabel} for this chat`}
+            aria-label={chip.ariaLabel}
           >
             <GitPullRequest className="size-4 shrink-0" aria-hidden="true" />
-            <span className="max-w-[14rem] truncate">{chipLabel}</span>
+            <span className="max-w-[14rem] truncate">{chip.text}</span>
             {pendingCount > 0 ? (
               <span
                 className="size-1.5 rounded-full bg-status-warning"
@@ -945,7 +993,38 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                 onChanged={invalidate}
               />
             ))}
-            {rows.length === 0 ? (
+            {refresh.state === "failed" && listStatus !== "error" ? (
+              <div className="flex items-center gap-2 px-2 py-2" role="alert">
+                <Text variant="small" color="secondary" className="min-w-0 flex-1">
+                  Couldn’t refresh from GitHub. Showing saved details.
+                </Text>
+                <Button variant="transparent" size="small" onClick={runRefresh}>
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+            {listStatus === "loading" ? (
+              <p className="flex items-center gap-2 px-2 py-3 text-small text-tertiary" role="status">
+                <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                Loading pull requests…
+              </p>
+            ) : listStatus === "error" ? (
+              <div className="flex items-center gap-2 px-2 py-3" role="alert">
+                <Text variant="small" color="secondary" className="min-w-0 flex-1">
+                  Couldn’t load pull requests for this chat.
+                </Text>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  onClick={() => {
+                    void links.refetch();
+                    runRefresh();
+                  }}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : listStatus === "empty" ? (
               <p className="px-2 py-3 text-small text-tertiary">
                 No pull requests are linked to this chat yet.
               </p>

@@ -17,6 +17,7 @@ import {
   buildGeminiTranscriptionRequest,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
+  startTranscriptionDeadline,
 } from "./transcription-core.js";
 import {
   GEMINI_TRANSCRIPTION_MODEL,
@@ -82,42 +83,49 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
   form.append("file", new Blob([bytes], { type: input.mimeType || "audio/webm" }), "audio.webm");
   form.append("model", model);
 
-  let response: Response;
+  const deadline = startTranscriptionDeadline(bytes.byteLength, input.signal);
   try {
-    response = await fetch(`${baseUrl}/audio/transcriptions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-      signal: input.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}` },
+        body: form,
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      await recordTranscription({ provider, model, status: "failed" });
+      throw new Error(
+        `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+      );
+    }
+    try {
+      const decoded: unknown = await response.json();
+      const data =
+        decoded && typeof decoded === "object"
+          ? (decoded as { text?: unknown; usage?: unknown })
+          : {};
+      const text = typeof data.text === "string" ? data.text.trim() : "";
+      await recordTranscription({
+        provider,
+        model,
+        status: "completed",
+        tokens: openAITranscriptionTokens(data.usage),
+      });
+      return text;
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
   } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
-  }
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    await recordTranscription({ provider, model, status: "failed" });
-    throw new Error(
-      `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-    );
-  }
-  try {
-    const decoded: unknown = await response.json();
-    const data =
-      decoded && typeof decoded === "object"
-        ? (decoded as { text?: unknown; usage?: unknown })
-        : {};
-    const text = typeof data.text === "string" ? data.text.trim() : "";
-    await recordTranscription({
-      provider,
-      model,
-      status: "completed",
-      tokens: openAITranscriptionTokens(data.usage),
-    });
-    return text;
-  } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
+    throw deadline.failure(error);
+  } finally {
+    deadline.dispose();
   }
 }
 
@@ -131,46 +139,56 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
 
-  let response: Response;
+  const deadline = startTranscriptionDeadline(
+    Math.floor((input.audioBase64.length * 3) / 4),
+    input.signal,
+  );
   try {
-    response = await fetch(GEMINI_INTERACTIONS_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": key,
-      },
-      body: JSON.stringify(
-        buildGeminiTranscriptionRequest({
-          audioBase64: input.audioBase64,
-          mimeType: input.mimeType,
-          model,
-        }),
-      ),
-      signal: input.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(GEMINI_INTERACTIONS_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": key,
+        },
+        body: JSON.stringify(
+          buildGeminiTranscriptionRequest({
+            audioBase64: input.audioBase64,
+            mimeType: input.mimeType,
+            model,
+          }),
+        ),
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      await recordTranscription({ provider, model, status: "failed" });
+      throw new Error(
+        `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+      );
+    }
+    try {
+      const data = parseGeminiTranscriptionResponse(await response.json());
+      await recordTranscription({
+        provider,
+        model,
+        status: "completed",
+        tokens: geminiTranscriptionTokens(data.usage),
+      });
+      return data.text;
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
   } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
-  }
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    await recordTranscription({ provider, model, status: "failed" });
-    throw new Error(
-      `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-    );
-  }
-  try {
-    const data = parseGeminiTranscriptionResponse(await response.json());
-    await recordTranscription({
-      provider,
-      model,
-      status: "completed",
-      tokens: geminiTranscriptionTokens(data.usage),
-    });
-    return data.text;
-  } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
+    throw deadline.failure(error);
+  } finally {
+    deadline.dispose();
   }
 }
 
