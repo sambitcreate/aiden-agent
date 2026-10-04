@@ -45,7 +45,7 @@ export interface RemoteRunView {
   textStreaming: boolean;
   timeline: GenerationTimeline | null;
   tool: RemoteToolActivity | null;
-  /** Pending approvals, read-only on this Mac (`canAllow: false`). */
+  /** Pending approvals; `canAllow` is false when the host omitted details too large to send. */
   approvals: ApprovalPrompt[];
   questions: AskUserQuestionPromptV1[];
   errorMessage: string | null;
@@ -122,6 +122,7 @@ function approvalPrompt(value: unknown): ApprovalPrompt | null {
   const payload = record(value);
   const approvalId = str(payload?.approvalId);
   if (!payload || !approvalId) return null;
+  const details = record(payload.details);
   const scopes = Array.isArray(payload.scopes)
     ? payload.scopes
         .map(parseToolApprovalScope)
@@ -132,8 +133,10 @@ function approvalPrompt(value: unknown): ApprovalPrompt | null {
     toolCallId: typeof payload.toolCallId === "string" ? payload.toolCallId : "",
     toolName: str(payload.toolName) ?? "Tool",
     summary: str(payload.summary) ?? "Aiden needs approval.",
-    // Read-only here: answering arrives with run control.
-    canAllow: false,
+    // The approval card validates details itself; any claim that fails its guard can only be denied.
+    ...(details ? { details: details as ApprovalPrompt["details"] } : {}),
+    // A controller may allow only what it could see: details too large to journal must be allowed on the host.
+    canAllow: payload.detailsOmitted !== true,
     ...(scopes.length > 0 ? { scopes } : {}),
     source: "remote",
   };

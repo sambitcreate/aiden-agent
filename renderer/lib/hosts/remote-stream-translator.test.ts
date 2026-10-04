@@ -134,7 +134,10 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
     event(40, "snapshot", {
       reason: "gap",
       state: "needs_input",
-      approvals: [{ approvalId: "ap-9", summary: "Write file", toolCallId: "c9", toolName: "write_file" }],
+      approvals: [
+        { approvalId: "ap-9", summary: "Write file", toolCallId: "c9", toolName: "write_file" },
+        { approvalId: "ap-10", summary: "Huge edit", toolCallId: "c10", toolName: "edit_file", detailsOmitted: true },
+      ],
       questions: [{ promptId: "q-1", toolCallId: "c2", questions: [question] }],
       nextSequence: 41,
     }),
@@ -143,7 +146,9 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
   assert.equal(gap.view.incomplete, true);
   assert.equal(gap.view.cursor, 40);
   assert.deepEqual(gap.view.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow, prompt.source]), [
-    ["ap-9", false, "remote"],
+    ["ap-9", true, "remote"],
+    // Details too large to send can be denied here but must be allowed on the host.
+    ["ap-10", false, "remote"],
   ]);
   assert.equal(gap.view.questions[0]?.streamId, "run-1");
 
@@ -153,7 +158,10 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
   assert.equal(transcript.streamingText, "");
   assert.equal(transcript.agentActivity?.phase, "waiting");
 
-  const answered = fold([event(42, "approval_resolved", { approvalId: "ap-9" })], resumed).view;
+  const answered = fold(
+    [event(42, "approval_resolved", { approvalId: "ap-9" }), event(43, "approval_resolved", { approvalId: "ap-10" })],
+    resumed,
+  ).view;
   assert.equal(remoteRunTranscript(answered, []).agentActivity?.label, "Waiting for an answer");
 });
 

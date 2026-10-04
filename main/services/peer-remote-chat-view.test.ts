@@ -462,8 +462,8 @@ test("a run started on the host streams into the open chat and hands off to the 
     assert.equal(view.row.streamingReasoning, "Reading the changelog");
     assert.deepEqual(
       view.run.approvals.map((prompt) => [prompt.approvalId, prompt.summary, prompt.canAllow]),
-      [["ap-1", "Run the release script", false]],
-      "the approval is shown, but this Mac cannot answer it",
+      [["ap-1", "Run the release script", true]],
+      "the approval is shown with everything needed to decide it",
     );
 
     host.runs.publish("run-1", "chat:tool", { toolName: "read_file", phase: "result" });
@@ -559,8 +559,8 @@ test("a window joining a run whose shared buffer overflowed still shows the pend
     assert.equal(joined.run.incomplete, true, "the reply's start is no longer buffered on this Mac");
     assert.deepEqual(
       joined.run.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow]),
-      [["ap-1", false]],
-      "the approval the buffer dropped is still shown, read-only",
+      [["ap-1", true]],
+      "the approval the buffer dropped is still shown",
     );
 
     host.runs.resolveAttention("ap-1");
