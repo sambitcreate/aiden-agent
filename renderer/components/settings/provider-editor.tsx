@@ -627,12 +627,12 @@ export function ProviderEditor({
                         <Badge color="green">Tools</Badge>
                       ) : null}
                       {info.reasoning ? (
-                        <Badge color="purple">Reasoning</Badge>
+                        <Badge>Reasoning</Badge>
                       ) : null}
                       {info.openWeights ? (
-                        <Badge color="secondary">Open</Badge>
+                        <Badge>Open</Badge>
                       ) : null}
-                      {ctx ? <Badge color="secondary">{ctx}</Badge> : null}
+                      {ctx ? <Badge>{ctx}</Badge> : null}
                     </div>
                   ) : (
                     <Text

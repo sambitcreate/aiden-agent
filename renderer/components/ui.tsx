@@ -186,13 +186,18 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
   return <span className={cn("text-mini text-tertiary", className)} {...props} />;
 }
 
+export type BadgeColor = "gray" | "green" | "red" | "blue" | "warning";
+
 export function Badge({
   color = "gray",
   icon,
   className,
   children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
+}: Omit<React.HTMLAttributes<HTMLSpanElement>, "color"> & {
+  color?: BadgeColor;
+  icon?: React.ReactNode;
+}) {
   return (
     <span
       className={cn(

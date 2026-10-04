@@ -194,7 +194,7 @@ export function SkillsSettings() {
                       <Text variant="strong" truncate>
                         {s.name}
                       </Text>
-                      <Badge color={s.source === "workspace" ? "blue" : "secondary"}>
+                      <Badge color={s.source === "workspace" ? "blue" : "gray"}>
                         {s.source}
                       </Badge>
                       {!s.available ? <Badge color="red">Unavailable</Badge> : null}
