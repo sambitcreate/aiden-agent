@@ -101,12 +101,12 @@ class FakeProcess extends EventEmitter implements KillableInferenceProcess {
     this.terminations += 1;
     return true;
   }
-  killHard(): void {
+  killHard(): void | Promise<void> {
     this.hardKills += 1;
     this.alive = false;
     this.emit("exit", 137);
   }
-  hasExited(): boolean {
+  hasExited(): boolean | Promise<boolean> {
     return !this.alive;
   }
   onMessage(listener: (message: unknown) => void): () => void {
@@ -561,6 +561,76 @@ test("isolated built-in provider environments preserve only reviewed parity vari
     CLOUDFLARE_GATEWAY_ID: source.CLOUDFLARE_GATEWAY_ID,
     PI_CACHE_RETENTION: source.PI_CACHE_RETENTION,
   });
+});
+
+/** Answers identity questions asynchronously, like an off-thread `ps` read. */
+class AsyncProofProcess extends FakeProcess {
+  exitedSilently = false;
+  proofFailure: Error | undefined;
+
+  override async killHard(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await super.killHard();
+  }
+
+  override async hasExited(): Promise<boolean> {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (this.proofFailure) throw this.proofFailure;
+    return this.exitedSilently || !this.alive;
+  }
+}
+
+test("asynchronous identity proofs are awaited before escalation is considered settled", async () => {
+  const child = new AsyncProofProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, { termGraceMs: 2, killGraceMs: 2 });
+  const cancellation = new AbortController();
+  const stream = owner.stream(request, { model }, cancellation.signal);
+  const events = (async () => {
+    const seen = [];
+    for await (const event of stream) seen.push(event);
+    return seen;
+  })();
+  for (let turn = 0; turn < 5 && child.sent.length === 0; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(child.sent.length, 1, "a live process is not mistaken for an exited one");
+  cancellation.abort(new Error("cancel"));
+  const seen = await events;
+  assert.equal(child.hardKills, 1);
+  assert.equal(seen[seen.length - 1]?.type, "error");
+  assert.equal(await owner.shutdown(), true);
+});
+
+test("an asynchronously indeterminate exit proof still fails closed", async () => {
+  const child = new AsyncProofProcess();
+  child.killHard = async () => {
+    child.hardKills += 1;
+  };
+  let cleanupFailures = 0;
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => {
+      cleanupFailures += 1;
+    },
+  );
+  const cancellation = new AbortController();
+  owner.stream(request, { model }, cancellation.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.proofFailure = new Error("process identity unavailable");
+  cancellation.abort();
+  assert.equal(await owner.shutdown(), false);
+  assert.equal(cleanupFailures, 1);
+});
+
+test("a worker that exited before its exit listener attached is found by the asynchronous proof", async () => {
+  const child = new AsyncProofProcess();
+  child.exitedSilently = true;
+  const owner = new SubagentInferenceProcessOwner(async () => child, { termGraceMs: 2, killGraceMs: 2 });
+  const seen = [];
+  for await (const event of owner.stream(request, { model })) seen.push(event);
+  assert.equal(seen[seen.length - 1]?.type, "error");
+  assert.equal(await owner.shutdown(), true);
 });
 
 test("abort escalates from cooperative cancel to TERM and verified hard kill", async () => {

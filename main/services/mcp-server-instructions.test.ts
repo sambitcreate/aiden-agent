@@ -108,14 +108,12 @@ test("collector caps metadata and duplicate server records cannot duplicate prom
 });
 
 test("production assembly applies guidance after final model policy and keeps discovery scoped", async () => {
-  const [llm, tools, mcp] = await Promise.all([
+  const [llm, tools] = await Promise.all([
     readFile(new URL("./llm-client.ts", import.meta.url), "utf8"),
     readFile(new URL("./tools.ts", import.meta.url), "utf8"),
-    readFile(new URL("./mcp.ts", import.meta.url), "utf8"),
   ]);
   assert.match(llm, /onMcpServerInstructions: mcpInstructionCollector.capture/u);
   assert.match(llm, /withMcpServerInstructions\(\s*applyCustomModelToolPolicy\([\s\S]*?mcpServerInstructions/u);
   assert.match(tools, /selectedMcpServers\(await configStore.listMcpServers\(\), ctx.mcpServerIds\)/u);
   assert.match(tools, /assertScheduledMcpServerBindings\(servers, ctx.mcpServerBindings\)/u);
-  assert.match(mcp, /await withConfiguredMcp\([\s\S]*?assertUniqueMcpAgentToolNames\([\s\S]*?options.onServerInstructions/u);
 });

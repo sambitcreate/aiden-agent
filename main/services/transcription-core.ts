@@ -70,3 +70,59 @@ export function parseGeminiTranscriptionResponse(value: unknown): {
     .trim();
   return { text, usage: response.usage };
 }
+
+const TRANSCRIPTION_BASE_TIMEOUT_MS = 120_000;
+const TRANSCRIPTION_MAX_TIMEOUT_MS = 5 * 60_000;
+/** Extra allowance per 128 KiB of audio for long voice notes on slow uplinks. */
+const TRANSCRIPTION_BYTES_PER_SECOND = 128 * 1024;
+
+/** Deadline for one cloud transcription request, scaled by the audio size. */
+export function transcriptionTimeoutMs(audioBytes: number): number {
+  const bytes = Number.isFinite(audioBytes) && audioBytes > 0 ? audioBytes : 0;
+  return Math.min(
+    TRANSCRIPTION_MAX_TIMEOUT_MS,
+    TRANSCRIPTION_BASE_TIMEOUT_MS + Math.ceil((bytes / TRANSCRIPTION_BYTES_PER_SECOND) * 1000),
+  );
+}
+
+export interface TranscriptionDeadline {
+  /** Aborts when the caller cancels or the deadline passes. */
+  readonly signal: AbortSignal;
+  /** Present a deadline abort as a timeout; pass other failures through. */
+  failure(error: unknown): unknown;
+  dispose(): void;
+}
+
+/**
+ * Bound a cloud transcription request (upload, response and body read) even
+ * when the caller supplies no signal, such as Telegram voice notes.
+ */
+export function startTranscriptionDeadline(
+  audioBytes: number,
+  callerSignal?: AbortSignal,
+): TranscriptionDeadline {
+  const timeoutMs = transcriptionTimeoutMs(audioBytes);
+  const controller = new AbortController();
+  let timedOut = false;
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Voice transcription timed out.", "TimeoutError"));
+  }, timeoutMs);
+  if (callerSignal?.aborted) onCallerAbort();
+  else callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  return {
+    signal: controller.signal,
+    failure(error) {
+      if (!timedOut) return error;
+      return Object.assign(
+        new Error(`Voice transcription timed out after ${Math.round(timeoutMs / 1000)} s.`),
+        { name: "TimeoutError", cause: error },
+      );
+    },
+    dispose() {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
