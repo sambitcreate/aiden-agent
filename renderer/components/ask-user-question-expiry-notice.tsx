@@ -1,5 +1,53 @@
+import * as React from "react";
 import { Clock } from "lucide-react";
-import { Button, Callout } from "./ui";
+import { Button, Callout, Text } from "./ui";
+
+/** Remaining time at which the countdown is announced once to assistive tech. */
+export const ASK_USER_QUESTION_ANNOUNCE_MS = 30_000;
+
+function formatRemaining(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * Quiet countdown while an ask_user_question still has a deadline. It owns its
+ * own one-second tick so the chat pane does not re-render every second, and it
+ * announces once when about 30 seconds remain rather than on every tick.
+ */
+export function AskUserQuestionCountdown({
+  expiresAt,
+  initialNow,
+}: {
+  expiresAt: string;
+  /** Clock seed for deterministic rendering; defaults to the current time. */
+  initialNow?: number;
+}) {
+  const deadline = Date.parse(expiresAt);
+  const [now, setNow] = React.useState(() => initialNow ?? Date.now());
+  React.useEffect(() => {
+    if (!Number.isFinite(deadline)) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [deadline]);
+  if (!Number.isFinite(deadline)) return null;
+  const remaining = Math.max(0, deadline - now);
+  if (remaining === 0) return null;
+  const announce = remaining <= ASK_USER_QUESTION_ANNOUNCE_MS;
+  return (
+    <div className="aiden-dock-inset chat-content-column flex justify-end pb-1">
+      <Text variant="small" color="tertiary" className="flex items-center gap-1.5 tabular-nums">
+        <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+        <span aria-hidden="true">Aiden continues on its own in {formatRemaining(remaining)}</span>
+      </Text>
+      <span role="status" className="sr-only">
+        {announce ? "Less than 30 seconds left to answer before Aiden continues on its own." : ""}
+      </span>
+    </div>
+  );
+}
 
 /**
  * Shown when an ask_user_question deadline passed. Kept separate from the

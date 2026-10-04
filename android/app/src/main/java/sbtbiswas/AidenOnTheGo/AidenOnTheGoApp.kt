@@ -13,6 +13,9 @@ import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 
 class AidenOnTheGoApp : Application() {
+    /** Created on first Activity use so Application startup stays free of store I/O. */
+    val container: AidenAppContainer by lazy { AidenAppContainer(this) }
+
     override fun onCreate() {
         super.onCreate()
         AidenDiagnostics.record(AidenDiagnosticArea.APP, AidenDiagnosticEvent.LAUNCH, AidenDiagnosticOutcome.STARTED)
