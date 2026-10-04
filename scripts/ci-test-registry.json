@@ -582,6 +582,7 @@
         "renderer/lib/use-mark-chat-read.test.ts",
         "renderer/lib/voice-recorder-core.test.ts",
         "renderer/lib/wav-audio.test.ts",
+        "renderer/lib/workspace-file-open-error.test.ts",
         "renderer/lib/workspace-path-display.test.ts",
         "renderer/main/bots-view.test.tsx",
         "renderer/main/chat-transition.test.tsx",
