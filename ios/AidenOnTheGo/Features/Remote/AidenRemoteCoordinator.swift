@@ -843,6 +843,13 @@ final class AidenRemoteCoordinator {
         guard let installation = installationStore.activeInstallation else {
             throw AidenRemoteClientError.missingCredential
         }
+        // The cache key changes whenever the active installation, its device
+        // identity, its credential scope, or the activation generation does,
+        // so a hit never needs the Keychain read below.
+        if let cachedActiveClient,
+           cachedActiveClient.key == activeClientKey(for: installation, activationGeneration: activationGeneration) {
+            return cachedActiveClient.client
+        }
         guard let credential = try installationStore.credential(for: installation),
               !credential.isEmpty else {
             throw AidenRemoteClientError.missingCredential
@@ -854,17 +861,24 @@ final class AidenRemoteCoordinator {
         )
     }
 
-    private func client(
+    private func activeClientKey(
         for installation: AidenInstallation,
-        credential: String,
         activationGeneration: Int
-    ) throws -> AidenRemoteClient {
-        let key = ActiveClientKey(
+    ) -> ActiveClientKey {
+        ActiveClientKey(
             instanceId: installation.id,
             deviceId: installation.deviceId,
             credentialScope: installation.credentialScope,
             activationGeneration: activationGeneration
         )
+    }
+
+    private func client(
+        for installation: AidenInstallation,
+        credential: String,
+        activationGeneration: Int
+    ) throws -> AidenRemoteClient {
+        let key = activeClientKey(for: installation, activationGeneration: activationGeneration)
         if let cachedActiveClient, cachedActiveClient.key == key {
             return cachedActiveClient.client
         }
