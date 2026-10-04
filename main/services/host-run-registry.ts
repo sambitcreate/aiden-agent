@@ -5,7 +5,11 @@ import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scop
 import {
   boundedText,
   createRunProjectionState,
+  isCoalescibleDelta,
+  MAX_COALESCED_DELTA_EVENT_BYTES,
+  mergeDeltaPayload,
   ownRecord,
+  projectApprovalDetails,
   projectRunContentNotification,
   type RunContentProjection,
   type RunProjectionState,
@@ -57,6 +61,13 @@ export interface HostRunRegistryOptions {
   maxTotalEventBytes?: number;
   maxRuns?: number;
   terminalRetentionMs?: number;
+  /**
+   * Consecutive text or reasoning deltas that no observer has read yet fold
+   * into one event for up to this many milliseconds (default 250), so a long
+   * answer costs a few journal events per second rather than one per token.
+   * Zero disables folding.
+   */
+  deltaCoalesceMs?: number;
 }
 
 type ContentState = Extract<RunContentProjection, { kind: "event" }>["state"];
@@ -75,6 +86,8 @@ interface RunRecord {
   pendingQuestionIds: string[];
   projection: RunProjectionState;
   subscribers: Set<() => void>;
+  /** The newest delta event while no `read` has returned it. */
+  openDelta?: { sequence: number; openedAt: number };
 }
 
 interface PendingEvent {
@@ -90,6 +103,7 @@ const DEFAULT_MAX_EVENT_BYTES_PER_RUN = 4 * 1_024 * 1_024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 32 * 1_024 * 1_024;
 const DEFAULT_MAX_RUNS = 128;
 const DEFAULT_TERMINAL_RETENTION_MS = 10 * 60_000;
+const DEFAULT_DELTA_COALESCE_MS = 250;
 const MAX_PROMPT_ID_LENGTH = 128;
 // Approval details carry caller-supplied text (workspace names, commands) that
 // nothing upstream bounds. A prompt can be a run's only retained event, which
@@ -115,14 +129,6 @@ function promptId(value: unknown): string | undefined {
     : undefined;
 }
 
-function cloneOrUndefined<T>(value: T): T | undefined {
-  try {
-    return structuredClone(value);
-  } catch {
-    return undefined;
-  }
-}
-
 function knownScopes(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const scopes = [...new Set(value.map(parseToolApprovalScope))].filter(
@@ -144,9 +150,18 @@ function approvalEvent(
     toolName: boundedText(payload.toolName, 120) || "Tool",
     ...(scopes ? { scopes } : {}),
   };
-  const detailsRecord = ownRecord(payload.details);
-  const details = detailsRecord ? cloneOrUndefined(detailsRecord) : undefined;
-  if (!details) return { type: "approval_required", payload: prompt, terminal: false };
+  // Details pass the same allowlist as Remote approvals: unrecognized kinds and
+  // undeclared fields (such as classifier state) are never journaled, so no
+  // observer of this host can read them.
+  const supplied = ownRecord(payload.details) !== null;
+  const details = projectApprovalDetails(payload.details);
+  if (!details) {
+    return {
+      type: "approval_required",
+      payload: supplied ? { ...prompt, detailsOmitted: true } : prompt,
+      terminal: false,
+    };
+  }
   const withDetails = { ...prompt, details };
   let fits = false;
   try {
@@ -196,6 +211,7 @@ export class HostRunRegistry {
   private readonly maxRuns: number;
   private readonly terminalRetentionMs: number;
   private readonly maxApprovalPayloadBytes: number;
+  private readonly deltaCoalesceMs: number;
 
   constructor(private readonly options: HostRunRegistryOptions) {
     this.epoch = options.epoch ?? randomUUID();
@@ -204,6 +220,7 @@ export class HostRunRegistry {
     this.maxTotalEventBytes = options.maxTotalEventBytes ?? DEFAULT_MAX_TOTAL_EVENT_BYTES;
     this.maxRuns = options.maxRuns ?? DEFAULT_MAX_RUNS;
     this.terminalRetentionMs = options.terminalRetentionMs ?? DEFAULT_TERMINAL_RETENTION_MS;
+    this.deltaCoalesceMs = options.deltaCoalesceMs ?? DEFAULT_DELTA_COALESCE_MS;
     this.maxApprovalPayloadBytes = Math.min(
       MAX_APPROVAL_PAYLOAD_BYTES,
       Math.floor(this.maxEventBytesPerRun / 2),
@@ -368,6 +385,9 @@ export class HostRunRegistry {
     const events = run.events
       .filter((event) => event.sequence > afterSequence)
       .map((event) => structuredClone(event));
+    // A returned event is final: the reader's cursor now covers it, so
+    // later deltas must take a new sequence rather than extend it.
+    if (events.length > 0) run.openDelta = undefined;
     return { kind: "events", epoch: this.epoch, events, summary };
   }
 
@@ -411,6 +431,7 @@ export class HostRunRegistry {
 
   private append(run: RunRecord, pending: PendingEvent): void {
     const now = this.options.now();
+    if (!pending.terminal && this.extendOpenDelta(run, pending, now)) return;
     const event: HostRunEvent = {
       runId: run.runId,
       sequence: run.lastSequence + 1,
@@ -422,7 +443,36 @@ export class HostRunRegistry {
     run.events.push(event);
     run.lastSequence = event.sequence;
     run.updatedAt = now;
+    run.openDelta = isCoalescibleDelta(event.type) ? { sequence: event.sequence, openedAt: now } : undefined;
     this.addBytes(run, this.eventSize(event));
+    this.trimRun(run);
+  }
+
+  /**
+   * Fold a delta into the run's unread tail delta. It keeps its sequence:
+   * no reader's cursor has reached it, so nobody can miss the added text,
+   * and ordering against prompts, tools and the outcome is unchanged
+   * because any other event closes the tail first.
+   */
+  private extendOpenDelta(run: RunRecord, pending: PendingEvent, now: number): boolean {
+    const open = run.openDelta;
+    const tail = run.events[run.events.length - 1];
+    if (!open || !tail || tail.sequence !== open.sequence || tail.type !== pending.type) return false;
+    if (now - open.openedAt >= this.deltaCoalesceMs) return false;
+    const merged = mergeDeltaPayload(pending.type, tail.payload, pending.payload);
+    if (!merged) return false;
+    // Replace rather than mutate: cached sizes are keyed on the event object.
+    const event: HostRunEvent = { ...tail, payload: merged };
+    const bytes = this.eventSize(event);
+    if (bytes > MAX_COALESCED_DELTA_EVENT_BYTES) return false;
+    run.events[run.events.length - 1] = event;
+    run.updatedAt = now;
+    this.addBytes(run, bytes - this.eventSize(tail));
+    this.trimRun(run);
+    return true;
+  }
+
+  private trimRun(run: RunRecord): void {
     while (
       run.events.length > this.maxEventsPerRun ||
       (run.eventBytes > this.maxEventBytesPerRun && run.events.length > 1)
