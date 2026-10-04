@@ -87,6 +87,13 @@ import {
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import {
+  hostRunRegistry,
+  recordRunAttentionResolved,
+  recordRunBegin,
+  recordRunNotification,
+  recordRunSettled,
+} from "./host-runs.js";
+import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
   resolveBotRuntimeSkills,
@@ -565,6 +572,7 @@ function broadcastChatSettled(
   fallbackWorkspaceId: string | undefined,
 ): void {
   chatActivityRegistry.settle(streamId);
+  recordRunSettled(hostRunRegistry, streamId);
   chatProgressEvents.settle(chatId, streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
@@ -622,6 +630,11 @@ function sendGeneration(streamId: string, channel: NotificationChannel, payload:
   } else if (chatId && channel === "chat:subagents") {
     chatProgressEvents.changed(chatId);
   }
+  // Journal before delivery so a run whose window went away stays observable.
+  // Prompts are journaled by their coordinators only once delivery succeeds.
+  if (channel !== "chat:approval" && channel !== "chat:questionnaire") {
+    recordRunNotification(hostRunRegistry, streamId, channel, payload);
+  }
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {
@@ -657,8 +670,12 @@ const approvals = new ToolApprovalCoordinator(
       throw new Error("The generation's renderer document is no longer active.");
     }
     chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
+    recordRunNotification(hostRunRegistry, prompt.streamId, "chat:approval", prompt);
   },
-  (approvalId) => chatActivityRegistry.resolveAttention(approvalId),
+  (approvalId) => {
+    chatActivityRegistry.resolveAttention(approvalId);
+    recordRunAttentionResolved(hostRunRegistry, approvalId);
+  },
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -666,8 +683,12 @@ const questionnaires = new AskUserQuestionCoordinator(
       throw new Error("The generation's renderer document is no longer active.");
     }
     chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
+    recordRunNotification(hostRunRegistry, prompt.streamId, "chat:questionnaire", prompt);
   },
-  (promptId) => chatActivityRegistry.resolveAttention(promptId),
+  (promptId) => {
+    chatActivityRegistry.resolveAttention(promptId);
+    recordRunAttentionResolved(hostRunRegistry, promptId);
+  },
 );
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
@@ -1665,6 +1686,7 @@ export const llmClient = {
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
+            recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
             chatProgressEvents.begin(params.chatId, streamId);
           },
         );
