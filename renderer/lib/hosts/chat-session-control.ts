@@ -1,4 +1,5 @@
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
+import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import { mintPeerIdempotencyKey } from "../../shared/peer-host";
 import {
   HostChatControlError,
@@ -6,6 +7,7 @@ import {
   type HostChatAdapter,
   type HostChatApprovalInput,
   type HostChatApprovalResult,
+  type HostChatAttachmentUpload,
   type HostChatCapability,
   type HostChatQuestionInput,
   type HostChatQuestionResult,
@@ -75,14 +77,65 @@ const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
   steer: "That Mac doesn't allow steering from here.",
   rename: "That Mac doesn't allow renaming from here.",
   remove: "That Mac doesn't allow deleting from here.",
+  attach: "That Mac doesn't accept attachments from here.",
+  skills: "That Mac doesn't allow skills from here.",
+  createChat: "That Mac doesn't allow new chats from here.",
+  browseFolders: "That Mac doesn't allow browsing its folders from here.",
+  createWorkspace: "That Mac doesn't allow new projects from here.",
+  botChats: "That Mac doesn't allow Bot chats from here.",
 };
+
+/** What a turn carries besides its text. */
+export interface ChatSendExtras {
+  /** Files this Mac read, uploaded to the chat's host before the turn starts. */
+  attachments?: HostChatAttachmentUpload[];
+  /** A skill from the host's own catalog. */
+  skill?: SkillInvocationV1;
+}
+
+/**
+ * Uploads a turn's attachments to the chat's host, one at a time. When one
+ * fails, the ones already staged are dropped again (best effort; unused
+ * uploads also expire on the host) and the failure is rethrown as a plain,
+ * retryable error: an upload is not keyed, so it is never left unresolved.
+ */
+export async function stageAttachments(
+  adapter: Pick<HostChatAdapter, "uploadAttachment" | "removeAttachment">,
+  chatId: string,
+  uploads: readonly HostChatAttachmentUpload[],
+): Promise<string[]> {
+  if (uploads.length === 0) return [];
+  if (!adapter.uploadAttachment) {
+    throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.attach! });
+  }
+  const staged: string[] = [];
+  try {
+    for (const upload of uploads) staged.push((await adapter.uploadAttachment(chatId, upload)).id);
+    return staged;
+  } catch (error) {
+    releaseAttachments(adapter, chatId, staged);
+    if (isOutcomeUnknown(error)) {
+      throw new HostChatControlError({
+        code: "upload_failed",
+        message: "An attachment didn't reach that Mac. Nothing was sent; try again.",
+        retryable: true,
+      });
+    }
+    throw error;
+  }
+}
+
+/** Drops staged uploads no turn will use. Failures are ignored: the host expires them anyway. */
+export function releaseAttachments(adapter: Pick<HostChatAdapter, "removeAttachment">, chatId: string, ids: readonly string[]): void {
+  for (const id of ids) void adapter.removeAttachment?.(chatId, id).catch(() => {});
+}
 
 /**
  * Why `capability` is unavailable on this adapter right now, or null when it
  * can run. Unsupported actions are refused rather than falling back to this
  * Mac; an offline or blocked host refuses every mutation.
  */
-export function chatControlRefusal(adapter: HostChatAdapter, capability: HostChatCapability): string | null {
+export function chatControlRefusal(adapter: Pick<HostChatAdapter, "capabilities" | "status">, capability: HostChatCapability): string | null {
   if (!adapter.capabilities().has(capability)) return UNSUPPORTED_REASON[capability] ?? "Not available for this chat.";
   const { availability } = adapter.status();
   return availability === "online" ? null : OFFLINE_REASON[availability];
@@ -194,16 +247,41 @@ export class ChatSessionControl {
     }
   }
 
-  /** Starts a turn with a fresh key. Throws `outcome_unknown` when the host's answer was lost. */
-  async send(text: string): Promise<HostChatTurnReceipt> {
+  /**
+   * Starts a turn with a fresh key, after staging its attachments on the
+   * host. Throws `outcome_unknown` when the host's answer was lost; a retry
+   * then replays the same key with the same staged uploads.
+   */
+  async send(text: string, extras: ChatSendExtras = {}): Promise<HostChatTurnReceipt> {
     this.guard("send");
+    const uploads = extras.attachments ?? [];
+    if (uploads.length > 0) this.guard("attach");
+    if (extras.skill) this.guard("skills");
     if (this.snapshot.unresolved) {
       throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
     }
     const { chatId } = this.ref;
     this.update({ sending: true });
     try {
-      return await this.intent("send", mintPeerIdempotencyKey(), (idempotencyKey) => this.adapter.send(chatId, { text, idempotencyKey }), text);
+      const attachmentIds = await stageAttachments(this.adapter, chatId, uploads);
+      try {
+        return await this.intent(
+          "send",
+          mintPeerIdempotencyKey(),
+          (idempotencyKey) =>
+            this.adapter.send(chatId, {
+              text,
+              idempotencyKey,
+              ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+              ...(extras.skill ? { skill: extras.skill } : {}),
+            }),
+          text,
+        );
+      } catch (error) {
+        // A definite refusal leaves the uploads unused; an unknown outcome may have consumed them.
+        if (!isOutcomeUnknown(error)) releaseAttachments(this.adapter, chatId, attachmentIds);
+        throw error;
+      }
     } finally {
       this.update({ sending: false });
     }

@@ -59,6 +59,8 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
     [{ operation: "updateBotFavorites", idempotencyKey: KEY, revision: "\"r1\"" }, "updateBotFavorites"],
     [{ operation: "updateBotChatAccess", resourceId: "chat_1", idempotencyKey: KEY, revision: "\"r2\"" }, "updateBotChatAccess"],
+    [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
+    [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
   ];
   for (const [operation, expected] of cases) {
     const request = peerOperationRequest(operation);
@@ -117,8 +119,24 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "attachmentContent", resourceId: "chat_1", itemId: "a/b" },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
+    { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },
+    { operation: "removeAttachment", resourceId: "chat_1", itemId: `../${"A".repeat(43)}` },
   ])
     assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
+});
+
+test("only an attachment upload may send a body past the 1 MiB JSON cap", () => {
+  const upload = peerOperationRequest({ operation: "uploadAttachment", resourceId: "chat_1", body: {} });
+  assert.ok((upload.maxBodyBytes ?? 0) >= 12 * 1024 * 1024);
+  // Staged uploads expire unused, so the upload carries no idempotency key.
+  assert.equal(upload.idempotencyKey, undefined);
+  for (const operation of [
+    { operation: "send", resourceId: "chat_1", idempotencyKey: KEY, body: { text: "hi" } },
+    { operation: "createChat", idempotencyKey: KEY, body: { workspaceId: "ws" } },
+    { operation: "createWorkspace", idempotencyKey: KEY, body: { mode: "scratch" } },
+    { operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` },
+  ])
+    assert.equal(peerOperationRequest(operation).maxBodyBytes, undefined, operation.operation);
 });
 
 test("expanded peer reads reject malformed DTOs and attachment bytes stay bounded images", () => {
@@ -145,8 +163,20 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "createBotChat",
     "updateBotFavorites",
     "updateBotChatAccess",
+    "uploadAttachment",
+    "removeAttachment",
   ])
     assert.throws(() => peerOperationResult({ operation }, {}), operation);
+  const staged = {
+    id: `att_${"A".repeat(43)}`,
+    name: "notes.md",
+    mimeType: "text/markdown",
+    kind: "text",
+    size: 12,
+    expiresAt: "2026-10-03T12:10:00.000Z",
+  };
+  assert.deepEqual(peerOperationResult({ operation: "uploadAttachment" }, staged), staged);
+  assert.equal(peerOperationResult({ operation: "removeAttachment" }, undefined), undefined);
   // `markRead` is a 204: only an empty body satisfies it.
   assert.equal(peerOperationResult({ operation: "markRead" }, undefined), undefined);
 

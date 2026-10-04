@@ -42,7 +42,9 @@ export type PeerWriteOperation =
   | "runInputs"
   | "createBotChat"
   | "updateBotFavorites"
-  | "updateBotChatAccess";
+  | "updateBotChatAccess"
+  | "uploadAttachment"
+  | "removeAttachment";
 export interface PeerOperation {
   operation: PeerReadOperation | PeerWriteOperation;
   /** The chat, stream, run, Bot or prompt the operation addresses. */

@@ -11,6 +11,7 @@ import {
   PeerTransport,
   PeerEventFrames,
   PeerTransportError,
+  MAX_PEER_UPLOAD_BYTES,
 } from "./peer-transport.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
@@ -201,6 +202,17 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         response.end(`data: ${request.headers["last-event-id"] ?? "none"}\n\n`);
         return;
       }
+      if (request.url?.endsWith("/upload")) {
+        let received = 0;
+        request.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+        });
+        request.on("end", () => {
+          response.writeHead(201, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ received }));
+        });
+        return;
+      }
       if (request.url?.endsWith("/events")) {
         response.writeHead(200, { "Content-Type": "text/event-stream" });
         response.write(': hello\n\nid: 1\ndata: {"text":');
@@ -312,6 +324,29 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     );
     assert.equal(redirected, 0);
     await assert.rejects(client.json({ path: "/large" }));
+    // A request body over 1 MiB leaves only where the operation allows an
+    // upload, and never past the upload ceiling, whatever the caller asks for.
+    const upload = { data: "a".repeat(2 * 1_048_576) };
+    await assert.rejects(
+      client.json({ method: "POST", path: "/upload", body: upload }),
+      /too large/u,
+    );
+    const accepted = (await client.json({
+      method: "POST",
+      path: "/upload",
+      body: upload,
+      maxBodyBytes: MAX_PEER_UPLOAD_BYTES,
+    })) as { received: number };
+    assert.equal(accepted.received, Buffer.byteLength(JSON.stringify(upload)));
+    await assert.rejects(
+      client.json({
+        method: "POST",
+        path: "/upload",
+        body: { data: "a".repeat(MAX_PEER_UPLOAD_BYTES) },
+        maxBodyBytes: Number.MAX_SAFE_INTEGER,
+      }),
+      /too large/u,
+    );
     const frames: string[] = [];
     await client.events({ path: "/events" }, (frame) => frames.push(frame));
     assert.deepEqual(frames, ['id: 1\ndata: {"text":"hello"}']);

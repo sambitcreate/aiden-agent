@@ -15,6 +15,8 @@ import {
   type HostChatAdapter,
   type HostChatApprovalInput,
   type HostChatApprovalResult,
+  type HostChatAttachmentUpload,
+  type HostStagedAttachment,
   type HostChatCancelInput,
   type HostChatCapability,
   type HostChatError,
@@ -30,6 +32,23 @@ import {
   type HostChatWindowRequest,
 } from "./host-chat-adapter";
 import { mapRemoteMessagesWindow, type RemoteMessagesWindow } from "./remote-chat-mapper";
+import { parseSkillCatalog, type SkillCatalogEntry } from "../../shared/slash-commands";
+import {
+  mapHostBrowserPage,
+  mapHostBrowserRoots,
+  mapHostCreatedChat,
+  mapHostCreatedWorkspace,
+  mapHostFolderSelection,
+  mapHostModelCatalog,
+  type HostBrowserPage,
+  type HostBrowserRoot,
+  type HostCreatedChat,
+  type HostCreatedWorkspace,
+  type HostFolderSelection,
+  type HostModelCatalog,
+  type HostNewChatInput,
+  type HostWorkspaceCreate,
+} from "./host-resources";
 
 /** The slice of `peerHostsApi` a remote adapter needs; tests wire main's handlers in-process. */
 export type PeerHostTransport = Pick<
@@ -47,10 +66,18 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   if (features.has("chat-messages-window-v1") && grants.has("chat:read")) capabilities.add("messagesWindow");
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
+  if (grants.has("workspace:browse")) capabilities.add("browseFolders");
+  if (grants.has("workspace:manage")) capabilities.add("createWorkspace");
   if (grants.has("chat:write")) {
     capabilities.add("send");
     capabilities.add("rename");
     capabilities.add("remove");
+    capabilities.add("attach");
+    capabilities.add("createChat");
+    // The host checks both grants on every skill read and invocation.
+    if (features.has("chat-skills-v1") && grants.has("skills:invoke")) capabilities.add("skills");
+    // Bot grants are bound at pairing; a Bot chat also reads the Bot and writes a chat.
+    if (grants.has("bot:write") && grants.has("bot:read")) capabilities.add("botChats");
     // Run control also needs chat write access on the host.
     if (features.has("run-control-v1") && grants.has("runs:control")) {
       capabilities.add("cancel");
@@ -229,7 +256,11 @@ export class RemoteHostAdapter implements HostChatAdapter {
       await this.mutate("send", {
         operation: "send",
         resourceId: chatId,
-        body: { text: input.text },
+        body: {
+          text: input.text,
+          ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {}),
+          ...(input.skill ? { skill: input.skill } : {}),
+        },
         idempotencyKey: input.idempotencyKey,
       }),
     );
@@ -326,6 +357,100 @@ export class RemoteHostAdapter implements HostChatAdapter {
   async remove(chatId: string, input: { revision?: string } = {}): Promise<void> {
     if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before deleting it." });
     await this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision: input.revision });
+  }
+
+  async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload): Promise<HostStagedAttachment> {
+    // Not keyed: an unused upload expires on the host, so a retry after a
+    // lost answer only leaves a short-lived orphan behind.
+    const value = record(await this.mutate("attach", { operation: "uploadAttachment", resourceId: chatId, body: upload }));
+    const id = text(value.id);
+    if (!id || typeof value.size !== "number")
+      throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    return { id, name: text(value.name) ?? upload.name, size: value.size };
+  }
+
+  async removeAttachment(chatId: string, attachmentId: string): Promise<void> {
+    await this.mutate("attach", { operation: "removeAttachment", resourceId: chatId, itemId: attachmentId });
+  }
+
+  /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
+  private read<T>(capability: HostChatCapability, operation: PeerOperation, map: (value: unknown) => T): Promise<HostChatResult<T>> {
+    if (!this.granted.has(capability))
+      return Promise.resolve({ ok: false, error: { code: "unsupported", message: "This Mac does not allow that from here." } });
+    return this.fenced(async () => {
+      const outcome = await this.transport.call(this.hostId, operation);
+      if (!outcome.ok) return outcome;
+      try {
+        return { ok: true, value: map(outcome.value) };
+      } catch (error) {
+        return { ok: false, error: failure(error) };
+      }
+    });
+  }
+
+  /** The host's skill catalog for one of its chats. */
+  skills(chatId: string): Promise<HostChatResult<SkillCatalogEntry[]>> {
+    return this.read("skills", { operation: "skills", resourceId: chatId }, (value) => parseSkillCatalog(record(value).skills));
+  }
+
+  /** The models the host has configured, for a chat that runs there. */
+  models(): Promise<HostChatResult<HostModelCatalog>> {
+    return this.read("createChat", { operation: "models" }, mapHostModelCatalog);
+  }
+
+  /** The folders the host's owner approved for browsing from paired devices. */
+  roots(): Promise<HostChatResult<HostBrowserRoot[]>> {
+    return this.read("browseFolders", { operation: "roots" }, mapHostBrowserRoots);
+  }
+
+  children(location: string, cursor?: string): Promise<HostChatResult<HostBrowserPage>> {
+    return this.read(
+      "browseFolders",
+      { operation: "children", resourceId: location, ...(cursor ? { cursor } : {}) },
+      mapHostBrowserPage,
+    );
+  }
+
+  /** Asks the host for a single-use nonce naming one browsed folder. */
+  async selectFolder(location: string): Promise<HostFolderSelection> {
+    return this.shaped(
+      await this.mutate("browseFolders", { operation: "selectFolder", body: { location } }),
+      mapHostFolderSelection,
+    );
+  }
+
+  async createWorkspace(body: HostWorkspaceCreate, idempotencyKey: string): Promise<HostCreatedWorkspace> {
+    return this.shaped(
+      await this.mutate("createWorkspace", { operation: "createWorkspace", body, idempotencyKey }),
+      mapHostCreatedWorkspace,
+    );
+  }
+
+  async createChat(input: HostNewChatInput, idempotencyKey: string): Promise<HostCreatedChat> {
+    return this.shaped(
+      await this.mutate("createChat", {
+        operation: "createChat",
+        body: { workspaceId: input.workspaceId, ...(input.model ? { ...input.model } : {}) },
+        idempotencyKey,
+      }),
+      mapHostCreatedChat,
+    );
+  }
+
+  /** Opens the Bot's chat on the host; the host returns the existing one when there is one. */
+  async createBotChat(botId: string, idempotencyKey: string): Promise<HostCreatedChat> {
+    return this.shaped(
+      await this.mutate("botChats", { operation: "createBotChat", resourceId: botId, body: {}, idempotencyKey }),
+      mapHostCreatedChat,
+    );
+  }
+
+  private shaped<T>(value: unknown, map: (value: unknown) => T): T {
+    try {
+      return map(value);
+    } catch {
+      throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    }
   }
 
   observe(chatId: string, observer: HostChatObserver): () => void {

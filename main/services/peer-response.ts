@@ -47,6 +47,8 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   createBotChat: "createBotChat",
   updateBotFavorites: "updateBotFavorites",
   updateBotChatAccess: "updateBotChatAccess",
+  uploadAttachment: "uploadChatAttachment",
+  removeAttachment: "removeChatAttachment",
 };
 let ajv: Ajv2020 | undefined;
 const validators = new Map<string, ValidateFunction | null>();

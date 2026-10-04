@@ -7,6 +7,7 @@ import type {
   PeerRunStreamState,
   PeerRunSubscription,
 } from "../../shared/peer-host";
+import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import type { ToolApprovalScope } from "../../shared/tool-approval-scope";
 import type { RemoteMessagesWindow } from "./remote-chat-mapper";
 
@@ -31,6 +32,15 @@ export type HostChatCapability =
   | "steer"
   | "rename"
   | "remove"
+  /** Stage attachments on the host for the next turn. */
+  | "attach"
+  /** Read the host's skill catalog and invoke a skill with a turn. */
+  | "skills"
+  // Host-wide: starting new work on the host.
+  | "createChat"
+  | "browseFolders"
+  | "createWorkspace"
+  | "botChats"
   // Panels that act on this Mac's filesystem, terminal, browser or screen.
   | "localPanels";
 
@@ -76,6 +86,22 @@ export interface HostChatSendInput {
   text: string;
   /** Minted once per user intent and reused by a retry, so a lost acknowledgement never starts a second turn. */
   idempotencyKey: string;
+  /** Uploads already staged on the chat's host for this turn. */
+  attachmentIds?: string[];
+  /** A skill from the host's own catalog. */
+  skill?: SkillInvocationV1;
+}
+
+/** A file this Mac read, in the shape the host's attachment upload accepts. */
+export type HostChatAttachmentUpload =
+  | { name: string; mimeType: "image/png" | "image/jpeg"; kind: "image"; data: string }
+  | { name: string; mimeType: string; kind: "text"; text: string };
+
+/** An upload staged on the host, unused until a turn references it. */
+export interface HostStagedAttachment {
+  id: string;
+  name: string;
+  size: number;
 }
 
 export interface HostChatTurnReceipt {
@@ -181,6 +207,10 @@ export interface HostChatAdapter {
   submitInput(chatId: string, input: HostChatInput): Promise<ChatRunInputAdmissionResult>;
   rename(chatId: string, input: HostChatRenameInput): Promise<void>;
   remove(chatId: string, input?: { revision?: string }): Promise<void>;
+  /** Stages one attachment on the chat's host. Adapters without staged uploads omit it. */
+  uploadAttachment?(chatId: string, upload: HostChatAttachmentUpload): Promise<HostStagedAttachment>;
+  /** Drops a staged attachment no turn will use. */
+  removeAttachment?(chatId: string, attachmentId: string): Promise<void>;
   dispose(): void;
 }
 

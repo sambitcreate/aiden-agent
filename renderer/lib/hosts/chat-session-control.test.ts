@@ -6,12 +6,14 @@ import {
   type HostChatAdapter,
   type HostChatApprovalInput,
   type HostChatApprovalResult,
+  type HostChatAttachmentUpload,
   type HostChatCapability,
+  type HostChatSendInput,
   type HostChatStatus,
   type HostChatTurnReceipt,
 } from "./host-chat-adapter";
 
-const ALL: HostChatCapability[] = ["send", "cancel", "respondApproval", "answerQuestion", "steer", "rename", "remove"];
+const ALL: HostChatCapability[] = ["send", "cancel", "respondApproval", "answerQuestion", "steer", "rename", "remove", "attach", "skills"];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,9 +33,14 @@ class FakeHost implements HostChatAdapter {
   readonly hostId = "host-b";
   current: HostChatStatus = { availability: "online", generation: 1 };
   granted = new Set<HostChatCapability>(ALL);
-  readonly turns = new Map<string, { chatId: string; text: string }>();
+  readonly turns = new Map<string, { chatId: string; text: string; attachmentIds?: string[]; skill?: string }>();
+  readonly staged = new Map<string, { chatId: string; name: string }>();
   readonly calls: string[] = [];
   loseNextAck = false;
+  refuseNextSend = false;
+  /** Upload attempts (1-based) whose acknowledgement is lost. */
+  readonly lostUploads = new Set<number>();
+  private uploads = 0;
   approval: (chatId: string, input: HostChatApprovalInput) => Promise<HostChatApprovalResult> = async () => ({
     resolution: "applied",
   });
@@ -65,9 +72,33 @@ class FakeHost implements HostChatAdapter {
   markRead() {
     return Promise.resolve({ ok: true as const, value: undefined });
   }
-  async send(chatId: string, input: { text: string; idempotencyKey: string }): Promise<HostChatTurnReceipt> {
+  async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
+    this.uploads += 1;
+    const id = `att-${this.uploads}`;
+    this.calls.push(`upload:${chatId}:${upload.name}`);
+    this.staged.set(id, { chatId, name: upload.name });
+    if (this.lostUploads.has(this.uploads)) throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
+    return { id, name: upload.name, size: 1 };
+  }
+  async removeAttachment(chatId: string, attachmentId: string) {
+    this.calls.push(`release:${chatId}:${attachmentId}`);
+    this.staged.delete(attachmentId);
+  }
+  async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.calls.push(`send:${chatId}`);
-    if (!this.turns.has(input.idempotencyKey)) this.turns.set(input.idempotencyKey, { chatId, text: input.text });
+    if (this.refuseNextSend) {
+      this.refuseNextSend = false;
+      throw new HostChatControlError({ code: "busy", message: "A turn is already running." });
+    }
+    if (!this.turns.has(input.idempotencyKey)) {
+      this.turns.set(input.idempotencyKey, {
+        chatId,
+        text: input.text,
+        ...(input.attachmentIds ? { attachmentIds: input.attachmentIds } : {}),
+        ...(input.skill ? { skill: input.skill.displayName } : {}),
+      });
+      for (const id of input.attachmentIds ?? []) this.staged.delete(id);
+    }
     const turnId = `turn-${[...this.turns.keys()].indexOf(input.idempotencyKey) + 1}`;
     if (this.loseNextAck) {
       this.loseNextAck = false;
@@ -232,4 +263,58 @@ test("switching chats never retargets in-flight work or lets it touch the new ch
 
 test("a session refuses an adapter for another host", () => {
   assert.throws(() => new ChatSessionControl(new FakeHost(), { hostId: "host-c", chatId: "chat-1" }));
+});
+
+const notes: HostChatAttachmentUpload = { name: "notes.md", mimeType: "text/markdown", kind: "text", text: "# Notes" };
+const shot: HostChatAttachmentUpload = { name: "shot.png", mimeType: "image/png", kind: "image", data: "iVBORw0KGgo=" };
+
+test("attachments are staged on the chat's host and consumed by the turn they were sent with", async () => {
+  const { host, control } = session();
+  await control.send("Read these", { attachments: [notes, shot] });
+
+  const [turn] = [...host.turns.values()];
+  assert.deepEqual(turn, { chatId: "chat-1", text: "Read these", attachmentIds: ["att-1", "att-2"] });
+  assert.equal(host.staged.size, 0, "the turn consumed every upload");
+  assert.deepEqual(host.calls, ["upload:chat-1:notes.md", "upload:chat-1:shot.png", "send:chat-1"]);
+});
+
+test("a lost upload releases the files already confirmed and sends nothing", async () => {
+  const { host, control } = session();
+  host.lostUploads.add(2);
+  await assert.rejects(control.send("Read these", { attachments: [notes, shot] }), {
+    code: "upload_failed",
+    retryable: true,
+  });
+  await Promise.resolve();
+
+  assert.equal(host.turns.size, 0);
+  // The first upload is released; the one whose answer was lost has no known id and expires on the host.
+  assert.deepEqual([...host.staged.keys()], ["att-2"]);
+  assert.equal(control.getSnapshot().unresolved, null, "an upload failure is a plain retryable error, not an unresolved send");
+});
+
+test("a turn the host refuses releases its uploads, while a lost turn keeps them for the retry", async () => {
+  const { host, control } = session();
+  host.refuseNextSend = true;
+  await assert.rejects(control.send("First", { attachments: [notes] }), { code: "busy" });
+  await Promise.resolve();
+  assert.equal(host.staged.size, 0);
+
+  host.loseNextAck = true;
+  await assert.rejects(control.send("Second", { attachments: [notes] }), { code: "outcome_unknown" });
+  assert.equal(host.staged.size, 0, "the host consumed the upload with the turn whose answer was lost");
+  await control.retryUnresolved();
+  assert.equal(host.turns.size, 1, "the retry replayed the same turn");
+  assert.deepEqual([...host.turns.values()][0]?.attachmentIds, ["att-2"]);
+});
+
+test("attachments and skills are refused when the host does not grant them, before anything is uploaded", async () => {
+  const { host, control } = session();
+  host.granted = new Set<HostChatCapability>(["send"]);
+  await assert.rejects(control.send("Read", { attachments: [notes] }), { code: "unsupported" });
+  await assert.rejects(
+    control.send("Run", { skill: { version: 1, invocationId: "skl_review", displayName: "review", source: "workspace" } }),
+    { code: "unsupported" },
+  );
+  assert.deepEqual(host.calls, []);
 });

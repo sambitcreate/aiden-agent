@@ -5,7 +5,11 @@ import type {
   PeerOperation,
 } from "../../renderer/shared/peer-operation.js";
 import { peerRecord, peerText } from "./peer-pairing.js";
-import { MAX_PEER_BINARY_BYTES, type PeerRequest } from "./peer-transport.js";
+import {
+  MAX_PEER_BINARY_BYTES,
+  MAX_PEER_UPLOAD_BYTES,
+  type PeerRequest,
+} from "./peer-transport.js";
 import {
   parseAidenRemoteChatProjection,
   parseAidenRemoteChatSummaryPage,
@@ -31,6 +35,8 @@ const OPERATION_FIELDS = new Set([
 /** Attachment IDs are longer than other host identifiers (contract revision 19). */
 const ATTACHMENT_ID = /^[A-Za-z0-9._:-]{1,256}$/u;
 const PUBLIC_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+/** A staged upload's ID, as `POST /chats/{chatId}/attachments` mints it. */
+const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -121,6 +127,7 @@ export function peerOperationRequest(
   let method: PeerRequest["method"] = "GET";
   let needsKey = false;
   let needsRevision = false;
+  let maxBodyBytes: number | undefined;
   switch (operation) {
     case "server":
       path = "/server";
@@ -306,6 +313,17 @@ export function peerOperationRequest(
       needsKey = true;
       needsRevision = true;
       break;
+    case "uploadAttachment":
+      // Not keyed: an unused staged upload expires on the host, so a retry
+      // after a lost answer only leaves a short-lived orphan behind.
+      path = `/chats/${id()}/attachments`;
+      method = "POST";
+      maxBodyBytes = MAX_PEER_UPLOAD_BYTES;
+      break;
+    case "removeAttachment":
+      path = `/chats/${id()}/attachments/${pattern(input.itemId, STAGED_ATTACHMENT_ID)}`;
+      method = "DELETE";
+      break;
     default:
       throw new Error("Unsupported peer operation.");
   }
@@ -323,5 +341,6 @@ export function peerOperationRequest(
       : {}),
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),
+    ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
   };
 }
