@@ -53,28 +53,28 @@ export interface ChatSessionSnapshot {
 
 const ACTION_LABEL: Record<ChatSessionIntentKind, string> = {
   send: "Your message may not have been sent.",
-  cancel: "The stop request may not have reached this Mac.",
-  respondApproval: "Your approval decision may not have reached this Mac.",
-  answerQuestion: "Your answer may not have reached this Mac.",
-  submitInput: "Your guidance may not have reached this Mac.",
+  cancel: "The stop request may not have reached that Mac.",
+  respondApproval: "Your approval decision may not have reached that Mac.",
+  answerQuestion: "Your answer may not have reached that Mac.",
+  submitInput: "Your guidance may not have reached that Mac.",
   rename: "The rename may not have been applied.",
   remove: "The chat may not have been deleted.",
 };
 
 const OFFLINE_REASON: Record<"connecting" | "offline" | "blocked", string> = {
-  connecting: "Connecting to this Mac…",
-  offline: "This Mac is offline. Nothing is sent until it is back online.",
-  blocked: "This Mac needs attention in Settings before it can be controlled.",
+  connecting: "Connecting to that Mac…",
+  offline: "That Mac is offline. Nothing is sent until it is back online.",
+  blocked: "That Mac needs attention in Settings before it can be controlled.",
 };
 
 const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
-  send: "This Mac doesn't allow sending from here.",
-  cancel: "This Mac doesn't allow stopping runs from here.",
+  send: "That Mac doesn't allow sending from here.",
+  cancel: "That Mac doesn't allow stopping runs from here.",
   respondApproval: "Answer this approval on the other Mac. It doesn't allow approvals from here.",
   answerQuestion: "Answer this question on the other Mac. It doesn't allow answers from here.",
-  steer: "This Mac doesn't allow steering from here.",
-  rename: "This Mac doesn't allow renaming from here.",
-  remove: "This Mac doesn't allow deleting from here.",
+  steer: "That Mac doesn't allow steering from here.",
+  rename: "That Mac doesn't allow renaming from here.",
+  remove: "That Mac doesn't allow deleting from here.",
 };
 
 /**
