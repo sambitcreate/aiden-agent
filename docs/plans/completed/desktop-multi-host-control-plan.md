@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Complete in code; packaged two-machine acceptance outstanding. All nine PRs are implemented. PR 1 (#310) is on main. PRs 2–9 are open as a stack (#313, #314, #315, #318, #311, #316, #317, #319, #336 and PR 9's acceptance PR) and merge in that order. PR 9 added the end-to-end acceptance test over real TLS, the 1/5/10-host budgets below, per-frame coalescing of feed and token updates, and a fix that makes a resumed host-feed stream report itself open at once. Not yet done: the packaged Mac↔Mac run over LAN and Tailscale, and measured idle CPU, wakeups and memory on real machines.
+Status: Complete in code; packaged two-machine acceptance outstanding. All nine PRs are implemented. PR 1 (#310) is on main. PRs 2–9 are open as a stack (#313, #314, #315, #318, #311, #316, #317, #319, #336 and #337) and merge in that order. PR 9 added the end-to-end acceptance test over real TLS, the 1/5/10-host budgets below, per-frame coalescing of feed and token updates, and a fix that makes a resumed host-feed stream report itself open at once. Not yet done: the packaged Mac↔Mac run over LAN and Tailscale, and measured idle CPU, wakeups and memory on real machines.
 Date: 2026-09-09; revised 2026-10-02.
 Source baseline: `d724ff76d` (origin/main, 2026-10-02). Remote contract revision 18.
 
