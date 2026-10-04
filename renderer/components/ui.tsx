@@ -237,16 +237,23 @@ export function Callout({
 export function EmptyState({
   title,
   description,
+  action,
   placement,
+  role,
   className,
 }: {
   title: React.ReactNode;
   description?: React.ReactNode;
+  /** Next step for the user, usually a single shared `Button`. */
+  action?: React.ReactNode;
   placement?: "inline";
+  /** `alert` for failure states that should be announced when they appear. */
+  role?: "alert" | "status";
   className?: string;
 }) {
   return (
     <div
+      role={role}
       className={cn(
         "flex flex-col items-center justify-center px-6 py-10 text-center",
         placement === "inline" && "py-6",
@@ -259,6 +266,7 @@ export function EmptyState({
           {description}
         </Text>
       ) : null}
+      {action ? <div className="mt-4 flex items-center justify-center gap-2">{action}</div> : null}
     </div>
   );
 }

@@ -77,3 +77,30 @@ test("renders model-specific Codex effort levels without an off alias", () => {
   assert.match(markup, />Max</u);
   assert.doesNotMatch(markup, />Off</u);
 });
+
+test("a disabled thinking control names why it is unavailable, and only while disabled", () => {
+  const reason = "Available after this response";
+  const disabled = renderToStaticMarkup(
+    <ThinkingControl
+      level="medium"
+      levels={["low", "medium", "high"]}
+      disabled
+      disabledReason={reason}
+      onChange={() => undefined}
+    />,
+  );
+  const describedBy = disabled.match(/role="radiogroup"[^>]*aria-describedby="([^"]+)"/u)?.[1];
+  assert.ok(describedBy, "the radiogroup is described while disabled");
+  assert.match(disabled, new RegExp(`id="${describedBy}"[^>]*>${reason}<`, "u"));
+
+  const enabled = renderToStaticMarkup(
+    <ThinkingControl
+      level="medium"
+      levels={["low", "medium", "high"]}
+      disabledReason={reason}
+      onChange={() => undefined}
+    />,
+  );
+  assert.doesNotMatch(enabled, /aria-describedby/u);
+  assert.doesNotMatch(enabled, new RegExp(reason, "u"));
+});
