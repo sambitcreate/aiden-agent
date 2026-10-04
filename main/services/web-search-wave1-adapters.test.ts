@@ -322,9 +322,9 @@ test("provider parsers drop result URLs that hide control characters", async () 
       const hostile = url.replace("https://", `https://evil.test${control}`);
       const smuggled = new URL(hostile.replace(control, "")).toString();
       const parsed = parse(replaceString(payload, url, hostile), 2);
-      const urls = parsed?.results.map((result) => result.url) ?? [];
+      const urls: unknown[] = parsed?.results.map((result) => result.url) ?? [];
       assert.equal(urls.includes(smuggled), false, `${JSON.stringify(control)} leaked ${smuggled}`);
-      assert.equal(urls.some((value) => /\p{Cc}/u.test(value ?? "")), false);
+      assert.equal(urls.some((value) => typeof value === "string" && /\p{Cc}/u.test(value)), false);
     }
   }
 });
