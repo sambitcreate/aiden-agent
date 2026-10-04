@@ -558,8 +558,13 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const splitContext = React.useMemo(
+    () => ({ collapsed, toggle, leadingAnchor }),
+    [collapsed, toggle, leadingAnchor],
+  );
+
   return (
-    <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
+    <SplitContext.Provider value={splitContext}>
       <div
         data-compact-sidebar-open={compactOpen ? "true" : "false"}
         className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary"
