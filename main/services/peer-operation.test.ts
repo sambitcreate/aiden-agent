@@ -121,7 +121,7 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
 });
 
-test("expanded peer reads reject malformed DTOs and attachment bytes stay bounded images", () => {
+test("expanded peer reads reject malformed DTOs and attachment bytes stay bounded images", async () => {
   for (const operation of [
     "messagesWindow",
     "skills",
@@ -146,15 +146,15 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "updateBotFavorites",
     "updateBotChatAccess",
   ])
-    assert.throws(() => peerOperationResult({ operation }, {}), operation);
+    await assert.rejects(peerOperationResult({ operation }, {}), operation);
   // `markRead` is a 204: only an empty body satisfies it.
-  assert.equal(peerOperationResult({ operation: "markRead" }, undefined), undefined);
+  assert.equal(await peerOperationResult({ operation: "markRead" }, undefined), undefined);
 
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  const content = peerOperationResult(
+  const content = (await peerOperationResult(
     { operation: "attachmentContent" },
     { mimeType: "image/png", data: png },
-  ) as { mimeType: string; bytes: Uint8Array };
+  )) as { mimeType: string; bytes: Uint8Array };
   assert.equal(content.mimeType, "image/png");
   assert.deepEqual([...content.bytes], [...png]);
   assert.ok(!Buffer.isBuffer(content.bytes));
@@ -163,7 +163,7 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     { mimeType: "image/png", data: Buffer.alloc(0) },
     { mimeType: "image/png", data: "iVBOR" },
   ])
-    assert.throws(() =>
+    await assert.rejects(
       peerOperationResult({ operation: "attachmentContent" }, invalid),
     );
 });

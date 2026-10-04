@@ -329,7 +329,7 @@ export class PeerHostManager {
       };
     }
     try {
-      return { ok: true, value: peerOperationResult(operation, raw) };
+      return { ok: true, value: await peerOperationResult(operation, raw) };
     } catch {
       return {
         ok: false,
@@ -883,7 +883,7 @@ export class PeerHostManager {
     const read = { operation: "chat", resourceId };
     try {
       return {
-        chat: peerOperationResult(
+        chat: await peerOperationResult(
           read,
           await this.options.registry.request(hostId, peerOperationRequest(read)),
         ),

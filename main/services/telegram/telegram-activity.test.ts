@@ -67,3 +67,55 @@ test("thinking and tool activity remain inside the Telegram thread", async () =>
   assert.equal(messages.length, 2);
   assert.ok(messages.every((message) => message.threadId === 11));
 });
+
+test("streamed reasoning sends at most one thinking update per interval, always with the latest text", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
+  const sent: string[] = [];
+  const edits: string[] = [];
+  const projector = createTelegramActivityProjector({
+    api: {
+      async sendMessage(input: { text: string }) {
+        sent.push(input.text);
+        return { message_id: 1, chat: { id: 7, type: "private" }, date: 0 };
+      },
+      async editMessageText(input: { text: string }) { edits.push(input.text); },
+    } as unknown as TelegramBotApi,
+    chatId: 7,
+    draftPreviews: false,
+    verbosity: "thinking",
+    rendering: "html",
+    now: () => Date.now(),
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  projector.observe("chat:reasoning-delta", { delta: "Step 1." });
+  await flush();
+  assert.equal(sent.length, 1, "the first thought appears immediately");
+
+  // Forty deltas inside one window collapse into a single edit.
+  for (let index = 2; index <= 41; index += 1) {
+    t.mock.timers.tick(20);
+    projector.observe("chat:reasoning-delta", { delta: ` Step ${index}.` });
+    await flush();
+  }
+  assert.equal(edits.length, 0, "no edit before the interval elapses");
+  t.mock.timers.tick(900);
+  await flush();
+  assert.equal(edits.length, 1);
+  assert.match(edits[0], /Step 41\.<\/blockquote>$/u);
+
+  // Whitespace-only reasoning renders the same text, so no edit is sent.
+  projector.observe("chat:reasoning-delta", { delta: "   " });
+  t.mock.timers.tick(900);
+  await flush();
+  assert.equal(edits.length, 1);
+
+  // A trailing change is flushed when the turn settles, without waiting for the timer.
+  projector.observe("chat:reasoning-delta", { delta: " Done." });
+  await projector.settle();
+  assert.equal(edits.length, 2);
+  assert.match(edits[1], /Done\.<\/blockquote>$/u);
+  t.mock.timers.tick(5_000);
+  await flush();
+  assert.equal(sent.length + edits.length, 3);
+});

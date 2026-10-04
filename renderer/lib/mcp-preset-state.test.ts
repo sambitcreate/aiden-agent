@@ -113,7 +113,7 @@ test("preset badges distinguish configured, authenticated, and enabled states", 
     mcpPresetConnectionBadge(
       state(oauthPreset, { configured: true, ready: true, enabled: false }),
     ),
-    { label: "Disabled", color: "secondary" },
+    { label: "Disabled", color: "gray" },
   );
   assert.deepEqual(
     mcpPresetConnectionBadge(
