@@ -798,6 +798,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  const thinkingDisabledReason =
+    isStartingGeneration || isGenerating
+      ? "Available after this response"
+      : thinkingSaving
+        ? "Saving thinking level…"
+        : undefined;
   // While a turn runs the harness pushes the authoritative in-turn projection;
   // ambient journal reads (and the draft reset's debounced refresh) would lag
   // behind and overwrite it. The meter resumes ambient reads once it settles.
@@ -2869,6 +2875,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeGoogleThinking(level)}
                     />
                   ) : codexThinkingSupported ? (
@@ -2877,6 +2884,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       level={codexThinkingLevel}
                       levels={codexThinkingLevels}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeCodexThinking(level)}
                     />
                   ) : anthropicThinkingSupported ? (
@@ -2886,6 +2894,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeAnthropicThinking(level)}
                     />
                   ) : providerThinkingSupported ? (
@@ -2895,6 +2904,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={providerThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
                     />
                   ) : localReasoningVisibilitySupported ? (
