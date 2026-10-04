@@ -1749,6 +1749,3 @@ export function isSafeBotCapabilityState(value: unknown): boolean {
   }
 }
 
-export function isSafeBotCapabilityRevisionToken(value: unknown): value is string {
-  return isPathSafeBotCapabilityId(value, BOT_CAPABILITY_LIMITS.revisionChars);
-}

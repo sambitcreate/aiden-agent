@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { validateScriptName } from "./schedule-store-core.js";
 
@@ -33,14 +34,6 @@ export interface ScriptProcessResult {
   aborted: boolean;
 }
 
-function pathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 async function existingScriptInRoot(root: string, script: string): Promise<string | null> {
   const candidate = path.join(root, script);
   try {
@@ -48,7 +41,7 @@ async function existingScriptInRoot(root: string, script: string): Promise<strin
       fs.realpath(root),
       fs.realpath(candidate),
     ]);
-    if (!pathInside(realRoot, realCandidate)) {
+    if (!isPathInside(realRoot, realCandidate)) {
       throw new Error(`Script "${script}" resolves outside ${root}.`);
     }
     const stat = await fs.stat(realCandidate);

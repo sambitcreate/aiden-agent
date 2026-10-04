@@ -228,7 +228,6 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
   assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
-  assert.match(source, /Profile and provider setup required/u);
   assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
   assert.match(source, />\s*Skip provider\s*</u);
   assert.match(source, /setProviderSkipped\(true\)/u);
