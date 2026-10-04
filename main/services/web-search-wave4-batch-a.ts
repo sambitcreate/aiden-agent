@@ -20,7 +20,3 @@ export const WEB_SEARCH_WAVE4_BATCH_A_ADAPTER_FACTORIES: Readonly<
 > = Object.freeze({
   serpdive: serpDiveWebSearchAdapterFactory,
 });
-
-/** Alias for integrations that name the map by its wave rather than batch. */
-export const WEB_SEARCH_WAVE4_ADAPTER_FACTORIES_BATCH_A =
-  WEB_SEARCH_WAVE4_BATCH_A_ADAPTER_FACTORIES;
