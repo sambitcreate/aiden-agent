@@ -35,8 +35,9 @@ import {
 } from "../lib/hosts/remote-new-chat";
 import {
   newChatMachines,
+  createdProjects,
+  reduceCreatedProjects,
   remoteProjectChoices,
-  unlistedProjects,
   type NewChatMachine,
   type RemoteProjectChoice,
 } from "../lib/hosts/new-chat-targets";
@@ -462,17 +463,18 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
     enabled: Boolean(binding) && capabilities.has("createChat") && snapshot?.status.availability === "online",
     staleTime: 60_000,
   });
-  const [created, setCreated] = React.useState<{ hostId: string; projects: RemoteProjectChoice[] }>({ hostId, projects: [] });
+  // Projects created here are offered until the host's feed lists them, whichever answer arrives first.
+  const [created, record] = React.useReducer(reduceCreatedProjects, hostId, createdProjects);
+  React.useEffect(() => {
+    record({ type: "feed", hostId, feed: feed.data });
+  }, [hostId, feed.data]);
   const projects = React.useMemo(
-    () => remoteProjectChoices(feed.data, created.hostId === hostId ? created.projects : []),
+    () => remoteProjectChoices(feed.data, created.hostId === hostId ? created.pending : []),
     [feed.data, created, hostId],
   );
   const adopt = React.useCallback(
     (workspace: HostCreatedWorkspace) => {
-      setCreated((current) => ({
-        hostId,
-        projects: [{ id: workspace.id, name: workspace.name }, ...(current.hostId === hostId ? current.projects : [])],
-      }));
+      record({ type: "created", hostId, project: { id: workspace.id, name: workspace.name } });
       setProject(workspace.id);
     },
     [hostId],
@@ -480,14 +482,6 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
   const [project, setProject] = React.useState<string>(workspaceId ?? "");
   const [model, setModel] = React.useState<HostModelChoice | undefined>(undefined);
   const [browsing, setBrowsing] = React.useState(false);
-
-  // Once the host's feed lists a project this window created, the feed alone speaks for it.
-  React.useEffect(() => {
-    setCreated((current) => {
-      const pending = unlistedProjects(current.projects, feed.data);
-      return pending.length === current.projects.length ? current : { ...current, projects: pending };
-    });
-  }, [feed.data]);
 
   // Preselect the most recent project, then the host's default model, once they are known.
   // A project the host's feed does not list is replaced, so a stale choice never reaches the host.
