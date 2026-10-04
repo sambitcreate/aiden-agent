@@ -193,6 +193,8 @@
         "main/services/workspace-operation-registry.test.ts",
         "main/services/workspace-record-removal.test.ts",
         "main/services/workspace-schedule-restoration.test.ts",
+        "main/shared/guards.test.ts",
+        "main/shared/path-containment.test.ts",
         "main/windows/pill-window-security.test.ts",
         "scripts/check-ci-policy.test.mjs",
         "scripts/ci-changes.test.mjs",

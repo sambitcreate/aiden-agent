@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 
 export type AidenOpaqueHandleKind = "loc" | "cur" | "sel" | "file";
 
@@ -142,8 +142,7 @@ export class AidenOpaqueHandleStore {
     if (claims.rootId !== current.rootId || claims.policyRevision !== current.policyRevision) {
       throw new AidenOpaqueHandleError("root_policy_changed");
     }
-    const relative = path.relative(current.canonicalRootPath, current.canonicalPath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (!isPathInside(current.canonicalRootPath, current.canonicalPath)) {
       throw new AidenOpaqueHandleError("path_outside_root");
     }
     if (
@@ -197,8 +196,7 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
   if (candidate.status === "rejected") throw candidate.reason;
   const canonicalRootPath = root.value;
   const canonicalPath = candidate.value;
-  const relative = path.relative(canonicalRootPath, canonicalPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new AidenOpaqueHandleError("path_outside_root");
+  if (!isPathInside(canonicalRootPath, canonicalPath)) throw new AidenOpaqueHandleError("path_outside_root");
   const identity = await stat(canonicalPath);
   // Another name for a multiply-linked regular file can live outside the root,
   // so the in-root name would expose or mutate that outside file.
