@@ -173,7 +173,22 @@ test("main test lifecycle builds the native worktree remover before GitService t
   const packageManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
   );
-  assert.match(packageManifest.scripts?.pretest ?? "", /^npm run build:worktree-remover(?: &&|$)/u);
+  assert.match(
+    packageManifest.scripts?.["pretest:serial"] ?? "",
+    /^npm run build:worktree-remover(?: &&|$)/u,
+  );
+
+  // `npm test` runs the registry plan: prerequisites finish before any lane.
+  const { buildPlan, parseArguments } = await import("./run-ci-tests.mjs");
+  const registry = JSON.parse(
+    await readFile(path.join(repositoryRoot, "scripts", "ci-test-registry.json"), "utf8"),
+  );
+  const plan = buildPlan(registry, parseArguments(["--parallel"]));
+  const gitLane = plan.unitCommands.find((command) => command.files.includes("main/services/git.test.ts"));
+  assert.ok(gitLane, "GitService tests must run in the default npm test plan");
+  const builder = plan.prerequisites.find((step) => step.command.join(" ") === "npm run build:worktree-remover");
+  assert.ok(builder, "the default plan must build the worktree remover");
+  assert.ok(builder.for.includes(gitLane.lane));
 });
 
 test("descriptor remover deletes nested owned entries without following symlinks", async (t) => {
