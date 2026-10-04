@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -128,6 +129,75 @@ export async function verifyPackagedGenerativeUiLibraries(appPath) {
   }
 }
 
+const PACKAGE_ROOT_MANIFEST = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\/package\.json$/u;
+
+/**
+ * Returns `name@version` for every package the lockfile installs for
+ * production. electron-builder may hoist a nested production copy to the top
+ * of app.asar, so packages are compared by identity rather than install path.
+ */
+export function productionLockfilePackages(lockfile) {
+  const packages = new Set();
+  for (const [key, metadata] of Object.entries(lockfile?.packages ?? {})) {
+    if (!key.includes("node_modules/") || metadata?.dev === true || metadata?.link === true) continue;
+    const name = metadata.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
+    packages.add(`${name}@${metadata.version}`);
+  }
+  return packages;
+}
+
+/**
+ * Rejects app.asar entries that only help development: source maps (kept as
+ * release symbols instead), type declarations, the esbuild toolchain that the
+ * main process never loads, and any package the lockfile installs only for
+ * development, such as renderer libraries that Vite already bundled.
+ *
+ * `manifests` lists each packaged package root as `{ entry, name, version }`.
+ */
+export function assertSlimPackagedEntries(entries, { manifests = [], productionPackages } = {}) {
+  const problems = [];
+  for (const raw of entries) {
+    const entry = raw.replaceAll("\\", "/");
+    if (entry.endsWith(".map")) problems.push(`source map ${entry}`);
+    else if (/\.d\.[cm]?ts$/u.test(entry)) problems.push(`type declaration ${entry}`);
+    else if (/\/node_modules\/(?:esbuild|@esbuild\/[^/]+)(?:\/|$)/u.test(entry)) problems.push(`esbuild toolchain ${entry}`);
+  }
+  if (productionPackages) {
+    for (const { entry, name, version } of manifests) {
+      if (!productionPackages.has(`${name}@${version}`)) {
+        problems.push(`development-only package ${name}@${version} at ${entry}`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    const shown = problems.slice(0, 5).join("; ");
+    const more = problems.length > 5 ? `; and ${problems.length - 5} more` : "";
+    throw new Error(`Packaged app.asar ships development-only files: ${shown}${more}`);
+  }
+}
+
+export async function verifyPackagedSlimness(
+  appAsar,
+  lockfilePath = path.join(repositoryRoot, "package-lock.json"),
+) {
+  await assertRegularFile(appAsar);
+  const lockfile = JSON.parse(await readFile(lockfilePath, "utf8"));
+  const entries = listPackage(appAsar, { isPack: false });
+  const manifests = [];
+  for (const raw of entries) {
+    const entry = raw.replaceAll("\\", "/");
+    if (!PACKAGE_ROOT_MANIFEST.test(entry)) continue;
+    const manifest = JSON.parse(extractFile(appAsar, entry.slice(1)).toString("utf8"));
+    if (typeof manifest.name === "string" && typeof manifest.version === "string") {
+      manifests.push({ entry, name: manifest.name, version: manifest.version });
+    }
+  }
+  assertSlimPackagedEntries(entries, {
+    manifests,
+    productionPackages: productionLockfilePackages(lockfile),
+  });
+}
+
 export function assertPackagedModelCatalogEntries(entries) {
   const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
   if (!normalized.has("/resources/model-capabilities.json")) {
@@ -207,40 +277,98 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
   const bootstrap = extractFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false).toString(
     "utf8",
   );
-  const lockdownIndex = bootstrap.indexOf("Object.defineProperty(childProcess");
-  const promiseLockdownIndex = bootstrap.indexOf('Object.defineProperty(childProcess, "promises"');
-  // The emitted ESM bootstrap names this symbol in its import before any
-  // lockdown code. Match the invocation, not the import declaration.
-  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports();", promiseLockdownIndex);
-  const runtimeImportIndex = bootstrap.indexOf("subagent-inference-worker-runtime.js");
-  const requiredSubprocessNames = [
-    '"exec"',
-    '"execFile"',
-    '"execFileSync"',
-    '"execSync"',
-    '"fork"',
-    '"spawn"',
-    '"spawnSync"',
-  ];
-  if (
-    !bootstrap.includes("Provider credential subprocesses are disabled") ||
-    lockdownIndex < 0 ||
-    promiseLockdownIndex <= lockdownIndex ||
-    promiseLockdownIndex >= syncIndex ||
-    syncIndex <= lockdownIndex ||
-    runtimeImportIndex <= syncIndex ||
-    requiredSubprocessNames.some((name) => {
-      const index = bootstrap.indexOf(name);
-      return index < 0 || index >= lockdownIndex;
-    }) ||
-    !bootstrap.slice(lockdownIndex, syncIndex).includes("configurable: false") ||
-    !bootstrap.slice(lockdownIndex, syncIndex).includes("writable: false") ||
-    !bootstrap.slice(promiseLockdownIndex, syncIndex).includes("Object.freeze") ||
-    bootstrap.includes("@earendil-works/pi-ai/providers/all")
-  ) {
+  const reachable = bootstrap.includes("@earendil-works/pi-ai/providers/all")
+    ? ["bundled provider modules"]
+    : await probeSubagentInferenceBootstrap(bootstrap);
+  if (reachable.length > 0) {
     throw new Error(
-      "Packaged subagent inference bootstrap must disable subprocesses before loading providers.",
+      `Packaged subagent inference bootstrap must disable subprocesses before loading providers. Reachable from the provider runtime: ${reachable.join(", ")}.`,
     );
+  }
+}
+
+const SUBAGENT_SUBPROCESS_ENTRY_POINTS = Object.freeze([
+  "exec",
+  "execFile",
+  "execFileSync",
+  "execSync",
+  "fork",
+  "spawn",
+  "spawnSync",
+]);
+const SUBAGENT_PROMISE_ENTRY_POINTS = Object.freeze(["exec", "execFile", "fork", "spawn"]);
+
+// Stands in for the provider runtime the bootstrap imports. It reports every
+// child_process entry point it can still reach: one that is not a locked
+// property, does not throw the lockdown error, or whose ESM named export still
+// points at Node's original. Calls pass no arguments, so an unlocked original
+// fails argument validation before it could start a process.
+const SUBAGENT_BOOTSTRAP_PROBE = `import childProcess, * as namedExports from "node:child_process";
+const trapped = (entry) => {
+  if (typeof entry !== "function") return false;
+  try {
+    entry();
+  } catch (error) {
+    return error instanceof Error && /subprocesses are disabled/u.test(error.message);
+  }
+  return false;
+};
+const locked = (descriptor) =>
+  descriptor !== undefined && descriptor.configurable === false && descriptor.writable === false;
+const reachable = [];
+for (const name of ${JSON.stringify(SUBAGENT_SUBPROCESS_ENTRY_POINTS)}) {
+  const descriptor = Object.getOwnPropertyDescriptor(childProcess, name);
+  if (!locked(descriptor) || !trapped(descriptor.value)) reachable.push(name);
+  else if (namedExports[name] !== descriptor.value) reachable.push(\`import { \${name} }\`);
+}
+const promises = Object.getOwnPropertyDescriptor(childProcess, "promises");
+for (const name of ${JSON.stringify(SUBAGENT_PROMISE_ENTRY_POINTS)}) {
+  if (!locked(promises) || !Object.isFrozen(promises.value) || !trapped(promises.value[name])) {
+    reachable.push(\`promises.\${name}\`);
+  }
+}
+process.stdout.write(JSON.stringify({ reachable }));
+`;
+
+/**
+ * Runs the packaged bootstrap under Node with a probe in place of the provider
+ * runtime and returns the subprocess entry points the probe could reach. This
+ * checks behavior rather than source text, so minified output is judged the
+ * same as readable output.
+ */
+async function probeSubagentInferenceBootstrap(bootstrap) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-subagent-bootstrap-probe-"));
+  try {
+    await Promise.all([
+      writeFile(path.join(directory, "package.json"), '{"type":"module"}\n'),
+      writeFile(path.join(directory, "subagent-inference-worker.js"), bootstrap),
+      writeFile(
+        path.join(directory, "subagent-inference-worker-runtime.js"),
+        SUBAGENT_BOOTSTRAP_PROBE,
+      ),
+    ]);
+    let stdout;
+    try {
+      ({ stdout } = await executeFile(
+        process.execPath,
+        [path.join(directory, "subagent-inference-worker.js")],
+        { cwd: directory, env: {}, timeout: 30_000, maxBuffer: 64 * 1024 },
+      ));
+    } catch (error) {
+      const detail = typeof error?.stderr === "string" ? error.stderr.trim().slice(-2_000) : "";
+      return [`a bootstrap that failed to load the runtime${detail ? ` (${detail})` : ""}`];
+    }
+    try {
+      const { reachable } = JSON.parse(stdout);
+      if (Array.isArray(reachable) && reachable.every((entry) => typeof entry === "string")) {
+        return reachable;
+      }
+    } catch {
+      // Fall through: no report means the probe runtime never loaded.
+    }
+    return ["a bootstrap that never loaded the runtime"];
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -732,6 +860,7 @@ export async function verifyMacPackage(appPath) {
     await assertRegularFile(file);
   }
   await verifyPackagedModelCatalogResources(appAsar);
+  await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedParakeetWorker(appAsar);
   await verifyPackagedVccWorker(appAsar);
