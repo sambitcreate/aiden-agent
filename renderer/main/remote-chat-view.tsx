@@ -266,6 +266,21 @@ function useRemoteChatSession(host: PeerHostView | undefined, chatId: string): R
 
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {
   const navigate = useNavigate();
+  const manage = React.useCallback(() => {
+    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
+  }, [navigate]);
+  return <RemoteChatRoute hostId={hostId} chatId={chatId} onManage={manage} />;
+}
+
+export interface RemoteChatRouteProps {
+  hostId: string;
+  chatId: string;
+  /** Opens Settings → Remote Access. */
+  onManage(): void;
+}
+
+/** The remote chat route, fed by the host queries the sidebar keeps current. */
+export function RemoteChatRoute({ hostId, chatId, onManage }: RemoteChatRouteProps) {
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
   const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
@@ -273,6 +288,7 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
   const session = useRemoteChatSession(view, chatId);
   const snapshot = React.useSyncExternalStore(
     session?.subscribe ?? subscribeNothing,
+    session?.getSnapshot ?? nothing,
     session?.getSnapshot ?? nothing,
   );
 
@@ -283,14 +299,32 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
       toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
     }
   }, []);
-  const manage = React.useCallback(() => {
-    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
-  }, [navigate]);
   const loadOlder = React.useCallback(() => {
     void session?.loadOlder();
   }, [session]);
 
-  const listed = sidebarHosts(list.data ?? [], statuses.data ?? []).find((entry) => entry.id === hostId);
+  // A direct open or refresh mounts before the sidebar has read the paired hosts.
+  if (list.isPending) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center" aria-label="Loading conversation">
+        <Text variant="small" color="secondary">
+          Loading…
+        </Text>
+      </div>
+    );
+  }
+  if (!list.data) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center">
+        <EmptyState
+          title="Paired Macs could not be read"
+          description={list.error instanceof Error ? list.error.message : "Try again in a moment."}
+        />
+      </div>
+    );
+  }
+  // Until the host reports a status it reads as connecting, not as missing.
+  const listed = sidebarHosts(list.data, statuses.data ?? []).find((entry) => entry.id === hostId);
   if (!view || !listed) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
@@ -316,7 +350,7 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
       snapshot={snapshot}
       onLoadOlder={loadOlder}
       onReconnect={reconnect}
-      onManage={manage}
+      onManage={onManage}
     />
   );
 }
