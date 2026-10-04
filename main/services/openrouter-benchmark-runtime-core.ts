@@ -4,6 +4,7 @@ import {
   type OpenRouterBenchmarkCache,
 } from "./openrouter-benchmark-catalog-core.js";
 import type { ModelInsightsActionErrorCode, ModelInsightsStatus } from "./types.js";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -59,41 +60,17 @@ export function normalizeOpenRouterBenchmarkApiKey(value: unknown): string {
 }
 
 async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new ModelInsightsError(
-      "invalid_response",
-      "OpenRouter returned too much benchmark data.",
-    );
-  }
-  if (!response.body) {
-    throw new ModelInsightsError(
-      "invalid_response",
-      "OpenRouter returned an empty benchmark response.",
-    );
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new ModelInsightsError(
-        "invalid_response",
-        "OpenRouter returned too much benchmark data.",
-      );
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const bytes = await readBoundedBody(response, {
+    maxBytes,
+    errors: {
+      tooLarge: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned too much benchmark data."),
+      missingBody: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned an empty benchmark response."),
+      invalidChunk: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned invalid benchmark data."),
+    },
+  });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {

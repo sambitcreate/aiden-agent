@@ -7,6 +7,7 @@
  * state, errors, or renderer projections.
  */
 
+import { isRecord } from "../shared/guards.js";
 import { WebSearchError, webSearchError } from "./web-search-core.js";
 import type { WebSearchProviderId } from "./web-search-provider-registry-core.js";
 import {
@@ -39,10 +40,6 @@ export const EMPTY_WEB_SEARCH_KEY_POOL_DOCUMENT: WebSearchKeyPoolDocument = Obje
   strategy: "ordered",
   entries: Object.freeze([]),
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Parse a stored index strictly. Anything malformed, duplicated, oversized,

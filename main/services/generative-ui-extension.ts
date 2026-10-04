@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
@@ -98,12 +99,7 @@ function resolveWorkspaceHtml(
   }
   const absolute = path.resolve(root, suppliedPath);
   const relative = path.relative(root, absolute);
-  if (
-    relative === "" ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
+  if (!isPathInside(root, absolute, { allowRoot: false })) {
     throw new Error(`Path "${suppliedPath}" is outside the workspace folder.`);
   }
   const extension = path.extname(absolute).toLowerCase();

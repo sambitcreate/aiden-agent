@@ -11,14 +11,8 @@ import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority
 
 export const SUBAGENT_WEB_PROXY_TIMEOUT_MS = 20_000;
 export const MAX_SUBAGENT_WEB_QUERY_CHARS = 2_000;
-export const MAX_SUBAGENT_WEB_QUERY_BYTES = 8_192;
-export const MAX_SUBAGENT_WEB_REQUEST_BYTES = 8_192;
-export const MAX_SUBAGENT_WEB_RESPONSE_BYTES = 256 * 1_024;
 export const MAX_SUBAGENT_WEB_RESULT_BYTES = 64 * 1_024;
 export const MAX_SUBAGENT_WEB_RESULTS = 10;
-export const MAX_SUBAGENT_WEB_TITLE_BYTES = 512;
-export const MAX_SUBAGENT_WEB_URL_BYTES = 2_048;
-export const MAX_SUBAGENT_WEB_TEXT_BYTES = 4_096;
 
 const WEB_UNAVAILABLE = "Web search is temporarily unavailable.";
 const WEB_DISABLED = "Web search is not available for this child.";
