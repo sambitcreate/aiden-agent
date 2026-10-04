@@ -104,11 +104,6 @@ function utf8Bytes(text: string): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
-/** Whether a string exceeds a UTF-8 byte budget (matches the model encoding). */
-export function utf8Truncated(text: string, maxBytes: number): boolean {
-  return utf8Bytes(text).length > maxBytes;
-}
-
 /**
  * Byte-limit truncation for display/provenance copies — stops at the last
  * complete code point. The scorer itself truncates raw bytes exactly like

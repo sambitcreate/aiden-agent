@@ -6,6 +6,7 @@ import {
   type ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 export const CONCENTRATE_PROVIDER_ID = "concentrate";
 export const CONCENTRATE_PROVIDER_NAME = "Concentrate";
@@ -108,37 +109,13 @@ export function parseConcentrateModels(value: unknown): Model<"openai-responses"
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_CATALOG_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error("Concentrate returned an oversized model catalog.");
-  }
-  if (!response.body) throw new Error("Concentrate returned an empty model catalog.");
-
-  const chunks: Uint8Array[] = [];
-  const reader = response.body.getReader();
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_CATALOG_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("Concentrate returned an oversized model catalog.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const bytes = await readBoundedBody(response, {
+    maxBytes: MAX_CATALOG_BYTES,
+    errors: {
+      tooLarge: () => new Error("Concentrate returned an oversized model catalog."),
+      missingBody: () => new Error("Concentrate returned an empty model catalog."),
+    },
+  });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {
