@@ -1139,6 +1139,34 @@ test("a slow write to one chat does not block writes to another chat", async (t)
   );
 });
 
+test("same-chat calls commit in call order even when index checks finish out of order", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-admission-order-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let delayNextLookup = false;
+  const store = createChatStore(async () => {
+    if (delayNextLookup) {
+      // Hold the first call's index check so the second call's finishes first.
+      delayNextLookup = false;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return directory;
+  });
+  const chat = await store.create({ title: "Ordered" });
+  await store.list();
+
+  delayNextLookup = true;
+  const appended = store.appendMessage(chat.id, { role: "user", content: "first" });
+  const renamed = store.rename(chat.id, "Renamed second");
+
+  await appended;
+  assert.deepEqual(
+    (await renamed).messages.map((message) => message.content),
+    ["first"],
+  );
+});
+
 test("rejects a valid chat payload whose identity differs from its storage key", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-mismatched-id-"),

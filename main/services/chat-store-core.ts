@@ -152,11 +152,16 @@ export function createChatStore(
     };
   }
 
-  async function withLocks<T>(keys: readonly string[], operation: () => Promise<T>): Promise<T> {
+  async function withLocks<T>(
+    keys: readonly string[],
+    operation: () => Promise<T>,
+    onAcquired?: () => void,
+  ): Promise<T> {
     // A stable acquisition order keeps multi-chat operations deadlock-free.
     const releases: Array<() => void> = [];
     try {
       for (const key of [...new Set(keys)].sort()) releases.push(await acquire(key));
+      onAcquired?.();
       return await operation();
     } finally {
       for (const release of releases.reverse()) release();
@@ -278,15 +283,39 @@ export function createChatStore(
     }
   }
 
+  // enterShared() awaits file I/O whose completions are not FIFO, so without an
+  // admission queue a later call on a chat could take that chat's lock first.
+  const admissionTails = new Map<string, Promise<void>>();
+
   async function shared<T>(
     chatIds: readonly string[],
     needsIndex: boolean,
     operation: () => Promise<T>,
   ): Promise<T> {
-    await enterShared(needsIndex);
+    const keys = [...new Set(chatIds)];
+    const prior = keys.map((key) => admissionTails.get(key));
+    let admit!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    for (const key of keys) admissionTails.set(key, admitted);
+    const finishAdmission = () => {
+      admit();
+      for (const key of keys) {
+        if (admissionTails.get(key) === admitted) admissionTails.delete(key);
+      }
+    };
     try {
-      return await withLocks(chatIds, operation);
+      await Promise.all(prior);
+      await enterShared(needsIndex);
+    } catch (error) {
+      finishAdmission();
+      throw error;
+    }
+    try {
+      return await withLocks(chatIds, operation, finishAdmission);
     } finally {
+      finishAdmission();
       leaveShared();
     }
   }
