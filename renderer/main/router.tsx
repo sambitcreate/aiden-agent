@@ -17,6 +17,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { RemoteChatView } from "./remote-chat-view";
+import { RemoteNewChatView } from "./remote-new-chat-view";
+import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
@@ -129,6 +131,25 @@ const hostChatRoute = createRoute({
   staticData: { title: "Remote chat" },
 });
 
+// A new chat that runs on a paired host, in one of that host's projects.
+const hostNewChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/host/$hostId/new",
+  validateSearch: parseRemoteNewChatSearch,
+  component: function HostNewChatRoute() {
+    const { hostId } = hostNewChatRoute.useParams();
+    const { workspaceId } = hostNewChatRoute.useSearch();
+    return (
+      <RemoteNewChatView
+        key={`${hostId}/${workspaceId ?? ""}`}
+        hostId={hostId}
+        {...(workspaceId ? { workspaceId } : {})}
+      />
+    );
+  },
+  staticData: { title: "New remote chat" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -151,6 +172,7 @@ const routeTree = rootRoute.addChildren([
     botRoute,
     botChatRoute,
     hostChatRoute,
+    hostNewChatRoute,
   ]),
   settingsRoute,
 ]);

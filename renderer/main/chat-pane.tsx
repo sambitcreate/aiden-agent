@@ -41,6 +41,8 @@ import { AskUserQuestionExpiryNotice } from "../components/ask-user-question-exp
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
+import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
+import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
@@ -179,6 +181,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
+  const newChatMachines = useNewChatMachines();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(chatId));
@@ -2505,6 +2508,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onOpenFolder={openFolder}
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
+                machinePicker={
+                  // A new chat may run on a paired Mac instead; a Bot's chat stays with its Bot.
+                  isNewChat && !chat.data?.botId && newChatMachines.length > 0 ? (
+                    <RemoteMachinePicker
+                      machines={newChatMachines}
+                      selected="local"
+                      disabled={isGenerating || isStartingGeneration}
+                      onSelect={(machine) => {
+                        if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
+                      }}
+                    />
+                  ) : undefined
+                }
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
