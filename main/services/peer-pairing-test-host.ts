@@ -18,7 +18,10 @@ import os from "node:os";
 import path from "node:path";
 import { AidenRemotePairingService } from "./aiden-remote-pairing.js";
 import { AidenRemotePairingRequestService } from "./aiden-remote-pairing-requests.js";
-import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
+import {
+  createAidenRemoteRequestHandler,
+  type AidenRemoteRouterDependencies,
+} from "./aiden-remote-router.js";
 import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
@@ -50,6 +53,8 @@ export interface PeerTestHost {
   setAccepting(value: boolean): void;
   /** Open a setup-code window for one route and return its code. */
   openSetupCode(route: "lan" | "tailscale"): string;
+  /** Drop every open connection, as a network change or sleep does. */
+  dropConnections(): void;
   /** Serve a new leaf key signed by the same CA, as after a renewal. */
   rotateLeaf(): Promise<void>;
   /** Serve an unrelated identity from a different CA. */
@@ -76,6 +81,10 @@ export async function startPeerTestHost(
     pollTimeoutMs?: number;
     /** A `.local` name the certificate covers and grants carry. */
     lanHostname?: string;
+    /** Host services the router serves besides pairing: chats, runs, the feed. */
+    services?: Partial<
+      Pick<AidenRemoteRouterDependencies, "chats" | "bots" | "hostFeed" | "hostRuns">
+    >;
   } = {},
 ): Promise<PeerTestHost> {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-host-"));
@@ -152,6 +161,7 @@ export async function startPeerTestHost(
       now: Date.now,
       acceptStrippedBasePath,
       log: () => undefined,
+      ...options.services,
     });
     return (request: Parameters<typeof route>[0], response: Parameters<typeof route>[1]) => {
       seen.push(`${request.method} ${request.url?.split("?")[0]}`);
@@ -217,6 +227,9 @@ export async function startPeerTestHost(
         }),
       );
       return window.manualCode;
+    },
+    dropConnections: () => {
+      for (const server of [lan, tailscale]) server.closeAllConnections();
     },
     rotateLeaf: async () => {
       serve(await identityIn(path.join(root, `leaf-${++rotations}`), hostnames, firstDirectory));

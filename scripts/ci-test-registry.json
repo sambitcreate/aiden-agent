@@ -363,6 +363,7 @@
         "main/services/peer-host-pairing.test.ts",
         "main/services/peer-host-registry.test.ts",
         "main/services/peer-lan-addresses.test.ts",
+        "main/services/peer-multi-host-acceptance.test.ts",
         "main/services/peer-operation.test.ts",
         "main/services/peer-pairing-client.test.ts",
         "main/services/peer-remote-chat-control.test.ts",

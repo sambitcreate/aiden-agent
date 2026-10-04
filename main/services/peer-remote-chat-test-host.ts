@@ -478,6 +478,60 @@ class FakeDocument implements PeerHostLiveOwner {
 }
 
 /**
+ * Electron's IPC between main's real live handlers and one renderer
+ * document: invocations and notifications are serialized, and notifications
+ * arrive asynchronously. Pass `broadcast` to the supervisor, then `attach` it
+ * for the renderer's transport.
+ */
+export function rendererIpc() {
+  const frameListeners = new Set<(message: PeerRunFrameMessage) => void>();
+  const stateListeners = new Set<(status: PeerHostStatus) => void>();
+  const delivered: unknown[] = [];
+  const broadcast = (channel: string, payload: unknown): void => {
+    const copy = structuredClone(payload);
+    delivered.push(copy);
+    queueMicrotask(() => {
+      if (channel === PEER_RUN_FRAME_CHANNEL)
+        for (const listener of [...frameListeners]) listener(copy as PeerRunFrameMessage);
+      if (channel === PEER_HOST_STATE_CHANNEL)
+        for (const listener of [...stateListeners]) listener(copy as PeerHostStatus);
+    });
+  };
+  const attach = (manager: PeerHostManager) => {
+    const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+    const document = new FakeDocument();
+    registerPeerHostLiveHandlers<unknown>({
+      handle: (channel, handler) => handlers.set(channel, handler),
+      owner: () => document,
+      manager: () => manager,
+    });
+    const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> =>
+      structuredClone((await handlers.get(channel)!({}, ...structuredClone(args))) as T);
+    const transport: PeerHostTransport = {
+      call: (hostId, operation) => invoke("remote:peerCall", hostId, operation),
+      statuses: () => invoke("remote:peerHostStatuses"),
+      runSubscribe: (hostId, target, afterSequence = 0) =>
+        invoke("remote:peerRunSubscribe", hostId, target, afterSequence),
+      runUnsubscribe: (subscriptionId) => invoke("remote:peerRunUnsubscribe", subscriptionId),
+      onRunFrame: (listener) => {
+        frameListeners.add(listener);
+        return () => {
+          frameListeners.delete(listener);
+        };
+      },
+      onHostState: (listener) => {
+        stateListeners.add(listener);
+        return () => {
+          stateListeners.delete(listener);
+        };
+      },
+    };
+    return { transport, delivered };
+  };
+  return { broadcast, attach };
+}
+
+/**
  * One paired desktop (`deviceId`) with its own main process, opening the
  * host's chat. Two calls with different device IDs are two Macs controlling
  * the same host.
@@ -511,54 +565,15 @@ export async function setup(host: FakeHost, deviceId = "desktop", options: { fra
     client: () => host.client(deviceId),
   });
 
-  // Electron's IPC: notifications are serialized and delivered asynchronously.
-  const frameListeners = new Set<(message: PeerRunFrameMessage) => void>();
-  const stateListeners = new Set<(status: PeerHostStatus) => void>();
-  const delivered: unknown[] = [];
+  const ipc = rendererIpc();
   const manager = new PeerHostManager({
     registry,
-    broadcast: (channel, payload) => {
-      const copy = structuredClone(payload);
-      delivered.push(copy);
-      queueMicrotask(() => {
-        if (channel === PEER_RUN_FRAME_CHANNEL)
-          for (const listener of [...frameListeners]) listener(copy as PeerRunFrameMessage);
-        if (channel === PEER_HOST_STATE_CHANNEL)
-          for (const listener of [...stateListeners]) listener(copy as PeerHostStatus);
-      });
-    },
+    broadcast: ipc.broadcast,
     now: () => timers.now,
     random: () => 0.5,
     timers,
   });
-  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
-  const document = new FakeDocument();
-  registerPeerHostLiveHandlers<unknown>({
-    handle: (channel, handler) => handlers.set(channel, handler),
-    owner: () => document,
-    manager: () => manager,
-  });
-  const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> =>
-    structuredClone((await handlers.get(channel)!({}, ...structuredClone(args))) as T);
-  const transport: PeerHostTransport = {
-    call: (hostId, operation) => invoke("remote:peerCall", hostId, operation),
-    statuses: () => invoke("remote:peerHostStatuses"),
-    runSubscribe: (hostId, target, afterSequence = 0) =>
-      invoke("remote:peerRunSubscribe", hostId, target, afterSequence),
-    runUnsubscribe: (subscriptionId) => invoke("remote:peerRunUnsubscribe", subscriptionId),
-    onRunFrame: (listener) => {
-      frameListeners.add(listener);
-      return () => {
-        frameListeners.delete(listener);
-      };
-    },
-    onHostState: (listener) => {
-      stateListeners.add(listener);
-      return () => {
-        stateListeners.delete(listener);
-      };
-    },
-  };
+  const { transport, delivered } = ipc.attach(manager);
   await manager.whenReady();
   await settle();
   const [view] = await registry.list();
