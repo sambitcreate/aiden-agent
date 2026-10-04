@@ -2,9 +2,6 @@ import { createHash } from "node:crypto";
 
 export const BROWSER_MAX_TABS = 24;
 export const BROWSER_MAX_RESULT_BYTES = 256_000;
-export const BROWSER_ZOOM_LEVELS = [
-  0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5,
-];
 
 export function browserUrl(value: unknown): string {
   if (typeof value !== "string" || value.length > 8_192)

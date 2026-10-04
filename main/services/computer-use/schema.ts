@@ -1,22 +1,5 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
 
-export const COMPUTER_USE_ACTIONS = [
-  "capture",
-  "click",
-  "double_click",
-  "right_click",
-  "middle_click",
-  "drag",
-  "scroll",
-  "type",
-  "key",
-  "set_value",
-  "wait",
-  "list_apps",
-  "list_windows",
-  "focus_app",
-] as const;
-
 const Action = Type.Union([
   Type.Literal("capture"),
   Type.Literal("click"),

@@ -9,7 +9,6 @@ export const FORM_FILL_HELPER_EXECUTABLE = "aiden-cua-s1-forms-helper";
 
 export const FORM_FILL_MAX_REQUEST_BYTES = 262_144;
 export const FORM_FILL_MAX_RESPONSE_BYTES = 262_144;
-export const FORM_FILL_MAX_TEXT_BYTES = 8_192;
 export const FORM_FILL_MAX_OPTIONS = 32;
 export const FORM_FILL_MIN_OPTIONS = 2;
 
