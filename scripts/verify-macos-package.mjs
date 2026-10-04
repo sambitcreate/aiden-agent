@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -276,40 +277,98 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
   const bootstrap = extractFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false).toString(
     "utf8",
   );
-  const lockdownIndex = bootstrap.indexOf("Object.defineProperty(childProcess");
-  const promiseLockdownIndex = bootstrap.indexOf('Object.defineProperty(childProcess, "promises"');
-  // The emitted ESM bootstrap names this symbol in its import before any
-  // lockdown code. Match the invocation, not the import declaration.
-  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports();", promiseLockdownIndex);
-  const runtimeImportIndex = bootstrap.indexOf("subagent-inference-worker-runtime.js");
-  const requiredSubprocessNames = [
-    '"exec"',
-    '"execFile"',
-    '"execFileSync"',
-    '"execSync"',
-    '"fork"',
-    '"spawn"',
-    '"spawnSync"',
-  ];
-  if (
-    !bootstrap.includes("Provider credential subprocesses are disabled") ||
-    lockdownIndex < 0 ||
-    promiseLockdownIndex <= lockdownIndex ||
-    promiseLockdownIndex >= syncIndex ||
-    syncIndex <= lockdownIndex ||
-    runtimeImportIndex <= syncIndex ||
-    requiredSubprocessNames.some((name) => {
-      const index = bootstrap.indexOf(name);
-      return index < 0 || index >= lockdownIndex;
-    }) ||
-    !bootstrap.slice(lockdownIndex, syncIndex).includes("configurable: false") ||
-    !bootstrap.slice(lockdownIndex, syncIndex).includes("writable: false") ||
-    !bootstrap.slice(promiseLockdownIndex, syncIndex).includes("Object.freeze") ||
-    bootstrap.includes("@earendil-works/pi-ai/providers/all")
-  ) {
+  const reachable = bootstrap.includes("@earendil-works/pi-ai/providers/all")
+    ? ["bundled provider modules"]
+    : await probeSubagentInferenceBootstrap(bootstrap);
+  if (reachable.length > 0) {
     throw new Error(
-      "Packaged subagent inference bootstrap must disable subprocesses before loading providers.",
+      `Packaged subagent inference bootstrap must disable subprocesses before loading providers. Reachable from the provider runtime: ${reachable.join(", ")}.`,
     );
+  }
+}
+
+const SUBAGENT_SUBPROCESS_ENTRY_POINTS = Object.freeze([
+  "exec",
+  "execFile",
+  "execFileSync",
+  "execSync",
+  "fork",
+  "spawn",
+  "spawnSync",
+]);
+const SUBAGENT_PROMISE_ENTRY_POINTS = Object.freeze(["exec", "execFile", "fork", "spawn"]);
+
+// Stands in for the provider runtime the bootstrap imports. It reports every
+// child_process entry point it can still reach: one that is not a locked
+// property, does not throw the lockdown error, or whose ESM named export still
+// points at Node's original. Calls pass no arguments, so an unlocked original
+// fails argument validation before it could start a process.
+const SUBAGENT_BOOTSTRAP_PROBE = `import childProcess, * as namedExports from "node:child_process";
+const trapped = (entry) => {
+  if (typeof entry !== "function") return false;
+  try {
+    entry();
+  } catch (error) {
+    return error instanceof Error && /subprocesses are disabled/u.test(error.message);
+  }
+  return false;
+};
+const locked = (descriptor) =>
+  descriptor !== undefined && descriptor.configurable === false && descriptor.writable === false;
+const reachable = [];
+for (const name of ${JSON.stringify(SUBAGENT_SUBPROCESS_ENTRY_POINTS)}) {
+  const descriptor = Object.getOwnPropertyDescriptor(childProcess, name);
+  if (!locked(descriptor) || !trapped(descriptor.value)) reachable.push(name);
+  else if (namedExports[name] !== descriptor.value) reachable.push(\`import { \${name} }\`);
+}
+const promises = Object.getOwnPropertyDescriptor(childProcess, "promises");
+for (const name of ${JSON.stringify(SUBAGENT_PROMISE_ENTRY_POINTS)}) {
+  if (!locked(promises) || !Object.isFrozen(promises.value) || !trapped(promises.value[name])) {
+    reachable.push(\`promises.\${name}\`);
+  }
+}
+process.stdout.write(JSON.stringify({ reachable }));
+`;
+
+/**
+ * Runs the packaged bootstrap under Node with a probe in place of the provider
+ * runtime and returns the subprocess entry points the probe could reach. This
+ * checks behavior rather than source text, so minified output is judged the
+ * same as readable output.
+ */
+async function probeSubagentInferenceBootstrap(bootstrap) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-subagent-bootstrap-probe-"));
+  try {
+    await Promise.all([
+      writeFile(path.join(directory, "package.json"), '{"type":"module"}\n'),
+      writeFile(path.join(directory, "subagent-inference-worker.js"), bootstrap),
+      writeFile(
+        path.join(directory, "subagent-inference-worker-runtime.js"),
+        SUBAGENT_BOOTSTRAP_PROBE,
+      ),
+    ]);
+    let stdout;
+    try {
+      ({ stdout } = await executeFile(
+        process.execPath,
+        [path.join(directory, "subagent-inference-worker.js")],
+        { cwd: directory, env: {}, timeout: 30_000, maxBuffer: 64 * 1024 },
+      ));
+    } catch (error) {
+      const detail = typeof error?.stderr === "string" ? error.stderr.trim().slice(-2_000) : "";
+      return [`a bootstrap that failed to load the runtime${detail ? ` (${detail})` : ""}`];
+    }
+    try {
+      const { reachable } = JSON.parse(stdout);
+      if (Array.isArray(reachable) && reachable.every((entry) => typeof entry === "string")) {
+        return reachable;
+      }
+    } catch {
+      // Fall through: no report means the probe runtime never loaded.
+    }
+    return ["a bootstrap that never loaded the runtime"];
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
