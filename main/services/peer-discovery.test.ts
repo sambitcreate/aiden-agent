@@ -254,7 +254,7 @@ const health = (instanceId: unknown, extra: Record<string, unknown> = {}) => ({
   protocolVersion: 1,
   instanceId,
   displayName: `Desktop ${String(instanceId)}`,
-  contractRevision: 19,
+  contractRevision: 20,
   pairingRequests: false,
   ...extra,
 });
@@ -289,6 +289,7 @@ test("health probes are bounded, time-limited and skip non-Aiden answers", async
     "<html>router login</html>",
     health("desk-c"),
     health("desk-a"),
+    health("desk-d", { contractRevision: 19, pairingRequests: true }),
   ];
   while (answered < peers.length) {
     const next = held.pending[answered];
@@ -309,6 +310,7 @@ test("health probes are bounded, time-limited and skip non-Aiden answers", async
     [
       { id: "desk-a", pairingRequests: true, platform: "linux" },
       { id: "desk-c", pairingRequests: false, platform: undefined },
+      { id: "desk-d", pairingRequests: false, platform: undefined },
     ],
   );
   subject.stop();

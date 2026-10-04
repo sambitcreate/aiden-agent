@@ -4643,7 +4643,7 @@
       "post": {
         "operationId": "createPairingRequest",
         "security": [],
-        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. A mac or linux desktop asks this host to pair. Accepted only while the host's Accept connection requests setting is on (403 pairing_closed otherwise); iphone and ipad requesters receive 403 capability_denied. At most 5 requests per source and 20 overall per minute, 8 open requests overall and 2 per source (429 rate_limited with details.retryAfterSeconds). The request expires 120 s after creation.",
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. A mac or linux desktop asks this host to pair. Accepted only while the host's Accept connection requests setting is on (403 pairing_closed otherwise); iphone and ipad requesters receive 403 capability_denied. At most 5 requests per source and 20 overall per minute, 8 open requests overall and 2 per source (429 rate_limited with details.retryAfterSeconds). The request expires 120 s after creation.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4675,7 +4675,7 @@
       "post": {
         "operationId": "revealPairingRequest",
         "security": [],
-        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. One-shot commit/reveal step: the requester sends its nonce and receives the host nonce committed to by hostCommitment. The host shows its approval prompt only after this call. A second reveal is 409 pairing_already_used; an unknown request or a wrong or missing secret is 404 not_found.",
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. One-shot commit/reveal step: the requester sends its nonce and receives the host nonce committed to by hostCommitment. The host shows its approval prompt only after this call. A second reveal is 409 pairing_already_used; an unknown request or a wrong or missing secret is 404 not_found.",
         "parameters": [
           {
             "name": "requestId",
@@ -4721,7 +4721,7 @@
       "get": {
         "operationId": "pollPairingRequest",
         "security": [],
-        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Long-poll for at most 25 s; answers early on any state change. Only approved carries the sealed grant envelope. Terminal records are kept for 60 s, then 404 not_found. An unknown request or a wrong or missing secret is 404 not_found.",
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Long-poll for at most 25 s; answers early on any state change. Only approved carries the sealed grant envelope. Terminal records are kept for 60 s, then 404 not_found. An unknown request or a wrong or missing secret is 404 not_found.",
         "parameters": [
           {
             "name": "requestId",
@@ -4755,7 +4755,7 @@
       "delete": {
         "operationId": "cancelPairingRequest",
         "security": [],
-        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Requester cancel. A denied, expired or cancelled request reports its state unchanged. Cancelling an approved request revokes its device and reports cancelled, even after the envelope was fetched. The cancel is acknowledged only once the revocation is recorded; otherwise it fails with internal_error and can be retried.",
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Requester cancel. A denied, expired or cancelled request reports its state unchanged. Cancelling an approved request revokes its device and reports cancelled, even after the envelope was fetched. The cancel is acknowledged only once the revocation is recorded; otherwise it fails with internal_error and can be retried.",
         "parameters": [
           {
             "name": "requestId",
@@ -10643,7 +10643,7 @@
       },
 "PairingRequestCreate": {
         "type": "object",
-        "description": "Contract revision 19 (pairing-requests-v1). deviceName is the requester's unauthenticated claim and is shown to the host user as such.",
+        "description": "Contract revision 20 (pairing-requests-v1). deviceName is the requester's unauthenticated claim and is shown to the host user as such.",
         "required": [
           "deviceName",
           "deviceType",
@@ -10901,7 +10901,7 @@
           },
           "pairingRequests": {
             "type": "boolean",
-            "description": "Whether this host accepts desktop pairing requests."
+            "description": "Whether this host accepts desktop pairing requests right now. Only a host at contract revision 20 or newer serves /pairing/requests, so requesters also check contractRevision."
           }
         },
         "additionalProperties": false

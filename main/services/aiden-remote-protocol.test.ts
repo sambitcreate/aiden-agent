@@ -108,7 +108,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 19);
+  assert.equal(fixture.contractRevision, 20);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -365,6 +365,15 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
     }),
     /32 bytes of unpadded base64url/u,
   );
+
+  // Pairing requests arrived in revision 20: a revision-19 fixture still
+  // parses without the section and is refused with it.
+  const revision19 = structuredClone(raw);
+  revision19.contractRevision = 19;
+  record(revision19.hostHealth, "hostHealth").contractRevision = 19;
+  assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
+  delete revision19.pairingRequests;
+  assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
 });
 
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
