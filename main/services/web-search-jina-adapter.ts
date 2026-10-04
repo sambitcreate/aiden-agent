@@ -1,5 +1,6 @@
 /** Jina Search Foundation API adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import { cancelWebSearchResponse } from "./web-search-response.js";
 import {
   WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
@@ -34,10 +35,6 @@ export interface JinaWebSearchApiKeyCredential {
 }
 
 export type JinaWebSearchCredential = JinaWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("jina", value);
@@ -82,19 +79,6 @@ export function buildJinaWebSearchRequest(
   return requestContract(query, numResults, credentialValue(credential));
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 function mapJinaItems(
   items: unknown[],
   maximumResults: number,
@@ -103,7 +87,7 @@ function mapJinaItems(
   const seen = new Set<string>();
   for (const item of items) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({

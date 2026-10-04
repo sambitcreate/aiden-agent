@@ -1,5 +1,6 @@
 /** AnySearch hosted web-search adapter (anonymous or API-key mode). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -29,10 +30,6 @@ export type AnySearchWebSearchCredential =
   | AnySearchWebSearchAnonymousCredential
   | AnySearchWebSearchApiKeyCredential
   | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialMode(value: unknown): "anonymous" | "api-key" {
   if (isRecord(value) && value.mode === "anonymous") return "anonymous";
@@ -96,19 +93,6 @@ export function buildAnySearchWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Parse AnySearch's `{ code: 0, data: { results, metadata } }` envelope.
  * Only source fields are retained; request IDs, quota details, and metadata
@@ -135,7 +119,7 @@ export function parseAnySearchWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.data.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     if (typeof item.title !== "string" || typeof item.snippet !== "string") continue;
     if (item.content !== undefined && item.content !== null && typeof item.content !== "string") {

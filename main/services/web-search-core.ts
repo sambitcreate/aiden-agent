@@ -7,6 +7,7 @@
  * request or loading Electron/secret-store code.
  */
 
+import { isRecord } from "../shared/guards.js";
 import {
   isWebSearchProviderId,
   normalizeWebSearchRouteEntry,
@@ -186,10 +187,6 @@ function hasControlCharacter(value: string): boolean {
     if (code <= 0x1f || code === 0x7f) return true;
   }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Normalize the small model-facing schema and discard no user-visible fields. */

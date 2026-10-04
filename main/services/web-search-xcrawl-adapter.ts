@@ -1,5 +1,6 @@
 /** XCrawl hosted web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -22,10 +23,6 @@ export interface XCrawlWebSearchApiKeyCredential {
 }
 
 export type XCrawlWebSearchCredential = XCrawlWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("xcrawl", value);
@@ -77,19 +74,6 @@ export function buildXCrawlWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Parse XCrawl's completed Search API envelope.  Search metadata and credit
  * accounting remain provider-local; only source evidence crosses the shared
@@ -117,7 +101,7 @@ export function parseXCrawlWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.data.data) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     const title = typeof item.title === "string" && item.title.trim() ? item.title : url;
     const text = typeof item.description === "string" ? item.description : "";

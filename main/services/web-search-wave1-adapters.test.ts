@@ -287,6 +287,48 @@ test("provider parsers normalize deterministic fixtures into bounded untrusted e
   });
 });
 
+test("provider parsers drop result URLs that hide control characters", async () => {
+  const replaceString = (value: unknown, from: string, to: string): unknown => {
+    if (value === from) return to;
+    if (Array.isArray(value)) return value.map((item) => replaceString(item, from, to));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, replaceString(item, from, to)]),
+      );
+    }
+    return value;
+  };
+  const cases = [
+    {
+      parse: parseOpenAIWebSearchResponse,
+      payload: JSON.parse(await fixture("openai-responses", "json-success.json")),
+      url: "https://platform.openai.com/docs/guides/tools-web-search",
+    },
+    {
+      parse: parseBraveWebSearchResponse,
+      payload: JSON.parse(await fixture("brave-search", "json-success.json")),
+      url: "https://api.search.brave.com/app/documentation/web-search",
+    },
+    {
+      parse: parseTavilyWebSearchResponse,
+      payload: JSON.parse(await fixture("tavily-search", "json-success.json")),
+      url: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
+    },
+  ];
+  for (const { parse, payload, url } of cases) {
+    for (const control of ["\t", "\n", "\r", "\u0000", "\u007f"]) {
+      // The WHATWG URL parser strips tab/CR/LF, so the hostile value would
+      // otherwise normalize into the trusted-looking smuggled URL.
+      const hostile = url.replace("https://", `https://evil.test${control}`);
+      const smuggled = new URL(hostile.replace(control, "")).toString();
+      const parsed = parse(replaceString(payload, url, hostile), 2);
+      const urls = parsed?.results.map((result) => result.url) ?? [];
+      assert.equal(urls.includes(smuggled), false, `${JSON.stringify(control)} leaked ${smuggled}`);
+      assert.equal(urls.some((value) => /\p{Cc}/u.test(value ?? "")), false);
+    }
+  }
+});
+
 test("malformed JSON envelopes fail closed without returning provider data", async () => {
   const malformed = [
     parseOpenAIWebSearchResponse(

@@ -139,10 +139,6 @@ const SOURCE_AUTH_KINDS: Readonly<
   "openai-codex": "subscription",
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function own(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
@@ -371,3 +367,4 @@ export function webSearchExistingAuthRendererOptions(
     ),
   );
 }
+import { isRecord } from "../shared/guards.js";

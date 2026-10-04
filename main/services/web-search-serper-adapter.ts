@@ -1,5 +1,6 @@
 /** Serper Google Search API web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -22,10 +23,6 @@ export interface SerperWebSearchApiKeyCredential {
 }
 
 export type SerperWebSearchCredential = SerperWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("serper", value);
@@ -77,19 +74,6 @@ export function buildSerperWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Parse Serper's `{ organic: [...] }` JSON envelope into source evidence. */
 export function parseSerperWebSearchResponse(
   payload: unknown,
@@ -104,7 +88,7 @@ export function parseSerperWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.organic) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.link);
+    const url = normalizeWebSearchSourceUrl(item.link);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({

@@ -7,6 +7,7 @@
  * without learning an endpoint, header, credential, or implementation name.
  */
 
+import { isRecord } from "../shared/guards.js";
 import type { WebSearchExistingAuthRendererSnapshot } from "./web-search-auth-reuse-core.js";
 
 /** The concrete provider ids shipped by Pi Web Access (in its registry order). */
@@ -803,10 +804,6 @@ export interface WebSearchProviderReadiness {
   hasCredential?: boolean;
   /** Existing model-provider auth was explicitly rebound to this provider. */
   hasExistingProviderAuth?: boolean;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function own(value: Record<string, unknown>, key: string): boolean {
