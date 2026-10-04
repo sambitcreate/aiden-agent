@@ -346,6 +346,23 @@ test("with run control, the approval and the question are answered from this Mac
   assert.doesNotMatch(view.text, /Answer it on Studio/);
 });
 
+test("several approvals are answered one at a time, the first with a count and the rest waiting behind it", () => {
+  const two = run([
+    event(1, "run.started", { runId: "run-1", chatId: "chat-1" }),
+    event(2, "approval_required", { approvalId: "ap-1", summary: "Run the release script", toolCallId: "c1", toolName: "run_shell" }),
+    event(3, "approval_required", { approvalId: "ap-2", summary: "Push the tag", toolCallId: "c2", toolName: "run_shell" }),
+  ]);
+  const view = render({ host: online, snapshot: snapshot(online, { run: two }), chat: session(online).chat() });
+
+  assert.equal(view.buttons.filter((node) => /^Deny$/.test(node.textContent ?? "")).length, 1, "one decision at a time");
+  assert.match(view.text, /1 of 2/);
+  const waiting = view.all.find((node) => node.getAttribute("data-remote-approval") === "ap-2");
+  assert.ok(waiting, "the second approval stays visible");
+  assert.equal(waiting.getElementsByTagName("button").length, 0);
+  assert.match(waiting.textContent ?? "", /Push the tag/);
+  assert.match(waiting.textContent ?? "", /Answer the approval above first\./);
+});
+
 test("an approval whose details the host left out can only be denied", () => {
   const omitted = run([
     event(1, "run.started", { runId: "run-1", chatId: "chat-1" }),
