@@ -27,6 +27,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
 import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
@@ -34,13 +35,22 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { AskUserQuestionExpiryNotice } from "../components/ask-user-question-expiry-notice";
+import {
+  AskUserQuestionCountdown,
+  AskUserQuestionExpiryNotice,
+} from "../components/ask-user-question-expiry-notice";
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
+import {
+  approvalShouldTakeFocus,
+  isEditableTypingTarget,
+  isReservedTypingSurface,
+  typingRedirectBlockedByOverlay,
+} from "../lib/composer-type-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import {
   rememberableApprovalScopes,
@@ -791,6 +801,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  const thinkingDisabledReason =
+    isStartingGeneration || isGenerating
+      ? "Available after this response"
+      : thinkingSaving
+        ? "Saving thinking level…"
+        : undefined;
   // While a turn runs the harness pushes the authoritative in-turn projection;
   // ambient journal reads (and the draft reset's debounced refresh) would lag
   // behind and overwrite it. The meter resumes ambient reads once it settles.
@@ -2315,6 +2331,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!pending) return;
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const takeFocus = approvalShouldTakeFocus({
+      typing:
+        isEditableTypingTarget(previousFocus) || isReservedTypingSurface(previousFocus),
+      overlayOpen: typingRedirectBlockedByOverlay(document, previousFocus),
+    });
+    if (!takeFocus) return;
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
     return () => {
       cancelAnimationFrame(frame);
@@ -2487,7 +2509,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   <p className="sr-only" role="status">
                     {invalidPendingPrivilegedApproval
                       ? "Invalid privileged approval blocked"
-                      : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
+                      : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${approvals.length > 1 ? `, 1 of ${approvals.length}` : ""}`}
                   </p>
                   <section
                     ref={approvalCardRef}
@@ -2518,6 +2540,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                   : pendingRunGrant
                                     ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
                                   : `${toolLabel(pending.toolName)} needs approval`}
+                          {approvals.length > 1 ? (
+                            <span className="ml-1.5 font-normal text-tertiary">
+                              1 of {approvals.length}
+                            </span>
+                          ) : null}
                         </Text>
                         <Text variant="small" color="secondary" as="p" className="mt-0.5">
                           {invalidPendingPrivilegedApproval
@@ -2590,22 +2617,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       >
                         {pendingFormFill ? "Cancel" : "Deny"}
                       </Button>
-                      {pendingRememberScopes.map((scope) => (
-                        <Button
-                          key={scope}
-                          variant="transparent"
-                          size="small"
-                          disabled={decidingApprovalId === pending.approvalId}
-                          title={
-                            scope === "always"
-                              ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
-                              : "Remember this exact action in this chat until Aiden quits."
-                          }
-                          onClick={() => void decideApproval(pending, "allow", { scope })}
-                        >
-                          {toolApprovalScopeLabel(scope)}
-                        </Button>
-                      ))}
+                      {pendingRememberScopes.map((scope) => {
+                        const scopeHint =
+                          scope === "always"
+                            ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
+                            : "Remember this exact action in this chat until Aiden quits.";
+                        const scopeHintId = `approval-scope-${scope}-${pending.approvalId}`;
+                        return (
+                          <React.Fragment key={scope}>
+                            <span id={scopeHintId} className="sr-only">
+                              {scopeHint}
+                            </span>
+                            <Button
+                              variant="transparent"
+                              size="small"
+                              disabled={decidingApprovalId === pending.approvalId}
+                              title={scopeHint}
+                              aria-describedby={scopeHintId}
+                              onClick={() => void decideApproval(pending, "allow", { scope })}
+                            >
+                              {toolApprovalScopeLabel(scope)}
+                            </Button>
+                          </React.Fragment>
+                        );
+                      })}
                       {pendingCanAllow ? (
                         <Button
                           variant="accent"
@@ -2670,6 +2705,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {questionnaireExpired ? <AskUserQuestionExpiryNotice state="expired" /> : null}
+            {questionnaire?.expiresAt && !questionnaireExpired ? (
+              <AskUserQuestionCountdown
+                key={questionnaire.promptId}
+                expiresAt={questionnaire.expiresAt}
+              />
+            ) : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}
@@ -2721,7 +2762,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   />
                 }
                 onStop={() => {
-                  messageQueue.discard();
+                  // Stop ends this response only. Queued follow-ups stay
+                  // visible, paused, so the user can resume or delete them.
+                  messageQueue.pause();
                   if (handleStop()) stopRequestedRef.current = true;
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
@@ -2841,6 +2884,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeGoogleThinking(level)}
                     />
                   ) : codexThinkingSupported ? (
@@ -2849,6 +2893,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       level={codexThinkingLevel}
                       levels={codexThinkingLevels}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeCodexThinking(level)}
                     />
                   ) : anthropicThinkingSupported ? (
@@ -2858,6 +2903,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeAnthropicThinking(level)}
                     />
                   ) : providerThinkingSupported ? (
@@ -2867,6 +2913,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={providerThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
                     />
                   ) : localReasoningVisibilitySupported ? (
@@ -2914,24 +2961,51 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       >
         {chat.isLoading || providers.isLoading ? (
-          <div
-            className="flex min-h-full items-center justify-center"
-            aria-label="Loading conversation"
-          >
+          <div role="status" className="flex min-h-full items-center justify-center">
             <Text variant="small" color="secondary">
-              Loading…
+              Loading conversation…
             </Text>
+          </div>
+        ) : chat.isError && messages.length === 0 ? (
+          <div className="flex min-h-full items-center justify-center">
+            <EmptyState
+              role="alert"
+              title="This chat couldn’t be loaded"
+              description="Your messages are still saved. Try loading the chat again."
+              action={
+                <Button
+                  variant="filled"
+                  size="small"
+                  onClick={() => void persistedChat.refetch()}
+                >
+                  Try again
+                </Button>
+              }
+            />
           </div>
         ) : messages.length === 0 && displayedStreamingText === null ? (
           <div className="flex min-h-full items-center justify-center">
-            <EmptyState
-              title="What would you like to work on?"
-              description={
-                (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
-                  ? undefined
-                  : "Set up a provider in Settings to start."
-              }
-            />
+            {(providers.data ?? []).some(
+              (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
+            ) ? (
+              <EmptyState title="What would you like to work on?" />
+            ) : (
+              <EmptyState
+                title="What would you like to work on?"
+                description={`${CONNECT_PROVIDER_ACTION} in ${PROVIDER_SETTINGS_LABEL} to start.`}
+                action={
+                  <Button
+                    variant="filled"
+                    size="small"
+                    onClick={() =>
+                      void navigate({ to: "/settings", search: { section: "providers" } })
+                    }
+                  >
+                    {CONNECT_PROVIDER_ACTION}
+                  </Button>
+                }
+              />
+            )}
           </div>
         ) : (
           <MessageList

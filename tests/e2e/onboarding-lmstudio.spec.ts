@@ -60,7 +60,10 @@ test.describe("fresh portable config", () => {
     const google = onboarding.getByRole("button", { name: "Google Add your API key" });
     await expect(google).toBeEnabled();
     await google.click();
-    await expect(google).toHaveAttribute("aria-pressed", "true");
+    // The setup dialog is modal, so the choice behind it leaves the accessibility tree.
+    await expect(
+      onboarding.getByRole("button", { name: "Google Add your API key", includeHidden: true }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     const setup = aiden.page.getByRole("dialog", { name: "Set up Google" });
     await expect(setup).toBeVisible();
