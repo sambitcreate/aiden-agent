@@ -157,7 +157,7 @@ function reportControlError(control: ChatSessionControl, error: unknown, fallbac
   toast.error(error instanceof Error ? error.message : fallback);
 }
 
-function ReadOnlyApprovalCard({ prompt, hostLabel }: { prompt: ApprovalPrompt; hostLabel: string }) {
+function ReadOnlyApprovalCard({ prompt, reason }: { prompt: ApprovalPrompt; reason: string }) {
   const titleId = `remote-approval-title-${prompt.approvalId}`;
   return (
     <section
@@ -177,7 +177,7 @@ function ReadOnlyApprovalCard({ prompt, hostLabel }: { prompt: ApprovalPrompt; h
             {prompt.summary}
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-1.5">
-            {`Approve or deny it on ${hostLabel}.`}
+            {reason}
           </Text>
         </div>
       </div>
@@ -374,6 +374,10 @@ export function RemoteChatPane({
   const canSend = Boolean(capabilities?.has("send"));
   const questionAnswerable = Boolean(capabilities?.has("answerQuestion"));
   const openQuestion = questionAnswerable && questionRefusal === null && runId ? questions[0] : undefined;
+  const approvalAnswerable = Boolean(capabilities?.has("respondApproval"));
+  // Decisions go out one at a time, so only the first approval takes input and
+  // the rest wait behind it, the way a local chat queues them.
+  const openApproval = approvalAnswerable ? approvals[0] : undefined;
   const isGenerating = live && run?.status === "running";
   const showChatMenu = Boolean(capabilities?.has("rename") || capabilities?.has("remove"));
   const composerKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
@@ -441,21 +445,27 @@ export function RemoteChatPane({
         showScrollToBottomButton
         footer={
           <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
-            {approvals.map((prompt) =>
-              capabilities?.has("respondApproval") ? (
-                <ChatApprovalCard
+            {openApproval ? (
+              <ChatApprovalCard
+                key={openApproval.approvalId}
+                pending={openApproval}
+                deciding={state?.decidingApprovalId === openApproval.approvalId}
+                onDecide={(decision, options) => decide(openApproval, decision, options)}
+                disabledReason={
+                  refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
+                }
+                pendingCount={approvals.length}
+              />
+            ) : null}
+            {approvals
+              .filter((prompt) => prompt !== openApproval)
+              .map((prompt) => (
+                <ReadOnlyApprovalCard
                   key={prompt.approvalId}
-                  pending={prompt}
-                  deciding={state?.decidingApprovalId === prompt.approvalId}
-                  onDecide={(decision, options) => decide(prompt, decision, options)}
-                  disabledReason={
-                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
-                  }
+                  prompt={prompt}
+                  reason={approvalAnswerable ? "Answer the approval above first." : `Approve or deny it on ${host.label}.`}
                 />
-              ) : (
-                <ReadOnlyApprovalCard key={prompt.approvalId} prompt={prompt} hostLabel={host.label} />
-              ),
-            )}
+              ))}
             {questions
               .filter((prompt) => prompt !== openQuestion)
               .map((prompt) => (
