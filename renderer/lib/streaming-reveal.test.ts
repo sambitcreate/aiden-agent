@@ -12,6 +12,7 @@ import {
   STREAMING_REVEAL_HANDOFF_MS,
   parseStreamingReveal,
   revealDelayMs,
+  StreamingRevealParser,
   splitStreamingRevealUnit,
   streamingRevealHandoffDelay,
 } from "./streaming-reveal.js";
@@ -90,8 +91,14 @@ test("withholds ambiguous starters while previewing open code with a stable bloc
   const openClosingFence = units("```ts\nconst answer = 1;\n```");
   const closedClosingFence = units("```ts\nconst answer = 1;\n```\n");
   assert.deepEqual(openClosingFence, beforeClosingFence);
-  assert.deepEqual(closedClosingFence, beforeClosingFence);
+  assert.equal(closedClosingFence[0]?.id, beforeClosingFence[0]?.id);
+  assert.equal(closedClosingFence[0]?.text, beforeClosingFence[0]?.text);
   assert.equal(beforeClosingFence[0]?.text, "```ts\nconst answer = 1;\n```\n");
+  // While open, the fence exposes its raw code so it can render unhighlighted;
+  // a stable closing fence hands it back to the highlighted Markdown path.
+  assert.deepEqual(beforeClosingFence[0]?.openCode, { code: "const answer = 1;\n", lang: "ts" });
+  assert.equal(closedClosingFence[0]?.openCode, undefined);
+  assert.deepEqual(units("~~~\nplain\n")[0]?.openCode, { code: "plain\n" });
 
   const longerFence = units("````md\n```not a closing fence\n````");
   assert.equal(longerFence[0]?.text, "````md\n```not a closing fence\n````\n");
@@ -279,4 +286,32 @@ test("reduced motion removes the final handoff wait", () => {
   assert.equal(streamingRevealHandoffDelay(true), 0);
   assert.equal(streamingRevealHandoffDelay(false), STREAMING_REVEAL_HANDOFF_MS);
   assert.ok(STREAMING_REVEAL_FALLBACK_MS > STREAMING_REVEAL_HANDOFF_MS * 5);
+});
+
+test("incremental parsing matches a full parse at every streamed prefix", () => {
+  const response = [
+    "Here is the plan. It has a few steps.\n\n",
+    "## Steps\n\n",
+    "- Read files\n  - Note details\n- Run tests\n\n",
+    "1. First\n\n2. Second after a gap\n\n",
+    "| a | b |\n| - | - |\n| 1 | 2 |\n\n",
+    "```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n",
+    "> quoted line\n\n",
+    "$$\nx^2\n$$\n\n",
+    "Final words with `code` and **bold**. Done!",
+  ].join("");
+  const parser = new StreamingRevealParser();
+  for (let end = 1; end <= response.length; end += 1) {
+    const prefix = response.slice(0, end);
+    assert.deepEqual(parser.parse(prefix), parseStreamingReveal(prefix), `prefix ${end}`);
+  }
+  assert.deepEqual(parser.parse(response, true), parseStreamingReveal(response, true));
+});
+
+test("incremental parsing starts over when the text is not an append", () => {
+  const parser = new StreamingRevealParser();
+  parser.parse("First paragraph.\n\nSecond paragraph.\n\nThird");
+  const replaced = "Different start.\n\nThen more.";
+  assert.deepEqual(parser.parse(replaced), parseStreamingReveal(replaced));
+  assert.deepEqual(parser.parse(""), []);
 });

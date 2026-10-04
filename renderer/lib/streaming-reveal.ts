@@ -9,6 +9,12 @@ export type StreamingRevealBlockKind = "prose" | "markdown";
 export interface StreamingRevealUnit {
   id: string;
   text: string;
+  /**
+   * Set only while a fenced code block is still open. Its source grows every
+   * line, so it renders as plain monospaced text and is highlighted once the
+   * closing fence (or the end of the turn) settles it.
+   */
+  openCode?: { code: string; lang?: string };
 }
 
 export interface StreamingRevealUnitParts {
@@ -71,19 +77,19 @@ export function splitStreamingRevealUnit(text: string): StreamingRevealUnitParts
   };
 }
 
-function sourceLines(text: string, isComplete: boolean): SourceLine[] {
+function sourceLines(text: string, isComplete: boolean, baseOffset = 0): SourceLine[] {
   const lines: SourceLine[] = [];
   let start = 0;
   while (start < text.length) {
     const newline = text.indexOf("\n", start);
     if (newline >= 0) {
       const value = text.slice(start, newline + 1);
-      lines.push({ start, text: value, body: value.slice(0, -1), closed: true });
+      lines.push({ start: baseOffset + start, text: value, body: value.slice(0, -1), closed: true });
       start = newline + 1;
       continue;
     }
     const value = text.slice(start);
-    lines.push({ start, text: value, body: value, closed: isComplete });
+    lines.push({ start: baseOffset + start, text: value, body: value, closed: isComplete });
     break;
   }
   return lines;
@@ -205,12 +211,21 @@ function proseUnits(
   return units;
 }
 
-function atomicMarkdownBlock(start: number, text: string): StreamingRevealBlock {
+function atomicMarkdownBlock(
+  start: number,
+  text: string,
+  openCode?: StreamingRevealUnit["openCode"],
+): StreamingRevealBlock {
   return {
     id: `markdown-${start}`,
     kind: "markdown",
-    units: [{ id: `markdown-${start}`, text }],
+    units: [{ id: `markdown-${start}`, text, ...(openCode ? { openCode } : {}) }],
   };
+}
+
+/** The language CodeBlock would read from the fence's info string. */
+function fenceLanguage(info: string): string | undefined {
+  return /^\w+/u.exec(info.trim().split(/\s/u)[0] ?? "")?.[0];
 }
 
 function closingFenceIndex(lines: SourceLine[], start: number, marker: string): number {
@@ -233,9 +248,32 @@ function closingFenceIndex(lines: SourceLine[], start: number, marker: string): 
  * unfinished code/table blocks stay withheld until their classification is safe.
  */
 export function parseStreamingReveal(text: string, isComplete = false): StreamingRevealBlock[] {
-  if (!text) return [];
-  const lines = sourceLines(text, isComplete);
+  return parseStreamingRevealRange(text, isComplete, 0).blocks;
+}
+
+interface StreamingRevealRange {
+  blocks: StreamingRevealBlock[];
+  /** Characters of `text` before the last top-level blank line's end. */
+  stableLength: number;
+  /** Blocks wholly before `stableLength`; later text cannot change them. */
+  stableBlockCount: number;
+}
+
+/**
+ * Parse `text`, whose first character sits at `baseOffset` in the response.
+ * A closed blank line at the top level resets every piece of parser state and
+ * no earlier line looks past it, so blocks before it are final.
+ */
+function parseStreamingRevealRange(
+  text: string,
+  isComplete: boolean,
+  baseOffset: number,
+): StreamingRevealRange {
+  if (!text) return { blocks: [], stableLength: 0, stableBlockCount: 0 };
+  const lines = sourceLines(text, isComplete, baseOffset);
   const blocks: StreamingRevealBlock[] = [];
+  let stableLength = 0;
+  let stableBlockCount = 0;
   let paragraphStart = -1;
   let paragraph = "";
 
@@ -274,17 +312,32 @@ export function parseStreamingReveal(text: string, isComplete = false): Streamin
         .slice(index, closingFenceStable ? sourceEnd : closedFence ? end : sourceEnd)
         .map((entry) => entry.text)
         .join("");
+      let openCode: StreamingRevealUnit["openCode"];
       if (!closingFenceStable) {
         if (!source.endsWith("\n")) source += "\n";
         source += `${marker}\n`;
+        const code = lines
+          .slice(index + 1, closedFence ? end : sourceEnd)
+          .map((entry) => entry.text)
+          .join("");
+        // An indented fence strips its indent from the code lines; leave that
+        // rare shape to the Markdown renderer rather than re-implementing it.
+        if (line.body.startsWith(marker)) {
+          const lang = fenceLanguage(trimmed.slice(marker.length));
+          openCode = lang ? { code, lang } : { code };
+        }
       }
-      blocks.push(atomicMarkdownBlock(line.start, source));
+      blocks.push(atomicMarkdownBlock(line.start, source, openCode));
       index = sourceEnd - 1;
       continue;
     }
 
     if (!trimmed) {
       flushParagraph(true);
+      if (line.closed) {
+        stableLength = line.start - baseOffset + line.text.length;
+        stableBlockCount = blocks.length;
+      }
       continue;
     }
 
@@ -352,7 +405,33 @@ export function parseStreamingReveal(text: string, isComplete = false): Streamin
   }
 
   flushParagraph(isComplete, isComplete);
-  return blocks;
+  return { blocks, stableLength, stableBlockCount };
+}
+
+/**
+ * Incremental `parseStreamingReveal` for an append-only stream: blocks before
+ * the last top-level blank line are kept, and only the text after it is
+ * reparsed, so each delta costs the open tail instead of the whole response.
+ * Any non-append change (reset, retry) falls back to a full parse.
+ */
+export class StreamingRevealParser {
+  private stablePrefix = "";
+  private stableBlocks: StreamingRevealBlock[] = [];
+
+  parse(text: string, isComplete = false): StreamingRevealBlock[] {
+    if (!text.startsWith(this.stablePrefix)) {
+      this.stablePrefix = "";
+      this.stableBlocks = [];
+    }
+    const base = this.stablePrefix.length;
+    const tail = parseStreamingRevealRange(text.slice(base), isComplete, base);
+    const blocks = this.stableBlocks.length ? this.stableBlocks.concat(tail.blocks) : tail.blocks;
+    if (tail.stableLength > 0) {
+      this.stablePrefix = text.slice(0, base + tail.stableLength);
+      this.stableBlocks = blocks.slice(0, this.stableBlocks.length + tail.stableBlockCount);
+    }
+    return blocks;
+  }
 }
 
 export function revealDelayMs(pendingUnits: number, isComplete: boolean): number {

@@ -342,6 +342,9 @@ export class BrowserService {
     this.terminalTails.set(workspaceId, tail);
     if (this.terminalTails.size > 100)
       this.terminalTails.delete(this.terminalTails.keys().next().value!);
+    // Only output near a URL scheme can announce a server; skip the regex scan
+    // for the ordinary build and log chunks that dominate terminal traffic.
+    if (!tail.slice(-(data.length + 256)).includes("://")) return;
     const servers = browserLocalServers(tail);
     if (!servers.length) return;
     const workspace = this.workspace(workspaceId);

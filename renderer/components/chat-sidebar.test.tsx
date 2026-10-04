@@ -198,24 +198,21 @@ test("workspace pull request indicators surface checks without owning GitHub sec
   assert.match(sidebar, /window\.open\(url, "_blank", "noopener,noreferrer"\)/u);
   assert.match(
     sidebar,
-    /const explicitlyExpanded = expandedWorkspaceIds\.has\(group\.workspace\.id\)/u,
+    /const explicitlyExpanded = expandedWorkspaceIds\.has\(workspace\.id\)/u,
   );
   assert.match(
     sidebar,
-    /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{group\.workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*group\.workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
+    /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
   );
   assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
   assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
 });
 
-test("workspace outline and recent view are alternate projections, not duplicate lists", () => {
+test("workspace outline expands groups without creating or opening chats", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
-  assert.match(sidebar, /projectSidebarWorkspaces\(workspaces, chats\.data \?\? \[\], search\)/u);
-  assert.match(sidebar, /organization === "workspace" \? \(/u);
-  assert.match(sidebar, /Recent only/u);
-  assert.match(sidebar, /expandedWorkspaceIds\.has\(group\.workspace\.id\)/u);
-  assert.match(sidebar, /onClick=\{\(\) => toggleWorkspace\(group\.workspace\.id\)\}/u);
+  assert.match(sidebar, /expandedWorkspaceIds\.has\(workspace\.id\)/u);
+  assert.match(sidebar, /onClick=\{\(\) => toggleWorkspace\(workspace\.id\)\}/u);
   assert.doesNotMatch(
     between(sidebar, "const toggleWorkspace", "const revealWorkspace"),
     /chatsApi\.create|navigate\(/u,
@@ -230,25 +227,13 @@ test("workspace outline and recent view are alternate projections, not duplicate
   assert.doesNotMatch(latestChatAction, /enterWorkspace|chatsApi\.create/u);
 });
 
-test("chat shortcuts follow the rows rendered by the active organization", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /const renderedChats = React\.useMemo/u);
-  assert.match(sidebar, /expandedWorkspaceIds\.has\(group\.workspace\.id\)/u);
-  assert.match(sidebar, /group\.chats\.slice\(0, COLLAPSED_WORKSPACE_CHAT_LIMIT\)/u);
-  assert.match(
-    sidebar,
-    /const shortcutGroups = React\.useMemo\(\(\) => groupChats\(renderedChats\)/u,
-  );
-  assert.match(sidebar, /createSidebarChatShortcutAssignments\(shortcutGroups\)/u);
-});
-
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useWorkspacePathPreferences/u);
   assert.match(source("../lib/workspace-path-display.ts"), /function workspaceSecondaryLabel/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(workspace, pathPreferences, workspaces\)\}`\}/u,
   );
   assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
   assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
@@ -281,19 +266,8 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(workspace, pathPreferences, workspaces\)\}`\}/u,
   );
-});
-
-test("sidebar organizer icons retain contrast on the highlighted accent surface", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const organizer = between(
-    sidebar,
-    "const sidebarOrganizationMenu",
-    "const workspaceCreationMenu",
-  );
-
-  assert.equal(organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length, 2);
 });
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
@@ -312,7 +286,7 @@ test("managed worktrees expose only the recovery-aware delete action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(
     sidebar,
-    /group\.workspace\.managedWorktree[\s\S]+Delete worktree…[\s\S]+!group\.workspace\.managedWorktree[\s\S]+Remove “\{group\.workspace\.name\}”/u,
+    /workspace\.managedWorktree[\s\S]+Delete worktree…[\s\S]+!workspace\.managedWorktree[\s\S]+Remove “\{workspace\.name\}”/u,
   );
 });
 
