@@ -9,7 +9,8 @@ import {
   type HostChatTurnReceipt,
 } from "./host-chat-adapter";
 import type { HostCreatedChat, HostCreatedWorkspace, HostNewChatInput, HostWorkspaceCreate } from "./host-resources";
-import { RemoteNewChatControl, type RemoteNewChatHost } from "./remote-new-chat";
+import { ChatIntentLedger } from "./chat-intent-ledger";
+import { RemoteNewChatControl, RemoteNewChatMemory, type RemoteNewChatHost } from "./remote-new-chat";
 
 const lost = () => new HostChatControlError({ code: "outcome_unknown", message: "lost" });
 
@@ -21,7 +22,7 @@ const lost = () => new HostChatControlError({ code: "outcome_unknown", message: 
 class FakeHost implements RemoteNewChatHost {
   readonly hostId = "host-b";
   current: HostChatStatus = { availability: "online", generation: 1 };
-  granted = new Set<HostChatCapability>(["send", "attach", "createChat", "createWorkspace", "botChats"]);
+  granted = new Set<HostChatCapability>(["send", "attach", "createChat", "createWorkspace", "browseFolders", "botChats"]);
   readonly chats = new Map<string, HostCreatedChat & { model?: HostNewChatInput["model"] }>();
   readonly workspaces = new Map<string, HostCreatedWorkspace>();
   readonly turns = new Map<string, { chatId: string; text: string; attachmentIds?: string[] }>();
@@ -30,6 +31,12 @@ class FakeHost implements RemoteNewChatHost {
   readonly calls: string[] = [];
   lose = new Set<"create" | "send" | "workspace" | "bot">();
   refuse = new Set<"create" | "send">();
+  /** The next send is lost on the way: the host never sees it. */
+  vanish = false;
+  /** Unused uploads the host keeps per chat before refusing more, like the real host's limit. */
+  uploadLimit = Infinity;
+  /** Single-use folder selections, by token. */
+  readonly selections = new Map<string, string>();
   private uploads = 0;
 
   capabilities() {
@@ -63,9 +70,20 @@ class FakeHost implements RemoteNewChatHost {
     this.calls.push(`createWorkspace:${body.mode}`);
     let id = this.ledger.get(key);
     if (!id) {
+      let name = body.mode === "folderless" ? body.name : "Scratch";
+      if (body.mode === "selected-folder") {
+        // A selection is spent once, and a folder is registered as one project.
+        const location = this.selections.get(body.selection);
+        if (!location) throw new HostChatControlError({ code: "invalid_request", message: "That folder selection expired." });
+        this.selections.delete(body.selection);
+        if ([...this.workspaces.values()].some((workspace) => workspace.name === location)) {
+          throw new HostChatControlError({ code: "already_exists", message: "That folder is already a project." });
+        }
+        name = location;
+      }
       id = `ws-${this.workspaces.size + 1}`;
       this.ledger.set(key, id);
-      this.workspaces.set(id, { id, name: body.mode === "folderless" ? body.name : "Scratch" });
+      this.workspaces.set(id, { id, name });
     }
     this.drop("workspace");
     return this.workspaces.get(id)!;
@@ -80,7 +98,14 @@ class FakeHost implements RemoteNewChatHost {
     this.drop("bot");
     return chat;
   }
+  async selectFolder(location: string) {
+    this.calls.push(`select:${location}`);
+    const selection = `sel-${this.selections.size + this.calls.length}`;
+    this.selections.set(selection, location);
+    return { selection, displayName: location };
+  }
   async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
+    if (this.staged.size >= this.uploadLimit) throw new HostChatControlError({ code: "rate_limited", message: "Too many unused attachments." });
     this.uploads += 1;
     const id = `att-${this.uploads}`;
     this.calls.push(`upload:${chatId}:${upload.name}`);
@@ -93,6 +118,10 @@ class FakeHost implements RemoteNewChatHost {
   }
   async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.calls.push(`send:${chatId}`);
+    if (this.vanish) {
+      this.vanish = false;
+      throw lost();
+    }
     if (this.refuse.delete("send")) throw new HostChatControlError({ code: "busy", message: "Busy." });
     if (!this.turns.has(input.idempotencyKey)) {
       this.turns.set(input.idempotencyKey, {
@@ -108,10 +137,10 @@ class FakeHost implements RemoteNewChatHost {
   }
 }
 
-function control(host = new FakeHost()) {
-  const value = new RemoteNewChatControl(host);
+function control(host = new FakeHost(), memory = { ledger: new ChatIntentLedger(), memory: new RemoteNewChatMemory() }) {
+  const value = new RemoteNewChatControl(host, memory);
   value.attach();
-  return { host, control: value };
+  return { host, control: value, memory };
 }
 
 const target: HostNewChatInput = { workspaceId: "ws-b", model: { providerId: "acme", modelId: "fast" } };
@@ -232,4 +261,65 @@ test("opening a Bot's chat returns the host's canonical chat for that Bot", asyn
   const again = await c.openBotChat("bot-1");
   assert.equal(first, again);
   assert.equal([...host.chats.values()].filter((chat) => chat.botId === "bot-1").length, 1);
+});
+
+test("a lost first turn and a lost create both survive the control being rebuilt", async () => {
+  const { host, control: first, memory } = control();
+  host.lose.add("create");
+  await assert.rejects(first.start(target, "Hello"), { code: "create_unconfirmed" });
+
+  // Leaving the page, or a grants change, builds a new control for the same host.
+  const second = new RemoteNewChatControl(host, memory);
+  second.attach();
+  host.lose.add("send");
+  await assert.rejects(second.start(target, "Hello", [notes]), { code: "outcome_unknown" });
+  assert.equal(host.chats.size, 1, "the rebuilt control reused the lost create's key");
+
+  const third = new RemoteNewChatControl(host, memory);
+  third.attach();
+  assert.equal(third.getSnapshot().unresolved?.text, "Hello", "the unresolved first turn is still offered");
+  assert.equal(await third.retryUnresolved(), "chat-1");
+  assert.equal(host.turns.size, 1, "the retry replayed the original turn");
+  assert.equal(second.getSnapshot().unresolved, null, "every control sees it resolved");
+});
+
+test("choosing the same folder again after a lost answer makes one project", async () => {
+  const { host, control: c } = control();
+  host.lose.add("workspace");
+  await assert.rejects(c.createFolderWorkspace("launch"), { code: "outcome_unknown" });
+  const created = await c.createFolderWorkspace("launch");
+  assert.equal(created.name, "launch");
+  assert.equal(host.workspaces.size, 1);
+  assert.equal(host.calls.filter((call) => call.startsWith("select:")).length, 1, "the retry replayed the original selection");
+
+  // A definite answer ends the intent: the next choice is a new request with a new selection.
+  await assert.rejects(c.createFolderWorkspace("launch"), { code: "already_exists" });
+  await assert.rejects(c.createFolderWorkspace("launch"), { code: "already_exists" });
+  assert.equal(host.calls.filter((call) => call.startsWith("select:")).length, 3, "a refused request is not replayed");
+});
+
+test("dismissing a first turn that never arrived frees its uploads for the next chat", async () => {
+  const { host, control: c } = control();
+  host.uploadLimit = 1;
+  host.vanish = true;
+  await assert.rejects(c.start(target, "Hello", [notes]), { code: "outcome_unknown" });
+  assert.equal(host.staged.size, 1);
+
+  c.dismissUnresolved();
+  await c.start({ workspaceId: "ws-c" }, "Hello again", [notes]);
+  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Hello again"]);
+});
+
+test("a first turn the host refuses on retry frees its uploads, and the next send reuses the empty chat", async () => {
+  const { host, control: c } = control();
+  host.uploadLimit = 1;
+  host.vanish = true;
+  await assert.rejects(c.start(target, "Hello", [notes]), { code: "outcome_unknown" });
+
+  host.refuse.add("send");
+  await assert.rejects(c.retryUnresolved(), { code: "busy" });
+  assert.equal(c.getSnapshot().unresolved, null);
+  const started = await c.start(target, "Hello again", [notes]);
+  assert.equal(started.chatId, "chat-1");
+  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Hello again"]);
 });

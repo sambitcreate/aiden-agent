@@ -345,9 +345,8 @@ function RemoteFolderBrowserDialog({
     if (!location) return;
     setBusy(true);
     try {
-      // The selection is single-use and expires, so it is minted just before it is spent.
-      const selection = await adapter.selectFolder(location.location);
-      const workspace = await control.createWorkspace({ mode: "selected-folder", selection: selection.selection });
+      // The control mints the single-use selection just before spending it, and replays it after a lost answer.
+      const workspace = await control.createFolderWorkspace(location.location);
       onCreated(workspace);
       onOpenChange(false);
     } catch (error) {

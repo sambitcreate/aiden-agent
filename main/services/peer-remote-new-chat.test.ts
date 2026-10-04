@@ -10,7 +10,9 @@ import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
 import { HostChatControlError, isOutcomeUnknown } from "../../renderer/lib/hosts/host-chat-adapter.js";
 import { defaultHostModel } from "../../renderer/lib/hosts/host-resources.js";
 import { remoteAttachmentUploads } from "../../renderer/lib/hosts/remote-attachments.js";
-import { RemoteNewChatControl } from "../../renderer/lib/hosts/remote-new-chat.js";
+import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
+import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
+import { RemoteNewChatControl, RemoteNewChatMemory } from "../../renderer/lib/hosts/remote-new-chat.js";
 
 /**
  * Starting work on another Mac end to end: the new-chat control over the
@@ -111,6 +113,9 @@ class StudioHost {
             const location = this.selections.get(String(body.selection));
             if (location !== LAUNCH) throw new AidenRemoteServiceError("invalid_request", "That folder selection expired.", 400);
             this.selections.delete(String(body.selection));
+            if ([...this.workspaces.values()].some((workspace) => workspace.name === "launch")) {
+              throw new AidenRemoteServiceError("already_exists", "That folder is already registered as an Aiden workspace.", 409);
+            }
             name = "launch";
           }
           const id = `ws-${this.workspaces.size + 1}`;
@@ -210,9 +215,10 @@ class StudioHost {
 
 async function start(studio: StudioHost) {
   const harness = await setup(studio.host);
-  const control = new RemoteNewChatControl(harness.adapter);
+  const ledger = new ChatIntentLedger();
+  const control = new RemoteNewChatControl(harness.adapter, { ledger, memory: new RemoteNewChatMemory() });
   control.attach();
-  return { harness, control };
+  return { harness, control, ledger };
 }
 
 test("a new chat on B starts in B's project with B's model, and its attachments are staged and used there", async () => {
@@ -304,6 +310,32 @@ test("a first message whose answer was lost is retried with its key and never se
   }
 });
 
+test("a first message lost on B is offered in that chat once opened, and its retry there sends it once", async () => {
+  const studio = new StudioHost();
+  const { harness, control, ledger } = await start(studio);
+  try {
+    studio.drop.turn = 1;
+    const uploads = remoteAttachmentUploads([
+      { id: "local-1", kind: "text", name: "brief.md", mimeType: "text/markdown", size: 12, text: "# Launch plan" },
+    ]);
+    await assert.rejects(control.start({ workspaceId: "ws-site" }, "Ship it", uploads), isOutcomeUnknown);
+    const chatId = control.getSnapshot().unresolved?.chatId;
+    assert.ok(chatId);
+
+    // Open chat: the chat's own session, on the same window ledger, shows the message and retries it.
+    const session = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId }, ledger);
+    session.attach();
+    assert.equal(session.getSnapshot().unresolved?.text, "Ship it");
+    await session.retryUnresolved();
+    assert.deepEqual(studio.turns.map((turn) => turn.text), ["Ship it"], "the retry replayed the original turn");
+    assert.equal(studio.turns[0]?.attachments.length, 1, "with the uploads it was staged with");
+    assert.equal(session.getSnapshot().unresolved, null);
+    assert.equal(control.getSnapshot().unresolved, null, "the new-chat page no longer offers it");
+  } finally {
+    harness.close();
+  }
+});
+
 test("a folder browsed on B becomes B's project, and a lost answer still makes one project", async () => {
   const studio = new StudioHost();
   const { harness, control } = await start(studio);
@@ -316,16 +348,20 @@ test("a folder browsed on B becomes B's project, and a lost answer still makes o
     const launch = page.value.entries.find((entry) => entry.name === "launch");
     assert.ok(launch);
 
-    const { selection } = await harness.adapter.selectFolder(launch.location);
     studio.drop.workspace = 1;
-    const body = { mode: "selected-folder" as const, selection };
-    await assert.rejects(control.createWorkspace(body), isOutcomeUnknown);
-    const created = await control.createWorkspace(body);
+    await assert.rejects(control.createFolderWorkspace(launch.location), isOutcomeUnknown);
+    // Choosing the same folder again replays the original request instead of being refused as already registered.
+    const created = await control.createFolderWorkspace(launch.location);
     assert.equal(created.name, "launch");
     assert.equal(
       [...studio.workspaces.values()].filter((workspace) => workspace.name === "launch").length,
       1,
       "the retry reused its key instead of spending the selection twice",
+    );
+    assert.equal(
+      studio.requests(0).filter((request) => request === "POST /workspace-browser/selections").length,
+      1,
+      "one selection was minted for the one project",
     );
 
     const started = await control.start({ workspaceId: created.id }, "Set up the repo");
