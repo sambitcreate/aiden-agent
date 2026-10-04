@@ -1,6 +1,6 @@
 # Multi-host PR 7: remote control
 
-Status: **In progress**. Row 7 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 6 ([remote chat view](desktop-multi-host-pr6-remote-chat-view.md)).
+Status: **In review**. Row 7 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 6 ([remote chat view](desktop-multi-host-pr6-remote-chat-view.md)).
 
 PR 6 made a paired host's chat viewable. This PR makes it controllable from this Mac: send, stop, approvals, questions, steer and queue, rename and delete, through the same adapter interface the local pane now uses.
 
@@ -27,6 +27,7 @@ PR 6 made a paired host's chat viewable. This PR makes it controllable from this
   - A send keeps its idempotency key until the host confirms it.
   - On `outcome_unknown` the composer is cleared and a reconciliation notice says the message may not have been sent. **Retry** resends with the same key, so the host returns the original turn instead of starting a second one. **Dismiss** forgets the intent.
   - Nothing is resent automatically.
+- **Files and Git.** A remote chat has no Environment, Files or Git surface yet, so nothing there can act on another Mac. When those views arrive they are read-only for remote chats.
 - **Drafts.** A remote chat's draft key is `hostResourceKey({hostId, resourceId: chatId})`, so it never collides with a local chat of the same ID. Local draft keys are unchanged.
 - **Peer errors.** `PeerOperationError` passes through the host's sanitized `details` (decision, outcome, resolvedAt, currentRevision), so the renderer can name an approval race's winner. This is not a host contract change.
 - **Translator.** A remote approval can be allowed when the host sent its exact details (`detailsOmitted` absent). The prompt keeps the details so the same specialized cards render.
@@ -42,14 +43,14 @@ PR 6 made a paired host's chat viewable. This PR makes it controllable from this
 
 ## Tests
 
-- `main/services/peer-remote-chat-control.test.ts` wires the real PR 2 host run registry and run-control service, an idempotency ledger for turns, PR 3's peer manager and IPC, and the renderer adapter in-process. It covers:
-  - a lost send acknowledgement with a same-key retry, which produces one turn;
+- `main/services/peer-remote-chat-control.test.ts` wires the real PR 2 host run registry, run-control service and idempotency ledger, PR 3's peer manager and live IPC handlers, and the renderer adapter and session control in-process. The harness (`peer-remote-chat-test-host.ts`) is shared with the PR 6 view suite. It covers:
+  - a lost send acknowledgement with a same-key retry, which produces one turn and one transcript message;
+  - an answer that lands after the connection changed, which is fenced as outcome unknown and retried without a second turn;
   - stopping a run started on the host;
-  - an approval race between two controllers, which resolves once and shows the loser the winner's decision;
-  - question answering;
-  - steer;
-  - offline refusal;
-  - a generation change during a mutation.
+  - an approval race between two Macs, which resolves once and shows the loser the winner's decision;
+  - question answering and steer;
+  - an unreachable host refusing every mutation, with nothing sent once it is back;
+  - the same `ChatSessionControl` driving a local chat (through `LocalHostAdapter`) and a remote one to the same outcome.
 - `renderer/lib/hosts/chat-session-control.test.ts`: host binding, offline gating, reconciliation and retry with the same key, approval "elsewhere" notices.
 - `renderer/lib/hosts/local-host-adapter.test.ts`: the local adapter delegates to the existing local APIs.
 - `renderer/main/remote-chat-view.test.tsx`: composer and header gating, approval and question controls, offline disabled reasons and the reconciliation notice, all through `renderToStaticMarkup`.
