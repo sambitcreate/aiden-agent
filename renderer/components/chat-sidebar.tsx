@@ -1501,6 +1501,18 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
               >
                 Open latest chat
               </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={primary.stale}
+                onSelect={() =>
+                  void navigate({
+                    to: "/host/$hostId/new",
+                    params: { hostId: primary.hostId },
+                    search: { workspaceId: primary.workspaceId },
+                  })
+                }
+              >
+                {`New chat on ${primary.hostLabel}`}
+              </DropdownMenuItem>
               {moveItems}
             </SidebarOverflowMenu>
           </div>

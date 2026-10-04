@@ -41,6 +41,10 @@ export const FEATURES = [
 export const CREDENTIAL = "c".repeat(43);
 const ENDPOINT = "https://server.example/api/aiden/v1";
 
+/** What a suite's extra route returns for a request it does not answer. */
+export const UNHANDLED: unique symbol = Symbol("unhandled");
+export type FakeHostRoute = (input: PeerRequest, deviceId: string) => Promise<unknown>;
+
 export class FakeTimers {
   now = 1_000_000;
   private next = 1;
@@ -190,6 +194,11 @@ export class FakeHost {
   dropAcks = 0;
   /** The host is unreachable: every request fails before it arrives. */
   down = false;
+  /** The grants and features this host gives paired devices. */
+  capabilities: string[] = CAPABILITIES;
+  features: string[] = FEATURES;
+  /** Answers a suite adds; asked first, and `UNHANDLED` falls through to the chat and run routes. */
+  routes: FakeHostRoute | undefined;
   /** The host deleted its chat. */
   removed = false;
   /** Renames and deletes, guarded by the chat's revision through the real host chat service. */
@@ -260,7 +269,7 @@ export class FakeHost {
   client(deviceId = "desktop"): PeerClient {
     let device = this.devices.get(deviceId);
     if (!device) {
-      device = { id: deviceId, capabilities: new Set<AidenRemoteCapability>(CAPABILITIES as AidenRemoteCapability[]) };
+      device = { id: deviceId, capabilities: new Set<AidenRemoteCapability>(this.capabilities as AidenRemoteCapability[]) };
       this.devices.set(deviceId, device);
     }
     const caller = device;
@@ -269,8 +278,8 @@ export class FakeHost {
         if (this.down) throw new PeerTransportError("unavailable");
         this.calls.push(`${input.method ?? "GET"} ${input.path}`);
         if (input.path === "/server")
-          return { protocolVersion: 1, instanceId: this.id, capabilities: CAPABILITIES, features: FEATURES };
-        if (input.path === "/device/capabilities") return { capabilities: CAPABILITIES };
+          return { protocolVersion: 1, instanceId: this.id, capabilities: this.capabilities, features: this.features };
+        if (input.path === "/device/capabilities") return { capabilities: this.capabilities };
         try {
           return await this.answer(input, caller);
         } catch (error) {
@@ -294,6 +303,11 @@ export class FakeHost {
     await this.feed.refresh();
   }
 
+  /** Runs `action` once per device, route, resource and key, replaying its answer for a repeated key. */
+  idempotent<T>(scope: { deviceId: string; route: string; resourceId: string; key: string }, body: unknown, action: () => Promise<T>): Promise<T> {
+    return this.ledger.execute(scope, body, action);
+  }
+
   windowReads(): string[] {
     return this.calls.filter((call) => call.startsWith("GET /chats/chat-1/messages"));
   }
@@ -312,6 +326,10 @@ export class FakeHost {
     const method = input.method ?? "GET";
     const key = input.idempotencyKey ?? "";
     const access = async <T>(_chatId: string, action: () => Promise<T>) => action();
+    if (this.routes) {
+      const answered = await this.routes(input, device.id);
+      if (answered !== UNHANDLED) return answered;
+    }
     if (url.pathname === "/chats/chat-1/messages") {
       // Projected now, answered after the gate: a read that crosses a reconnect.
       const before = url.searchParams.get("before") ?? undefined;
@@ -476,8 +494,8 @@ export async function setup(host: FakeHost, deviceId = "desktop") {
       deviceId: `device_${host.id}`,
       credential: CREDENTIAL,
       enabled: true,
-      capabilities: CAPABILITIES,
-      features: FEATURES,
+      capabilities: host.capabilities,
+      features: host.features,
     },
   ];
   const registry = new PeerHostRegistry({

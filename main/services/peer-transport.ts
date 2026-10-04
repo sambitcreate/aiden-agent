@@ -24,6 +24,11 @@ export interface PeerRequest {
   signal?: AbortSignal;
   /** Overrides the 30 s JSON deadline, e.g. for a simulator boot. Capped at `MAX_PEER_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /**
+   * Raises the 1 MiB JSON request cap for an endpoint that accepts more, such
+   * as an attachment upload. Capped at `MAX_PEER_UPLOAD_BYTES`.
+   */
+  maxBodyBytes?: number;
   /** SSE resume cursor sent as `Last-Event-ID`. */
   lastEventId?: string;
   /**
@@ -48,6 +53,8 @@ const MAX_JSON_BYTES = 1_048_576;
 const MAX_FRAME_BYTES = 1_048_576;
 const MAX_ERROR_BYTES = 16_384;
 export const MAX_PEER_BINARY_BYTES = 8 * 1024 * 1024;
+/** The largest request body any host endpoint accepts: an attachment upload. */
+export const MAX_PEER_UPLOAD_BYTES = 12 * 1024 * 1024;
 const DEADLINE_MS = 30_000;
 export const MAX_PEER_TIMEOUT_MS = 240_000;
 /** A single SSE connection never outlives this; callers resume from their cursor. */
@@ -361,7 +368,11 @@ export class PeerTransport {
       input.body === undefined
         ? undefined
         : Buffer.from(JSON.stringify(input.body));
-    if (body && body.length > MAX_JSON_BYTES)
+    const maxBodyBytes = Math.min(
+      input.maxBodyBytes ?? MAX_JSON_BYTES,
+      MAX_PEER_UPLOAD_BYTES,
+    );
+    if (body && body.length > maxBodyBytes)
       throw new Error("Peer request is too large.");
     if (body) {
       requestHeaders["Content-Type"] = "application/json";

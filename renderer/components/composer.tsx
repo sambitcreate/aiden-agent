@@ -107,7 +107,7 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
-import type { SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
 import { filterForkTurnChoices, forkTurnEligibility } from "../lib/chat-copy-view";
 import { MAX_FORK_QUERY_CODE_UNITS } from "../shared/chat-copy-contract";
 import {
@@ -244,6 +244,26 @@ interface ComposerProps {
   slashActionBusy?: boolean;
   /** Affordances that act on this Mac; a remote chat turns them off. */
   surfaces?: ComposerSurfaces;
+  /**
+   * A remote chat's skills, read from its host. When set, `$` offers this
+   * catalog instead of this Mac's, even while the slash palette is off.
+   */
+  hostSkills?: ComposerSkillCatalog;
+  /** Replaces the "Local" label: which Mac a new chat will run on. */
+  machinePicker?: React.ReactNode;
+  /** The context bar for a chat whose project lives on another Mac. */
+  remoteContext?: React.ReactNode;
+}
+
+/** A skill catalog the composer offers after `$`, scoped to one chat or project. */
+export interface ComposerSkillCatalog {
+  /** A selected skill stays valid only while this scope is unchanged. */
+  scopeId: string;
+  data?: SkillCatalogEntry[];
+  isError: boolean;
+  isFetching: boolean;
+  isLoading: boolean;
+  refetch(): unknown;
 }
 const PERMISSION_META: Record<
   WorkspacePermission,
@@ -368,6 +388,9 @@ export function Composer({
   slashPaletteBlocked = false,
   slashActionBusy = false,
   surfaces = LOCAL_COMPOSER_SURFACES,
+  hostSkills,
+  machinePicker,
+  remoteContext,
 }: ComposerProps) {
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
@@ -568,13 +591,17 @@ export function Composer({
   // Read at transcript time so dictionary edits apply to an in-flight recording.
   const dictationDictionaryRef = React.useRef<unknown>(undefined);
   dictationDictionaryRef.current = settings.data?.dictationDictionary;
-  const skillCatalog = useDiscoveredSkills(workspace?.id);
+  // A remote chat's skills come from its host; this Mac's catalog is never read for it.
+  const localSkillCatalog = useDiscoveredSkills(hostSkills ? undefined : workspace?.id);
+  const skillCatalog: ComposerSkillCatalog | typeof localSkillCatalog = hostSkills ?? localSkillCatalog;
+  const skillScopeId = hostSkills ? hostSkills.scopeId : workspace?.id;
+  const skillsOffered = surfaces.slashCommands || Boolean(hostSkills);
   const selectedSkillState = React.useMemo(
     () =>
       selectedSkill
         ? selectedSkillStatus(
             selectedSkill,
-            workspace?.id,
+            skillScopeId,
             skillCatalog.data,
             skillCatalog.isError ? "error" : skillCatalog.isFetching ? "loading" : "ready",
           )
@@ -584,7 +611,7 @@ export function Composer({
       skillCatalog.data,
       skillCatalog.isError,
       skillCatalog.isFetching,
-      workspace?.id,
+      skillScopeId,
     ],
   );
   const canSend =
@@ -621,9 +648,9 @@ export function Composer({
     return filterForkTurnChoices(completedForkTurns, forkQuery);
   }, [completedForkTurns, forkQuery]);
 
-  const slashSession = React.useMemo(
-    () =>
-      !surfaces.slashCommands ||
+  const slashSession = React.useMemo(() => {
+    const session =
+      !skillsOffered ||
       slashPaletteBlocked ||
       confirmFullAccess ||
       renameDialogOpen ||
@@ -639,8 +666,11 @@ export function Composer({
             selectionEnd: selection.end,
             composing,
             tracker: slashTracker,
-          }),
-    [
+          });
+    // Without this Mac's palette only `$` skills from the chat's host remain.
+    return session && !surfaces.slashCommands && session.kind !== "skill" ? null : session;
+  }, [
+      skillsOffered,
       surfaces.slashCommands,
       composing,
       confirmFullAccess,
@@ -1052,13 +1082,13 @@ export function Composer({
         return;
       }
       if (result.kind === "skill") {
-        if (!workspace?.id) return;
+        if (!skillScopeId) return;
         const nextText = consumeSlashToken(text, slashSession);
         const nextCaret = slashSession.tokenStart;
         dispatchSkillSelection({
           type: "select",
           selected: {
-            workspaceId: workspace.id,
+            workspaceId: skillScopeId,
             invocation: {
               version: 1,
               invocationId: result.skill.invocationId,
@@ -1260,7 +1290,7 @@ export function Composer({
       slashResultSelectable,
       slashSession,
       text,
-      workspace?.id,
+      skillScopeId,
     ],
   );
 
@@ -1886,14 +1916,16 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this host. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this device"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
+            {/* Execution location — Pi runs locally on this host, unless a new chat picks another Mac. */}
+            {machinePicker ?? (
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this device"
+              >
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+            )}
             {gitBranch && workspace?.folderPath ? (
               <GitBranchPicker
                 key={`git-branch-picker-${worktreeRequest}`}
@@ -1919,6 +1951,12 @@ export function Composer({
             <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
+          ) : remoteContext ? (
+            <ComposerContextBar hasUserMessages={hasMessages} inputRef={inputRef}>
+              <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+                {remoteContext}
+              </div>
+            </ComposerContextBar>
           ) : null}
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"

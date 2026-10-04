@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Info, Loader2, MessageCircleQuestion, MoreHorizontal, ShieldQuestion, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { ChatApprovalCard, toolLabel, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
-import { Composer } from "../components/composer";
+import { Composer, type ComposerSkillCatalog } from "../components/composer";
 import { MessageList } from "../components/message-list";
 import { RemoteHostMarker, RemoteHostStatusRow } from "../components/sidebar-remote";
 import {
@@ -24,7 +24,8 @@ import {
 import { peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
 import type { ChatSessionControl, ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
-import { isOutcomeUnknown, type HostChatAdapter } from "../lib/hosts/host-chat-adapter";
+import { hostResultValue, isOutcomeUnknown } from "../lib/hosts/host-chat-adapter";
+import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import type { RemoteTranscript } from "../lib/hosts/remote-chat-mapper";
@@ -32,9 +33,11 @@ import { RemoteChatSession, type RemoteChatSnapshot } from "../lib/hosts/remote-
 import { remoteRunTranscript } from "../lib/hosts/remote-stream-translator";
 import { useChatSession, type ChatSession } from "../lib/hosts/use-chat-session";
 import { sidebarHosts, type SidebarHost } from "../lib/sidebar-remote-groups";
+import type { Attachment } from "../lib/types";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import type { ChatRunInputMode, ChatRunInputRejectionReason } from "../shared/chat-run-input";
 import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
+import type { SkillInvocationV1 } from "../shared/slash-commands";
 
 /**
  * `/host/$hostId/chat/$chatId`: a chat that lives on a paired host, read,
@@ -72,8 +75,8 @@ function availabilityLabel(host: SidebarHost): string {
 }
 
 export interface RemoteComposerActions {
-  send(text: string): Promise<void>;
-  submitInput(mode: ChatRunInputMode): (text: string) => Promise<void>;
+  send(text: string, attachments?: Attachment[], skill?: SkillInvocationV1): Promise<void>;
+  submitInput(mode: ChatRunInputMode): (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) => Promise<void>;
 }
 
 /**
@@ -88,18 +91,22 @@ export function remoteComposerActions(
   hostLabel: string,
 ): RemoteComposerActions {
   return {
-    async send(text) {
+    async send(text, attachments = [], skill) {
       if (!control) throw new Error(`Connecting to ${hostLabel}…`);
+      // Files are read on this Mac and uploaded to the chat's host before the turn starts.
+      const uploads = remoteAttachmentUploads(attachments);
       try {
-        await control.send(text);
+        await control.send(text, { ...(uploads.length > 0 ? { attachments: uploads } : {}), ...(skill ? { skill } : {}) });
       } catch (error) {
         // The banner keeps the text and retries it with the same key; the composer clears.
         if (isOutcomeUnknown(error)) return;
         throw error;
       }
     },
-    submitInput: (mode) => async (text) => {
+    submitInput: (mode) => async (text, attachments = [], skill) => {
       if (!control) throw new Error(`Connecting to ${hostLabel}…`);
+      // A running turn on the host takes text only; nothing is dropped silently.
+      if (attachments.length > 0 || skill) throw new Error("Send attachments and skills as a new message after this run.");
       if (!runId) throw new Error("Wait for the run to start on that Mac.");
       try {
         const result = await control.submitInput(runId, mode, text);
@@ -250,6 +257,8 @@ export interface RemoteChatPaneProps {
   onManage(): void;
   /** The host deleted this chat; leave its view. */
   onRemoved(): void;
+  /** The skills this chat's host offers after `$`; absent when it grants none. */
+  hostSkills?: ComposerSkillCatalog;
 }
 
 /** The remote chat's presentation; all state arrives in `snapshot` and `chat`. */
@@ -262,6 +271,7 @@ export function RemoteChatPane({
   onReconnect,
   onManage,
   onRemoved,
+  hostSkills,
 }: RemoteChatPaneProps) {
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
@@ -558,6 +568,7 @@ export function RemoteChatPane({
                 }
                 hasMessages={messages.length > 0}
                 onSend={send}
+                hostSkills={capabilities?.has("skills") ? hostSkills : undefined}
                 onQueue={steerRefusal === null ? submitInput("queue") : undefined}
                 onSteer={steerRefusal === null ? submitInput("steer") : undefined}
                 onStop={stop}
@@ -705,14 +716,39 @@ function useRemoteChatSession(host: PeerHostView | undefined, chatId: string): R
 
 type RemoteChatFrameProps = Omit<RemoteChatPaneProps, "chat">;
 
+/**
+ * The skills a remote chat may invoke, read from its host. This Mac's own
+ * skill catalog is never read for a remote chat.
+ */
+export function useHostSkills(adapter: RemoteHostAdapter, chatId: string): ComposerSkillCatalog | undefined {
+  const granted = adapter.capabilities().has("skills");
+  const query = useQuery({
+    queryKey: hostQueryKeys.skills(adapter.hostId, chatId),
+    queryFn: async () => hostResultValue(await adapter.skills(chatId)),
+    enabled: granted,
+    staleTime: 30_000,
+  });
+  if (!granted) return undefined;
+  return {
+    // A skill picked for one chat is never sent with another host's or chat's turn.
+    scopeId: hostResourceKey({ hostId: adapter.hostId, resourceId: chatId }),
+    data: query.data,
+    isError: query.isError,
+    isFetching: query.isFetching,
+    isLoading: query.isLoading,
+    refetch: query.refetch,
+  };
+}
+
 /** Binds the pane's session control to this host's adapter and this chat. */
 function ControlledRemoteChatPane({
   adapter,
   chatId,
   ...props
-}: RemoteChatFrameProps & { adapter: HostChatAdapter; chatId: string }) {
+}: RemoteChatFrameProps & { adapter: RemoteHostAdapter; chatId: string }) {
   const chat = useChatSession(adapter, { hostId: adapter.hostId, chatId });
-  return <RemoteChatPane {...props} chat={chat} />;
+  const hostSkills = useHostSkills(adapter, chatId);
+  return <RemoteChatPane {...props} chat={chat} {...(hostSkills ? { hostSkills } : {})} />;
 }
 
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {

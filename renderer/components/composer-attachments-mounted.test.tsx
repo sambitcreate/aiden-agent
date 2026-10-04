@@ -36,7 +36,7 @@ async function loadComposer() {
       export const toast={info:()=>{},error:()=>{},success:()=>{}};`,
     "../lib/use-voice-recorder": "export const useVoiceRecorder=()=>({});",
     "../lib/queries":
-      "export const useSettings=()=>({}); export const useDiscoveredSkills=()=>({});",
+      "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false});",
     "../lib/ipc":
@@ -351,12 +351,13 @@ test("mounted established Composer blocks attachment intake until failed send re
 test("mounted Composer for a remote chat offers no local attachment or workspace surface and sends plain text", async () => {
   const mounted = installDom();
   const calls = { picker: 0, drop: 0, clipboard: 0 };
+  let picked: Attachment[] = [];
   Object.assign(globalThis, {
     __composerAttachmentFixture: {
       api: {
         async pickAndRead() {
           calls.picker++;
-          return { attachments: [], skipped: 0 };
+          return { attachments: picked, skipped: 0 };
         },
         async readDroppedFiles() {
           calls.drop++;
@@ -374,11 +375,16 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
   const root = createRoot(mounted.container);
   const labels = () =>
     Array.from(mounted.container.getElementsByTagName("button")).map((element) => element.getAttribute("aria-label"));
-  const render = (surfaces: React.ComponentProps<typeof Composer>["surfaces"], onSend: React.ComponentProps<typeof Composer>["onSend"]) =>
+  const render = (
+    surfaces: React.ComponentProps<typeof Composer>["surfaces"],
+    onSend: React.ComponentProps<typeof Composer>["onSend"],
+    chatId = "host-b/chat-1",
+  ) =>
     React.act(async () =>
       root.render(
         <loaded.Composer
-          chatId="host-b/chat-1"
+          key={chatId}
+          chatId={chatId}
           ready
           hasMessages
           initialText="Ship it"
@@ -440,11 +446,86 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
     });
     assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
     assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
+
+    // A host that stages uploads gets the attach button, still without this Mac's workspace access control.
+    picked = [text("notes")];
+    const attaching = new Set<HostChatCapability>(["send", "attach", "createChat"]);
+    const uploaded: Attachment[][] = [];
+    await render(
+      composerSurfacesFor(attaching),
+      async (_value, attachments) => {
+        uploaded.push(attachments);
+      },
+      "host-b/draft:new-chat",
+    );
+    assert.ok(labels().includes("Attach files or images"));
+    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Attach files or images")).onClick();
+    });
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(
+      uploaded.map((attachments) => attachments.map((attachment) => attachment.name)),
+      [["notes.txt"]],
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
     mounted.restore();
     Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("mounted Composer reads this Mac's skills only for a local chat, and a remote chat's from its host", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, { __composerAttachmentFixture: { api: {} }, __composerSkillScopes: [] });
+  const scopes = () => (globalThis as unknown as { __composerSkillScopes: Array<string | null> }).__composerSkillScopes;
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const workspace = { id: "ws-local", name: "Local", permission: "ask", createdAt: 1, updatedAt: 1 } as React.ComponentProps<
+    typeof Composer
+  >["workspace"];
+  const render = (props: Partial<React.ComponentProps<typeof Composer>>, chatId: string) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key={chatId}
+          chatId={chatId}
+          ready
+          hasMessages
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async () => {}}
+          workspace={workspace}
+          {...props}
+        />,
+      ),
+    );
+  try {
+    await render({ surfaces: LOCAL_COMPOSER_SURFACES }, "chat-local");
+    assert.ok(scopes().includes("ws-local"), "a local chat reads this Mac's catalog for its project");
+
+    scopes().length = 0;
+    const hostSkills = { scopeId: "host-b/ws-b", data: [], isError: false, isFetching: false, isLoading: false, refetch() {} };
+    await render(
+      { surfaces: composerSurfacesFor(new Set<HostChatCapability>(["send", "skills"])), hostSkills },
+      "host-b/chat-1",
+    );
+    assert.ok(scopes().length > 0);
+    assert.ok(
+      scopes().every((scope) => scope === null),
+      "a remote chat never asks this Mac for a project's skills",
+    );
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerSkillScopes");
   }
 });
 

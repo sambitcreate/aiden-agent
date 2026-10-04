@@ -248,7 +248,6 @@ test("palette opening and rendering consume cached data without side-effect impo
     composer.indexOf("const slashActionContext = React.useMemo"),
   );
 
-  assert.match(composer, /const skillCatalog = useDiscoveredSkills\(workspace\?\.id\)/u);
   assert.match(openingPipeline, /deriveSlashSession/u);
   assert.match(openingPipeline, /rankSlashResults/u);
   assert.doesNotMatch(openingPipeline, /refetch|invalidateQueries|skillsApi|mcpApi|fetch\(/u);

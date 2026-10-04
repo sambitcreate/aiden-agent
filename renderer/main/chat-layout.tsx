@@ -30,6 +30,8 @@ export function ChatLayout() {
       params.hostId && params.chatId ? { hostId: params.hostId, chatId: params.chatId } : null,
     [params.chatId, params.hostId],
   );
+  // Every `/host/...` route works on a paired host, never on this Mac's environment.
+  const onRemoteHost = Boolean(params.hostId);
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -85,14 +87,14 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench suppressed={activeRemoteChat !== null}>
+      <EnvironmentWorkbench suppressed={onRemoteHost}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
           </div>
           {pathname === "/profile" ||
           pathname === "/scheduled" ||
-          activeRemoteChat !== null ||
+          onRemoteHost ||
           (pathname.startsWith("/bots") && !params.chatId) ? null : (
             <TerminalDrawer />
           )}

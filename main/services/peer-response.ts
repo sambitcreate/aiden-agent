@@ -46,6 +46,8 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   createBotChat: "createBotChat",
   updateBotFavorites: "updateBotFavorites",
   updateBotChatAccess: "updateBotChatAccess",
+  uploadAttachment: "uploadChatAttachment",
+  removeAttachment: "removeChatAttachment",
 };
 type PeerProtocol = typeof import("../../protocol/aiden-remote/v1/openapi.json");
 interface PeerContract {

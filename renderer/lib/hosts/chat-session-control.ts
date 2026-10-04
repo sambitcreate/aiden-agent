@@ -1,4 +1,5 @@
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
+import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import { mintPeerIdempotencyKey } from "../../shared/peer-host";
 import { chatIntentLedger, type ChatIntent, type ChatIntentKind, type ChatIntentLedger } from "./chat-intent-ledger";
 import {
@@ -7,6 +8,7 @@ import {
   type HostChatAdapter,
   type HostChatApprovalInput,
   type HostChatApprovalResult,
+  type HostChatAttachmentUpload,
   type HostChatCapability,
   type HostChatQuestionInput,
   type HostChatQuestionResult,
@@ -76,14 +78,65 @@ const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
   steer: "That Mac doesn't allow steering from here.",
   rename: "That Mac doesn't allow renaming from here.",
   remove: "That Mac doesn't allow deleting from here.",
+  attach: "That Mac doesn't accept attachments from here.",
+  skills: "That Mac doesn't allow skills from here.",
+  createChat: "That Mac doesn't allow new chats from here.",
+  browseFolders: "That Mac doesn't allow browsing its folders from here.",
+  createWorkspace: "That Mac doesn't allow new projects from here.",
+  botChats: "That Mac doesn't allow Bot chats from here.",
 };
+
+/** What a turn carries besides its text. */
+export interface ChatSendExtras {
+  /** Files this Mac read, uploaded to the chat's host before the turn starts. */
+  attachments?: HostChatAttachmentUpload[];
+  /** A skill from the host's own catalog. */
+  skill?: SkillInvocationV1;
+}
+
+/**
+ * Uploads a turn's attachments to the chat's host, one at a time. When one
+ * fails, the ones already staged are dropped again (best effort; unused
+ * uploads also expire on the host) and the failure is rethrown as a plain,
+ * retryable error: an upload is not keyed, so it is never left unresolved.
+ */
+export async function stageAttachments(
+  adapter: Pick<HostChatAdapter, "uploadAttachment" | "removeAttachment">,
+  chatId: string,
+  uploads: readonly HostChatAttachmentUpload[],
+): Promise<string[]> {
+  if (uploads.length === 0) return [];
+  if (!adapter.uploadAttachment) {
+    throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.attach! });
+  }
+  const staged: string[] = [];
+  try {
+    for (const upload of uploads) staged.push((await adapter.uploadAttachment(chatId, upload)).id);
+    return staged;
+  } catch (error) {
+    releaseAttachments(adapter, chatId, staged);
+    if (isOutcomeUnknown(error)) {
+      throw new HostChatControlError({
+        code: "upload_failed",
+        message: "An attachment didn't reach that Mac. Nothing was sent; try again.",
+        retryable: true,
+      });
+    }
+    throw error;
+  }
+}
+
+/** Drops staged uploads no turn will use. Failures are ignored: the host expires them anyway. */
+export function releaseAttachments(adapter: Pick<HostChatAdapter, "removeAttachment">, chatId: string, ids: readonly string[]): void {
+  for (const id of ids) void adapter.removeAttachment?.(chatId, id).catch(() => {});
+}
 
 /**
  * Why `capability` is unavailable on this adapter right now, or null when it
  * can run. Unsupported actions are refused rather than falling back to this
  * Mac; an offline or blocked host refuses every mutation.
  */
-export function chatControlRefusal(adapter: HostChatAdapter, capability: HostChatCapability): string | null {
+export function chatControlRefusal(adapter: Pick<HostChatAdapter, "capabilities" | "status">, capability: HostChatCapability): string | null {
   if (!adapter.capabilities().has(capability)) return UNSUPPORTED_REASON[capability] ?? "Not available for this chat.";
   const { availability } = adapter.status();
   return availability === "online" ? null : OFFLINE_REASON[availability];
@@ -128,10 +181,11 @@ export class ChatSessionControl {
   /** The ledger's view of this chat: a send still in flight, and any unknown outcome. */
   private recorded(): Pick<ChatSessionSnapshot, "sending" | "unresolved"> {
     const unresolved = this.ledger.unresolved(this.ref);
-    if (!unresolved) return { sending: this.ledger.sending(this.ref), unresolved: null };
+    const sending = this.ledger.sending(this.ref);
+    if (!unresolved) return { sending, unresolved: null };
     const { intent, retrying } = unresolved;
     return {
-      sending: this.ledger.sending(this.ref),
+      sending,
       unresolved: {
         kind: intent.kind,
         idempotencyKey: intent.idempotencyKey,
@@ -205,9 +259,16 @@ export class ChatSessionControl {
     kind: ChatIntentKind,
     run: (adapter: HostChatAdapter, key: string) => Promise<T>,
     text?: string,
+    attachmentIds: readonly string[] = [],
   ): Promise<T> {
     const key = mintPeerIdempotencyKey();
-    const intent: ChatIntent = { kind, idempotencyKey: key, ...(text !== undefined ? { text } : {}), replay: run };
+    const intent: ChatIntent = {
+      kind,
+      idempotencyKey: key,
+      ...(text !== undefined ? { text } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+      replay: run,
+    };
     this.ledger.begin(this.ref, intent);
     try {
       const result = await run(this.adapter, key);
@@ -231,14 +292,55 @@ export class ChatSessionControl {
     return this.ledger.submissionsSettled(this.ref);
   }
 
-  /** Starts a turn with a fresh key. Throws `outcome_unknown` when the host's answer was lost. */
-  async send(text: string): Promise<HostChatTurnReceipt> {
+  /**
+   * Starts a turn with a fresh key, after staging its attachments on the
+   * host. Throws `outcome_unknown` when the host's answer was lost; a retry
+   * then replays the same key with the same staged uploads.
+   */
+  async send(text: string, extras: ChatSendExtras = {}): Promise<HostChatTurnReceipt> {
     this.guard("send");
+    const uploads = extras.attachments ?? [];
+    if (uploads.length > 0) this.guard("attach");
+    if (extras.skill) this.guard("skills");
     if (this.ledger.unresolved(this.ref)) {
       throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
     }
     const { chatId } = this.ref;
-    return this.intent("send", (adapter, idempotencyKey) => adapter.send(chatId, { text, idempotencyKey }), text);
+    // Recorded before its uploads stage, so a pane reopened meanwhile already sees the text as in flight.
+    const key = mintPeerIdempotencyKey();
+    let attachmentIds: string[] = [];
+    const intent: ChatIntent = {
+      kind: "send",
+      idempotencyKey: key,
+      text,
+      replay: (adapter, idempotencyKey) =>
+        adapter.send(chatId, {
+          text,
+          idempotencyKey,
+          ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+          ...(extras.skill ? { skill: extras.skill } : {}),
+        }),
+    };
+    this.ledger.begin(this.ref, intent);
+    try {
+      attachmentIds = await stageAttachments(this.adapter, chatId, uploads);
+    } catch (error) {
+      // Nothing was sent: the turn definitely did not start.
+      this.ledger.settle(this.ref, key, "known");
+      throw error;
+    }
+    if (attachmentIds.length > 0) intent.attachmentIds = attachmentIds;
+    try {
+      const receipt = await intent.replay(this.adapter, key);
+      this.ledger.settle(this.ref, key, "known");
+      return receipt as HostChatTurnReceipt;
+    } catch (error) {
+      const unknown = isOutcomeUnknown(error);
+      this.ledger.settle(this.ref, key, unknown ? "unknown" : "known");
+      // A definite refusal leaves the uploads unused; an unknown outcome may have consumed them.
+      if (!unknown) releaseAttachments(this.adapter, chatId, attachmentIds);
+      throw error;
+    }
   }
 
   /** Retries the unresolved intent with its original key, so it is applied at most once. */
@@ -253,16 +355,28 @@ export class ChatSessionControl {
       this.ledger.resolve(this.ref, intent.idempotencyKey);
     } catch (error) {
       // Still unknown: keep the same key for the next retry.
-      if (isOutcomeUnknown(error)) this.ledger.retrying(this.ref, intent.idempotencyKey, false);
-      else this.ledger.resolve(this.ref, intent.idempotencyKey);
+      if (isOutcomeUnknown(error)) {
+        this.ledger.retrying(this.ref, intent.idempotencyKey, false);
+      } else {
+        // The host refused the turn, so it never used the uploads.
+        this.ledger.resolve(this.ref, intent.idempotencyKey);
+        releaseAttachments(this.adapter, this.ref.chatId, intent.attachmentIds ?? []);
+      }
       throw error;
     }
   }
 
-  /** Forgets the unresolved intent without resending it. */
+  /**
+   * Forgets the unresolved intent without resending it. A dismissed send's
+   * uploads are released; if the host did start that turn, it already used
+   * them and the release is a no-op.
+   */
   dismissUnresolved(): ChatSessionUnresolved | null {
+    const recorded = this.ledger.unresolved(this.ref);
     const unresolved = this.recorded().unresolved;
-    if (unresolved) this.ledger.resolve(this.ref, unresolved.idempotencyKey);
+    if (!recorded || !unresolved) return null;
+    this.ledger.resolve(this.ref, recorded.intent.idempotencyKey);
+    releaseAttachments(this.adapter, this.ref.chatId, recorded.intent.attachmentIds ?? []);
     return unresolved;
   }
 
