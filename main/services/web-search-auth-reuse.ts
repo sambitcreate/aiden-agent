@@ -10,6 +10,7 @@
  * changes Web Search routing and has no network-capable dependency.
  */
 
+import { isRecord } from "../shared/guards.js";
 import { createHash } from "node:crypto";
 import type { Api, Credential, CredentialStore, Model } from "@earendil-works/pi-ai";
 import {
@@ -108,10 +109,6 @@ interface BindingInspection {
   readonly binding?: WebSearchExistingAuthBinding;
   readonly state: WebSearchExistingAuthBindingState;
   readonly prepared?: PreparedCredential;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function nonEmptyCredential(value: unknown): string | undefined {

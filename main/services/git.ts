@@ -9,6 +9,7 @@ import {
   repositoryRelativePath,
   type RepositoryIdentity,
 } from "./repository-identity.js";
+import { redactUrlCredentials } from "../shared/redaction.js";
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, type BigIntStats, type Stats } from "fs";
@@ -539,17 +540,11 @@ function replaceAllLiteral(value: string, search: string, replacement: string): 
   return search ? value.split(search).join(replacement) : value;
 }
 
-function redactGitText(value: string): string {
-  return value
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
-    .replace(/([?&](?:access_token|auth|key|password|signature|token)=)[^&\s]+/gi, "$1***");
-}
-
 function publicGitMessage(value: unknown, cwd: string): string {
   const raw = replaceAllLiteral(String(value || "Git command failed."), "\u0000", "").trim();
   const withoutWorkspace = replaceAllLiteral(raw, cwd, "the workspace");
   const withoutHome = replaceAllLiteral(withoutWorkspace, os.homedir(), "~");
-  return (redactGitText(withoutHome) || "Git command failed.").slice(0, 1_200);
+  return (redactUrlCredentials(withoutHome) || "Git command failed.").slice(0, 1_200);
 }
 
 function gitEnvironment(mutation: boolean): NodeJS.ProcessEnv {
@@ -6599,8 +6594,6 @@ export const gitManagedWorktreeDeletionPending = (
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
 export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyState(folderPath, worktreePath);
-export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
-  gitService.managedWorktreeBranchHead(folderPath, branch);
 export const gitCaptureManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,
