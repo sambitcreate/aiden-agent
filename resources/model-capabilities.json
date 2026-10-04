@@ -73248,7 +73248,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.5964,
+          "input": 0.629,
           "output": 13,
           "cache_read": 0.45
         }
@@ -77462,9 +77462,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.05,
+          "input": 0.08,
           "output": 5,
-          "cache_read": 0.04
+          "cache_read": 0.07
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -110561,7 +110561,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.5914,
+          "input": 0.629,
           "output": 13,
           "cache_read": 0.45
         }
@@ -113663,9 +113663,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.064,
+          "input": 0.0504,
           "output": 8,
-          "cache_read": 0.064
+          "cache_read": 0.0504
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -114876,9 +114876,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.05,
+          "input": 0.08,
           "output": 5,
-          "cache_read": 0.04
+          "cache_read": 0.07
         }
       },
       "arcee-ai/trinity-large-thinking": {

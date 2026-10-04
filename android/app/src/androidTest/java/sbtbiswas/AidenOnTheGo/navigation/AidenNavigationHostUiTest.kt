@@ -17,7 +17,6 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -59,6 +58,17 @@ class AidenNavigationHostUiTest {
         }
     }
 
+    /**
+     * System back as the platform delivers it: through the activity's back dispatcher,
+     * where both the host's predictive handler and in-screen handlers are registered.
+     * Espresso's key injection also waits for window focus, which CI emulators can
+     * withhold from the test activity, so it would test the emulator rather than the host.
+     */
+    private fun pressSystemBack() {
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
     @Test
     fun systemBackPopsOneScreenAtATimeAndRestoresTheEarlierScreenState() {
         compose.setContent { Host() }
@@ -69,10 +79,10 @@ class AidenNavigationHostUiTest {
         compose.onNodeWithText("open chat").performClick()
         compose.onNodeWithText("chat c1").assertIsDisplayed()
 
-        Espresso.pressBack()
+        pressSystemBack()
         compose.onNodeWithText("bot b1").assertIsDisplayed()
 
-        Espresso.pressBack()
+        pressSystemBack()
         compose.onNodeWithText("shell taps 2").assertIsDisplayed()
         compose.runOnIdle { assertFalse(navigator.stack.canPop) }
     }
@@ -84,10 +94,10 @@ class AidenNavigationHostUiTest {
         compose.onNodeWithText("show detail").performClick()
         compose.onNodeWithText("bot detail").assertIsDisplayed()
 
-        Espresso.pressBack()
+        pressSystemBack()
         compose.onNodeWithText("bot b1").assertIsDisplayed()
 
-        Espresso.pressBack()
+        pressSystemBack()
         compose.onNodeWithText("shell taps 0").assertIsDisplayed()
     }
 
@@ -107,7 +117,7 @@ class AidenNavigationHostUiTest {
                 navigator.stack.entries
             )
         }
-        Espresso.pressBack()
+        pressSystemBack()
         compose.onNodeWithText("bot b1").assertIsDisplayed()
     }
 }
