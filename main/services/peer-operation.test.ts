@@ -139,7 +139,7 @@ test("only an attachment upload may send a body past the 1 MiB JSON cap", () => 
     assert.equal(peerOperationRequest(operation).maxBodyBytes, undefined, operation.operation);
 });
 
-test("expanded peer reads reject malformed DTOs and attachment bytes stay bounded images", () => {
+test("expanded peer reads reject malformed DTOs and attachment bytes stay bounded images", async () => {
   for (const operation of [
     "messagesWindow",
     "skills",
@@ -166,7 +166,7 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "uploadAttachment",
     "removeAttachment",
   ])
-    assert.throws(() => peerOperationResult({ operation }, {}), operation);
+    await assert.rejects(peerOperationResult({ operation }, {}), operation);
   const staged = {
     id: `att_${"A".repeat(43)}`,
     name: "notes.md",
@@ -175,16 +175,16 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     size: 12,
     expiresAt: "2026-10-03T12:10:00.000Z",
   };
-  assert.deepEqual(peerOperationResult({ operation: "uploadAttachment" }, staged), staged);
-  assert.equal(peerOperationResult({ operation: "removeAttachment" }, undefined), undefined);
+  assert.deepEqual(await peerOperationResult({ operation: "uploadAttachment" }, staged), staged);
+  assert.equal(await peerOperationResult({ operation: "removeAttachment" }, undefined), undefined);
   // `markRead` is a 204: only an empty body satisfies it.
-  assert.equal(peerOperationResult({ operation: "markRead" }, undefined), undefined);
+  assert.equal(await peerOperationResult({ operation: "markRead" }, undefined), undefined);
 
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  const content = peerOperationResult(
+  const content = (await peerOperationResult(
     { operation: "attachmentContent" },
     { mimeType: "image/png", data: png },
-  ) as { mimeType: string; bytes: Uint8Array };
+  )) as { mimeType: string; bytes: Uint8Array };
   assert.equal(content.mimeType, "image/png");
   assert.deepEqual([...content.bytes], [...png]);
   assert.ok(!Buffer.isBuffer(content.bytes));
@@ -193,7 +193,7 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     { mimeType: "image/png", data: Buffer.alloc(0) },
     { mimeType: "image/png", data: "iVBOR" },
   ])
-    assert.throws(() =>
+    await assert.rejects(
       peerOperationResult({ operation: "attachmentContent" }, invalid),
     );
 });

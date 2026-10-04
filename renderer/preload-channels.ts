@@ -89,6 +89,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:btw-event",
   "chats:pull-requests-changed",
   "chats:settled",
+  "git:changed",
   "dictation:state",
   "formFill:progress",
   "localModels:progress",

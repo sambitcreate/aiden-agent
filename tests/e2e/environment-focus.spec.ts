@@ -215,3 +215,42 @@ for (const invalidation of [
     ).toBeFocused();
   });
 }
+
+test.describe("branch search", () => {
+  test.use({ workspaceSeed: true });
+
+  test("creates a missing branch from the search text with the keyboard", async ({ aiden }) => {
+    const { page, app } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    execFileSync("git", [
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Fixture",
+    ]);
+    await finishLmStudioOnboarding(page);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 800));
+    await page.locator("[data-environment-toggle]").click();
+    await page.locator("[data-quick-view-toggle]").click();
+    const quickView = page.getByRole("complementary", { name: "Quick View" });
+    await quickView.getByRole("button", { name: /^Branch main/u }).click();
+    await page.getByPlaceholder("Search branches").fill("release/next");
+    await expect(page.getByRole("option", { name: "Create branch “release/next”…" })).toBeVisible();
+    await page.keyboard.press("Enter");
+    const name = page.getByRole("textbox", { name: "New branch name" });
+    await expect(name).toHaveValue("release/next");
+    await expect(name).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(quickView.getByRole("button", { name: /^Branch release\/next/u })).toBeVisible();
+    const current = execFileSync("git", ["-C", aiden.workspaceDir, "branch", "--show-current"], {
+      encoding: "utf8",
+    });
+    expect(current.trim()).toBe("release/next");
+  });
+});

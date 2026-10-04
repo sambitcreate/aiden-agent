@@ -19,6 +19,7 @@ import {
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { commitOwnedMutation } from "./mcp-oauth-store-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import { syncDirectory } from "./durable-fs.js";
 
 const FILE = "mcp-oauth.json";
 
@@ -38,15 +39,6 @@ async function readMap(): Promise<SessionMap> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw error;
-  }
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
   }
 }
 

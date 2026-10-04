@@ -44,6 +44,7 @@ import { SimulatorSettings } from "../components/settings/simulator-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import {
   availableSettingsDestinations,
+  matchesSettingsSearch,
   SETTINGS_DESTINATIONS,
   type SettingsSection,
 } from "../lib/settings-section";
@@ -149,9 +150,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   );
   const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
-    ? availableNav.filter((item) =>
-        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
-      )
+    ? availableNav.filter((item) => matchesSettingsSearch(item, query, DESCRIPTIONS[item.id]))
     : availableNav;
   const ActiveSection = CONTENT[section];
 

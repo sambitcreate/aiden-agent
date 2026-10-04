@@ -28,8 +28,6 @@ import {
   type FilesEditorStateChangeOptions,
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
-import { BrowserPanel } from "./browser-panel";
-import { DevicesPanel } from "./devices-panel";
 import { ReviewPanel } from "./review-panel";
 import { SubagentOrb } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
@@ -90,6 +88,15 @@ import {
   replaceSubagentStopPendingOwner,
   type SubagentStopPendingState,
 } from "../lib/subagent-stop-pending";
+
+// The browser and simulator tabs carry their own heavy dependencies and are
+// rarely opened, so their code loads with the panel instead of at startup.
+const BrowserPanel = React.lazy(() =>
+  import("./browser-panel").then((module) => ({ default: module.BrowserPanel })),
+);
+const DevicesPanel = React.lazy(() =>
+  import("./devices-panel").then((module) => ({ default: module.DevicesPanel })),
+);
 
 export type { EnvironmentPanelTab } from "../lib/environment-panel-state";
 export type EnvironmentReviewMode = "changes" | "compare";
@@ -1469,11 +1476,15 @@ function EnvironmentPanelSurface({
           hidden={panel.tab !== "browser"}
           className="h-full min-h-0"
         >
-          {active && <BrowserPanel
-            workspaceId={active.id}
-            active={presented && panel.tab === "browser"}
-            onDock={() => panel.showTools("browser")}
-          />}
+          {active && (
+            <React.Suspense fallback={null}>
+              <BrowserPanel
+                workspaceId={active.id}
+                active={presented && panel.tab === "browser"}
+                onDock={() => panel.showTools("browser")}
+              />
+            </React.Suspense>
+          )}
         </div>
         {panel.devicesEnabled ? (
           <div
@@ -1484,12 +1495,14 @@ function EnvironmentPanelSurface({
             className="h-full min-h-0"
           >
             {active && (
-              <DevicesPanel
-                workspaceId={active.id}
-                chatId={panel.activeChat.chatId ?? undefined}
-                active={presented && panel.tab === "devices"}
-                compact={width < 540}
-              />
+              <React.Suspense fallback={null}>
+                <DevicesPanel
+                  workspaceId={active.id}
+                  chatId={panel.activeChat.chatId ?? undefined}
+                  active={presented && panel.tab === "devices"}
+                  compact={width < 540}
+                />
+              </React.Suspense>
             )}
           </div>
         ) : null}

@@ -71,14 +71,14 @@ function binaryContent(value: unknown): PeerAttachmentContent {
 }
 
 /** Pairing credentials never cross back into renderer operation results. */
-export function peerOperationResult(
+export async function peerOperationResult(
   operation: unknown,
   value: unknown,
-): unknown {
+): Promise<unknown> {
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
   if (name === "attachmentContent") return binaryContent(value);
-  validatePeerResponse(name, value);
+  await validatePeerResponse(name, value);
   if (name === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
   if (name === "chat" || name === "createChat" || name === "renameChat")
