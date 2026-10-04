@@ -7,6 +7,7 @@ import {
   googleProviderModels,
 } from "./google-provider.js";
 import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.js";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 interface GenericModelEntry {
   id?: string;
@@ -91,34 +92,10 @@ function httpFailureMessage(status: number): string {
 }
 
 async function boundedResponseText(response: Response): Promise<string> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_MODEL_DISCOVERY_RESPONSE_BYTES) {
-    throw new Error("The provider's model catalog is too large.");
-  }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_MODEL_DISCOVERY_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("The provider's model catalog is too large.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const body = new Uint8Array(bytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const body = await readBoundedBody(response, {
+    maxBytes: MAX_MODEL_DISCOVERY_RESPONSE_BYTES,
+    errors: { tooLarge: () => new Error("The provider's model catalog is too large.") },
+  });
   return new TextDecoder().decode(body);
 }
 
