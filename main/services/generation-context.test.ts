@@ -12,6 +12,7 @@ import {
   chatContextPressureFromProjection,
   compactGenerationContext,
   createGenerationContextTransform,
+  estimateStaticContextTokens,
   limitComputerUseImages,
   limitBrowserSnapshotImages,
   projectChatContextPressure,
@@ -958,4 +959,24 @@ test("an AGENTS.md revision still active after a stale anchor is priced once nea
     `after=${overCompaction.estimatedTokensAfter}`,
   );
   assert.ok(overCompaction.estimatedTokensAfter <= overCompaction.inputBudgetTokens);
+});
+
+test("static context estimates follow tool edits and match a fresh tool set", () => {
+  const tool = {
+    name: "read_file",
+    label: "Read file",
+    description: "Read a file.",
+    parameters: Type.Object({ path: Type.String() }),
+    execute: async () => ({ content: [], details: undefined }),
+  };
+  const estimate = (tools: (typeof tool)[]) =>
+    estimateStaticContextTokens({ ...options, tools } as unknown as Parameters<
+      typeof estimateStaticContextTokens
+    >[0]);
+  const short = estimate([tool]);
+  assert.equal(estimate([tool]), short);
+  tool.description = "Read a file. ".repeat(200);
+  const long = estimate([tool]);
+  assert.ok(long > short + 500);
+  assert.equal(long, estimate([{ ...tool }]));
 });

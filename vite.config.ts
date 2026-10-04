@@ -19,7 +19,10 @@ export default defineConfig(({ command }) => {
     build: {
       outDir: "build/renderer",
       emptyOutDir: true,
-      sourcemap: true,
+      // Hidden maps: emitted for release symbolication (uploaded as a CI
+      // artifact) but never referenced from the shipped bundles, and the
+      // packager excludes every *.map file from app.asar.
+      sourcemap: "hidden",
       // The write-pty trampoline is 112 bytes. Vite's default 4kb inline
       // limit would emit it as a data: URL; Chromium then fetches that URL
       // under CSP connect-src 'self', which fails. Keep wasm as real files.
