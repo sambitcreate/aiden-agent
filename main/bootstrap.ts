@@ -1,11 +1,12 @@
 import path from "node:path";
-import { app } from "electron";
+import { app, ipcMain } from "electron";
 
 import { initDiagnosticJournal, writeDiagnosticEventSync } from "./services/diagnostic-journal.js";
 import { initDiagnosticHealth } from "./services/diagnostic-health.js";
 import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { installProcessDiagnostics } from "./services/process-diagnostics.js";
+import { installProcessStartupIpcAdmission } from "./services/startup-ipc-admission.js";
 import { applyLinuxGraphicsFlags } from "./linux-graphics-flags.js";
 import { configureRuntimeProfile } from "./runtime-profile.js";
 import { parseCaptureAcceptanceLaunch } from "./services/gemini-live/display-capture-acceptance-core.js";
@@ -51,6 +52,9 @@ try {
     );
     app.exit(await runDisplayCaptureAcceptance(runtimeProfile));
   } else {
+    // Hold renderer invokes until index.ts finishes startup reconciliation;
+    // install before any module in the app graph registers a handler.
+    installProcessStartupIpcAdmission(ipcMain);
     await import("./index.js");
   }
 } catch (error) {

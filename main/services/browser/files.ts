@@ -495,7 +495,7 @@ export class BrowserFileService {
       await check();
       await verifyIdentity(route, file);
       sourceBytes += content.length;
-      const references = browserAssetReferences(content.toString("utf8"), kind);
+      const references = await browserAssetReferences(content.toString("utf8"), kind);
       if (references.incomplete) warn("Some asset references could not be parsed or exceeded the preview limits.");
       const sourceUrl = new URL(`http://aiden-preview.invalid/${route.split(path.sep).map(encodeURIComponent).join("/")}`);
       let baseUrl = sourceUrl;
