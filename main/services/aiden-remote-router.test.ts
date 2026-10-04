@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import { connect } from "node:net";
 import {
@@ -40,6 +41,8 @@ async function fixture(options: {
   chatClassification?: "present" | "missing" | "error";
   chatPayloadError?: "reconciling";
   oversizedChatResponse?: boolean;
+  /** A transcript comfortably above the compression threshold. */
+  largeChatResponse?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
   runInputAvailable?: boolean;
@@ -80,7 +83,14 @@ async function fixture(options: {
           text: "x".repeat(190_000),
           createdAt: new Date(1_100 + index).toISOString(),
         }))
-      : [],
+      : options.largeChatResponse
+        ? Array.from({ length: 40 }, (_, index) => ({
+            id: `message-${index}`,
+            role: index % 2 === 0 ? "user" as const : "assistant" as const,
+            text: `Step ${index}: review the workspace changes and summarize them.`,
+            createdAt: new Date(1_100 + index).toISOString(),
+          }))
+        : [],
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
     revision: `rev_${"c".repeat(43)}`,
@@ -2637,6 +2647,80 @@ test("authorized archived Bot chats preserve reads and reject every retained mut
         /^(?:chat-rename|chat-remove|chat-move|turn|attachment-upload|attachment-remove|cancel|approval):/u.test(call)),
       [],
     );
+  } finally {
+    await app.close();
+  }
+});
+
+test("successful JSON reads negotiate gzip and revalidation only when the client opts in", async () => {
+  const app = await fixture({ capabilities: ["chat:read", "chat:write"], largeChatResponse: true });
+  const get = (path: string, headers: Record<string, string>, method = "GET") =>
+    new Promise<{ status: number; headers: IncomingHttpHeaders; body: Buffer }>(
+      (resolve, reject) => {
+        const request = httpRequest(`${app.base}${path}`, {
+          method,
+          headers: {
+            authorization: `Bearer ${"a".repeat(43)}`,
+            "aiden-protocol-version": "1",
+            ...headers,
+          },
+        }, (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve({
+            status: response.statusCode!,
+            headers: response.headers,
+            body: Buffer.concat(chunks),
+          }));
+        });
+        request.on("error", reject);
+        request.end();
+      },
+    );
+  try {
+    // A client that advertises nothing receives the unchanged identity body.
+    const plain = await get("/chats/chat-1", {});
+    assert.equal(plain.status, 200);
+    assert.equal(plain.headers["content-encoding"], undefined);
+    assert.equal(plain.headers["content-length"], String(plain.body.length));
+    const transcript = JSON.parse(plain.body.toString("utf8"));
+    assert.equal(transcript.messages.length, 40);
+    assert.ok(plain.body.length > 1024);
+    const etag = plain.headers.etag;
+    assert.ok(etag);
+
+    // URLSession/OkHttp-style negotiation gets a smaller, equivalent body.
+    const compressed = await get("/chats/chat-1", { "accept-encoding": "gzip, deflate, br" });
+    assert.equal(compressed.status, 200);
+    assert.equal(compressed.headers["content-encoding"], "gzip");
+    assert.ok(compressed.body.length < plain.body.length / 2);
+    assert.deepEqual(JSON.parse(gunzipSync(compressed.body).toString("utf8")), transcript);
+    assert.equal(compressed.headers.etag, etag, "the ETag identifies the representation, not its coding");
+
+    // Peer transports that pin identity (or refuse gzip) are never encoded.
+    for (const acceptEncoding of ["identity", "gzip;q=0, identity", "*;q=0"]) {
+      const identity = await get("/chats/chat-1", { "accept-encoding": acceptEncoding });
+      assert.equal(identity.headers["content-encoding"], undefined, acceptEncoding);
+      assert.deepEqual(JSON.parse(identity.body.toString("utf8")), transcript);
+    }
+
+    // Revalidation with the current tag is a body-less 304; any other tag is a full read.
+    const notModified = await get("/chats/chat-1", { "if-none-match": `"other", ${etag}` });
+    assert.equal(notModified.status, 304);
+    assert.equal(notModified.body.length, 0);
+    assert.equal(notModified.headers.etag, etag);
+    const stale = await get("/chats/chat-1", { "if-none-match": 'W/"stale"' });
+    assert.equal(stale.status, 200);
+    assert.deepEqual(JSON.parse(stale.body.toString("utf8")), transcript);
+
+    // Errors are never revalidated or encoded.
+    const missing = await get("/chats/chat-1/unknown-route", {
+      "accept-encoding": "gzip",
+      "if-none-match": "*",
+    });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers["content-encoding"], undefined);
+    assert.equal(missing.headers.etag, undefined);
   } finally {
     await app.close();
   }

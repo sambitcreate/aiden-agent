@@ -39,7 +39,19 @@ export interface DictationCoordinatorDeps {
 }
 
 const RESULT_HIDE_DELAY_MS = 1_200;
-const ERROR_HIDE_DELAY_MS = 2_000;
+// The pill window cannot take focus, so an error is readable only while it is
+// on screen. Hold it long enough to read: a floor for short notices, plus
+// roughly reading speed for longer guidance, capped so it never lingers.
+const ERROR_HIDE_MIN_MS = 4_000;
+const ERROR_HIDE_MAX_MS = 10_000;
+const ERROR_HIDE_MS_PER_CHARACTER = 60;
+
+export function errorHideDelayMs(message: string): number {
+  return Math.min(
+    ERROR_HIDE_MAX_MS,
+    Math.max(ERROR_HIDE_MIN_MS, message.length * ERROR_HIDE_MS_PER_CHARACTER),
+  );
+}
 export const WARNING_HIDE_DELAY_MS = 4_000;
 const MAX_TRANSCRIPT_LENGTH = 100_000;
 export const HOLD_RELEASE_GRACE_MS = 50;
@@ -142,12 +154,10 @@ export class DictationCoordinator {
         if (this.stage !== "transcribing" || this.operationId !== operationId) return;
         this.stage = "idle";
         this.operationId = null;
-        this.deps.broadcast({
-          state: "error",
+        this.broadcastError(
           operationId,
-          message: "Transcription took too long. Your recording was stopped safely; try again.",
-        });
-        this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          "Transcription took too long. Your recording was stopped safely; try again.",
+        );
       });
     }, TRANSCRIPTION_WATCHDOG_MS);
   }
@@ -237,6 +247,11 @@ export class DictationCoordinator {
     } catch (error) {
       this.deps.logError("Could not warm up the transcription model.", error);
     }
+  }
+
+  private broadcastError(operationId: DictationStatePayload["operationId"], message: string): void {
+    this.deps.broadcast({ state: "error", operationId, message });
+    this.scheduleHide(errorHideDelayMs(message));
   }
 
   private scheduleHide(delayMs: number): void {
@@ -441,8 +456,7 @@ export class DictationCoordinator {
         if (!transcript) {
           this.stage = "idle";
           this.operationId = null;
-          this.deps.broadcast({ state: "error", operationId, message: "No speech detected." });
-          this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          this.broadcastError(operationId, "No speech detected.");
           return;
         }
         try {
@@ -483,15 +497,10 @@ export class DictationCoordinator {
         this.stage = "idle";
         this.operationId = null;
         this.deps.logError("Dictation delivery failed.", error);
-        this.deps.broadcast({
-          state: "error",
+        this.broadcastError(
           operationId,
-          message:
-            error instanceof Error && error.message.trim()
-              ? error.message.trim()
-              : "Dictation failed.",
-        });
-        this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          error instanceof Error && error.message.trim() ? error.message.trim() : "Dictation failed.",
+        );
       }
     });
   }
@@ -509,12 +518,10 @@ export class DictationCoordinator {
       this.operationId = null;
       this.pendingRelease = false;
       this.endHoldWatch();
-      this.deps.broadcast({
-        state: "error",
+      this.broadcastError(
         operationId,
-        message: typeof value === "string" && value.trim() ? value.trim() : "Dictation failed.",
-      });
-      this.scheduleHide(ERROR_HIDE_DELAY_MS);
+        typeof value === "string" && value.trim() ? value.trim() : "Dictation failed.",
+      );
     });
   }
 

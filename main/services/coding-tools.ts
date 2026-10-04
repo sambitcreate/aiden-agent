@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { assertPathInside } from "../shared/path-containment.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
@@ -218,19 +219,13 @@ async function compileSafeGlob(pattern: string, signal?: AbortSignal): Promise<R
 /** Resolve a user/agent-supplied path within the root, rejecting lexical escapes. */
 function resolveInRoot(root: string, p: string): string {
   const resolved = path.resolve(root, p ?? ".");
-  const rel = path.relative(root, resolved);
-  if (rel === "") return root;
-  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw new Error(`Path "${p}" is outside the workspace folder.`);
-  }
+  if (path.relative(root, resolved) === "") return root;
+  assertPathInside(root, resolved, `Path "${p}" is outside the workspace folder.`);
   return resolved;
 }
 
 function assertRealPathInRoot(root: string, resolved: string, suppliedPath: string): string {
-  const rel = path.relative(root, resolved);
-  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw new Error(`Path "${suppliedPath}" resolves outside the workspace folder.`);
-  }
+  assertPathInside(root, resolved, `Path "${suppliedPath}" resolves outside the workspace folder.`);
   return resolved;
 }
 

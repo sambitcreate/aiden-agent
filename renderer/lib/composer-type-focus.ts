@@ -196,3 +196,46 @@ export function insertTextIntoTextarea(textarea: HTMLTextAreaElement, text: stri
     new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
   );
 }
+
+export interface ApprovalFocusContext {
+  /** Focus is in a text field, editor, terminal, or other typing surface. */
+  typing: boolean;
+  /** A dialog, menu, or focused popover owns the keyboard. */
+  overlayOpen: boolean;
+}
+
+/**
+ * A new approval card may take focus only from an idle position. Moving focus
+ * out of a field mid-typing would let the next keystroke (Space, Enter)
+ * activate Deny, so the card relies on its status announcement instead.
+ */
+export function approvalShouldTakeFocus(context: ApprovalFocusContext): boolean {
+  return !context.typing && !context.overlayOpen;
+}
+
+export interface EscapeStopContext {
+  key: string;
+  defaultPrevented?: boolean;
+  isComposing?: boolean;
+  repeat?: boolean;
+  /** A response is running and the Stop control is enabled. */
+  canStop: boolean;
+  /** The composer holds no text or attachments, so Escape cannot be clearing a draft. */
+  draftEmpty: boolean;
+}
+
+/**
+ * Escape in the focused, empty composer stops the running response. Popovers,
+ * menus, and dialogs own Escape first (they hold focus or prevent the default),
+ * and a draft keeps Escape harmless so a stray press never cancels work.
+ */
+export function escapeStopsGeneration(context: EscapeStopContext): boolean {
+  return (
+    context.key === "Escape" &&
+    !context.defaultPrevented &&
+    !context.isComposing &&
+    !context.repeat &&
+    context.canStop &&
+    context.draftEmpty
+  );
+}

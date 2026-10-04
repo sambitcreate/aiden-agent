@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.scheduled
 
+import androidx.activity.compose.BackHandler
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -50,6 +51,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,10 +64,10 @@ fun AidenScheduledTasksScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val notifier = remember { AidenScheduledRunNotifier(context.applicationContext) }
-    val client by coordinator.client.collectAsState()
-    val connectionState by coordinator.connectionState.collectAsState()
-    val installations by coordinator.installationStore.installations.collectAsState()
-    val activeInstallationId by coordinator.installationStore.activeInstallationId.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+    val installations by coordinator.installationStore.installations.collectAsStateWithLifecycle()
+    val activeInstallationId by coordinator.installationStore.activeInstallationId.collectAsStateWithLifecycle()
     val activeInstallation = installations.firstOrNull { it.id == activeInstallationId }
     val instanceId = activeInstallation?.instanceId
     val canReadSchedules = activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
@@ -85,6 +87,7 @@ fun AidenScheduledTasksScreen(
     var operationTaskId by remember { mutableStateOf<String?>(null) }
     var operationRequestId by remember { mutableStateOf<UUID?>(null) }
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = selectedTaskId != null) { selectedTaskId = null }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AidenScheduledTaskFilter.ALL) }
     var runs by remember { mutableStateOf<List<AidenScheduledRun>>(emptyList()) }
