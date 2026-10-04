@@ -148,8 +148,10 @@ export class PeerHostFeedCache {
         return this.upsertBounded(this.bots, row(payload), PEER_FEED_MAX_BOTS, "bot.upsert");
       case "chat.remove": {
         const id = row(payload).id;
-        this.forgetRuns(id);
-        return this.remove(this.summaries, id, "chat.remove");
+        // A chat beyond the cap has no summary here but may still have runs;
+        // the removal is published whenever either goes.
+        const forgotRuns = this.forgetRuns(id);
+        return this.summaries.delete(id) || forgotRuns ? [{ type: "chat.remove", id }] : [];
       }
       case "workspace.remove":
         return this.remove(this.workspaces, row(payload).id, "workspace.remove");
@@ -230,19 +232,24 @@ export class PeerHostFeedCache {
     for (const candidate of this.summaries.values())
       if (!oldest || newestFirst(candidate, oldest) > 0) oldest = candidate;
     this.summaries.delete(oldest!.id);
-    this.forgetRuns(oldest!.id);
-    // The upsert itself may be the oldest chat; then nothing visible changed.
-    return oldest!.id === item.id
-      ? []
-      : [
-          { type: "chat.upsert", row: item },
-          { type: "chat.remove", id: oldest!.id },
-        ];
+    const forgotRuns = this.forgetRuns(oldest!.id);
+    // The upsert itself may be the oldest chat; then only its runs, if any, left the cache.
+    if (oldest!.id === item.id) return forgotRuns ? [{ type: "chat.remove", id: item.id }] : [];
+    return [
+      { type: "chat.upsert", row: item },
+      { type: "chat.remove", id: oldest!.id },
+    ];
   }
 
-  /** A chat that leaves the cache takes its run states with it; the feed has no run removal. */
-  private forgetRuns(chatId: string): void {
-    for (const [runId, run] of this.runs) if (run.chatId === chatId) this.runs.delete(runId);
+  /**
+   * A chat that leaves the cache takes its run states with it. The feed has no
+   * run removal, so callers publish `chat.remove`, which renderers cascade to runs.
+   */
+  private forgetRuns(chatId: string): boolean {
+    let forgot = false;
+    for (const [runId, run] of this.runs)
+      if (run.chatId === chatId) forgot = this.runs.delete(runId) || forgot;
+    return forgot;
   }
 
   private upsertBounded(

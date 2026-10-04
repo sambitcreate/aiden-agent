@@ -5,6 +5,8 @@ import type {
   PeerHostStatus,
   PeerRunState,
 } from "../../shared/peer-host";
+import type { QueryClient } from "@tanstack/react-query";
+import { hostQueryKeys } from "./host-query-keys";
 
 /**
  * Pure renderer mirror of main's per-host feed cache. Main broadcasts every
@@ -118,14 +120,45 @@ export function mergePeerHostStatuses(
   return [...byHost.values()];
 }
 
+export interface PeerHostStatusSync {
+  /** Applies one host's status broadcast. */
+  receive(status: PeerHostStatus): void;
+  /** Query function for every host's status. */
+  read(): Promise<PeerHostStatus[]>;
+}
+
 /**
- * Reads every host's status, then merges against the cache as it is when the
- * reply lands, so a newer broadcast received during the read is kept.
+ * Keeps the status query in step with per-host broadcasts. A broadcast names
+ * one host, so until a complete read has landed it is held aside rather than
+ * cached: a cached partial list would look fresh and skip the complete read.
+ * Every read merges against the cache as it is when the reply lands, so a
+ * newer broadcast received during the read is kept.
  */
-export async function readPeerHostStatuses(
-  read: () => Promise<readonly PeerHostStatus[]>,
-  cached: () => readonly PeerHostStatus[] | undefined,
-): Promise<PeerHostStatus[]> {
-  const incoming = await read();
-  return mergePeerHostStatuses(cached(), incoming, true);
+export function createPeerHostStatusSync(
+  queryClient: QueryClient,
+  readAll: () => Promise<readonly PeerHostStatus[]>,
+): PeerHostStatusSync {
+  const key = hostQueryKeys.statuses();
+  const cached = () => queryClient.getQueryData<PeerHostStatus[]>(key);
+  let early: PeerHostStatus[] = [];
+  return {
+    receive(status) {
+      if (cached() === undefined) {
+        early.push(status);
+        return;
+      }
+      queryClient.setQueryData<PeerHostStatus[]>(key, (current) =>
+        mergePeerHostStatuses(current, [status]),
+      );
+    },
+    async read() {
+      const incoming = await readAll();
+      const merged = mergePeerHostStatuses(
+        mergePeerHostStatuses(cached(), incoming, true),
+        early,
+      );
+      early = [];
+      return merged;
+    },
+  };
 }

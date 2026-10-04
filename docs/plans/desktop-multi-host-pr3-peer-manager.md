@@ -174,7 +174,9 @@ endpoints.
     snapshot-then-notification consumer sees every paired host, disabled ones included.
 24. **Run states follow their chat.** The feed has no run removal, so a chat removed by the host
     or evicted by the 2,000-chat cap drops its run states from the cache. Renderers applying
-    `chat.remove` should drop that chat's runs the same way.
+    `chat.remove` should drop that chat's runs the same way. Every such drop is published as
+    `chat.remove`, including for a chat whose summary was never kept because of the cap (its runs
+    are still learned) and for an update that is itself too old to keep.
 25. **A stream's frame deadline starts on acceptance.** The 30 s quiet-time deadline is re-armed
     when a stream's response headers are accepted, so connect time does not shorten the wait for
     the first frame.
