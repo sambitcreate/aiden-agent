@@ -173,7 +173,7 @@ test("two Macs answering the same approval resolve it exactly once, and the lose
     assert.deepEqual(resolutions, ["applied", "elsewhere"]);
     const winner = host.effects.approvals[0]!.split(":")[1];
     const [loserResult, loser] = fromA?.resolution === "elsewhere" ? [fromA, a] : [fromC, c];
-    assert.equal(loserResult?.decision, winner, "the loser is told the winning decision");
+    assert.equal(loserResult?.resolution === "elsewhere" && loserResult.decision, winner, "the loser is told the winning decision");
     assert.deepEqual(loser.getSnapshot().elsewhere, { kind: "approval", id: "ap-1", decision: winner });
     const winnerControl = loser === a ? c : a;
     assert.equal(winnerControl.getSnapshot().elsewhere, null);
@@ -256,7 +256,8 @@ async function approveSteerStop(control: ChatSessionControl) {
 }
 
 function hostOutcome(runs: HostRunRegistry, effects: FakeHostEffects) {
-  return { state: runs.summary("run-1")?.state, approval: runs.resolution("ap-1")?.decision, effects };
+  const approval = runs.resolution("ap-1");
+  return { state: runs.summary("run-1")?.state, approval: approval?.kind === "approval" ? approval.decision : undefined, effects };
 }
 
 test("the same session control drives a chat on this Mac and one on another Mac to the same outcome", async () => {

@@ -14,7 +14,7 @@ import {
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PeerHostRegistry, type PeerClient, type StoredPeerHost } from "./peer-host-registry.js";
 import { PEER_HOST_STATE_CHANNEL, PEER_RUN_FRAME_CHANNEL, PeerHostManager } from "./peer-host-manager.js";
-import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
+import { PeerEventFrames, PeerTransportError, parsePeerErrorEnvelope, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
 import type { PeerHostStatus, PeerRunFrameMessage } from "../../renderer/shared/peer-host.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
 import { RemoteHostAdapter, type PeerHostTransport } from "../../renderer/lib/hosts/remote-host-adapter.js";
@@ -103,11 +103,9 @@ function peerError(error: unknown): unknown {
   if (error instanceof AidenRemoteServiceError) {
     if ((error.status === 401 || error.status === 403) && error.code !== "capability_denied")
       return new PeerTransportError("authentication_required", error.status);
-    return new PeerTransportError("request_failed", error.status, {
-      code: error.code,
-      retryable: error.retryable,
-      ...(error.details ? { details: error.details } : {}),
-    });
+    // The error envelope crosses the wire and is read back by the real parser.
+    const envelope = { error: { code: error.code, retryable: error.retryable, details: error.details } };
+    return new PeerTransportError("request_failed", error.status, parsePeerErrorEnvelope(JSON.stringify(envelope)));
   }
   return new PeerTransportError("unavailable");
 }
