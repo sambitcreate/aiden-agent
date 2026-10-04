@@ -9,6 +9,7 @@ import {
   modelGridSize,
   nearestModel,
   modelBenchmarkPercentiles,
+  modelInfoByValue,
   orderModelEntries,
   parseModel,
   positionSavedModels,
@@ -433,6 +434,34 @@ test("rerank-only models stay out while authoritative chat classifications overr
   assert.deepEqual(
     createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
     ["rerank-discussion-chat", "ordinary-chat"],
+  );
+});
+
+test("catalog details stay with the provider that answered for a shared model id", () => {
+  const hosted = provider({ id: "hosted", label: "Hosted", models: ["shared-model", "plain-model"] });
+  const local = provider({ id: "local", label: "Local", models: ["shared-model"] });
+  const entries = createModelEntries(
+    [hosted, local],
+    modelInfoByValue([hosted, local], {
+      hosted: {
+        "shared-model": {
+          id: "shared-model",
+          name: "Shared Model Pro",
+          metadataSource: "models-dev" as const,
+          matched: true,
+        },
+        // A stale answer for a model the provider no longer lists adds nothing.
+        "retired-model": { id: "retired-model", metadataSource: "models-dev" as const, matched: true },
+      },
+    }),
+  );
+  assert.deepEqual(
+    entries.map((entry) => [entry.value, entry.info?.matched ?? false]),
+    [
+      ["hosted::shared-model", true],
+      ["hosted::plain-model", false],
+      ["local::shared-model", false],
+    ],
   );
 });
 
