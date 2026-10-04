@@ -117,7 +117,7 @@ export function RemoteChatPane({ title, host, snapshot, onLoadOlder, onReconnect
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
-  const stale = snapshot?.stale ?? host.availability !== "online";
+  const stale = host.availability !== "online";
   const unavailable = host.availability === "offline" || host.availability === "blocked";
   const loading = !snapshot || (!snapshot.loaded && snapshot.error === null);
   const approvals = run && !run.ended ? run.approvals : [];
@@ -301,10 +301,11 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
       </div>
     );
   }
-  // The session's status is fenced by generation; the sidebar's is the fallback until it exists.
-  const host: SidebarHost = snapshot
-    ? { id: listed.id, label: listed.label, ...availabilityOf(snapshot) }
-    : listed;
+  // The session's status is fenced by generation; the sidebar's stands in until it knows one.
+  const host: SidebarHost =
+    snapshot && snapshot.status.generation >= 0
+      ? { id: listed.id, label: listed.label, ...availabilityOf(snapshot) }
+      : listed;
   const summary = feed.data?.summaries.find((row) => row.id === chatId);
   const title = typeof summary?.title === "string" && summary.title.trim() ? summary.title : "Remote chat";
 
