@@ -21,6 +21,8 @@ export const MAX_TAILSCALE_CANDIDATES = 64;
 export const MAX_LAN_CANDIDATES = 64;
 /** A scan reads as searching for at least this long while Bonjour answers arrive. */
 export const PEER_BROWSE_SETTLE_MS = 3_000;
+/** The first contract revision that serves `/pairing/requests`. */
+const PAIRING_REQUESTS_CONTRACT_REVISION = 20;
 const MAX_STATUS_CHARS = 256 * 1_024;
 const MAX_STATUS_PEERS = 4_096;
 const DESKTOP_OS = new Set(["macOS", "linux"]);
@@ -344,7 +346,12 @@ export class PeerDiscovery {
         ? { platform: health.platform }
         : {}),
       route,
-      pairingRequests: health.pairingRequests === true,
+      // Pairing requests arrived in contract revision 20. An earlier host that
+      // claims them cannot serve the routes, so it is offered a setup code instead.
+      pairingRequests:
+        health.pairingRequests === true &&
+        typeof health.contractRevision === "number" &&
+        health.contractRevision >= PAIRING_REQUESTS_CONTRACT_REVISION,
       endpoint,
     });
     this.emit();
