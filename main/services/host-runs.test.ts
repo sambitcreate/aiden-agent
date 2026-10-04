@@ -1,34 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import { transformSync } from "esbuild";
-import * as registryModule from "./host-run-registry.js";
 import { HostRunRegistry, type HostRunEvent } from "./host-run-registry.js";
-
-type HostRunsModule = typeof import("./host-runs.js");
-
-// Load the wiring module with the Electron-backed platform replaced by a
-// recording logger, and the real registry module beside it.
-const serviceCode = transformSync(
-  readFileSync(new URL("./host-runs.ts", import.meta.url), "utf8"),
-  { loader: "ts", format: "cjs" },
-).code;
+import { createHostRunRecorders, hostRunOriginFor } from "./host-runs.js";
 
 function loadHostRuns() {
   const warnings: unknown[][] = [];
-  const module = { exports: {} as HostRunsModule };
-  new Function("require", "module", "exports", serviceCode)(
-    (specifier: string) => {
-      if (specifier === "../platform.js") {
-        return { logger: { warn: (...args: unknown[]) => warnings.push(args) } };
-      }
-      if (specifier === "./host-run-registry.js") return registryModule;
-      throw new Error(`Unexpected import ${specifier}`);
-    },
-    module,
-    module.exports,
-  );
-  return { hostRuns: module.exports, warnings };
+  const hostRuns = {
+    ...createHostRunRecorders((...args) => {
+      warnings.push(args);
+    }),
+    hostRunOriginFor,
+  };
+  return { hostRuns, warnings };
 }
 
 function eventTypes(registry: HostRunRegistry, runId: string): string[] {

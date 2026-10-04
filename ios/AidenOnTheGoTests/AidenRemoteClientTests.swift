@@ -3029,6 +3029,76 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testActiveClientIsReusedWithoutKeychainReadsUntilTheActiveInstallationChanges() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let first = makeExchange(
+            instanceId: "instance-first",
+            deviceId: "device-first",
+            credential: String(repeating: "F", count: 43)
+        )
+        let second = makeExchange(
+            instanceId: "instance-second",
+            deviceId: "device-second",
+            credential: String(repeating: "S", count: 43)
+        )
+        _ = try store.savePairing(first, trust: makeSystemTrust(), name: "First Mac")
+        _ = try store.savePairing(second, trust: makeSystemTrust(), name: "Second Mac")
+        try store.setActive(second.instanceId)
+        let session = makeSession()
+        var builtCredentials: [String] = []
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                builtCredentials.append(credential)
+                return AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+
+        let loadsBefore = keychain.scopedLoadCount
+        let client = try coordinator.remoteClient()
+        for _ in 0..<10 {
+            XCTAssertTrue(try coordinator.remoteClient() === client)
+        }
+        XCTAssertEqual(keychain.scopedLoadCount - loadsBefore, 1, "Cache hits must not read the Keychain.")
+        XCTAssertEqual(builtCredentials, [second.credential])
+
+        try store.setActive(first.instanceId)
+        let switched = try coordinator.remoteClient()
+        XCTAssertFalse(switched === client)
+        XCTAssertTrue(try coordinator.remoteClient() === switched)
+        XCTAssertEqual(builtCredentials, [second.credential, first.credential])
+        XCTAssertEqual(keychain.scopedLoadCount - loadsBefore, 2)
+    }
+
+    func testSessionPoliciesBoundInteractiveCallsAndKeepStreamsAliveOnHeartbeats() {
+        let serverHeartbeatInterval: TimeInterval = 15
+        let interactive = AidenRemoteClient.SessionPolicy.interactive.configuration(waitsForConnectivity: true)
+        let stream = AidenRemoteClient.SessionPolicy.stream.configuration(waitsForConnectivity: true)
+
+        // A request issued while offline must fail within minutes, not wait
+        // out an hour-long stream budget.
+        XCTAssertLessThanOrEqual(interactive.timeoutIntervalForResource, 5 * 60)
+        XCTAssertGreaterThanOrEqual(interactive.timeoutIntervalForResource, interactive.timeoutIntervalForRequest)
+        // A healthy stream survives long turns, and a silent one is declared
+        // dead only after missing at least two heartbeats.
+        XCTAssertGreaterThanOrEqual(stream.timeoutIntervalForResource, 30 * 60)
+        XCTAssertGreaterThanOrEqual(stream.timeoutIntervalForRequest, 2 * serverHeartbeatInterval)
+        XCTAssertLessThan(stream.timeoutIntervalForRequest, 3 * serverHeartbeatInterval)
+        for configuration in [interactive, stream] {
+            XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+            XCTAssertFalse(configuration.httpShouldSetCookies)
+        }
+        // Physical-device runs may lengthen the idle timeout; the resource
+        // budget never drops below it.
+        let slow = AidenRemoteClient.SessionPolicy.interactive.configuration(
+            waitsForConnectivity: false,
+            requestTimeout: 600
+        )
+        XCTAssertGreaterThanOrEqual(slow.timeoutIntervalForResource, 600)
+    }
+
+    @MainActor
     func testRePairingAtomicallyReplacesInstallationScopedCredential() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -4707,8 +4777,11 @@ private final class AidenRemoteMemoryKeychain: KeychainStoring {
         scoped[KeychainStore.scopedKey(key, scope: scope)] = value
     }
 
+    private(set) var scopedLoadCount = 0
+
     func load(_ key: KeychainStore.Key, scope: String) throws -> String? {
-        scoped[KeychainStore.scopedKey(key, scope: scope)]
+        scopedLoadCount += 1
+        return scoped[KeychainStore.scopedKey(key, scope: scope)]
     }
 
     func delete(_ key: KeychainStore.Key, scope: String) throws {
