@@ -24,7 +24,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 19 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 20 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -191,8 +191,9 @@ export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
 export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
 /**
  * Server feature token for unauthenticated desktop connection requests
- * (`/pairing/requests*`). A requester without a credential discovers support
- * through `/health?detail=host` `pairingRequests` instead.
+ * (`/pairing/requests*`, contract revision 20). A requester without a
+ * credential discovers support through `/health?detail=host` `pairingRequests`
+ * instead.
  */
 export const AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE = "pairing-requests-v1" as const;
 
@@ -1035,7 +1036,7 @@ export interface AidenRemoteContractFixture {
   };
   /** Revision 19: a run-control loser's `409 approval_resolved`. */
   runControlError?: AidenRemoteErrorEnvelope;
-  /** Revision 19, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
+  /** Revision 20, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
   pairingRequests?: AidenRemotePairingRequestsFixture;
 }
 
@@ -5217,7 +5218,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ? parseRevision19Fixture(value, { instanceId, contractRevision })
     : {};
   if (value.pairingRequests !== undefined) {
-    if (contractRevision < 19) throw new Error("Pairing request fixtures require contract revision 19.");
+    if (contractRevision < 20) throw new Error("Pairing request fixtures require contract revision 20.");
     parsePairingRequestsFixture(value.pairingRequests);
   }
   assertNoForbiddenWireKeys(value);
