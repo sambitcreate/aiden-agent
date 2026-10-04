@@ -759,3 +759,32 @@ test("PR linking sends source in the handler input object", async () => {
     restore();
   }
 });
+
+test("IPC failures reach callers without Electron's remote-method wrapper", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      aidenAPI: {
+        ipc: {
+          invoke: async (channel: string) => {
+            throw new Error(
+              `Error invoking remote method '${channel}': Error: Pull request is no longer linked.`,
+            );
+          },
+          onNotification: () => () => undefined,
+        },
+      },
+    },
+  });
+  try {
+    await assert.rejects(pullRequestsApi.list("chat-1"), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Pull request is no longer linked.");
+      return true;
+    });
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "window", descriptor);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});

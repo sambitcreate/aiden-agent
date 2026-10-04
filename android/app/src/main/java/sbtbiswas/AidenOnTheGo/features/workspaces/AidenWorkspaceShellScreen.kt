@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,19 +41,21 @@ fun AidenWorkspaceDirectoryScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToFiles: (String) -> Unit,
     onNavigateToGit: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isActive: Boolean = true
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
-    val allWorkspaces by coordinator.workspaces.collectAsState()
+    val client = coordinator.client.collectAsStateWithLifecycle().value
+    val allWorkspaces by coordinator.workspaces.collectAsStateWithLifecycle()
     val archiveStore = coordinator.archiveStore
-    val archivedIDs by archiveStore.workspaceIDsByInstance.collectAsState()
+    val archivedIDs by archiveStore.workspaceIDsByInstance.collectAsStateWithLifecycle()
     val activeInstanceId = coordinator.activeInstanceId
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) } // 0: Active, 1: Archived
     var selectedWorkspace by remember { mutableStateOf<AidenWorkspace?>(null) }
+    BackHandler(enabled = isActive && selectedWorkspace != null) { selectedWorkspace = null }
     var workspaceChats by remember { mutableStateOf<List<AidenChat>>(emptyList()) }
     var isLoadingChats by remember { mutableStateOf(false) }
 
@@ -961,7 +965,7 @@ fun AidenFolderBrowserSheet(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client = coordinator.client.collectAsState().value
+    val client = coordinator.client.collectAsStateWithLifecycle().value
 
     var roots by remember { mutableStateOf<List<AidenBrowserRoot>>(emptyList()) }
     var currentPage by remember { mutableStateOf<AidenBrowserPage?>(null) }
