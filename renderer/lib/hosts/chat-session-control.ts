@@ -1,5 +1,6 @@
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
 import { mintPeerIdempotencyKey } from "../../shared/peer-host";
+import { chatIntentLedger, type ChatIntent, type ChatIntentKind, type ChatIntentLedger } from "./chat-intent-ledger";
 import {
   HostChatControlError,
   isOutcomeUnknown,
@@ -93,30 +94,51 @@ export function chatControlRefusal(adapter: HostChatAdapter, capability: HostCha
  * fixed at construction, so every operation is bound to the host and chat it
  * started on: closing the session (switching chats) never retargets in-flight
  * work, it only stops late answers from updating this session's state.
+ *
+ * Keyed intents are recorded in a ledger that outlives the session, so an
+ * unknown outcome (even one that lands after the pane moved on) is recovered
+ * by the next session opened for the same chat, with its original key.
  */
 export class ChatSessionControl {
   readonly adapter: HostChatAdapter;
   readonly ref: ChatSessionRef;
+  private readonly ledger: ChatIntentLedger;
   private snapshot: ChatSessionSnapshot;
   private readonly listeners = new Set<() => void>();
   private offStatus: (() => void) | null = null;
+  private offLedger: (() => void) | null = null;
   private attached = false;
-  /** Replays the unresolved intent with its original key. */
-  private replay: ((key: string) => Promise<unknown>) | null = null;
 
-  constructor(adapter: HostChatAdapter, ref: ChatSessionRef) {
+  constructor(adapter: HostChatAdapter, ref: ChatSessionRef, ledger: ChatIntentLedger = chatIntentLedger) {
     if (adapter.hostId !== ref.hostId) throw new Error("The adapter belongs to another host.");
     this.adapter = adapter;
     this.ref = ref;
+    this.ledger = ledger;
     this.snapshot = {
       ref,
       status: adapter.status(),
-      sending: false,
       stopping: false,
       decidingApprovalId: null,
       answeringQuestionId: null,
-      unresolved: null,
       elsewhere: null,
+      ...this.recorded(),
+    };
+  }
+
+  /** The ledger's view of this chat: a send still in flight, and any unknown outcome. */
+  private recorded(): Pick<ChatSessionSnapshot, "sending" | "unresolved"> {
+    const unresolved = this.ledger.unresolved(this.ref);
+    if (!unresolved) return { sending: this.ledger.sending(this.ref), unresolved: null };
+    const { intent, retrying } = unresolved;
+    return {
+      sending: this.ledger.sending(this.ref),
+      unresolved: {
+        kind: intent.kind,
+        idempotencyKey: intent.idempotencyKey,
+        ...(intent.text !== undefined ? { text: intent.text } : {}),
+        message: ACTION_LABEL[intent.kind],
+        retrying,
+      },
     };
   }
 
@@ -130,7 +152,8 @@ export class ChatSessionControl {
     if (!this.attached) {
       this.attached = true;
       this.offStatus = this.adapter.onStatus((status) => this.update({ status }));
-      this.update({ status: this.adapter.status() });
+      this.offLedger = this.ledger.subscribe(this.ref, () => this.update(this.recorded()));
+      this.update({ status: this.adapter.status(), ...this.recorded() });
     }
     return () => this.detach();
   }
@@ -158,6 +181,8 @@ export class ChatSessionControl {
     this.attached = false;
     this.offStatus?.();
     this.offStatus = null;
+    this.offLedger?.();
+    this.offLedger = null;
   }
 
   private update(patch: Partial<ChatSessionSnapshot>): void {
@@ -173,23 +198,23 @@ export class ChatSessionControl {
 
   /**
    * Runs one keyed intent. An unknown outcome keeps the intent and its key so
-   * the user can retry it safely; nothing is resent automatically.
+   * the user can retry it safely; nothing is resent automatically. The
+   * outcome is recorded even if this session detached while it was in flight.
    */
   private async intent<T>(
-    kind: ChatSessionIntentKind,
-    key: string,
-    run: (key: string) => Promise<T>,
+    kind: ChatIntentKind,
+    run: (adapter: HostChatAdapter, key: string) => Promise<T>,
     text?: string,
   ): Promise<T> {
+    const key = mintPeerIdempotencyKey();
+    const intent: ChatIntent = { kind, idempotencyKey: key, ...(text !== undefined ? { text } : {}), replay: run };
+    this.ledger.begin(this.ref, intent);
     try {
-      return await run(key);
+      const result = await run(this.adapter, key);
+      this.ledger.settle(this.ref, key, "known");
+      return result;
     } catch (error) {
-      if (isOutcomeUnknown(error)) {
-        this.replay = run;
-        this.update({
-          unresolved: { kind, idempotencyKey: key, ...(text !== undefined ? { text } : {}), message: ACTION_LABEL[kind], retrying: false },
-        });
-      }
+      this.ledger.settle(this.ref, key, isOutcomeUnknown(error) ? "unknown" : "known");
       throw error;
     }
   }
@@ -197,45 +222,35 @@ export class ChatSessionControl {
   /** Starts a turn with a fresh key. Throws `outcome_unknown` when the host's answer was lost. */
   async send(text: string): Promise<HostChatTurnReceipt> {
     this.guard("send");
-    if (this.snapshot.unresolved) {
+    if (this.ledger.unresolved(this.ref)) {
       throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
     }
     const { chatId } = this.ref;
-    this.update({ sending: true });
-    try {
-      return await this.intent("send", mintPeerIdempotencyKey(), (idempotencyKey) => this.adapter.send(chatId, { text, idempotencyKey }), text);
-    } finally {
-      this.update({ sending: false });
-    }
+    return this.intent("send", (adapter, idempotencyKey) => adapter.send(chatId, { text, idempotencyKey }), text);
   }
 
   /** Retries the unresolved intent with its original key, so it is applied at most once. */
   async retryUnresolved(): Promise<void> {
-    const unresolved = this.snapshot.unresolved;
-    const replay = this.replay;
-    if (!unresolved || !replay || unresolved.retrying) return;
-    this.guard(unresolved.kind === "submitInput" ? "steer" : unresolved.kind);
-    this.update({ unresolved: { ...unresolved, retrying: true } });
+    const unresolved = this.ledger.unresolved(this.ref);
+    if (!unresolved || unresolved.retrying) return;
+    const { intent } = unresolved;
+    this.guard(intent.kind === "submitInput" ? "steer" : intent.kind);
+    this.ledger.retrying(this.ref, intent.idempotencyKey, true);
     try {
-      await replay(unresolved.idempotencyKey);
-      this.replay = null;
-      this.update({ unresolved: null });
+      await intent.replay(this.adapter, intent.idempotencyKey);
+      this.ledger.resolve(this.ref, intent.idempotencyKey);
     } catch (error) {
       // Still unknown: keep the same key for the next retry.
-      this.update({ unresolved: { ...unresolved, retrying: false } });
-      if (!isOutcomeUnknown(error)) {
-        this.replay = null;
-        this.update({ unresolved: null });
-      }
+      if (isOutcomeUnknown(error)) this.ledger.retrying(this.ref, intent.idempotencyKey, false);
+      else this.ledger.resolve(this.ref, intent.idempotencyKey);
       throw error;
     }
   }
 
   /** Forgets the unresolved intent without resending it. */
   dismissUnresolved(): ChatSessionUnresolved | null {
-    const unresolved = this.snapshot.unresolved;
-    this.replay = null;
-    this.update({ unresolved: null });
+    const unresolved = this.recorded().unresolved;
+    if (unresolved) this.ledger.resolve(this.ref, unresolved.idempotencyKey);
     return unresolved;
   }
 
@@ -245,9 +260,7 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     this.update({ stopping: true });
     try {
-      return await this.intent("cancel", mintPeerIdempotencyKey(), (idempotencyKey) =>
-        this.adapter.cancel(chatId, { runId, idempotencyKey }),
-      );
+      return await this.intent("cancel", (adapter, idempotencyKey) => adapter.cancel(chatId, { runId, idempotencyKey }));
     } finally {
       this.update({ stopping: false });
     }
@@ -260,8 +273,8 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     this.update({ decidingApprovalId: input.approvalId });
     try {
-      const result = await this.intent("respondApproval", mintPeerIdempotencyKey(), (idempotencyKey) =>
-        this.adapter.respondApproval(chatId, { ...input, idempotencyKey }),
+      const result = await this.intent("respondApproval", (adapter, idempotencyKey) =>
+        adapter.respondApproval(chatId, { ...input, idempotencyKey }),
       );
       if (result.resolution === "elsewhere") {
         this.update({
@@ -280,8 +293,8 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     this.update({ answeringQuestionId: input.promptId });
     try {
-      const result = await this.intent("answerQuestion", mintPeerIdempotencyKey(), (idempotencyKey) =>
-        this.adapter.answerQuestion(chatId, { ...input, idempotencyKey }),
+      const result = await this.intent("answerQuestion", (adapter, idempotencyKey) =>
+        adapter.answerQuestion(chatId, { ...input, idempotencyKey }),
       );
       if (result.status === "elsewhere") this.update({ elsewhere: { kind: "question", id: input.promptId } });
       return result;
@@ -295,8 +308,7 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     return this.intent(
       "submitInput",
-      mintPeerIdempotencyKey(),
-      (idempotencyKey) => this.adapter.submitInput(chatId, { runId, mode, text, idempotencyKey }),
+      (adapter, idempotencyKey) => adapter.submitInput(chatId, { runId, mode, text, idempotencyKey }),
       text,
     );
   }

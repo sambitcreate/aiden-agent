@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LOCAL_HOST_ID } from "../../shared/peer-host";
 import { ChatSessionControl } from "./chat-session-control";
+import { ChatIntentLedger } from "./chat-intent-ledger";
 import { LocalHostAdapter, type LocalChatApis } from "./local-host-adapter";
 
 function recordingApis(overrides: Partial<LocalChatApis> = {}) {
@@ -47,7 +48,7 @@ test("this Mac is always online and offers its local panels", () => {
 test("local control goes to this Mac's chat APIs with the pane's arguments", async () => {
   const { apis, calls } = recordingApis();
   const adapter = new LocalHostAdapter(apis);
-  const session = new ChatSessionControl(adapter, { hostId: LOCAL_HOST_ID, chatId: "c1" });
+  const session = new ChatSessionControl(adapter, { hostId: LOCAL_HOST_ID, chatId: "c1" }, new ChatIntentLedger());
   session.attach();
 
   await session.rename("Renamed");

@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../lib/command-system";
+import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger";
 import { ChatSessionControl } from "../lib/hosts/chat-session-control";
 import {
   HostChatControlError,
@@ -132,7 +133,7 @@ class StubHost implements HostChatAdapter {
 
 function session(host: SidebarHost, granted: HostChatCapability[] = RUN_CONTROL) {
   const adapter = new StubHost(host, granted);
-  const control = new ChatSessionControl(adapter, { hostId: "host-b", chatId: "chat-1" });
+  const control = new ChatSessionControl(adapter, { hostId: "host-b", chatId: "chat-1" }, new ChatIntentLedger());
   control.attach();
   return { control, adapter, chat: (): ChatSession => ({ control, snapshot: control.getSnapshot() }) };
 }

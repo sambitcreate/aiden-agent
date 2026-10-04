@@ -575,5 +575,11 @@ export async function setup(host: FakeHost, deviceId = "desktop") {
     manager.close();
     host.close();
   };
-  return { timers, manager, adapter, session, open, openAnother, transcript, delivered, close };
+  /** Another adapter for the same host, as a reopened pane builds one. */
+  const adapterFor = async () => {
+    const next = new RemoteHostAdapter(view!, transport);
+    await next.ready();
+    return next;
+  };
+  return { timers, manager, adapter, adapterFor, session, open, openAnother, transcript, delivered, close };
 }

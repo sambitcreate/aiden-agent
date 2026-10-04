@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ChatSessionControl } from "./chat-session-control";
+import { ChatIntentLedger } from "./chat-intent-ledger";
 import {
   HostChatControlError,
   type HostChatAdapter,
@@ -104,7 +105,7 @@ class FakeHost implements HostChatAdapter {
 }
 
 function session(host = new FakeHost(), chatId = "chat-1") {
-  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId });
+  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId }, new ChatIntentLedger());
   const detach = control.attach();
   return { host, control, detach };
 }
