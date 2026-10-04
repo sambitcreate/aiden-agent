@@ -727,8 +727,12 @@ test("command palette selects same-named models from distinct provider identitie
       hasKey: false,
       deployment: "local",
     }));
+    // Startup reads the list and then the stale-catalog refresh; the renderer
+    // keeps whichever answers last, so both must report the same inventory.
     ipcMain.removeHandler("providers:list");
     ipcMain.handle("providers:list", () => providers);
+    ipcMain.removeHandler("providers:refreshIfStale");
+    ipcMain.handle("providers:refreshIfStale", () => ({ providers, errors: [] }));
   });
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
@@ -908,8 +912,7 @@ test("command palette loads model results when settings resolve after providers"
     Object.assign(globalThis, { paletteReleaseSettings: release });
     ipcMain.removeHandler("settings:get");
     ipcMain.handle("settings:get", async () => { await gate; return settings; });
-    ipcMain.removeHandler("providers:list");
-    ipcMain.handle("providers:list", () => ["first", "second"].map((id) => ({
+    const providers = ["first", "second"].map((id) => ({
       id: `late-settings-${id}`,
       kind: "openai",
       label: "Delayed settings provider",
@@ -918,7 +921,13 @@ test("command palette loads model results when settings resolve after providers"
       needsKey: false,
       hasKey: false,
       deployment: "local",
-    })));
+    }));
+    // Startup reads the list and then the stale-catalog refresh; the renderer
+    // keeps whichever answers last, so both must report the same inventory.
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => providers);
+    ipcMain.removeHandler("providers:refreshIfStale");
+    ipcMain.handle("providers:refreshIfStale", () => ({ providers, errors: [] }));
   }, settings);
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
