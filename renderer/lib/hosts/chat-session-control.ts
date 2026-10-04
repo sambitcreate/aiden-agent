@@ -219,6 +219,18 @@ export class ChatSessionControl {
     }
   }
 
+  /**
+   * For a newly opened chat: resolves once every send and guidance submitted
+   * from it, by this or an earlier pane, has the host's answer recorded; null
+   * when none is in flight. Until then that text belongs to the submission,
+   * so a composer must not offer it as a fresh draft. The pane that submitted
+   * it settles the stored draft as the answer lands (consumed when the host
+   * took it or the reconciliation notice holds it, restored when refused).
+   */
+  submissionsSettled(): Promise<void> | null {
+    return this.ledger.submissionsSettled(this.ref);
+  }
+
   /** Starts a turn with a fresh key. Throws `outcome_unknown` when the host's answer was lost. */
   async send(text: string): Promise<HostChatTurnReceipt> {
     this.guard("send");

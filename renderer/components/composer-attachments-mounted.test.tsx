@@ -10,7 +10,17 @@ import type { Composer } from "./composer.js";
 import type { Attachment } from "../lib/types.js";
 import { attachmentInlineBytesRemaining } from "../shared/attachment-contract.js";
 import { composerSurfacesFor, LOCAL_COMPOSER_SURFACES } from "../lib/hosts/composer-surfaces.js";
-import type { HostChatCapability } from "../lib/hosts/host-chat-adapter.js";
+import {
+  HostChatControlError,
+  type HostChatAdapter,
+  type HostChatCapability,
+  type HostChatSendInput,
+  type HostChatTurnReceipt,
+} from "../lib/hosts/host-chat-adapter.js";
+import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger.js";
+import { ChatSessionControl } from "../lib/hosts/chat-session-control.js";
+import { remoteComposerActions } from "../main/remote-chat-view.js";
+import { hostResourceKey } from "../shared/peer-host.js";
 
 // Mount the production Composer and its send/restore/attachment logic. Replace only
 // peripheral UI, device hooks, and IPC; no lifecycle logic is copied into this fixture.
@@ -430,6 +440,131 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
     });
     assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
     assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+/** A paired Mac whose first answer to each send waits until the test gives it. */
+class AnsweringHost {
+  readonly hostId = "host-b";
+  readonly turns: HostChatSendInput[] = [];
+  private answer: ((outcome: "applied" | "lost" | "refused") => void) | null = null;
+  capabilities() {
+    return new Set<HostChatCapability>(["send", "steer"]);
+  }
+  status() {
+    return { availability: "online" as const, generation: 1 };
+  }
+  onStatus() {
+    return () => {};
+  }
+  send(_chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
+    this.turns.push(input);
+    // A same-key retry finds the turn the host already started.
+    if (this.turns.some((turn, index) => index < this.turns.length - 1 && turn.idempotencyKey === input.idempotencyKey)) {
+      return Promise.resolve({ turnId: "turn-1", streamId: "run-1" });
+    }
+    return new Promise((resolve, reject) => {
+      this.answer = (outcome) => {
+        if (outcome === "applied") resolve({ turnId: "turn-1", streamId: "run-1" });
+        else if (outcome === "lost") reject(new HostChatControlError({ code: "outcome_unknown", message: "The answer was lost." }));
+        else reject(new HostChatControlError({ code: "invalid_request", message: "That Mac refused the message." }));
+      };
+    });
+  }
+  give(outcome: "applied" | "lost" | "refused") {
+    this.answer?.(outcome);
+  }
+}
+
+test("a reopened remote chat's composer gets a message back only when the host refused it", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const surfaces = composerSurfacesFor(new Set<HostChatCapability>(["send", "steer"]));
+  const textarea = () => handlers(mounted.container.getElementsByTagName("textarea")[0]);
+  const mount = (draftKey: string, control: ChatSessionControl, initialText?: string) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key={`${draftKey}-${initialText ?? "reopened"}`}
+          chatId={draftKey}
+          ready
+          hasMessages
+          initialText={initialText}
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          surfaces={surfaces}
+          onSend={remoteComposerActions(control, null, "Studio").send}
+        />,
+      ),
+    );
+  try {
+    for (const outcome of ["applied", "lost", "refused"] as const) {
+      const ref = { hostId: "host-b", chatId: `chat-${outcome}` };
+      const draftKey = hostResourceKey({ hostId: ref.hostId, resourceId: ref.chatId });
+      const ledger = new ChatIntentLedger();
+      const host = new AnsweringHost();
+      const adapter = host as unknown as HostChatAdapter;
+
+      // The earlier pane sends, and the person starts a new thought while it is in flight.
+      const earlier = new ChatSessionControl(adapter, ref, ledger);
+      const detach = earlier.attach();
+      await mount(draftKey, earlier, "Tag the build");
+      let pending: Promise<unknown> = Promise.resolve();
+      await React.act(async () => {
+        pending = Promise.resolve(handlers(button(mounted.container, "Send message")).onClick()).catch(() => {});
+      });
+      if (outcome === "applied") {
+        await React.act(async () => {
+          textarea().onChange({ target: { value: "Also bump the version", selectionStart: 21, selectionEnd: 21 } });
+        });
+      }
+
+      // Navigating away unmounts it before the host answers.
+      await React.act(async () => root.render(<></>));
+      detach();
+      const reopened = new ChatSessionControl(adapter, ref, ledger);
+      reopened.attach();
+      const settled = reopened.submissionsSettled();
+      assert.ok(settled, `${outcome}: the reopened composer waits for the host's answer`);
+
+      await React.act(async () => {
+        host.give(outcome);
+        await settled;
+        // The pane renders the composer in a later task, after the sending composer settled its draft.
+        await pending;
+      });
+      await mount(draftKey, reopened);
+      const expected = { applied: "Also bump the version", lost: "", refused: "Tag the build" }[outcome];
+      assert.equal(textarea().value, expected, `${outcome}: the reopened draft`);
+
+      if (outcome === "lost") {
+        // The notice holds the text; its same-key retry starts no second turn and leaves the draft empty.
+        assert.equal(reopened.getSnapshot().unresolved?.text, "Tag the build");
+        await React.act(async () => reopened.retryUnresolved());
+        assert.equal(reopened.getSnapshot().unresolved, null);
+        assert.equal(new Set(host.turns.map((turn) => turn.idempotencyKey)).size, 1);
+        assert.equal(textarea().value, "");
+      } else {
+        assert.equal(host.turns.length, 1);
+      }
+    }
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
