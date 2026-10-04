@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { redactCredentialTokens } from "../shared/redaction.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
@@ -93,16 +94,13 @@ function timestamp(value: number | undefined): string | undefined {
 }
 
 function redactSummary(value: string, limit = 20_000): string {
-  return [...value
+  const withoutPaths = value
     .replace(/\/(?:Users|home|private|var|opt|srv|mnt)\/[^\s"'`]+/gu, "[local path]")
     .replace(/\b[A-Za-z]:\\Users\\[^\s"'`]+/gu, "[local path]")
-    .replace(/file:\/\/[^\s"'`]+/gu, "[local path]")
-    .replace(/\b(?:sk|key|token|secret|bearer|api[_-]?key|password)[-_:=\s]*[A-Za-z0-9._~+/-]{12,}\b/giu, "[redacted]")
-    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}\b/gu, "[redacted]")
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gu, "[redacted]")
-    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu, "[redacted]")
-    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/gu, "[redacted]")
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu, "[redacted]")]
+    .replace(/file:\/\/[^\s"'`]+/gu, "[local path]");
+  return [...redactCredentialTokens(withoutPaths, "[redacted]")
+    // Remote summaries also mask long values that follow a credential-like word.
+    .replace(/\b(?:sk|key|token|secret|bearer|api[_-]?key|password)[-_:=\s]*[A-Za-z0-9._~+/-]{12,}\b/giu, "[redacted]")]
     .slice(0, limit)
     .join("");
 }

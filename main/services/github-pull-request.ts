@@ -8,6 +8,7 @@ import { constants as fsConstants } from "fs";
 import { access } from "fs/promises";
 import * as os from "os";
 import { promisify } from "util";
+import { redactUrlCredentials } from "../shared/redaction.js";
 import {
   normalizeGitHubHost,
   normalizeGitHubRepositoryIdentity,
@@ -185,12 +186,7 @@ function publicCommandMessage(error: unknown, cwd: string): string {
   const withoutWorkspace = replaceAllLiteral(raw, cwd, "the workspace");
   const withoutHome = replaceAllLiteral(withoutWorkspace, os.homedir(), "~");
   return (
-    redactAbsolutePaths(withoutHome)
-      .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
-      .replace(
-        /([?&](?:access_token|auth|key|password|private_token|signature|token)=)[^&\s]+/gi,
-        "$1***",
-      )
+    redactUrlCredentials(redactAbsolutePaths(withoutHome))
       .replace(/\p{Cc}+/gu, " ")
       .trim()
       .slice(0, 600) || "GitHub CLI failed."
