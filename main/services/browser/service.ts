@@ -1489,15 +1489,22 @@ export class BrowserService {
     }
     if (!current()) return;
     let pending = false;
+    let lastFrame = "";
     const frame = async () => {
       if (pending || !current()) return;
+      // A hidden or minimized preview has no viewer; skip the capture.
+      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
       pending = true;
       try {
         const image = await this.capture(tab);
-        if (current())
+        const source = `data:${image.mimeType};base64,${image.data}`;
+        // A static page re-encodes to the same frame; skip the repaint.
+        if (current() && source !== lastFrame) {
           await pip.webContents.executeJavaScript(
-            `document.querySelector('img').src=${JSON.stringify(`data:${image.mimeType};base64,${image.data}`)}`,
+            `document.querySelector('img').src=${JSON.stringify(source)}`,
           );
+          lastFrame = source;
+        }
       } catch {
         /* A cold or navigating page retries on the next frame. */
       } finally {

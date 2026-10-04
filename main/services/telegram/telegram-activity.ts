@@ -29,6 +29,13 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
   let thinkingMessage: TelegramMessage | undefined;
   let lastDraftAt = 0;
   let lastDraftSent = "";
+  // Thinking edits are coalesced: at most one per DRAFT_INTERVAL_MS, carrying
+  // the latest reasoning, and skipped when the rendered text is unchanged.
+  let thinkingDirty = false;
+  let thinkingPending = false;
+  let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastThinkingAt = Number.NEGATIVE_INFINITY;
+  let lastThinkingSent = "";
   let delivery = Promise.resolve();
   let finished = false;
 
@@ -75,9 +82,14 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
   }
 
   async function updateThinking(): Promise<void> {
-    if (!reasoning.trim() || finished) return;
+    thinkingPending = false;
+    if (!thinkingDirty || finished) return;
+    thinkingDirty = false;
+    lastThinkingAt = options.now();
+    if (!reasoning.trim()) return;
     const visible = reasoning.slice(-THINKING_LIMIT).trim();
     const html = `<blockquote expandable>${escapeHtml(visible)}</blockquote>`;
+    if (html === lastThinkingSent) return;
     if (!thinkingMessage) {
       thinkingMessage = await options.api.sendMessage({
         chatId: options.chatId,
@@ -86,6 +98,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
         parseMode: "HTML",
         disablePreview: true,
       });
+      lastThinkingSent = html;
       return;
     }
     await options.api.editMessageText({
@@ -94,6 +107,32 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
       text: html,
       parseMode: "HTML",
     });
+    lastThinkingSent = html;
+  }
+
+  function enqueueThinking(): void {
+    if (thinkingTimer !== undefined) {
+      clearTimeout(thinkingTimer);
+      thinkingTimer = undefined;
+    }
+    if (thinkingPending) return;
+    thinkingPending = true;
+    enqueue(updateThinking);
+  }
+
+  /** Mark reasoning dirty; flush now if the interval has passed, else once it does. */
+  function scheduleThinking(): void {
+    thinkingDirty = true;
+    if (thinkingPending || thinkingTimer !== undefined) return;
+    const wait = lastThinkingAt + DRAFT_INTERVAL_MS - options.now();
+    if (wait <= 0) {
+      enqueueThinking();
+      return;
+    }
+    thinkingTimer = setTimeout(() => {
+      thinkingTimer = undefined;
+      enqueueThinking();
+    }, wait);
   }
 
   function observe(channel: NotificationChannel, payload: unknown): void {
@@ -112,7 +151,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
       const delta = (payload as { delta?: string })?.delta;
       if (!delta) return;
       reasoning += delta;
-      enqueue(updateThinking);
+      scheduleThinking();
       return;
     }
     if (channel === "chat:tool") {
@@ -134,6 +173,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
   }
 
   async function settle(): Promise<void> {
+    if (thinkingDirty) enqueueThinking();
     if (options.draftPreviews && draft.trim()) enqueue(updateDraft);
     await delivery;
     finished = true;

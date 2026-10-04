@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { scheduledJobs } from "croner";
-import { createScheduleServiceCore } from "./schedule-service-core.js";
+import { createCatchUpQueue, createScheduleServiceCore } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -1113,3 +1113,62 @@ for (const automaticSource of ["Cron", "startup catch-up"] as const) {
     assert.equal(testbed.service.isRunning(task.id), false);
   });
 }
+
+function catchUpFixture(count: number) {
+  const started: number[] = [];
+  const finish = new Map<number, () => void>();
+  const runs = Array.from({ length: count }, (_, index) => () => {
+    started.push(index);
+    return new Promise<void>((resolve) => finish.set(index, resolve));
+  });
+  return { started, finish, runs };
+}
+
+const settleMicrotasks = async () => {
+  for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+};
+
+test("ten missed runs start at most two at a time, staggered", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const queue = createCatchUpQueue({ concurrency: 2, staggerMs: 3_000 });
+  const { started, finish, runs } = catchUpFixture(10);
+  for (const run of runs) queue.enqueue(run, () => true);
+  assert.deepEqual(started, [0], "only the first missed run starts immediately");
+  t.mock.timers.tick(3_000);
+  assert.deepEqual(started, [0, 1]);
+  t.mock.timers.tick(30_000);
+  assert.deepEqual(started, [0, 1], "a third run waits for a free slot");
+  finish.get(0)!();
+  await settleMicrotasks();
+  assert.deepEqual(started, [0, 1, 2]);
+  let peak = 0;
+  while (started.length < 10) {
+    finish.get(started[started.length - 2])?.();
+    finish.get(started[started.length - 1])?.();
+    await settleMicrotasks();
+    t.mock.timers.tick(3_000);
+    await settleMicrotasks();
+    peak = Math.max(peak, queue.active);
+  }
+  assert.ok(peak <= 2);
+  queue.clear();
+});
+
+test("catch-up waits while deferred and resumes when re-evaluated; stale entries are dropped", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  let locked = true;
+  const queue = createCatchUpQueue({ concurrency: 2, staggerMs: 0, shouldDefer: () => locked });
+  const { started, runs } = catchUpFixture(3);
+  let secondCurrent = true;
+  queue.enqueue(runs[0], () => true);
+  queue.enqueue(runs[1], () => secondCurrent);
+  queue.enqueue(runs[2], () => true);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(started, []);
+  secondCurrent = false;
+  locked = false;
+  queue.reevaluate();
+  assert.deepEqual(started, [0, 2]);
+  assert.equal(queue.pending, 0);
+  queue.clear();
+});
