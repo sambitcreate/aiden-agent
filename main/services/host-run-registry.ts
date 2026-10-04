@@ -143,6 +143,7 @@ const MAX_PROMPT_ID_LENGTH = 128;
 // an allowance derived from the configured budgets: half a run's budget, and
 // half an equal share of the total.
 const MAX_APPROVAL_PAYLOAD_BYTES = 64 * 1_024;
+const MAX_APPROVAL_SUMMARY_LENGTH = 2_000;
 
 function isTerminalState(state: HostRunState): boolean {
   return state === "done" || state === "failed" || state === "cancelled";
@@ -175,13 +176,19 @@ function approvalEvent(
   maximumPayloadBytes: number,
 ): PendingEvent {
   const scopes = knownScopes(payload.scopes);
+  const summary = boundedText(payload.summary, MAX_APPROVAL_SUMMARY_LENGTH);
   const prompt: Record<string, unknown> = {
     approvalId,
-    summary: boundedText(payload.summary, 2_000) || "Aiden needs approval.",
+    summary: summary || "Aiden needs approval.",
     toolCallId: boundedText(payload.toolCallId, 128),
     toolName: boundedText(payload.toolName, 120) || "Tool",
     ...(scopes ? { scopes } : {}),
   };
+  // A generic command approval carries the whole command in its summary. A
+  // shortened summary hides part of what would be allowed, so it is withheld
+  // like oversized details: a controller can deny it but not allow it.
+  const summaryShortened = typeof payload.summary === "string" && summary.length < payload.summary.length;
+  if (summaryShortened) return { type: "approval_required", payload: { ...prompt, detailsOmitted: true }, terminal: false };
   // Details pass the same allowlist as Remote approvals: unrecognized kinds and
   // undeclared fields (such as classifier state) are never journaled, so no
   // observer of this host can read them.

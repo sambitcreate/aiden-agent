@@ -1,16 +1,29 @@
 import { peerHostsApi } from "../ipc";
+import type { ChatRunInputAdmissionResult } from "../../shared/chat-run-input";
+import type { PeerOperation } from "../../shared/peer-operation";
 import { hostAvailability } from "../sidebar-remote-groups";
 import {
   mintPeerIdempotencyKey,
   type PeerHostStatus,
+  type PeerOperationError,
   type PeerHostView,
   type PeerRunFrameMessage,
 } from "../../shared/peer-host";
 import {
   FENCED_ERROR,
+  HostChatControlError,
   type HostChatAdapter,
+  type HostChatApprovalInput,
+  type HostChatApprovalResult,
+  type HostChatCancelInput,
   type HostChatCapability,
   type HostChatError,
+  type HostChatInput,
+  type HostChatQuestionInput,
+  type HostChatQuestionResult,
+  type HostChatRenameInput,
+  type HostChatSendInput,
+  type HostChatTurnReceipt,
   type HostChatObserver,
   type HostChatResult,
   type HostChatStatus,
@@ -34,7 +47,49 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   if (features.has("chat-messages-window-v1") && grants.has("chat:read")) capabilities.add("messagesWindow");
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
+  if (grants.has("chat:write")) {
+    capabilities.add("send");
+    capabilities.add("rename");
+    capabilities.add("remove");
+    // Run control also needs chat write access on the host.
+    if (features.has("run-control-v1") && grants.has("runs:control")) {
+      capabilities.add("cancel");
+      capabilities.add("respondApproval");
+      capabilities.add("answerQuestion");
+      capabilities.add("steer");
+    }
+  }
   return capabilities;
+}
+
+/** Why a host refuses control right now, or null when it is online. */
+export function hostControlRefusal(status: Pick<HostChatStatus, "availability" | "blockedReason">): HostChatError | null {
+  switch (status.availability) {
+    case "online":
+      return null;
+    case "connecting":
+      return { code: "host_unavailable", message: "Still connecting to this Mac. Try again once it is online." };
+    case "offline":
+      return { code: "host_unavailable", message: "This Mac is offline. Nothing is sent until it is back online." };
+    case "blocked":
+      return {
+        code: "host_blocked",
+        message:
+          status.blockedReason === "protocol"
+            ? "This Mac runs an incompatible version of Aiden. Update both Macs to control it."
+            : "This Mac needs to be paired again before it can be controlled.",
+      };
+  }
+}
+
+const OUTCOME_UNKNOWN_MESSAGE = "The connection to this Mac changed before it answered. It may or may not have applied this change.";
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function failure(error: unknown): HostChatError {
@@ -51,6 +106,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
   private readonly granted: ReadonlySet<HostChatCapability>;
   private current: HostChatStatus = { availability: "connecting", generation: -1 };
   private readonly listeners = new Set<(status: HostChatStatus) => void>();
+  private readonly chatListeners = new Set<(chatId: string) => void>();
   private readonly offHostState: () => void;
   private disposed = false;
   private readonly initial: Promise<void>;
@@ -84,6 +140,30 @@ export class RemoteHostAdapter implements HostChatAdapter {
   onStatus(listener: (status: HostChatStatus) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onChatChanged(listener: (chatId: string) => void): () => void {
+    this.chatListeners.add(listener);
+    return () => this.chatListeners.delete(listener);
+  }
+
+  private chatChanged(chatId: string): void {
+    if (this.disposed) return;
+    for (const listener of [...this.chatListeners]) listener(chatId);
+  }
+
+  /** Runs a revision-guarded change; a stale or unknown outcome means the loaded revision may be out of date. */
+  private async guarded<T>(chatId: string, change: () => Promise<T>): Promise<T> {
+    try {
+      return await change();
+    } catch (error) {
+      if (
+        error instanceof HostChatControlError &&
+        (error.code === "outcome_unknown" || error.remoteCode === "revision_conflict" || error.status === 409)
+      )
+        this.chatChanged(chatId);
+      throw error;
+    }
   }
 
   private acceptStatus(status: PeerHostStatus): void {
@@ -134,6 +214,151 @@ export class RemoteHostAdapter implements HostChatAdapter {
     });
   }
 
+  /**
+   * Runs one mutation bound to this host and its current generation. It is
+   * refused while the host is not online, and an answer that lands after the
+   * connection changed is reported as `outcome_unknown`: the request may have
+   * been applied, so only a same-key retry is safe.
+   */
+  private async mutate(
+    capability: HostChatCapability,
+    operation: PeerOperation,
+    recover?: (error: PeerOperationError) => { value: unknown } | null,
+  ): Promise<unknown> {
+    if (this.disposed) throw new HostChatControlError(FENCED_ERROR);
+    if (!this.granted.has(capability))
+      throw new HostChatControlError({ code: "unsupported", message: "This Mac does not allow that from here." });
+    const refusal = hostControlRefusal(this.current);
+    if (refusal) throw new HostChatControlError(refusal);
+    const generation = this.current.generation;
+    let outcome: Awaited<ReturnType<PeerHostTransport["call"]>>;
+    try {
+      outcome = await this.transport.call(this.hostId, operation);
+    } catch (error) {
+      outcome = { ok: false, error: { code: "outcome_unknown", message: failure(error).message } };
+    }
+    if (this.disposed || this.current.generation !== generation) {
+      throw new HostChatControlError({ code: "outcome_unknown", message: OUTCOME_UNKNOWN_MESSAGE });
+    }
+    if (outcome.ok) return outcome.value;
+    // The host answered, but not in the expected shape: it may have applied the change.
+    if (outcome.error.code === "invalid_response")
+      throw new HostChatControlError({ ...outcome.error, code: "outcome_unknown", message: OUTCOME_UNKNOWN_MESSAGE });
+    const recovered = recover?.(outcome.error);
+    if (recovered) return recovered.value;
+    throw new HostChatControlError(outcome.error);
+  }
+
+  async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
+    const value = record(
+      await this.mutate("send", {
+        operation: "send",
+        resourceId: chatId,
+        body: { text: input.text },
+        idempotencyKey: input.idempotencyKey,
+      }),
+    );
+    const turnId = text(value.turnId);
+    const streamId = text(value.streamId);
+    if (!turnId || !streamId) throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    return { turnId, streamId };
+  }
+
+  async cancel(_chatId: string, input: HostChatCancelInput): Promise<boolean> {
+    const value = await this.mutate(
+      "cancel",
+      { operation: "runCancel", resourceId: input.runId, body: {}, idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey() },
+      // The run already finished and the host let it go: nothing is left to stop.
+      (error) => (error.remoteCode === "run_gone" ? { value: { cancelRequested: false } } : null),
+    );
+    return record(value).cancelRequested === true;
+  }
+
+  async respondApproval(_chatId: string, input: HostChatApprovalInput): Promise<HostChatApprovalResult> {
+    if (!input.runId) throw new HostChatControlError({ code: "invalid", message: "This approval is no longer attached to a run." });
+    const value = await this.mutate(
+      "respondApproval",
+      {
+        operation: "runRespondApproval",
+        resourceId: input.runId,
+        itemId: input.approvalId,
+        body: { decision: input.decision, ...(input.decision === "allow" && input.scope ? { scope: input.scope } : {}) },
+        idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
+      },
+      // First responder wins: another device or the host's own screen answered.
+      (error) =>
+        error.remoteCode === "approval_resolved"
+          ? { value: { elsewhere: true, decision: error.details?.decision } }
+          : null,
+    );
+    const result = record(value);
+    if (result.elsewhere === true) {
+      const decision = result.decision === "allow" || result.decision === "deny" ? result.decision : undefined;
+      return { resolution: "elsewhere", ...(decision ? { decision } : {}) };
+    }
+    return { resolution: "applied" };
+  }
+
+  async answerQuestion(_chatId: string, input: HostChatQuestionInput): Promise<HostChatQuestionResult> {
+    if (!input.runId) throw new HostChatControlError({ code: "invalid", message: "This question is no longer attached to a run." });
+    const value = await this.mutate(
+      "answerQuestion",
+      {
+        operation: "runRespondQuestion",
+        resourceId: input.runId,
+        itemId: input.promptId,
+        body: { cancelled: input.response.cancelled, answers: input.response.cancelled ? [] : input.response.answers },
+        idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
+      },
+      (error) =>
+        error.remoteCode === "question_already_resolved"
+          ? { value: { outcome: error.details?.outcome === "expired" ? "expired" : "elsewhere" } }
+          : null,
+    );
+    const outcome = record(value).outcome;
+    return { status: outcome === "answered" || outcome === "expired" || outcome === "elsewhere" ? outcome : undefined };
+  }
+
+  async submitInput(_chatId: string, input: HostChatInput): Promise<ChatRunInputAdmissionResult> {
+    const value = record(
+      await this.mutate("steer", {
+        operation: "runInputs",
+        resourceId: input.runId,
+        body: { mode: input.mode, text: input.text },
+        idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
+      }),
+    );
+    const queue = value.queue === "steer" || value.queue === "follow-up" ? value.queue : undefined;
+    const reason =
+      value.reason === "run_not_active" || value.reason === "cancelled" || value.reason === "capacity" || value.reason === "invalid"
+        ? value.reason
+        : undefined;
+    const messageId = text(value.messageId);
+    return {
+      admitted: value.status === "admitted",
+      committed: value.committed === true,
+      ...(queue ? { queue } : {}),
+      ...(reason ? { reason } : {}),
+      ...(messageId ? { messageId } : {}),
+    };
+  }
+
+  async rename(chatId: string, input: HostChatRenameInput): Promise<void> {
+    if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before renaming it." });
+    const revision = input.revision;
+    await this.guarded(chatId, () =>
+      this.mutate("rename", { operation: "renameChat", resourceId: chatId, body: { title: input.title }, revision }),
+    );
+    // The rename gave the chat a new revision; reread it before another guarded change.
+    this.chatChanged(chatId);
+  }
+
+  async remove(chatId: string, input: { revision?: string } = {}): Promise<void> {
+    if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before deleting it." });
+    const revision = input.revision;
+    await this.guarded(chatId, () => this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision }));
+  }
+
   observe(chatId: string, observer: HostChatObserver): () => void {
     let closed = false;
     let key: string | null = null;
@@ -181,5 +406,6 @@ export class RemoteHostAdapter implements HostChatAdapter {
     this.disposed = true;
     this.offHostState();
     this.listeners.clear();
+    this.chatListeners.clear();
   }
 }

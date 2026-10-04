@@ -932,7 +932,7 @@ test("foreground child egress reaches the owner-bound approval UI and consumes a
     source("main/services/subagents/subagent-foreground-persistence-v2.ts"),
     source("main/services/subagents/subagent-child-runner.ts"),
     source("main/services/subagents/child-agent-runtime.ts"),
-    source("renderer/main/chat-pane.tsx"),
+    source("renderer/components/chat-approval-card.tsx"),
   ]);
   const requestApproval = llm.indexOf(
     "requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId)",

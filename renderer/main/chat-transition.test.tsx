@@ -366,7 +366,7 @@ test("revisited generations expose Stop and queue/redirect without admitting a s
   assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
   assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
   assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
-  assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
+  assert.match(stop, /chatControl\.cancel\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
   assert.match(pane, /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u);
