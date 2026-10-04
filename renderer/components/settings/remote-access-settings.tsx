@@ -247,7 +247,7 @@ export function RemoteAccessSettings() {
   const capabilities = useAppCapabilities();
   const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
   const queryClient = useQueryClient();
-  const settingsQuery = useAidenRemoteSettings();
+  const settingsQuery = useAidenRemoteSettings(true);
   const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
   const [setupReview, setSetupReview] = React.useState<{
     transport: "lan" | "tailscale"; instanceId: string; enabled: boolean;

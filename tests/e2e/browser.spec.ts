@@ -83,6 +83,8 @@ test("browser user and automation share a sandboxed page, annotations and isolat
       guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
     }, url);
     await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
+    // Keyboard focus moves into the editor so its controls and Escape are reachable.
+    await expect(page.getByRole("region", { name: "Annotate browser" }).getByRole("button", { name: "Element" })).toBeFocused();
     await expect.poll(() => aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
       const guests = BrowserWindow.getAllWindows().flatMap(window => window.contentView.children)
         .filter(child => "webContents" in child && (child as Electron.WebContentsView).webContents.getURL().startsWith(guestUrl));
@@ -411,4 +413,52 @@ test("guest identity headers match the renderer's navigator.userAgentData", asyn
   } finally {
     server.close();
   }
+});
+
+test("deleting a browser profile asks first, and a failure shows inside Browser settings", async ({ aiden }) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Show Environment" }).click();
+  const surface = page.getByRole("complementary", { name: "Environment work surface" });
+  await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+  await command(page, { action: "profile_create", name: "Work" });
+  const hasWork = async () => (await state(page)).profiles.some(profile => profile.name === "Work");
+  await expect.poll(hasWork).toBe(true);
+
+  await app.evaluate(({ ipcMain }) => {
+    const flags = globalThis as unknown as { failNextProfileDelete?: boolean };
+    flags.failNextProfileDelete = true;
+    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const original = handlers.get("browser:command");
+    if (!original) throw new Error("browser:command is not registered");
+    ipcMain.removeHandler("browser:command");
+    ipcMain.handle("browser:command", (event, ...args) => {
+      if (flags.failNextProfileDelete && (args[1] as { action?: string } | undefined)?.action === "profile_delete") {
+        flags.failNextProfileDelete = false;
+        throw new Error("The Work profile is still in use.");
+      }
+      return original(event, ...args);
+    });
+  });
+
+  await surface.getByRole("button", { name: "Choose browser profile" }).click();
+  await page.getByRole("menuitem", { name: "Browser settings…" }).click();
+  const settings = page.getByRole("dialog", { name: "Browser settings" });
+  await settings.getByRole("combobox", { name: "Manage profile" }).selectOption({ label: "Work" });
+  const remove = settings.getByRole("button", { name: "Delete Work profile" });
+  const confirm = page.getByRole("alertdialog", { name: "Delete the Work profile?" });
+
+  await remove.click();
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  expect(await hasWork()).toBe(true);
+
+  await remove.click();
+  await confirm.getByRole("button", { name: "Delete profile", exact: true }).click();
+  await expect(settings.getByRole("alert")).toContainText("The Work profile is still in use.");
+  expect(await hasWork()).toBe(true);
+
+  await remove.click();
+  await confirm.getByRole("button", { name: "Delete profile", exact: true }).click();
+  await expect.poll(hasWork).toBe(false);
 });
