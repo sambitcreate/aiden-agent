@@ -1,6 +1,7 @@
 // React Query hooks for providers, chats, and settings.
 
 import {
+  queryOptions,
   useMutation,
   useQueries,
   useQuery,
@@ -33,6 +34,7 @@ import {
   webSearchApi,
   workspacesApi,
 } from "./ipc";
+import { isWindowActive } from "./window-activity";
 import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -383,24 +385,47 @@ export function useProvidersModelInfo(providers: Provider[]) {
   };
 }
 
+// Git display reads are refreshed by `git:changed`, agent tool results,
+// settled chats and window activation (see git-query-sync.ts). Polling is only
+// a safety net, and it stops while the window is hidden or blurred.
+export const GIT_SAFETY_POLL_MS = 60_000;
+const PULL_REQUEST_POLL_MS = 5 * 60_000;
+const PULL_REQUEST_STALE_MS = 60_000;
+const GIT_STALE_MS = 5_000;
+
+/** A refetch interval that is switched off while the window is hidden or blurred. */
+export function pollWhileWindowActive(intervalMs: number) {
+  return () => (isWindowActive() ? intervalMs : false);
+}
+
+export function gitSafetyPoll(enabled: boolean, intervalMs = GIT_SAFETY_POLL_MS) {
+  return enabled ? pollWhileWindowActive(intervalMs) : false;
+}
+
 export function useGitInfo(workspaceId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.git(workspaceId),
     queryFn: () => workspacesApi.gitInfo(workspaceId as string),
     enabled: Boolean(workspaceId),
-    refetchInterval: 5_000,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(true),
+    staleTime: GIT_STALE_MS,
+  });
+}
+
+export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined, enabled = true) {
+  return queryOptions({
+    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    // `gh pr view` is a network call. Push, focus and repository-change
+    // events refresh it when stale; the interval only catches remote updates.
+    refetchInterval: gitSafetyPoll(enabled, PULL_REQUEST_POLL_MS),
+    staleTime: PULL_REQUEST_STALE_MS,
   });
 }
 
 export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
-    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
-    enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 30_000 : false,
-    staleTime: 30_000,
-  });
+  return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
 }
 
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
@@ -408,8 +433,8 @@ export function useGitReview(workspaceId: string | undefined, enabled = true) {
     queryKey: queryKeys.gitReview(workspaceId),
     queryFn: () => gitApi.review(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 4_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -418,8 +443,8 @@ export function useGitPushCapability(workspaceId: string | undefined, enabled = 
     queryKey: queryKeys.gitPushCapability(workspaceId),
     queryFn: () => gitApi.pushCapability(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    refetchInterval: enabled ? 5_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -432,8 +457,8 @@ export function useGitComparison(
     queryKey: queryKeys.gitComparison(workspaceId, targetRef),
     queryFn: () => gitApi.compare(workspaceId as string, targetRef as string),
     enabled: Boolean(workspaceId) && Boolean(targetRef) && enabled,
-    refetchInterval: enabled ? 5_000 : false,
-    staleTime: 1_000,
+    refetchInterval: gitSafetyPoll(enabled),
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -442,7 +467,7 @@ export function useGitWorktrees(workspaceId: string | undefined, enabled = true)
     queryKey: queryKeys.gitWorktrees(workspaceId),
     queryFn: () => gitApi.worktrees(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    staleTime: 1_000,
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -451,7 +476,7 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
     queryKey: queryKeys.gitBranches(workspaceId),
     queryFn: () => gitApi.branches(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    staleTime: 1_000,
+    staleTime: GIT_STALE_MS,
   });
 }
 
@@ -500,6 +525,7 @@ export function useDiscoveredSkills(workspaceId: string | undefined) {
     queryFn: () => skillsApi.catalog(workspaceId as string),
     enabled: Boolean(workspaceId),
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -508,6 +534,9 @@ export function useChat(id: string | undefined) {
     queryKey: id ? queryKeys.chat(id) : ["chat", "none"],
     queryFn: () => (id ? chatsApi.get(id) : Promise.resolve(null)),
     enabled: Boolean(id),
+    // Revisiting a chat re-reads it (the streaming and settlement paths keep
+    // the open chat current; focus no longer resends it).
+    staleTime: 0,
   });
 }
 
@@ -584,6 +613,9 @@ export function useUsageSummary(range: UsageDateRange) {
   return useQuery({
     queryKey: queryKeys.usage(range),
     queryFn: () => usageApi.summary(range),
+    // Usage grows with every generation and has no push event.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -597,12 +629,22 @@ export function useFoundationModelsConnection(enabled = true) {
   });
 }
 
+// Skill files and MCP server state can change outside the app with no push
+// event, so these re-read on focus once stale.
 export function useSkills() {
-  return useQuery({ queryKey: queryKeys.skills, queryFn: skillsApi.list });
+  return useQuery({
+    queryKey: queryKeys.skills,
+    queryFn: skillsApi.list,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useMcpServers() {
-  return useQuery({ queryKey: queryKeys.mcpServers, queryFn: mcpApi.list });
+  return useQuery({
+    queryKey: queryKeys.mcpServers,
+    queryFn: mcpApi.list,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useMcpPresets() {
@@ -625,18 +667,35 @@ export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
 }
 
-export function useAidenRemoteSettings() {
-  return useQuery({
+// Each Remote snapshot runs the Tailscale CLI twice. Settings changes arrive as
+// `remote:changed`, so only a surface showing live status (the open popover or
+// Remote settings) polls quickly; the always-visible sidebar badge refreshes
+// once a minute while the window is active, and on focus once stale.
+export const AIDEN_REMOTE_LIVE_POLL_MS = 10_000;
+export const AIDEN_REMOTE_IDLE_POLL_MS = 60_000;
+
+export function aidenRemoteSettingsQueryOptions(live = false) {
+  return queryOptions({
     queryKey: queryKeys.aidenRemote,
     queryFn: aidenRemoteApi.get,
     retry: false,
     refetchOnWindowFocus: true,
-    refetchInterval: 10_000,
+    staleTime: live ? 0 : AIDEN_REMOTE_IDLE_POLL_MS,
+    refetchInterval: live ? AIDEN_REMOTE_LIVE_POLL_MS : pollWhileWindowActive(AIDEN_REMOTE_IDLE_POLL_MS),
   });
 }
 
+export function useAidenRemoteSettings(live = false) {
+  return useQuery(aidenRemoteSettingsQueryOptions(live));
+}
+
 export function useEngineStatus(enabled = true) {
-  return useQuery({ queryKey: queryKeys.engineStatus, queryFn: localVoiceApi.status, enabled });
+  return useQuery({
+    queryKey: queryKeys.engineStatus,
+    queryFn: localVoiceApi.status,
+    enabled,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useLocalModels(enabled = true) {

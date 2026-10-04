@@ -57,6 +57,14 @@ test("the stateful panel renders a checking state before any IPC answers", () =>
   assert.match(html, /aria-labelledby="devices-empty-title"/u);
 });
 
+test("a failed first state read stops the checking spinner and offers Try again", () => {
+  const html = view({ state: null, error: "Device service is not running.", onRetryLoad: noop });
+  assert.doesNotMatch(html, /Checking simulator setup/u);
+  assert.match(html, /Couldn’t check simulator setup/u);
+  assert.match(html, /role="alert"[^>]*>Device service is not running\./u);
+  assert.match(html, />Try again<\/button>/u);
+});
+
 test("consent explains npm and the node-datachannel prebuilt download before setup", () => {
   const html = view({ state: state("needs-consent") });
   assert.match(html, /iOS Simulator/u);

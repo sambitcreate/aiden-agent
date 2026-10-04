@@ -2,11 +2,13 @@ import * as React from "react";
 import { Plus, RotateCw, Trash2 } from "lucide-react";
 import type { BrowserCommand, BrowserCommandResult, BrowserDefaults, BrowserImportSource, BrowserState } from "../shared/browser";
 import { BROWSER_DEVICE_PRESETS, validBrowserViewport } from "../lib/browser-ui-state";
-import { Button, Dialog, Input, Text } from "./ui";
+import { AlertDialog, Button, Dialog, Input, Text } from "./ui";
 
-export function BrowserSettings({ state, open, onOpenChange, run }: {
+export function BrowserSettings({ state, open, onOpenChange, run, error = null }: {
   state: BrowserState; open: boolean; onOpenChange: (open: boolean) => void;
   run: (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
+  /** The latest browser action error, shown here because the modal hides the panel's error strip. */
+  error?: string | null;
 }) {
   const [profileId, setProfileId] = React.useState(state.defaults.profileId);
   const [name, setName] = React.useState("");
@@ -14,6 +16,7 @@ export function BrowserSettings({ state, open, onOpenChange, run }: {
   const [sources, setSources] = React.useState<BrowserImportSource[] | null>(null);
   const [sourceId, setSourceId] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [importMessage, setImportMessage] = React.useState("");
   const [defaultWidth, setDefaultWidth] = React.useState(String(state.defaults.viewport.width));
   const [defaultHeight, setDefaultHeight] = React.useState(String(state.defaults.viewport.height));
@@ -29,6 +32,7 @@ export function BrowserSettings({ state, open, onOpenChange, run }: {
   };
   return <Dialog open={open} onOpenChange={onOpenChange} title="Browser settings" description="Browser preferences apply to new tabs opened by you or Aiden." onConfirm={() => onOpenChange(false)}>
     <div className="browser-settings">
+      {error ? <p role="alert" className="text-small text-red">{error}</p> : null}
       <section aria-labelledby="browser-defaults-heading">
         <Text id="browser-defaults-heading" variant="strong">New tabs</Text>
         <label className="browser-setting-row">Profile
@@ -86,7 +90,7 @@ export function BrowserSettings({ state, open, onOpenChange, run }: {
         {profile && !["default", "incognito"].includes(profile.id) ? <form className="browser-profile-edit" onSubmit={(event) => { event.preventDefault(); if (name.trim()) void operate({ action: "profile_rename", profileId: profile.id, name: name.trim() }); }}>
           <Input aria-label="Profile name" value={name} maxLength={48} onChange={(event) => setName(event.target.value)} />
           <Button size="small" type="submit" disabled={busy || !name.trim() || name.trim() === profile.name}>Rename</Button>
-          <Button size="small" iconOnly aria-label={`Delete ${profile.name} profile`} disabled={busy} onClick={() => void operate({ action: "profile_delete", profileId: profile.id }).then((result) => { if (result) setProfileId("default"); })}><Trash2 /></Button>
+          <Button size="small" iconOnly aria-label={`Delete ${profile.name} profile`} disabled={busy} onClick={() => setDeleteOpen(true)}><Trash2 /></Button>
         </form> : null}
         <form className="browser-profile-edit" onSubmit={(event) => { event.preventDefault(); if (newName.trim()) void operate({ action: "profile_create", name: newName.trim() }).then((result) => { if (result) setNewName(""); }); }}>
           <Input aria-label="New profile name" placeholder="New profile name" value={newName} maxLength={48} onChange={(event) => setNewName(event.target.value)} />
@@ -104,5 +108,19 @@ export function BrowserSettings({ state, open, onOpenChange, run }: {
         </div> : null}
       </section>
     </div>
+    {profile ? <AlertDialog
+      open={deleteOpen}
+      onOpenChange={setDeleteOpen}
+      title={`Delete the ${profile.name} profile?`}
+      description="Its cookies, sign-ins, cache and website data are erased, and any tabs using it close. This can’t be undone."
+      confirmLabel={busy ? "Deleting…" : "Delete profile"}
+      confirmVariant="destructive"
+      busy={busy}
+      keepOpenOnConfirm
+      onConfirm={() => void operate({ action: "profile_delete", profileId: profile.id }).then((result) => {
+        setDeleteOpen(false);
+        if (result) setProfileId("default");
+      })}
+    /> : null}
   </Dialog>;
 }

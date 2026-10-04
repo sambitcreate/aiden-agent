@@ -39,6 +39,7 @@ import { reloadPortableConfig } from "./services/portable-config.js";
 import {
   createLastSafeSnapshotReload,
   createPortableConfigWatcher,
+  createThrottledTrigger,
 } from "./services/portable-config-watch-core.js";
 import { setPortableCredentialSnapshotListener } from "./services/portable-credential-snapshot.js";
 import {
@@ -61,6 +62,7 @@ import type {
 } from "../renderer/shared/app-update.js";
 import { devLogPath } from "./services/dev-log.js";
 import { flushDiagnosticJournal, writeDiagnosticEvent } from "./services/diagnostic-journal.js";
+import { openProcessStartupIpcAdmission } from "./services/startup-ipc-admission.js";
 import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
@@ -422,6 +424,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       terminalService.flushHistory(),
       browserService.shutdown(),
       shutdownDevices(),
+      // Bounded so a wedged server cannot hold quit; stdio children that miss
+      // the budget are still signalled by their transports' close.
+      mcpManager.closeAllWithin(2_000).then((closed) => {
+        if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
+      }),
     ]);
   } catch (error) {
     logger.error(
@@ -1027,12 +1034,16 @@ function refreshFoundationModelsStatus(force = false): void {
   void foundationModelsConnection.status(force ? { force: true } : undefined);
 }
 
-async function createMainWindow(): Promise<void> {
+async function createMainWindow(
+  options: { startupAdmissionHeld?: boolean } = {},
+): Promise<void> {
   let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
   // shortcut can all arrive while whenReady is still initializing. Never let
   // those alternate paths expose a renderer to a partial shortcut snapshot.
-  await shortcutInitializationPromise;
+  // The startup window may skip the wait: the startup IPC admission holds its
+  // renderer's invokes until shortcuts and reconciliation have finished.
+  if (!options.startupAdmissionHeld) await shortcutInitializationPromise;
   if (mainWindow && !mainWindow.isDestroyed()) {
     const existingWindow = mainWindow;
     await mainWindowLoads.wait();
@@ -1665,6 +1676,8 @@ if (!ownsSingleInstanceLock) {
       ),
   );
 
+  let initialMainWindow: Promise<void> = Promise.resolve();
+  let startupIpcAdmitted = false;
   app
     .whenReady()
     .then(async () => {
@@ -1709,6 +1722,16 @@ if (!ownsSingleInstanceLock) {
           crashDumpsPath: runtimeProfile.crashDumpsPath,
         });
       }
+      // Start the main window now so the renderer bundle loads in parallel
+      // with the reconcile chain below. The startup IPC admission (installed in
+      // bootstrap.ts) holds every renderer invoke until that chain finishes,
+      // so no renderer reads or writes state before reconciliation.
+      nativeTheme.themeSource = normalizeAppearanceConfig(
+        (await configStore.getSettings()).appearance,
+      ).mode;
+      initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
+      // Observed below after reconciliation; never an unhandled rejection.
+      initialMainWindow.catch(() => undefined);
       try {
         terminalService.installHistoryStore(
           await TerminalHistoryStore.create(),
@@ -1759,7 +1782,9 @@ if (!ownsSingleInstanceLock) {
         );
       }
       await subagentRunStore.initialize();
-      await toolOutputStore.pruneExpired().catch(() => {
+      // Expiry cleanup is not part of reconciliation; let it run alongside
+      // the rest of startup instead of delaying the first window.
+      void toolOutputStore.pruneExpired().catch(() => {
         logger.warn("pi", "Expired tool output cleanup could not complete.");
       });
       const toolOutputCleanup = setInterval(() => {
@@ -2003,10 +2028,13 @@ if (!ownsSingleInstanceLock) {
       // The active profile's portable config is user-editable, so pick
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
-      app.on(
-        "browser-window-focus",
+      // Focus can fire repeatedly while switching windows; a throttle keeps
+      // that to one re-read per interval plus one trailing pass.
+      const focusConfigRefresh = createThrottledTrigger(
         () => void portableConfigWatcher.refresh(),
+        2_000,
       );
+      app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {
@@ -2019,12 +2047,29 @@ if (!ownsSingleInstanceLock) {
         );
       }
 
-      await createMainWindow();
+      openProcessStartupIpcAdmission();
+      startupIpcAdmitted = true;
+      writeDiagnosticEvent({
+        level: "info",
+        area: "app",
+        event: "startup-reconciled",
+        outcome: "completed",
+      });
+      await initialMainWindow;
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
       }
       try {
+        // Hold the startup catch-up burst while the screen is locked, and
+        // re-check it whenever the machine wakes or unlocks.
+        scheduleService.setCatchUpDeferPolicy(
+          () => powerMonitor.getSystemIdleState(1) === "locked",
+        );
+        powerMonitor.on("resume", () => scheduleService.reevaluateCatchUp());
+        powerMonitor.on("unlock-screen", () =>
+          scheduleService.reevaluateCatchUp(),
+        );
         await scheduleService.start();
       } catch (error) {
         logger.error(
@@ -2049,6 +2094,10 @@ if (!ownsSingleInstanceLock) {
     })
     .catch((error: unknown) => {
       logger.error("main", "Failed to start Aiden Agent", error);
+      // A startup window whose renderer was never admitted holds no user
+      // state, and its held invokes could never answer a close handshake.
+      if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed())
+        mainWindow.destroy();
       void shutdownAndQuit();
     });
 }

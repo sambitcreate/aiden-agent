@@ -56,7 +56,7 @@ export function registerPeerHostHandlers(): void {
         });
         if (owner.isDestroyed())
           throw new Error("The application document changed.");
-        return peerOperationResult(operation, result);
+        return await peerOperationResult(operation, result);
       } finally {
         detach();
       }

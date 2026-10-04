@@ -39,6 +39,8 @@ export interface DevicesPanelViewProps {
   onAgentAccess(granted: boolean): void;
   /** Lets paired Macs that were granted simulator control view and drive this Mac's simulators. */
   onPeerSharing(granted: boolean): void;
+  /** Re-reads the service state after the first read failed. */
+  onRetryLoad?(): void;
   /** Renders the live viewer for the open session. */
   viewer?: (session: DeviceSession, device: DeviceSummary) => React.ReactNode;
 }
@@ -284,11 +286,26 @@ export function DevicesPanelView({
   onOpen,
   onAgentAccess,
   onPeerSharing,
+  onRetryLoad,
   viewer,
 }: DevicesPanelViewProps) {
   // A narrow panel keeps explanations for assistive technology only; status and errors stay visible.
   const explain = compact ? "sr-only" : undefined;
   const spinner = <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />;
+  if (!state && error) {
+    return (
+      <Empty icon={<TriangleAlert aria-hidden />} title="Couldn’t check simulator setup">
+        <Text variant="small" className="text-red" role="alert">
+          {error}
+        </Text>
+        {onRetryLoad ? (
+          <Button variant="muted" size="small" onClick={onRetryLoad}>
+            Try again
+          </Button>
+        ) : null}
+      </Empty>
+    );
+  }
   if (!state) {
     return (
       <Empty icon={spinner} title="iOS Simulator">
@@ -434,6 +451,7 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
   const [error, setError] = React.useState<string | null>(null);
   const visible = useDocumentVisible();
   const listedRef = React.useRef(false);
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
 
   React.useEffect(() => {
     if (!active) return;
@@ -459,7 +477,7 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
       current = false;
       unsubscribe();
     };
-  }, [active]);
+  }, [active, loadAttempt]);
 
   const run = async (key: string, task: () => Promise<unknown>) => {
     if (pending) return;
@@ -488,6 +506,10 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
       compact={compact}
       pending={pending}
       error={error}
+      onRetryLoad={() => {
+        setError(null);
+        setLoadAttempt((attempt) => attempt + 1);
+      }}
       onSetup={() => void run("setup", () => devicesApi.setConsent("streaming", true))}
       onStart={() => void run("start", () => devicesApi.refresh("local"))}
       onRefresh={() => void run("refresh", () => devicesApi.refresh())}

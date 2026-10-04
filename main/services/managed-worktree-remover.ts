@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { syncDirectory } from "./durable-fs.js";
 
 export type ManagedWorktreeRemovalFailure =
   | "identity_changed"
@@ -42,15 +43,6 @@ function finalizingRemovalManifestPath(manifestPath: string): string {
 
 function deletingRemovalManifestPath(manifestPath: string): string {
   return `${manifestPath}.deleting`;
-}
-
-async function syncDirectory(directoryPath: string): Promise<void> {
-  const directory = await fs.open(directoryPath, "r");
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
-  }
 }
 
 /**

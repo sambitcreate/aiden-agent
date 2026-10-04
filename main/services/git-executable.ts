@@ -74,3 +74,80 @@ export async function resolveGitExecutable(
   }
   throw new Error("Git is not installed or unavailable. Install Git to use repository features; ordinary chat does not require it.");
 }
+
+export type GitExecutableResolver = (
+  binary: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+) => Promise<string>;
+
+interface GitExecutableResolverOptions {
+  /** How long a resolution is trusted before the full search (and its xcode-select probe) reruns. */
+  ttlMs?: number;
+  now?: () => number;
+}
+
+const DEFAULT_RESOLUTION_TTL_MS = 5 * 60_000;
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
+/**
+ * Memoizes {@link resolveGitExecutable} per binary/PATH/DEVELOPER_DIR. Every Git command
+ * otherwise repeats the PATH walk and, when Apple's shim leads PATH, spawns xcode-select.
+ * A hit is revalidated with one filesystem probe of the resolved file, so an uninstalled
+ * or replaced Git is noticed on the next command; failures are never cached.
+ */
+export function createGitExecutableResolver(
+  deps: GitExecutableDependencies = defaults,
+  options: GitExecutableResolverOptions = {},
+): GitExecutableResolver {
+  const ttlMs = options.ttlMs ?? DEFAULT_RESOLUTION_TTL_MS;
+  const now = options.now ?? Date.now;
+  const resolved = new Map<string, { executable: string; at: number }>();
+  const pending = new Map<string, Promise<string>>();
+
+  return async (binary, cwd, env, signal) => {
+    signal?.throwIfAborted();
+    if (deps.platform !== "darwin") return binary;
+    const key = JSON.stringify([
+      binary.includes("/") ? path.resolve(cwd, binary) : binary,
+      env.PATH ?? null,
+      env.DEVELOPER_DIR ?? null,
+    ]);
+    const cached = resolved.get(key);
+    if (cached && now() - cached.at < ttlMs) {
+      const current = await abortable(deps.executablePath(cached.executable), signal);
+      if (current === cached.executable) return cached.executable;
+    }
+    if (resolved.get(key) === cached) resolved.delete(key);
+    let resolution = pending.get(key);
+    if (!resolution) {
+      // Shared by concurrent callers, so it must not inherit any one caller's signal.
+      resolution = resolveGitExecutable(binary, cwd, env, undefined, deps).then(
+        (executable) => {
+          resolved.set(key, { executable, at: now() });
+          return executable;
+        },
+      ).finally(() => pending.delete(key));
+      // A caller may abort before attaching; the failure still surfaces to the others.
+      resolution.catch(() => undefined);
+      pending.set(key, resolution);
+    }
+    return abortable(resolution, signal);
+  };
+}
+
+/** Process-wide memoized resolver used by the Git service. */
+export const resolveGitExecutableMemoized: GitExecutableResolver = createGitExecutableResolver();
