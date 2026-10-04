@@ -142,6 +142,7 @@ export function PresetSetupDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={onOpenChange}
       title={

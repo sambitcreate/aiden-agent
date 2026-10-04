@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -12,6 +13,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+
+import { writeFileAtomic } from "../durable-fs.js";
 
 interface OwnershipRecord {
   pid: number;
@@ -51,36 +54,48 @@ export function createTelegramOwnershipLease(options: {
   const file = path.join(directory, `${options.profile}.json`);
   const staleMs = options.staleMs ?? 10_000;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  // Bumped on every acquire and release so a heartbeat write that finishes
+  // after release can tell that it published a lease nobody holds any more.
+  let epoch = 0;
+  let refreshing = false;
 
   function owns(): boolean {
     const record = readRecord(file);
     return record?.pid === process.pid && record.generation === generation;
   }
 
-  function write(record: OwnershipRecord, exclusive: boolean): void {
+  function claim(record: OwnershipRecord): void {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (exclusive) {
-      const descriptor = openSync(file, "wx", 0o600);
-      try {
-        writeFileSync(descriptor, JSON.stringify(record));
-      } finally {
-        closeSync(descriptor);
-      }
-      return;
+    const descriptor = openSync(file, "wx", 0o600);
+    try {
+      writeFileSync(descriptor, JSON.stringify(record));
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
     }
-    const temporary = `${file}.${generation}.tmp`;
-    writeFileSync(temporary, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-    renameSync(temporary, file);
   }
 
-  function refresh(): void {
+  async function refresh(): Promise<void> {
+    // Heartbeats never overlap, so a slow disk cannot queue an unbounded backlog.
+    if (refreshing) return;
+    refreshing = true;
+    const startedIn = epoch;
     try {
       const current = readRecord(file);
       if (!current || current.pid !== process.pid || current.generation !== generation) return;
-      write({ ...current, heartbeatAt: now() }, false);
+      // A unique staging name per write: a crash-left stage can never wedge
+      // later heartbeats, and the heartbeat no longer blocks the main thread.
+      // The record is ephemeral liveness state, so it skips fsync.
+      await writeFileAtomic(file, JSON.stringify({ ...current, heartbeatAt: now() }), {
+        mode: 0o600,
+        fsync: false,
+      });
+      if (epoch !== startedIn && !heartbeat && owns()) unlinkSync(file);
     } catch {
       // A heartbeat must never crash the app. Losing ownership is detected by
       // owns() and the next launch can quarantine a stale or malformed lease.
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -96,14 +111,16 @@ export function createTelegramOwnershipLease(options: {
         recovered = true;
       }
       const timestamp = now();
-      write({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp }, true);
-      heartbeat = setInterval(refresh, Math.max(1_000, Math.floor(staleMs / 4)));
+      claim({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp });
+      epoch += 1;
+      heartbeat = setInterval(() => void refresh(), Math.max(1_000, Math.floor(staleMs / 4)));
       heartbeat.unref?.();
       return { acquired: true, recovered };
     },
     release(): void {
       if (heartbeat) clearInterval(heartbeat);
       heartbeat = undefined;
+      epoch += 1;
       if (owns()) {
         try {
           unlinkSync(file);

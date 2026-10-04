@@ -1,6 +1,6 @@
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import Bonjour from "bonjour-service";
+import type Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
@@ -406,6 +406,12 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
   ): Promise<void> {
     this.stop();
     const generation = ++this.generation;
+    // bonjour-service is only needed once Remote publishes on Linux, so it
+    // loads here rather than on the main-process startup path.
+    const { default: BonjourService } = await import("bonjour-service");
+    if (this.generation !== generation) {
+      throw new Error("Local discovery was stopped before it became ready.");
+    }
     let ready = false;
     let failed = false;
     let rejectStartup: (error: Error) => void = () => undefined;
@@ -424,7 +430,7 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
       if (!ready) rejectStartup(error);
       else onUnexpectedFailure(error);
     };
-    const bonjour = new Bonjour(undefined, fail);
+    const bonjour = new BonjourService(undefined, fail);
     this.bonjour = bonjour;
     const service = bonjour.publish({
       name: aidenRemoteBonjourServiceName(input.displayName, input.instanceId),

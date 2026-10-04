@@ -3,6 +3,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { readRegularUtf8File } from "./regular-file-read.js";
+import { syncDirectory } from "./durable-fs.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -32,15 +33,6 @@ interface EncryptedPiCredentialStoreOptions {
   syncDirectory?(directory: string): Promise<void>;
   beforeWritePublish?(): void;
   afterWritePublish?(): void;
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 class AsyncMutex {

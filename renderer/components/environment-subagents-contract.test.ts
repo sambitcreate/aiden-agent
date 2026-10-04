@@ -262,7 +262,7 @@ test("the Environment work surface owns one mounted Subagents destination", () =
 
 test("main-derived capabilities gate every renderer entry and repair disabled navigation", () => {
   const appHandler = source("../../main/handlers/app.ts");
-  const bootstrap = source("../main/index.tsx");
+  const bootstrap = source("../main/app.tsx");
   const environment = source("./environment-panel.tsx");
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");

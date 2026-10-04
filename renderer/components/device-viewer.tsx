@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  AlertDialog,
   Button,
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -95,6 +96,10 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const [attempt, setAttempt] = React.useState(0);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = React.useState(false);
+  const [shutdownOpen, setShutdownOpen] = React.useState(false);
+  const toolsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const toolsRef = React.useRef<HTMLDivElement | null>(null);
+  const frameBlockerId = React.useId();
   const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() => readFramePreference());
   const [webglUnavailable, setWebglUnavailable] = React.useState(false);
   /** Sticky once a frame lands, so the 3D frame never loads for a stream that turns out flat-only. */
@@ -318,7 +323,18 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         </Button>
       </div>
     ) : null;
+  React.useEffect(() => {
+    if (!toolsOpen) return;
+    toolsRef.current
+      ?.querySelector<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")
+      ?.focus();
+  }, [toolsOpen]);
+  const closeTools = () => {
+    setToolsOpen(false);
+    toolsTriggerRef.current?.focus();
+  };
   const toggleFrame = () => {
+    if (blocker !== null) return;
     const next = framePreference === "3d" ? "flat" : "3d";
     setFramePreference(next);
     writeFramePreference(next);
@@ -333,6 +349,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     <Button
       variant="transparent"
       size="small"
+      iconOnly
       aria-label={name}
       title={name}
       disabled={disabled}
@@ -440,6 +457,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             <Button
               variant="transparent"
               size="small"
+              iconOnly
               aria-label="Text size"
               title="Text size"
               disabled={controls.disabled || !controls.settings?.textSize}
@@ -468,36 +486,68 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         <Button
           variant={framePreference === "3d" && blocker === null ? "muted" : "transparent"}
           size="small"
+          iconOnly
           aria-label="3D frame"
           title={frameBlockerLabel(blocker)}
           aria-pressed={framePreference === "3d" && blocker === null}
-          disabled={blocker !== null}
+          // aria-disabled keeps the button focusable and hoverable so the reason stays reachable.
+          aria-disabled={blocker !== null || undefined}
+          aria-describedby={blocker !== null ? frameBlockerId : undefined}
+          className={blocker !== null ? "opacity-45" : undefined}
           onClick={toggleFrame}
         >
           <Box aria-hidden />
         </Button>
+        {blocker !== null ? (
+          <span id={frameBlockerId} className="sr-only">
+            {frameBlockerLabel(blocker)}
+          </span>
+        ) : null}
         {frame3d && resetPose ? railButton("Reset 3D view", <Rotate3d aria-hidden />, resetPose) : null}
         <Button
           variant={toolsOpen ? "muted" : "transparent"}
           size="small"
+          iconOnly
+          ref={toolsTriggerRef}
           aria-label="Device tools"
           title="Device tools"
           aria-pressed={toolsOpen}
           aria-expanded={toolsOpen}
           aria-controls={toolsOpen ? "device-tools" : undefined}
-          onClick={() => setToolsOpen((open) => !open)}
+          onClick={() => (toolsOpen ? closeTools() : setToolsOpen(true))}
         >
           <SlidersHorizontal aria-hidden />
         </Button>
         <span className="flex-1" />
-        {railButton("Shut down simulator", <Power aria-hidden />, () => onClose(true))}
+        {railButton("Shut down simulator", <Power aria-hidden />, () => setShutdownOpen(true))}
         {railButton("Close simulator", <X aria-hidden />, () => onClose(false))}
       </div>
       {toolsOpen ? (
-        <div id="device-tools" className="device-viewer-tools">
-          <DeviceToolsPanel controls={controls} onClose={() => setToolsOpen(false)} />
+        <div
+          id="device-tools"
+          ref={toolsRef}
+          className="device-viewer-tools"
+          onKeyDown={(event) => {
+            // Menus inside the drawer portal out of it; their Escape belongs to them.
+            if (event.key !== "Escape" || event.defaultPrevented) return;
+            if (!event.currentTarget.contains(event.target as Node)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeTools();
+          }}
+        >
+          <DeviceToolsPanel controls={controls} onClose={closeTools} />
         </div>
       ) : null}
+      <AlertDialog
+        open={shutdownOpen}
+        onOpenChange={setShutdownOpen}
+        title={`Shut down ${device.name}?`}
+        description="The simulator and any apps running on it stop. Close simulator instead keeps it running in the background."
+        confirmLabel="Shut down"
+        confirmVariant="destructive"
+        onConfirm={() => onClose(true)}
+      />
     </section>
   );
 }

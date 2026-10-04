@@ -171,13 +171,22 @@ test("completed first-send receipts retain quota until handoff or abandonment", 
 test("corrupt and mismatched UUID payload collisions are preserved byte-for-byte", async (t) => {
   const f = await fixture(t);
   const commit = createFirstMessageCommitter(f.deps);
+  const preserved = async (chatId: string): Promise<string> => {
+    // A torn payload is set aside under a hidden sibling by the first read;
+    // a parseable mismatched payload stays where it is.
+    const names = (await fs.readdir(f.directory)).filter((name) =>
+      name === `${chatId}.json` || (name.startsWith(`.${chatId}.json.`) && name.endsWith(".corrupt")));
+    assert.equal(names.length, 1);
+    return fs.readFile(path.join(f.directory, names[0]!), "utf8");
+  };
   for (const contents of ["{interrupted payload", JSON.stringify({ id: "another-id", title: "Keep me", messages: [], createdAt: 1, updatedAt: 1 })]) {
     const input = parseChatFirstMessage(request());
-    const file = path.join(f.directory, `${input.chatId}.json`);
-    await fs.writeFile(file, contents, "utf8");
-    await assert.rejects(commit(input, f.owner), /unreadable existing chat/u);
-    assert.equal(await fs.readFile(file, "utf8"), contents);
-    assert.equal(f.turns.owns(input.chatId, input.turnId, f.owner.documentId), false);
+    await fs.writeFile(path.join(f.directory, `${input.chatId}.json`), contents, "utf8");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(commit(input, f.owner), /unreadable existing chat/u);
+      assert.equal(await preserved(input.chatId), contents);
+      assert.equal(f.turns.owns(input.chatId, input.turnId, f.owner.documentId), false);
+    }
   }
   assert.deepEqual(await f.store.list(), []);
 });
