@@ -432,8 +432,10 @@ test("a reconnect cursor resumes without resending snapshots the device already 
     }),
   });
   const grants = new Set(["tasks:read", "agents:read"] as const);
-  const lastEventId = (response: Response) =>
-    Number([...response.chunks.join("").matchAll(/^id: (\d+)$/gmu)].at(-1)![1]);
+  const lastEventId = (response: Response) => {
+    const ids = [...response.chunks.join("").matchAll(/^id: (\d+)$/gmu)];
+    return Number(ids[ids.length - 1]![1]);
+  };
   const first = new Response();
   await service.openEvents("device-1", "chat-1", grants, 0, first.wire);
   assert.equal(first.chunks.length, 2, "a fresh stream hydrates both projections");
