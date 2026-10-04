@@ -62,3 +62,25 @@ test("a failed provider removal stays open with the error, then succeeds on retr
   await expect(confirm).toBeHidden();
   await expect(page.getByRole("button", { name: "Remove LM Studio (local)" })).toHaveCount(0);
 });
+
+test("Enter in a dialog text field saves, and Escape still cancels", async ({ aiden }) => {
+  const { page } = aiden;
+  await openProviders(page);
+  const configure = page
+    .getByText("LM Studio (local)", { exact: true })
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
+    .getByRole("button", { name: "Configure", exact: true });
+  await configure.click();
+  const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
+  const name = dialog.getByRole("group", { name: "Name", exact: true }).getByRole("textbox");
+  await name.fill("Studio box");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Studio box", { exact: true })).toHaveCount(0);
+
+  await configure.click();
+  await name.fill("Studio box");
+  await name.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Studio box", { exact: true })).toBeVisible();
+});

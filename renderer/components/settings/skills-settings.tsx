@@ -265,6 +265,7 @@ function SkillEditor({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={onOpenChange}
       title={skill.name ? `Edit ${skill.name}` : "New skill"}

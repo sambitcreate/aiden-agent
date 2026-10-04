@@ -27,6 +27,7 @@ import {
   SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
 } from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
+import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-enter";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
   compactSidebarAutoFocusIntent,
@@ -1093,6 +1094,11 @@ type DialogProps = React.PropsWithChildren<{
   returnFocus?: () => HTMLElement | null;
   size?: "large";
   layer?: DialogLayer;
+  /**
+   * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
+   * dialog, while confirm is visible, enabled, and not busy.
+   */
+  submitOnEnter?: boolean;
 }>;
 
 export function Dialog({
@@ -1115,6 +1121,7 @@ export function Dialog({
   returnFocus,
   size,
   layer = "default",
+  submitOnEnter = false,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1145,6 +1152,28 @@ export function Dialog({
           }}
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
+          onKeyDown={
+            submitOnEnter
+              ? (event) => {
+                  if (confirmHidden || confirmDisabled || busy || !onConfirm) return;
+                  const target = event.target;
+                  // React events bubble through portals; ignore keys from nested popovers or dialogs.
+                  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+                  const key = {
+                    key: event.key,
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                    isComposing: event.nativeEvent.isComposing,
+                    defaultPrevented: event.defaultPrevented,
+                  };
+                  if (!shouldSubmitDialogOnEnter(key, dialogEnterTarget(target))) return;
+                  event.preventDefault();
+                  void onConfirm();
+                }
+              : undefined
+          }
           className={cn(
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",

@@ -471,6 +471,7 @@ export function PullRequestLinkDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) onOpenChange(nextOpen);

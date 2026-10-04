@@ -322,6 +322,7 @@ export function ProviderEditor({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       layer={layer}
       busy={saving || testing}

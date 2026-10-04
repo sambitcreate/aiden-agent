@@ -529,6 +529,7 @@
         "renderer/lib/device-duo-control.test.ts",
         "renderer/lib/device-foreground.test.ts",
         "renderer/lib/device-stream.test.ts",
+        "renderer/lib/dialog-enter.test.ts",
         "renderer/lib/dialog-motion-contract.test.ts",
         "renderer/lib/dictation-operation-gate.test.ts",
         "renderer/lib/dictation-sounds.test.ts",
