@@ -52,8 +52,15 @@ test("a failed provider removal stays open with the error, then succeeds on retr
     });
   });
 
-  await page.getByRole("button", { name: "Remove LM Studio (local)" }).click();
+  const remove = page.getByRole("button", { name: "Remove LM Studio (local)" });
   const confirm = page.getByRole("alertdialog", { name: "Remove this provider?" });
+  // Cancelling returns focus to the button that opened the confirmation.
+  await remove.click();
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(remove).toBeFocused();
+
+  await remove.click();
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(confirm.getByRole("alert")).toContainText("Provider store is locked.");
   await expect(confirm).toBeVisible();

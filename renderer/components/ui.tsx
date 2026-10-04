@@ -1247,6 +1247,13 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  // Remember what had focus when the dialog opened so closing can return there.
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, [open]);
   const confirm = (
     <Button
       variant={confirmVariant === "destructive" ? "destructive" : "accent"}
@@ -1272,8 +1279,12 @@ export function AlertDialog({
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
+            const opener = openerRef.current?.isConnected ? openerRef.current : null;
+            openerRef.current = null;
             const target =
-              returnFocus?.() ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+              returnFocus?.() ??
+              opener ??
+              document.querySelector<HTMLElement>("[data-app-focus-root]");
             if (target?.isConnected) {
               event.preventDefault();
               target.focus();
