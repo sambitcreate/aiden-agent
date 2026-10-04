@@ -32,6 +32,7 @@ import {
   Monitor,
   MousePointer2,
   OctagonAlert,
+  Paperclip,
   Plus,
   ShieldQuestion,
   Square,
@@ -440,6 +441,7 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  const [fileDragActive, setFileDragActive] = React.useState(false);
   React.useLayoutEffect(() => {
     if (!workspace?.id) return;
     const available = () => {
@@ -1459,6 +1461,7 @@ export function Composer({
   );
 
   const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+    setFileDragActive(false);
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1466,7 +1469,17 @@ export function Composer({
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setFileDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    // Moving between children fires dragleave on the shell; only clear when the
+    // pointer actually leaves it.
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setFileDragActive(false);
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1848,8 +1861,22 @@ export function Composer({
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
+            {fileDragActive ? (
+              <div
+                aria-hidden="true"
+                data-composer-drop-target
+                className="composer-drop-overlay pointer-events-none absolute inset-0 z-30 grid place-items-center bg-popover"
+              >
+                <span className="composer-drop-overlay absolute inset-0 bg-status-accent-surface" />
+                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent">
+                  <Paperclip className="size-4" aria-hidden="true" />
+                  Drop to attach
+                </span>
+              </div>
+            ) : null}
             <span id={attachmentDescriptionId} className="sr-only">
               Drag files here or paste an image to attach it. Use Attach files or images to choose
               files with the keyboard.

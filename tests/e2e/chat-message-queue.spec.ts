@@ -793,3 +793,30 @@ test("messages sent during compaction queue behind it and survive a failed compa
     .toEqual(["During compaction retry", "During compaction first", "During compaction second"]);
   await expect(queue).toBeHidden();
 });
+
+test("dragging files over the composer shows a drop target that clears when the drag leaves", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const shell = page.locator(".composer-shell");
+  const composer = page.locator("textarea");
+  const dropHint = shell.getByText("Drop to attach", { exact: true });
+  const files = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+    return transfer;
+  });
+  const text = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", "just text");
+    return transfer;
+  });
+
+  await composer.dispatchEvent("dragover", { dataTransfer: text });
+  await expect(dropHint).toHaveCount(0);
+  await composer.dispatchEvent("dragover", { dataTransfer: files });
+  await expect(dropHint).toBeVisible();
+  await shell.dispatchEvent("dragleave", { dataTransfer: files });
+  await expect(dropHint).toHaveCount(0);
+});
