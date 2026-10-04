@@ -7,6 +7,7 @@ import {
   applyRemoteRunEvents,
   applyRemoteRunStreamState,
   applyRemoteRunSubscription,
+  handOffRemoteRun,
   initialRemoteRunView,
   remoteRunTranscript,
   type RemoteRunView,
@@ -239,4 +240,32 @@ test("a chat with no current run subscribes idle, and a gone stream settles the 
   assert.equal(gone.view.ended, true);
   assert.equal(remoteRunTranscript(gone.view, []).agentActivity, null);
   assert.equal(applyRemoteRunStreamState(running, "waiting").view, running);
+});
+
+test("a settled reply hands off to the persisted transcript even when its message id is unknown", () => {
+  // The host names a synthetic id when its done payload carries no assistant message.
+  const synthetic = fold([
+    event(1, "run.started", {}),
+    event(2, "text_delta", { text: "Answer" }),
+    event(3, "done", { messageId: "assistant_turn-1" }),
+  ]).view;
+  const persisted = [assistant("a-1", "Answer")];
+  assert.equal(remoteRunTranscript(synthetic, []).streamingText, "Answer", "the row waits for the window read");
+  assert.equal(remoteRunTranscript(synthetic, persisted).streamingText, "Answer");
+  const handed = handOffRemoteRun(synthetic);
+  assert.equal(remoteRunTranscript(handed, persisted).streamingText, null, "the window read after done owns the reply");
+  assert.equal(remoteRunTranscript(handed, persisted).agentActivity, null);
+
+  // A run whose done event was missed settles from run.ended alone.
+  const endedOnly = fold([event(1, "run.started", {}), event(2, "text_delta", { text: "Answer" }), event(4, "run.ended", { state: "done" })]).view;
+  assert.equal(endedOnly.doneMessageId, null);
+  assert.equal(remoteRunTranscript(handOffRemoteRun(endedOnly), persisted).streamingText, null);
+
+  // A window read while the run is still going hands nothing off.
+  const running = fold([event(1, "run.started", {}), event(2, "text_delta", { text: "Ans" })]).view;
+  assert.equal(handOffRemoteRun(running), running);
+  assert.equal(remoteRunTranscript(handOffRemoteRun(running), []).streamingText, "Ans");
+  // A newer run starts without the previous hand-off.
+  const next = applyRemoteRunEvent(handed, event(1, "text_delta", { text: "Next" }, "run-2")).view;
+  assert.equal(remoteRunTranscript(next, persisted).streamingText, "Next");
 });

@@ -22,6 +22,7 @@ This PR is about viewing and live observation only. Send, stop, approvals, quest
   - `run.ended` is applied once even though it repeats the terminal sequence.
   - A `truncated` subscription asks for a refetch before its events apply.
   - Terminal events and `run.started` also ask for a refetch, so the persisted turn replaces the stream.
+  - The streamed row stays until the persisted reply arrives: either a window holds the `done` message id, or the session has read the newest window after the run settled (`handOffRemoteRun`). The second case covers the host's synthetic `assistant_<turnId>` id and a run that only reports `run.ended`, so the reply is never shown twice.
 - **Adapter** (`renderer/lib/hosts/host-chat-adapter.ts` and `remote-host-adapter.ts`).
   - `HostChatAdapter` exposes `capabilities`, `ready`, `status`/`onStatus`, `getMessagesWindow`, `observe` and `markRead`. `ready()` resolves once the host's first status is known, so the first read is fenced against a real generation.
   - The remote adapter wraps `peerHostsApi` behind an injectable transport.

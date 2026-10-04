@@ -52,6 +52,12 @@ export interface RemoteRunView {
   /** Assistant message the host persisted for a `done` run. */
   doneMessageId: string | null;
   /**
+   * The newest window was read after the run settled, so the persisted
+   * transcript owns the reply even when `doneMessageId` is synthetic or
+   * missing.
+   */
+  handedOff: boolean;
+  /**
    * Part of the live text was not delivered (a `gap` snapshot or a truncated
    * subscription). The partial text is not shown; the persisted window
    * replaces it when the run ends.
@@ -82,6 +88,7 @@ export function initialRemoteRunView(runId: string | null = null, chatId: string
     questions: [],
     errorMessage: null,
     doneMessageId: null,
+    handedOff: false,
     incomplete: false,
   };
 }
@@ -359,6 +366,14 @@ export function applyRemoteRunSubscription(current: RemoteRunView, subscription:
   return { view: state.view, refetch: refetch || state.refetch };
 }
 
+/**
+ * The newest messages window was read. Once the run has settled, that read
+ * holds whatever the host persisted for it, so the streamed row gives way.
+ */
+export function handOffRemoteRun(view: RemoteRunView): RemoteRunView {
+  return isTerminal(view.status) && !view.handedOff ? { ...view, handedOff: true } : view;
+}
+
 /** A main-side stream state change for the observed key. */
 export function applyRemoteRunStreamState(current: RemoteRunView, state: PeerRunStreamState): RemoteRunStep {
   if ((state === "ended" || state === "gone") && current.runId !== null && !current.ended) {
@@ -397,7 +412,8 @@ export interface RemoteRunTranscript {
  */
 export function remoteRunTranscript(view: RemoteRunView, messages: readonly ChatMessage[]): RemoteRunTranscript {
   const active = view.status === "running" && !view.ended;
-  const persisted = view.doneMessageId !== null && messages.some((message) => message.id === view.doneMessageId);
+  const persisted =
+    view.handedOff || (view.doneMessageId !== null && messages.some((message) => message.id === view.doneMessageId));
   const handoff = view.status === "done" && !persisted && !view.incomplete && view.text.length > 0;
   const showRow = active || handoff;
   const streamingText = showRow ? (view.incomplete ? "" : view.text) : null;
