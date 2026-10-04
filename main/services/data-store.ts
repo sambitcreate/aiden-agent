@@ -29,6 +29,12 @@ export interface DataStoreOptions<T> {
   /** POSIX mode applied to every atomically staged replacement. */
   fileMode?: number;
   /**
+   * Write single-line JSON. Use this for machine-owned journals that are
+   * rewritten often; indentation is only for files people read or edit.
+   * Loading accepts either form, so files written indented still load.
+   */
+  compact?: boolean;
+  /**
    * Keep an unparseable or unreadable file aside before a write replaces it, so
    * a JSON typo, a torn write, or a permission problem costs a restart rather
    * than the data. On by default; only pure regenerable caches should pass
@@ -486,7 +492,7 @@ export class DataStore<T> {
     if (this.options.isSafe && !this.options.isSafe(data)) {
       throw new DataStoreUnsafeWriteError();
     }
-    const serialized = `${JSON.stringify(data, null, 2)}\n`;
+    const serialized = `${this.options.compact ? JSON.stringify(data) : JSON.stringify(data, null, 2)}\n`;
     if (
       this.options.maxBytes !== undefined &&
       Buffer.byteLength(serialized, "utf8") > this.options.maxBytes
