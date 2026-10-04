@@ -106,7 +106,10 @@ test("real chat files and summary rows are deleted while corrupt and populated p
       remove: (id, check) => store.remove(id, async (chat) => { if (chat) await check(chat); }),
     }), 1);
     await assert.rejects(fs.stat(path.join(root, "empty.json")), { code: "ENOENT" });
-    assert.equal(await fs.readFile(path.join(root, "corrupt.json"), "utf8"), "{broken");
+    // The unreadable payload is set aside under a hidden sibling, never deleted.
+    const kept = (await fs.readdir(root)).filter((name) => name.startsWith(".corrupt.json.") && name.endsWith(".corrupt"));
+    assert.equal(kept.length, 1);
+    assert.equal(await fs.readFile(path.join(root, kept[0]!), "utf8"), "{broken");
     const reopened = createChatStore(async () => root);
     assert.equal((await reopened.get("populated"))?.messages[0]?.content, "hello");
     assert.ok(!(await reopened.listSummaryMetadata()).some((chat) => chat.id === "empty"));

@@ -5,6 +5,8 @@ import {
   buildGeminiTranscriptionRequest,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
+  startTranscriptionDeadline,
+  transcriptionTimeoutMs,
 } from "./transcription-core.js";
 
 test("Gemini 3.5 transcription uses a non-stored verbatim Interactions request", () => {
@@ -63,4 +65,41 @@ test("Gemini Interactions responses return only model transcript text and usage"
     text: "",
     usage: undefined,
   });
+});
+
+test("a transcription without a caller signal is still aborted at its deadline and reported as a timeout", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const deadline = startTranscriptionDeadline(64 * 1024);
+  t.mock.timers.tick(transcriptionTimeoutMs(64 * 1024) - 1);
+  assert.equal(deadline.signal.aborted, false);
+  t.mock.timers.tick(1);
+  assert.equal(deadline.signal.aborted, true);
+  const failure = deadline.failure(deadline.signal.reason) as Error;
+  assert.equal(failure.name, "TimeoutError");
+  assert.match(failure.message, /timed out after \d+ s/u);
+  deadline.dispose();
+});
+
+test("caller cancellation passes through unchanged and a disposed deadline never fires", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const caller = new AbortController();
+  const cancelled = startTranscriptionDeadline(0, caller.signal);
+  const reason = new Error("user stopped dictation");
+  caller.abort(reason);
+  assert.equal(cancelled.signal.reason, reason);
+  assert.equal(cancelled.failure(reason), reason, "a user cancel is not a timeout");
+  cancelled.dispose();
+
+  const finished = startTranscriptionDeadline(0);
+  finished.dispose();
+  t.mock.timers.tick(10 * 60_000);
+  assert.equal(finished.signal.aborted, false);
+});
+
+test("transcription deadlines grow with audio size up to a cap", () => {
+  const short = transcriptionTimeoutMs(100 * 1024);
+  const long = transcriptionTimeoutMs(10 * 1024 * 1024);
+  assert.ok(short >= 120_000 && short < long);
+  assert.equal(transcriptionTimeoutMs(1024 * 1024 * 1024), 5 * 60_000);
+  assert.equal(transcriptionTimeoutMs(Number.NaN), transcriptionTimeoutMs(0));
 });

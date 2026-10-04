@@ -41,11 +41,11 @@ function statusBadge(
   error: boolean,
   configured: boolean,
 ): React.ReactNode {
-  if (signingOut) return <Badge color="secondary">Signing out</Badge>;
-  if (checking) return <Badge color="secondary">Checking</Badge>;
+  if (signingOut) return <Badge>Signing out</Badge>;
+  if (checking) return <Badge>Checking</Badge>;
   if (error) return <Badge color="red">Needs attention</Badge>;
   if (configured) return <Badge color="green">Configured</Badge>;
-  return <Badge color="secondary">Sign in needed</Badge>;
+  return <Badge>Sign in needed</Badge>;
 }
 
 export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLayer }) {

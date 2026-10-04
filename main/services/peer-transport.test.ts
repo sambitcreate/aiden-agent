@@ -43,7 +43,7 @@ test("desktop manual pairing consumes the native clients' canonical cryptographi
   );
 });
 
-test("closed peer operations reject injected routes and require mutation identity", () => {
+test("closed peer operations reject injected routes and require mutation identity", async () => {
   for (const operation of ["cancel", "respondApproval"]) {
     assert.throws(() =>
       peerOperationRequest({ operation, resourceId: "resource" }),
@@ -72,15 +72,14 @@ test("closed peer operations reject injected routes and require mutation identit
     }),
     { method: "GET", path: "/workspaces/work/files/file_handle" },
   );
-  assert.throws(
-    () =>
-      peerOperationResult(
-        { operation: "server" },
-        { nested: { credential: "secret" } },
-      ),
+  await assert.rejects(
+    peerOperationResult(
+      { operation: "server" },
+      { nested: { credential: "secret" } },
+    ),
     /response contract/,
   );
-  assert.throws(() =>
+  await assert.rejects(
     peerOperationResult({ operation: "chat" }, { id: "missing-fields" }),
   );
 });
@@ -492,7 +491,7 @@ test("pairing tolerates bounded skew but rejects nonsense expiry", () => {
   assert.throws(() => assertPeerPairingExpiry("nonsense", now));
 });
 
-test("every exposed operation rejects malformed DTOs and preserves legitimate content", () => {
+test("every exposed operation rejects malformed DTOs and preserves legitimate content", async () => {
   const operations = [
     "server",
     "summaries",
@@ -516,27 +515,27 @@ test("every exposed operation rejects malformed DTOs and preserves legitimate co
     "createWorkspace",
   ];
   for (const operation of operations)
-    assert.throws(() => peerOperationResult({ operation }, {}), operation);
+    await assert.rejects(peerOperationResult({ operation }, {}), operation);
   const models = {
     providers: [],
     defaults: { secret: "model-id", headers: "another-model" },
   };
   assert.deepEqual(
-    peerOperationResult({ operation: "models" }, models),
+    await peerOperationResult({ operation: "models" }, models),
     models,
   );
   assert.deepEqual(
-    peerOperationResult({ operation: "approval" }, { approval: null }),
+    await peerOperationResult({ operation: "approval" }, { approval: null }),
     { approval: null },
   );
-  assert.throws(() =>
+  await assert.rejects(
     peerOperationResult(
       { operation: "approval" },
       { approval: null, credential: "private" },
     ),
   );
   assert.equal(
-    peerOperationResult({ operation: "deleteChat" }, undefined),
+    await peerOperationResult({ operation: "deleteChat" }, undefined),
     undefined,
   );
 });

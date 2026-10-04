@@ -7,10 +7,11 @@
  * to PATH while device tools are attached, so the agent gets the version the
  * `device_open` guidance was written for, whatever is installed globally.
  */
-import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentDeviceEndpoint } from "./device-host.js";
+import { writeFileAtomic } from "../durable-fs.js";
 
 const SHIM_DIR = "bin";
 
@@ -82,12 +83,5 @@ async function writeIfChanged(file: string, content: string, mode: number): Prom
     await chmod(file, mode);
     return;
   }
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, content, { mode });
-    await chmod(temporary, mode);
-    await rename(temporary, file);
-  } finally {
-    await rm(temporary, { force: true }).catch(() => undefined);
-  }
+  await writeFileAtomic(file, content, { mode });
 }

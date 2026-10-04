@@ -158,6 +158,7 @@ export function GitCommitDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) onOpenChange(nextOpen);
@@ -208,8 +209,8 @@ export function GitCommitDialog({
                   <Label
                     key={option}
                     className={cn(
-                      "items-start rounded-control border border-field px-3 py-2.5",
-                      !disabled && "cursor-pointer hover:border-primary/30 hover:bg-list-hover",
+                      "items-start rounded-control bg-well px-3 py-2.5 transition-colors duration-150 motion-reduce:transition-none has-[[data-state=checked]]:bg-list-selection",
+                      !disabled && "cursor-pointer hover:bg-list-hover",
                       disabled && "opacity-45",
                     )}
                   >

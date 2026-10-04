@@ -68,6 +68,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "renderer-invalidation-listener-failed",
   "child-process-gone",
   "electron-ready",
+  "startup-reconciled",
   "remote-request-failed",
   "remote-request-slow",
   "tailscale-status-read-unavailable",

@@ -7,8 +7,8 @@
  * (a local spawn) but never contacts npm. Consent is device-local, stored in
  * `userData/devices/consent.json`, because the installs it authorizes are.
  */
-import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   LOCAL_DEVICE_HOST_ID,
@@ -42,6 +42,7 @@ import {
   ensureAgentDeviceShim,
   writeAgentDeviceConfig,
 } from "./agent-device-shim.js";
+import { writeJsonAtomic } from "../durable-fs.js";
 
 export const DEVICE_BOOT_TIMEOUT_MS = 3 * 60_000;
 const HUB_REQUEST_TIMEOUT_MS = 30_000;
@@ -327,13 +328,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   function saveConsent(): Promise<void> {
     const next = saving.then(async () => {
       await mkdir(deps.baseDir, { recursive: true });
-      const temporary = `${consentPath}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        await writeFile(temporary, `${JSON.stringify({ version: 1, ...consent }, null, 2)}\n`);
-        await rename(temporary, consentPath);
-      } finally {
-        await rm(temporary, { force: true }).catch(() => undefined);
-      }
+      await writeJsonAtomic(consentPath, { version: 1, ...consent }, { space: 2, trailingNewline: true });
     });
     saving = next.catch(() => undefined);
     return next;

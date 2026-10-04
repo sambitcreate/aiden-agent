@@ -23,6 +23,7 @@ import {
 } from "./pi-legacy-session.js";
 import { createCurrentPiSessionRepository } from "./pi-session-repository-port.js";
 import { convertOldPiV4Journal, upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
+import { syncDirectory } from "./durable-fs.js";
 
 export const PI_SESSION_MIGRATION_RECEIPT_VERSION = 1 as const;
 
@@ -162,15 +163,6 @@ async function durableCopy(
     await handle.close();
   }
   await syncDirectory(path.dirname(destination));
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 async function readValidBackup(

@@ -23,6 +23,8 @@ const store = new DataStore<ModelsDevCacheDocument>(
     maxBytes: 65 * 1024 * 1024,
     fileMode: 0o600,
     normalize: parseModelsDevCacheDocument,
+    // Display-only cache of a manual fetch; a rescue copy would only litter.
+    preserveCorruptFile: false,
   },
 );
 
