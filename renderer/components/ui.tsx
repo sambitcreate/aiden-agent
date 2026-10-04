@@ -928,9 +928,12 @@ export function ScrollArea({
     });
   }, [followBottomNow]);
 
+  const hasToolbar = Boolean(toolbar ?? (title || leading || actions));
+  const hasFooter = Boolean(footer);
   React.useLayoutEffect(() => {
     const measure = () => {
-      setToolbarHeight(toolbarRef.current?.getBoundingClientRect().height ?? 0);
+      const nextToolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      setToolbarHeight((current) => current === nextToolbarHeight ? current : nextToolbarHeight);
       const nextFooterHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
       if (alignFooterToScrollContent) {
         const scrollViewport = viewport.current;
@@ -951,7 +954,9 @@ export function ScrollArea({
     if (toolbarRef.current) observer.observe(toolbarRef.current);
     if (footerRef.current) observer.observe(footerRef.current);
     return () => observer.disconnect();
-  }, [alignFooterToScrollContent, toolbar, footer, title, leading, actions, scheduleFollowBottom]);
+    // Content changes inside the toolbar/footer surface through the observer;
+    // only their presence decides which elements are observed.
+  }, [alignFooterToScrollContent, hasToolbar, hasFooter, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     scheduleFollowBottom();
