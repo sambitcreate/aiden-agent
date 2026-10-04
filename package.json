@@ -171,7 +171,7 @@
     "test:tailscale-live": "tsx scripts/aiden-remote-tailscale-live-acceptance.ts",
     "build:secret-service-authority": "node scripts/build-secret-service-authority.mjs",
     "test:bot-authority": "tsx --test main/services/bot-capability-keychain-anchor.test.ts main/services/bot-capability-secret-service-anchor.test.ts",
-    "test:main-shared": "tsx --test main/shared/guards.test.ts main/shared/path-containment.test.ts",
+    "test:main-shared": "tsx --test main/shared/guards.test.ts main/shared/path-containment.test.ts main/shared/redaction.test.ts",
     "test:subagent-worker-smoke": "npm run build:electron && node --test scripts/subagent-inference-worker-smoke.test.mjs",
     "test:secret-service-integration": "npm run build:secret-service-authority && node scripts/run-secret-service-integration.mjs",
     "build:global-shortcuts-portal": "node scripts/build-global-shortcuts-portal.mjs",

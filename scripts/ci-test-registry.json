@@ -195,6 +195,7 @@
         "main/services/workspace-schedule-restoration.test.ts",
         "main/shared/guards.test.ts",
         "main/shared/path-containment.test.ts",
+        "main/shared/redaction.test.ts",
         "main/windows/pill-window-security.test.ts",
         "scripts/check-ci-policy.test.mjs",
         "scripts/ci-changes.test.mjs",
