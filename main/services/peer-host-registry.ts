@@ -629,7 +629,7 @@ export class PeerHostRegistry {
       const instanceId = hostIdentifier(target.instanceId);
       await this.reserve(instanceId, attempt, options);
       reserved = true;
-      const grant = await requestPeerPairing({
+      return await requestPeerPairing({
         session: this.bootstrap({
           endpoint: target.endpoint,
           mode: target.route === "tailscale" ? "webpki" : "unverified",
@@ -641,30 +641,34 @@ export class PeerHostRegistry {
         clientVersion: this.options.clientVersion,
         signal: attempt.controller.signal,
         onMatchCode,
-      });
-      attempt.assertCurrent();
-      // The match code covered the key seen at this address, and TLS checks
-      // the sealed `.local` name against it, so the address may stand in for
-      // a name this device cannot resolve.
-      const address = target.route === "lan" ? endpointIPv4(target.endpoint) : undefined;
-      if (address) this.lanAddresses.remember(instanceId, address);
-      return await this.finish(
-        {
-          trust: {
-            endpoint: grant.endpoint,
-            serverSpkiSha256: grant.serverSpkiSha256,
-            ...(grant.caCertificateDerBase64
-              ? { caCertificateDerBase64: grant.caCertificateDerBase64 }
-              : {}),
-          },
-          instanceId: grant.instanceId,
-          deviceId: grant.deviceId,
-          credential: grant.credential,
-          grants: grant.capabilities,
+        // The request is withdrawn (revoking the credential) unless this
+        // confirms and saves the host.
+        install: async (grant) => {
+          attempt.assertCurrent();
+          // The match code covered the key seen at this address, and TLS checks
+          // the sealed `.local` name against it, so the address may stand in for
+          // a name this device cannot resolve.
+          const address = target.route === "lan" ? endpointIPv4(target.endpoint) : undefined;
+          if (address) this.lanAddresses.remember(instanceId, address);
+          return await this.finish(
+            {
+              trust: {
+                endpoint: grant.endpoint,
+                serverSpkiSha256: grant.serverSpkiSha256,
+                ...(grant.caCertificateDerBase64
+                  ? { caCertificateDerBase64: grant.caCertificateDerBase64 }
+                  : {}),
+              },
+              instanceId: grant.instanceId,
+              deviceId: grant.deviceId,
+              credential: grant.credential,
+              grants: grant.capabilities,
+            },
+            attempt,
+            options,
+          );
         },
-        attempt,
-        options,
-      );
+      });
     } catch (error) {
       if (!attempt.current())
         throw new PeerPairingOutcomeError({ status: "cancelled" });

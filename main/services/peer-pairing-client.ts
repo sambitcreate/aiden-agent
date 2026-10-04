@@ -36,7 +36,7 @@ const POLL_RETRY_MS = 1_000;
 /** The host's TTL is 2 minutes; stop polling shortly after the stated expiry. */
 const EXPIRY_GRACE_MS = 15_000;
 
-export interface PeerPairingRequestInput {
+export interface PeerPairingRequestInput<T> {
   /** The bootstrap session for the address the user picked. */
   session: PeerBootstrapClient;
   /** The installation the user picked; the grant must name it. */
@@ -52,6 +52,13 @@ export interface PeerPairingRequestInput {
   signal: AbortSignal;
   /** Called once both screens can show the same code. */
   onMatchCode(code: string, expiresAt: string): void;
+  /**
+   * Confirm and save the opened grant. Until this resolves the request is
+   * still withdrawn on any failure or cancel, which revokes the credential
+   * on the other device, so a pairing this device never saved leaves no
+   * working credential behind.
+   */
+  install(grant: PeerPairingRequestGrant): Promise<T>;
   now?(): number;
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
 }
@@ -119,13 +126,12 @@ function deny(outcome: PeerPairingFailure): never {
 }
 
 /**
- * Ask another desktop to pair with this one and wait for its answer.
- * Resolves with the opened grant once the other device allows it.
- * Every other ending throws `PeerPairingOutcomeError`.
+ * Ask another desktop to pair with this one, wait for its answer and
+ * install the grant. Resolves with what `install` returns once the other
+ * device allows it and the grant is installed. Every other ending throws
+ * `PeerPairingOutcomeError` and withdraws the request.
  */
-export async function requestPeerPairing(
-  input: PeerPairingRequestInput,
-): Promise<PeerPairingRequestGrant> {
+export async function requestPeerPairing<T>(input: PeerPairingRequestInput<T>): Promise<T> {
   const now = input.now ?? Date.now;
   const sleep = input.sleep ?? sleepFor;
   const { session, signal } = input;
@@ -257,8 +263,9 @@ export async function requestPeerPairing(
               status: "failed",
               message: "A different device answered this request.",
             });
+          const installed = await input.install(grant);
           created = undefined;
-          return grant;
+          return installed;
         }
         default:
           throw new Error("Invalid pairing status.");
@@ -269,7 +276,9 @@ export async function requestPeerPairing(
     if (error instanceof PeerPairingOutcomeError) throw error;
     throw new PeerPairingOutcomeError(peerPairingFailure(error));
   } finally {
-    // Withdraw an unanswered request so the other device's prompt closes.
+    // Withdraw the request so the other device's prompt closes, or, once
+    // it was allowed, so the credential this device did not install is
+    // revoked there.
     if (created) {
       const { requestId, pollSecret } = created;
       void session

@@ -523,13 +523,28 @@ test("an approved grant nobody collected is revoked when it retires or the servi
   );
 });
 
-test("a requester that cancels before collecting its grant leaves no working credential", async () => {
+test("a requester that cancels before or after collecting its grant leaves no working credential", async () => {
   const { service, liveDevices } = harness();
   const { created } = await open(service);
   await service.respond(created.requestId, "allow");
   assert.equal(liveDevices().length, 1);
   assert.equal((await service.cancel(created.requestId, created.pollSecret)).state, "cancelled");
   assert.equal(liveDevices().length, 0);
+
+  // A requester that collected the envelope but could not install the
+  // pairing withdraws it the same way, and the envelope is gone.
+  const collected = await open(service, { source: "10.0.0.2", transport: "lan" });
+  await service.respond(collected.created.requestId, "allow");
+  assert.ok((await service.poll(collected.created.requestId, collected.created.pollSecret)).envelope);
+  assert.equal(liveDevices().length, 1);
+  assert.equal(
+    (await service.cancel(collected.created.requestId, collected.created.pollSecret)).state,
+    "cancelled",
+  );
+  assert.equal(liveDevices().length, 0);
+  const after = await service.poll(collected.created.requestId, collected.created.pollSecret);
+  assert.equal(after.state, "cancelled");
+  assert.equal(after.envelope, undefined);
 });
 
 test("the reveal is one-shot and the prompt appears only after it", async () => {

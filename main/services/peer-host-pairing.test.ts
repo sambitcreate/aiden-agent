@@ -11,13 +11,23 @@ import { PeerPairingOutcomeError, type PeerPairingFailure } from "./peer-pairing
 import { startPeerTestHost, type PeerTestHost } from "./peer-pairing-test-host.js";
 import { PeerTransport, PeerTransportError } from "./peer-transport.js";
 
-function registryFor(host: PeerTestHost, options: { localInstanceId?: string } = {}) {
+function registryFor(
+  host: PeerTestHost,
+  options: {
+    localInstanceId?: string;
+    /** Called as each `/server` read starts, with the credential it presents. */
+    onServerRead?: (credential: string | undefined) => void;
+    /** Refuse to save, as a full disk or a locked keychain does. */
+    failSave?: boolean;
+  } = {},
+) {
   let saved: StoredPeerHost[] = [];
   let repinned = 0;
   const registry = new PeerHostRegistry({
     storage: {
       load: async () => structuredClone(saved),
       save: async (next) => {
+        if (options.failSave) throw new Error("The disk is full.");
         saved = structuredClone(next);
       },
     },
@@ -26,12 +36,20 @@ function registryFor(host: PeerTestHost, options: { localInstanceId?: string } =
     clientVersion: "0.60.0",
     platform: "mac",
     // The fixture CA stands in for the system roots of a Tailscale certificate.
-    client: (trust) =>
-      new PeerTransport({
+    client: (trust) => {
+      const transport = new PeerTransport({
         endpoint: trust.endpoint,
         serverSpkiSha256: trust.serverSpkiSha256,
         caCertificateDerBase64: trust.caCertificateDerBase64 ?? host.caDerBase64,
-      }),
+      });
+      return {
+        json: (input) => {
+          if (input.path === "/server") options.onServerRead?.(input.credential);
+          return transport.json(input);
+        },
+        events: (input, onFrame) => transport.events(input, onFrame),
+      };
+    },
     bootstrap: (session) => new PeerBootstrapTransport({ ...session, ca: host.caPem }),
     repinned: () => {
       repinned += 1;
@@ -70,6 +88,12 @@ async function eventually(check: () => boolean) {
   for (let attempt = 0; attempt < 100 && !check(); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(check());
+}
+
+async function eventuallyAsync(check: () => Promise<boolean>) {
+  for (let attempt = 0; attempt < 100 && !(await check()); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(await check());
 }
 
 test("an allowed LAN request saves a host pinned to the key the code covered", async (t) => {
@@ -151,6 +175,84 @@ test("cancelling while waiting withdraws the request from the other device", asy
   await eventually(() => host.requests.list().length === 0);
   assert.ok(host.seen.some((entry) => entry.startsWith("DELETE /api/aiden/v1/pairing/requests/")));
   assert.deepEqual(saved(), []);
+});
+
+/** Whether the host still serves a request that presents `credential`. */
+async function hostAccepts(host: PeerTestHost, credential: string | undefined) {
+  assert.ok(credential, "the client presented the credential it was granted");
+  const transport = new PeerTransport({
+    endpoint: host.lanEndpoint,
+    serverSpkiSha256: host.serverSpkiSha256(),
+    caCertificateDerBase64: host.caDerBase64,
+  });
+  try {
+    await transport.json({ path: "/server", credential });
+    return true;
+  } catch (error) {
+    if (error instanceof PeerTransportError && error.code === "authentication_required") return false;
+    throw error;
+  }
+}
+
+test("cancelling while the allowed pairing is being confirmed revokes its credential on the other device", async (t) => {
+  const host = await startPeerTestHost();
+  t.after(() => host.close());
+  const controller = new AbortController();
+  let granted: string | undefined;
+  const { registry, saved } = registryFor(host, {
+    onServerRead: (credential) => {
+      granted = credential;
+      controller.abort();
+    },
+  });
+  const pairing = registry.pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+    answer(host, "allow"),
+    controller.signal,
+  );
+  assert.deepEqual(await outcome(pairing), { status: "cancelled" });
+  assert.deepEqual(saved(), []);
+  assert.deepEqual(await registry.list(), []);
+  await eventuallyAsync(async () => !(await hostAccepts(host, granted)));
+  assert.deepEqual(
+    (await host.devices.listDevices()).filter((device) => device.revokedAt === undefined),
+    [],
+  );
+});
+
+test("a pairing this device cannot save revokes its credential on the other device", async (t) => {
+  const host = await startPeerTestHost();
+  t.after(() => host.close());
+  let granted: string | undefined;
+  const { registry, saved } = registryFor(host, {
+    failSave: true,
+    onServerRead: (credential) => {
+      granted = credential;
+    },
+  });
+  const failure = await outcome(
+    registry.pairWithRequest(
+      { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+      answer(host, "allow"),
+    ),
+  );
+  assert.equal(failure.status, "failed");
+  assert.deepEqual(saved(), []);
+  assert.deepEqual(await registry.list(), []);
+  await eventuallyAsync(async () => !(await hostAccepts(host, granted)));
+
+  // A pairing that does save keeps its credential.
+  const { registry: working } = registryFor(host);
+  const view = await working.pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+    answer(host, "allow"),
+  );
+  assert.equal(view.state, "connected");
+  assert.equal(
+    (await host.devices.listDevices()).filter((device) => device.revokedAt === undefined).length,
+    1,
+  );
+  assert.deepEqual(await working.request(host.instanceId, { path: "/server" }).then(() => "served"), "served");
 });
 
 test("a setup code opens the sealed payload for the typed address and pairs over the pinned exchange", async (t) => {

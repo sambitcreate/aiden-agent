@@ -61,6 +61,7 @@ function run(host: ReturnType<typeof scriptedHost>, clock = { now: START }, sign
     clientVersion: "0.60.0",
     signal,
     onMatchCode: (code) => codes.push(code),
+    install: async (grant) => grant,
     now: () => clock.now,
     sleep: async (ms) => {
       clock.now += ms;

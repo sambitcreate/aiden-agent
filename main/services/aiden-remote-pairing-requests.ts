@@ -439,28 +439,24 @@ export class AidenRemotePairingRequestService {
     return this.status(record, signal?.aborted !== true);
   }
 
-  /** Requester-side cancel. A delivered grant is left alone. */
+  /**
+   * Requester-side cancel. An approved request is withdrawn too, delivered
+   * or not: only the requester can open the envelope, so a requester that
+   * cancels after collecting it is abandoning its own credential (it could
+   * not confirm or save the pairing). The issued device is revoked.
+   */
   async cancel(requestId: string, secret: string | undefined): Promise<{ requestId: string; state: AidenPairingRequestState }> {
     const record = this.authorize(requestId, secret);
     this.expireIfDue(record);
     if (isOpen(record)) {
       this.finish(record, "cancelled");
     } else if (record.state === "approved") {
-      if (!record.delivered) {
-        // The requester gave up before it collected the credential, so no
-        // one holds it. Revoke and report the request as cancelled.
-        record.envelope = undefined;
-        const deviceId = record.issuedDeviceId;
-        record.issuedDeviceId = undefined;
-        record.state = "cancelled";
-        this.changed();
-        if (deviceId) await this.revokeIssued(deviceId);
-      } else {
-        // Delivered: the requester holds a working credential. Retire the
-        // record now so the envelope cannot be fetched again.
-        this.retire(record.requestId);
-        return { requestId, state: "approved" };
-      }
+      record.envelope = undefined;
+      const deviceId = record.issuedDeviceId;
+      record.issuedDeviceId = undefined;
+      record.state = "cancelled";
+      this.changed();
+      if (deviceId) await this.revokeIssued(deviceId);
     }
     return { requestId, state: publicState(record.state) };
   }
