@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../../shared/peer-host";
-import { newChatMachines, remoteBotGroups, remoteProjectChoices } from "./new-chat-targets";
+import { newChatMachines, remoteBotGroups, remoteProjectChoices, unlistedProjects } from "./new-chat-targets";
 import { parseRemoteNewChatSearch } from "./remote-new-chat-search";
 
 const CHAT_GRANTS = ["chat:read", "chat:write", "workspace:read"];
@@ -76,6 +76,23 @@ test("a project just created on the host is offered at once, and only once after
     { id: "w-launch", name: "launch", detail: "launch-repo" },
     { id: "w-site", name: "Site" },
   ]);
+});
+
+test("a created project the feed has listed is retired, so the host deleting it later removes it", () => {
+  const site: PeerFeedRow = { id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" };
+  const launch: PeerFeedRow = { id: "w-launch", name: "launch", updatedAt: "2026-03-01T00:00:00.000Z" };
+  let created = [{ id: "w-launch", name: "launch" }];
+  // The window keeps only what the feed has yet to list, as each feed snapshot arrives.
+  const arrive = (rows: PeerFeedRow[]) => {
+    const snapshot = feed("host-b", { workspaces: rows });
+    created = unlistedProjects(created, snapshot);
+    return remoteProjectChoices(snapshot, created).map((project) => project.id);
+  };
+
+  assert.deepEqual(arrive([site]), ["w-launch", "w-site"], "offered before the feed reports it");
+  assert.deepEqual(arrive([site, launch]), ["w-launch", "w-site"], "listed once when the feed catches up");
+  assert.deepEqual(created, [], "the feed now speaks for it");
+  assert.deepEqual(arrive([site]), ["w-site"], "deleted on the host, it is no longer offered");
 });
 
 test("Bots are grouped by host, without archived Bots or hosts that have none", () => {

@@ -12,7 +12,12 @@ import { defaultHostModel } from "../../renderer/lib/hosts/host-resources.js";
 import { remoteAttachmentUploads } from "../../renderer/lib/hosts/remote-attachments.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
-import { hostFolderIdentity, RemoteNewChatControl, RemoteNewChatMemory } from "../../renderer/lib/hosts/remote-new-chat.js";
+import {
+  hostFolderChoice,
+  hostFolderPlaces,
+  RemoteNewChatControl,
+  RemoteNewChatMemory,
+} from "../../renderer/lib/hosts/remote-new-chat.js";
 
 /**
  * Starting work on another Mac end to end: the new-chat control over the
@@ -359,18 +364,19 @@ test("a folder browsed on B becomes B's project, and a lost answer still makes o
   const studio = new StudioHost();
   const { harness, control } = await start(studio);
   try {
-    // Browses into `launch` the way the folder dialog does, and names the opened folder.
+    // Browses into `launch` the way the folder dialog does, and names the opened folder by B's IDs.
     const browse = async () => {
       const roots = await harness.adapter.roots();
       assert.ok(roots.ok);
       assert.deepEqual(roots.value.map((root) => root.label), ["Projects"]);
-      const listing = await harness.adapter.children(roots.value[0]!.location);
+      const root = hostFolderPlaces.root(roots.value[0]!);
+      const listing = await harness.adapter.children(root.location.location);
       assert.ok(listing.ok);
       const launch = listing.value.entries.find((entry) => entry.name === "launch");
       assert.ok(launch);
       const opened = await harness.adapter.children(launch.location);
       assert.ok(opened.ok);
-      return { identity: hostFolderIdentity(opened.value), location: launch.location };
+      return hostFolderChoice(hostFolderPlaces.entry(root, launch));
     };
 
     const first = await browse();

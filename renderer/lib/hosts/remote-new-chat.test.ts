@@ -11,7 +11,8 @@ import {
 import type { HostCreatedChat, HostCreatedWorkspace, HostNewChatInput, HostWorkspaceCreate } from "./host-resources";
 import { ChatIntentLedger } from "./chat-intent-ledger";
 import {
-  hostFolderIdentity,
+  hostFolderChoice,
+  hostFolderPlaces,
   RemoteNewChatControl,
   RemoteNewChatMemory,
   type HostFolderChoice,
@@ -50,12 +51,17 @@ class FakeHost implements RemoteNewChatHost {
   hold: Promise<void> | null = null;
   private uploads = 0;
 
-  /** Lists a folder the way the host browser does, returning a handle valid until the next listing. */
-  list(folder: string): HostFolderChoice {
+  /**
+   * Lists a folder the way the host browser does, returning a handle valid
+   * until the next listing. The host names the folder `shown`, which can
+   * match another folder's once it replaces characters it will not display.
+   */
+  list(folder: string, shown = folder): HostFolderChoice {
     this.listings += 1;
     const location = `loc-${this.listings}`;
     this.handles = new Map([[location, folder]]);
-    return { identity: hostFolderIdentity({ rootId: "root-home", breadcrumbs: [{ label: "Home" }, { label: folder }] }), location };
+    const home = hostFolderPlaces.root({ id: "root-home", label: "Home", location: "loc-home" });
+    return hostFolderChoice(hostFolderPlaces.entry(home, { id: `entry-${folder}`, name: shown, location }));
   }
 
   capabilities() {
@@ -330,6 +336,34 @@ test("a different folder after a lost answer is its own project", async () => {
   const other = await c.createFolderWorkspace(host.list("notes"));
   assert.equal(other.name, "notes");
   assert.deepEqual([...host.workspaces.values()].map((workspace) => workspace.name).sort(), ["launch", "notes"]);
+});
+
+test("two folders the host shows under the same name are separate projects after a lost answer", async () => {
+  const { host, control: c } = control();
+  host.lose.add("workspace");
+  await assert.rejects(c.createFolderWorkspace(host.list("draft\u0007", "draft\uFFFD")), { code: "outcome_unknown" });
+  const other = await c.createFolderWorkspace(host.list("draft\u0008", "draft\uFFFD"));
+  assert.equal(other.name, "draft\u0008", "the second folder is not mistaken for the first");
+  assert.equal(host.workspaces.size, 2);
+});
+
+test("a browsed folder is named by the host's IDs, whichever way the browser reached it", () => {
+  const root = hostFolderPlaces.root({ id: "root-1", label: "Projects", location: "loc-1" });
+  const site = hostFolderPlaces.entry(root, { id: "entry-site", name: "site", location: "loc-2" });
+  const src = hostFolderPlaces.entry(site, { id: "entry-src", name: "src", location: "loc-3" });
+
+  const relisted = hostFolderPlaces.entry(root, { id: "entry-site", name: "site", location: "loc-9" });
+  assert.equal(hostFolderChoice(relisted).identity, hostFolderChoice(site).identity, "a fresh handle names the same folder");
+  assert.equal(hostFolderChoice(relisted).location, "loc-9", "the newest handle is the one spent");
+
+  const viaCrumb = hostFolderPlaces.ancestor(src, { label: "site", location: "loc-4" }, 1);
+  assert.equal(hostFolderChoice(viaCrumb).identity, hostFolderChoice(site).identity, "a breadcrumb reopens that folder");
+  const rootViaCrumb = hostFolderPlaces.ancestor(src, { label: "Projects", location: "loc-5" }, 0);
+  assert.equal(hostFolderChoice(rootViaCrumb).identity, hostFolderChoice(root).identity);
+
+  const lookalike = hostFolderPlaces.entry(root, { id: "entry-other", name: "site", location: "loc-6" });
+  assert.notEqual(hostFolderChoice(lookalike).identity, hostFolderChoice(site).identity, "a same-named folder is another folder");
+  assert.notEqual(hostFolderChoice(site).identity, hostFolderChoice(root).identity);
 });
 
 test("a control rebuilt while a first message is in flight cannot send another", async () => {

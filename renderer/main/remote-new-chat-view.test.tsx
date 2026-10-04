@@ -103,6 +103,9 @@ test("sending waits for a project, a reachable host and a connected control", ()
   const noProjects = renderPane({ project: "", projects: [], capabilities: new Set<HostChatCapability>(["send", "createChat"]) });
   assert.match(noProjects.text, /Studio has no projects this Mac can use yet\./u);
 
+  const foreign = renderPane({ project: "w-from-another-mac" });
+  assert.match(foreign.text, /Choose a project on Studio first\./u, "a project this host does not list cannot be sent to");
+
   const connecting = renderPane({ snapshot: null });
   assert.match(connecting.text, /Connecting to Studio…/u);
 
@@ -144,7 +147,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
         hostLabel="Studio"
         roots={[{ id: "r1", label: "Projects", location: "loc-r1" }]}
         rootsError={null}
-        location={null}
+        place={null}
         pages={[]}
         loading={false}
         error={null}
@@ -165,7 +168,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
         hostLabel="Studio"
         roots={[{ id: "r1", label: "Projects", location: "loc-r1" }]}
         rootsError={null}
-        location={{ label: "site", location: "loc-site" }}
+        place={{ location: { label: "site", location: "loc-site" }, trail: ["r1", "e-site"] }}
         pages={[
           {
             rootId: "r1",
@@ -203,7 +206,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
         hostLabel="Studio"
         roots={undefined}
         rootsError="Studio refused the folder list."
-        location={null}
+        place={null}
         pages={[]}
         loading={false}
         error={null}
@@ -222,7 +225,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
         hostLabel="Studio"
         roots={[]}
         rootsError={null}
-        location={null}
+        place={null}
         pages={[]}
         loading={false}
         error={null}

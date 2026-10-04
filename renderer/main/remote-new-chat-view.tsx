@@ -18,7 +18,6 @@ import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import {
   defaultHostModel,
   findHostModel,
-  type HostBrowserLocation,
   type HostBrowserPage,
   type HostBrowserRoot,
   type HostCreatedWorkspace,
@@ -27,8 +26,20 @@ import {
 } from "../lib/hosts/host-resources";
 import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
-import { hostFolderIdentity, RemoteNewChatControl, type RemoteNewChatSnapshot } from "../lib/hosts/remote-new-chat";
-import { newChatMachines, remoteProjectChoices, type NewChatMachine, type RemoteProjectChoice } from "../lib/hosts/new-chat-targets";
+import {
+  hostFolderChoice,
+  hostFolderPlaces,
+  RemoteNewChatControl,
+  type HostFolderPlace,
+  type RemoteNewChatSnapshot,
+} from "../lib/hosts/remote-new-chat";
+import {
+  newChatMachines,
+  remoteProjectChoices,
+  unlistedProjects,
+  type NewChatMachine,
+  type RemoteProjectChoice,
+} from "../lib/hosts/new-chat-targets";
 import { peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
 import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
@@ -80,7 +91,9 @@ function sendBlockedReason(props: RemoteNewChatPaneProps): string | null {
   if (host.disabledReason) return host.disabledReason;
   if (!snapshot) return `Connecting to ${host.label}…`;
   if (snapshot.unresolved) return "Retry or dismiss the message above before sending another.";
-  if (!project) {
+  // A project this host does not list, such as one carried over from another Mac, is no choice at all.
+  const chosen = project === SCRATCH_PROJECT || projects.some((choice) => choice.id === project);
+  if (!chosen) {
     return capabilities.has("createWorkspace") || projects.length > 0
       ? `Choose a project on ${host.label} first.`
       : `${host.label} has no projects this Mac can use yet.`;
@@ -204,13 +217,14 @@ interface FolderBrowserProps {
   hostLabel: string;
   roots: HostBrowserRoot[] | undefined;
   rootsError: string | null;
-  location: HostBrowserLocation | null;
+  /** The open folder, or null while the host's shared roots are listed. */
+  place: HostFolderPlace | null;
   pages: HostBrowserPage[];
   loading: boolean;
   error: string | null;
   hasMore: boolean;
   busy: boolean;
-  onOpen(location: HostBrowserLocation | null): void;
+  onOpen(place: HostFolderPlace | null): void;
   onLoadMore(): void;
 }
 
@@ -219,7 +233,7 @@ export function RemoteFolderList({
   hostLabel,
   roots,
   rootsError,
-  location,
+  place,
   pages,
   loading,
   error,
@@ -229,10 +243,11 @@ export function RemoteFolderList({
   onLoadMore,
 }: FolderBrowserProps) {
   const breadcrumbs = pages[0]?.breadcrumbs ?? [];
+  const location = place?.location ?? null;
   const entries = pages.flatMap((page) => page.entries);
-  const rows: HostBrowserLocation[] = location
-    ? entries.map((entry) => ({ label: entry.name, location: entry.location }))
-    : (roots ?? []).map((root) => ({ label: root.label, location: root.location }));
+  const rows: HostFolderPlace[] = place
+    ? entries.map((entry) => hostFolderPlaces.entry(place, entry))
+    : (roots ?? []).map((root) => hostFolderPlaces.root(root));
   const failure = location ? error : rootsError;
   return (
     <div className="flex min-h-64 flex-col gap-2" aria-busy={loading || busy || undefined}>
@@ -240,14 +255,14 @@ export function RemoteFolderList({
         <Button variant="transparent" size="small" disabled={busy || !location} onClick={() => onOpen(null)}>
           {hostLabel}
         </Button>
-        {breadcrumbs.map((crumb) => (
+        {breadcrumbs.map((crumb, index) => (
           <React.Fragment key={crumb.location}>
             <ChevronRight className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
             <Button
               variant="transparent"
               size="small"
               disabled={busy || crumb.location === location?.location}
-              onClick={() => onOpen(crumb)}
+              onClick={() => place && onOpen(hostFolderPlaces.ancestor(place, crumb, index))}
             >
               {crumb.label}
             </Button>
@@ -270,7 +285,7 @@ export function RemoteFolderList({
         ) : (
           <ul aria-label={location ? `Folders in ${location.label}` : `Shared folders on ${hostLabel}`}>
             {rows.map((row, index) => (
-              <li key={row.location} className={index ? "border-t border-separator" : undefined}>
+              <li key={row.location.location} className={index ? "border-t border-separator" : undefined}>
                 <button
                   type="button"
                   disabled={busy}
@@ -278,7 +293,7 @@ export function RemoteFolderList({
                   onClick={() => onOpen(row)}
                 >
                   <Folder className="size-4 shrink-0 text-secondary" aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{row.location.label}</span>
                   <ChevronRight className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
                 </button>
               </li>
@@ -320,10 +335,11 @@ function RemoteFolderBrowserDialog({
   control: RemoteNewChatControl;
   onCreated(workspace: HostCreatedWorkspace): void;
 }) {
-  const [location, setLocation] = React.useState<HostBrowserLocation | null>(null);
+  const [place, setPlace] = React.useState<HostFolderPlace | null>(null);
+  const location = place?.location ?? null;
   const [busy, setBusy] = React.useState(false);
   React.useEffect(() => {
-    if (!open) setLocation(null);
+    if (!open) setPlace(null);
   }, [open]);
   const roots = useQuery({
     queryKey: hostQueryKeys.browser(adapter.hostId),
@@ -341,14 +357,13 @@ function RemoteFolderBrowserDialog({
     staleTime: 30_000,
   });
 
-  // The open folder's page names it stably across listings; its handles change every time.
-  const page = location ? children.data?.pages[0] : undefined;
   const chooseFolder = async () => {
-    if (!location || !page) return;
+    if (!place) return;
     setBusy(true);
     try {
       // The control mints the single-use selection just before spending it, and replays it after a lost answer.
-      const workspace = await control.createFolderWorkspace({ identity: hostFolderIdentity(page), location: location.location });
+      // The folder is named by the host's IDs, which survive a re-listing; its handles change every time.
+      const workspace = await control.createFolderWorkspace(hostFolderChoice(place));
       onCreated(workspace);
       onOpenChange(false);
     } catch (error) {
@@ -369,7 +384,7 @@ function RemoteFolderBrowserDialog({
       title={`Choose a folder on ${hostLabel}`}
       description="The new project uses this folder on that Mac."
       confirmLabel={busy ? "Creating project…" : "Use this folder"}
-      confirmDisabled={!location || !page}
+      confirmDisabled={!place}
       busy={busy}
       onConfirm={chooseFolder}
       size="large"
@@ -378,13 +393,13 @@ function RemoteFolderBrowserDialog({
         hostLabel={hostLabel}
         roots={roots.data}
         rootsError={roots.isError ? errorText(roots.error, "Folders could not be read.") : null}
-        location={location}
+        place={place}
         pages={children.data?.pages ?? []}
         loading={location ? children.isFetching : roots.isFetching}
         error={children.isError ? errorText(children.error, "This folder could not be read.") : null}
         hasMore={children.hasNextPage}
         busy={busy}
-        onOpen={setLocation}
+        onOpen={setPlace}
         onLoadMore={() => void children.fetchNextPage()}
       />
     </Dialog>
@@ -466,10 +481,21 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
   const [model, setModel] = React.useState<HostModelChoice | undefined>(undefined);
   const [browsing, setBrowsing] = React.useState(false);
 
-  // Preselect the most recent project, then the host's default model, once they are known.
+  // Once the host's feed lists a project this window created, the feed alone speaks for it.
   React.useEffect(() => {
-    if (!project && projects[0]) setProject(projects[0].id);
-  }, [project, projects]);
+    setCreated((current) => {
+      const pending = unlistedProjects(current.projects, feed.data);
+      return pending.length === current.projects.length ? current : { ...current, projects: pending };
+    });
+  }, [feed.data]);
+
+  // Preselect the most recent project, then the host's default model, once they are known.
+  // A project the host's feed does not list is replaced, so a stale choice never reaches the host.
+  React.useEffect(() => {
+    const known = project === SCRATCH_PROJECT || projects.some((choice) => choice.id === project);
+    if (project && !known && feed.data) setProject(projects[0]?.id ?? "");
+    else if (!project && projects[0]) setProject(projects[0].id);
+  }, [project, projects, feed.data]);
   React.useEffect(() => {
     if (!findHostModel(models.data, model)) setModel(defaultHostModel(models.data));
   }, [model, models.data]);
@@ -576,7 +602,8 @@ export function RemoteNewChatView({ hostId, workspaceId }: { hostId: string; wor
   const selectMachine = React.useCallback(
     (machine: NewChatMachineId) => {
       if (machine === "local") void navigate({ to: "/" });
-      else if (machine !== hostId) void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
+      // Another Mac starts with no project: this one's project ID means nothing there.
+      else if (machine !== hostId) void navigate({ to: "/host/$hostId/new", params: { hostId: machine }, search: {} });
     },
     [hostId, navigate],
   );
