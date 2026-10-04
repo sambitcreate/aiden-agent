@@ -19,9 +19,11 @@ interface CodeBlockProps {
   code: string;
   /** Language hint parsed from the ```lang fence, if any. */
   lang?: string;
+  /** Skip highlighting, e.g. while a streamed fence is still growing. */
+  plain?: boolean;
 }
 
-export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlockProps) {
+export const CodeBlock = React.memo(function CodeBlock({ code, lang, plain = false }: CodeBlockProps) {
   const display = code.replace(/\n$/, "");
   const language = lang;
   // Changes when any lazily loaded grammar lands, re-running the memo below.
@@ -36,8 +38,8 @@ export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlock
   }, [language]);
 
   const html = React.useMemo(
-    () => highlightCode(display, language),
-    [display, language, grammarsVersion],
+    () => (plain ? null : highlightCode(display, language)),
+    [display, language, plain, grammarsVersion],
   );
 
   return (

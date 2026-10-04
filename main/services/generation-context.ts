@@ -91,23 +91,59 @@ function safeJsonLength(value: unknown): number {
   }
 }
 
+type EstimatedTool = GenerationContextOptions["tools"][number];
+
+interface ToolCharsEntry {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  chars: number;
+}
+
+/**
+ * Serialized tool sizes, reused while a tool's fields are unchanged. Tool sets
+ * are rebuilt rarely but estimated on every turn and draft refresh.
+ */
+const toolCharsCache = new WeakMap<EstimatedTool, ToolCharsEntry>();
+
+function toolChars(tool: EstimatedTool): number {
+  const cached = toolCharsCache.get(tool);
+  if (
+    cached &&
+    cached.name === tool.name &&
+    cached.label === tool.label &&
+    cached.description === tool.description &&
+    cached.parameters === tool.parameters
+  ) {
+    return cached.chars;
+  }
+  const serialized = safeJsonLength({
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.parameters,
+  });
+  const chars =
+    serialized ||
+    tool.name.length +
+      tool.label.length +
+      tool.description.length +
+      safeJsonLength(tool.parameters) +
+      64;
+  toolCharsCache.set(tool, {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.parameters,
+    chars,
+  });
+  return chars;
+}
+
 export function estimateStaticContextTokens(options: GenerationContextOptions): number {
   let chars = options.systemPrompt.length;
-  for (const tool of options.tools) {
-    const serialized = safeJsonLength({
-      name: tool.name,
-      label: tool.label,
-      description: tool.description,
-      parameters: tool.parameters,
-    });
-    chars +=
-      serialized ||
-      tool.name.length +
-        tool.label.length +
-        tool.description.length +
-        safeJsonLength(tool.parameters) +
-        64;
-  }
+  for (const tool of options.tools) chars += toolChars(tool);
   return Math.ceil(chars / 4);
 }
 
