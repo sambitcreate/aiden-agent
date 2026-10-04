@@ -61,6 +61,8 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setOngoing(status != AgentRunActivityStatus.COMPLETE && status != AgentRunActivityStatus.FAILED && status != AgentRunActivityStatus.CANCELLED)
             .setAutoCancel(true)
+            // Each streamed update replaces the same notification; only the first may alert.
+            .setOnlyAlertOnce(true)
             .build()
 
         try {

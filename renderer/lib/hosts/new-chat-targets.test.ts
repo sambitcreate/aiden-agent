@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../../shared/peer-host";
-import { newChatMachines, remoteBotGroups, remoteProjectChoices, unlistedProjects } from "./new-chat-targets";
+import {
+  createdProjects,
+  newChatMachines,
+  reduceCreatedProjects,
+  remoteBotGroups,
+  remoteProjectChoices,
+  type CreatedProjects,
+  type CreatedProjectsEvent,
+} from "./new-chat-targets";
 import { parseRemoteNewChatSearch } from "./remote-new-chat-search";
 
 const CHAT_GRANTS = ["chat:read", "chat:write", "workspace:read"];
@@ -78,21 +86,43 @@ test("a project just created on the host is offered at once, and only once after
   ]);
 });
 
+/** Replays what the new-chat route sees, returning the projects it offers after each step. */
+function offered(steps: Array<{ created: string } | { feed: PeerFeedRow[] }>): string[][] {
+  let state: CreatedProjects = createdProjects("host-b");
+  let latest: PeerHostFeedSnapshot | null = null;
+  return steps.map((step) => {
+    const event: CreatedProjectsEvent =
+      "created" in step
+        ? { type: "created", hostId: "host-b", project: { id: step.created, name: step.created } }
+        : { type: "feed", hostId: "host-b", feed: (latest = feed("host-b", { workspaces: step.feed })) };
+    state = reduceCreatedProjects(state, event);
+    return remoteProjectChoices(latest, state.pending).map((project) => project.id);
+  });
+}
+
 test("a created project the feed has listed is retired, so the host deleting it later removes it", () => {
   const site: PeerFeedRow = { id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" };
   const launch: PeerFeedRow = { id: "w-launch", name: "launch", updatedAt: "2026-03-01T00:00:00.000Z" };
-  let created = [{ id: "w-launch", name: "launch" }];
-  // The window keeps only what the feed has yet to list, as each feed snapshot arrives.
-  const arrive = (rows: PeerFeedRow[]) => {
-    const snapshot = feed("host-b", { workspaces: rows });
-    created = unlistedProjects(created, snapshot);
-    return remoteProjectChoices(snapshot, created).map((project) => project.id);
-  };
 
-  assert.deepEqual(arrive([site]), ["w-launch", "w-site"], "offered before the feed reports it");
-  assert.deepEqual(arrive([site, launch]), ["w-launch", "w-site"], "listed once when the feed catches up");
-  assert.deepEqual(created, [], "the feed now speaks for it");
-  assert.deepEqual(arrive([site]), ["w-site"], "deleted on the host, it is no longer offered");
+  assert.deepEqual(offered([{ feed: [site] }, { created: "w-launch" }, { feed: [site, launch] }, { feed: [site] }]), [
+    ["w-site"],
+    ["w-launch", "w-site"],
+    ["w-launch", "w-site"],
+    ["w-site"],
+  ], "the create's answer first: offered at once, listed once, gone once the host deletes it");
+
+  assert.deepEqual(offered([{ feed: [site] }, { feed: [site, launch] }, { created: "w-launch" }, { feed: [site] }]), [
+    ["w-site"],
+    ["w-launch", "w-site"],
+    ["w-launch", "w-site"],
+    ["w-site"],
+  ], "the feed first: the late create answer does not keep a project the host deletes");
+
+  assert.deepEqual(
+    offered([{ created: "w-launch" }, { created: "w-scratch" }, { feed: [site] }]),
+    [["w-launch"], ["w-scratch", "w-launch"], ["w-scratch", "w-launch", "w-site"]],
+    "projects the feed has not listed stay offered, newest first",
+  );
 });
 
 test("Bots are grouped by host, without archived Bots or hosts that have none", () => {

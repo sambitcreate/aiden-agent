@@ -225,6 +225,7 @@ import type {
   PeerRunSubscription,
   PeerRunTarget,
 } from "../shared/peer-host";
+import { normalizeIpcError } from "./ipc-error";
 import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
@@ -239,7 +240,9 @@ export interface AppInfo {
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-  return bridge().invoke(channel, ...args) as Promise<T>;
+  return (bridge().invoke(channel, ...args) as Promise<T>).catch((error: unknown) => {
+    throw normalizeIpcError(error);
+  });
 }
 
 export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {

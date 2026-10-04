@@ -28,6 +28,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 sealed class AidenBotProfileLifecycleAction {
     object Archive : AidenBotProfileLifecycleAction()
@@ -105,8 +106,8 @@ fun AidenBotProfileScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client by coordinator.client.collectAsState()
-    val connectionState by coordinator.connectionState.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
 
     var botDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
     var favorites by remember { mutableStateOf<AidenBotFavorites?>(null) }

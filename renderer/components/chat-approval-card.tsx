@@ -64,6 +64,7 @@ export function ChatApprovalCard({
   cardRef,
   denyRef,
   disabledReason,
+  pendingCount = 1,
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -72,6 +73,8 @@ export function ChatApprovalCard({
   denyRef?: React.Ref<HTMLButtonElement>;
   /** Why this approval cannot be answered from here right now (an offline host). */
   disabledReason?: string;
+  /** Approvals waiting in this chat when they are shown one at a time, this one first. */
+  pendingCount?: number;
 }) {
   const details = pending.details as unknown;
   const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
@@ -104,7 +107,7 @@ export function ChatApprovalCard({
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"
-          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
+          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
       </p>
       <section
         ref={cardRef}
@@ -131,6 +134,7 @@ export function ChatApprovalCard({
                       : pendingRunGrant
                         ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
                         : `${toolLabel(pending.toolName)} needs approval`}
+              {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
             </Text>
             <Text variant="small" color="secondary" as="p" className="mt-0.5">
               {invalidPendingPrivilegedApproval
@@ -185,22 +189,30 @@ export function ChatApprovalCard({
           <Button ref={denyRef} variant="transparent" size="small" disabled={disabled} onClick={() => onDecide("deny")}>
             {pendingFormFill ? "Cancel" : "Deny"}
           </Button>
-          {pendingRememberScopes.map((scope) => (
-            <Button
-              key={scope}
-              variant="transparent"
-              size="small"
-              disabled={disabled}
-              title={
-                scope === "always"
-                  ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
-                  : "Remember this exact action in this chat until Aiden quits."
-              }
-              onClick={() => onDecide("allow", { scope })}
-            >
-              {toolApprovalScopeLabel(scope)}
-            </Button>
-          ))}
+          {pendingRememberScopes.map((scope) => {
+            const scopeHint =
+              scope === "always"
+                ? "Remember this exact action for this workspace. Revoke it in Settings → Tool approvals."
+                : "Remember this exact action in this chat until Aiden quits.";
+            const scopeHintId = `approval-scope-${scope}-${pending.approvalId}`;
+            return (
+              <React.Fragment key={scope}>
+                <span id={scopeHintId} className="sr-only">
+                  {scopeHint}
+                </span>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  disabled={disabled}
+                  title={scopeHint}
+                  aria-describedby={scopeHintId}
+                  onClick={() => onDecide("allow", { scope })}
+                >
+                  {toolApprovalScopeLabel(scope)}
+                </Button>
+              </React.Fragment>
+            );
+          })}
           {pendingCanAllow ? (
             <Button
               variant="accent"

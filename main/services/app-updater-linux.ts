@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 
 export interface LinuxAppImageUpdateRuntime {
   appImage?: string;
@@ -9,11 +10,6 @@ export interface LinuxAppImageUpdateRuntime {
   executablePath: string;
   mountInfo?: string;
   uid?: number;
-}
-
-function inside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
 /** Type-2 AppImage ELF marker; arbitrary executables are never replacement inputs. */
@@ -39,7 +35,8 @@ export function canUpdateLinuxAppImage(runtime: LinuxAppImageUpdateRuntime): boo
     if (!image || !appDir || !path.isAbsolute(appDir) || !isRegularAppImage(image, runtime.uid)) return false;
     if (realpathSync(image) !== image || realpathSync(appDir) !== appDir || !statSync(appDir).isDirectory()) return false;
     const resources = realpathSync(runtime.resourcesPath);
-    if (!inside(appDir, resources) || !inside(appDir, realpathSync(runtime.executablePath))) return false;
+    const strict = { allowRoot: false } as const;
+    if (!isPathInside(appDir, resources, strict) || !isPathInside(appDir, realpathSync(runtime.executablePath), strict)) return false;
     const config = path.join(resources, "app-update.yml");
     const configStat = lstatSync(config);
     if (!configStat.isFile() || configStat.size === 0 || configStat.size > 65_536) return false;

@@ -18,10 +18,6 @@ import {
 /** Exact-zero keeps the recoverable baseline available for emergency rollback. */
 export const WEB_SEARCH_PROVIDER_ZOO_ENABLED_ENV = "AIDEN_WEB_SEARCH_PROVIDER_ZOO_ENABLED";
 
-/** Compatibility names for callers that describe this as a rollout flag. */
-export const WEB_SEARCH_PROVIDER_ZOO_ROLLOUT_ENV = WEB_SEARCH_PROVIDER_ZOO_ENABLED_ENV;
-export const WEB_SEARCH_PROVIDER_ZOO_FEATURE_FLAG = WEB_SEARCH_PROVIDER_ZOO_ENABLED_ENV;
-
 export type WebSearchRolloutMode = "provider-zoo" | "exa-baseline";
 
 /** Main-owned settings operation names used by the rollback mutation fence. */

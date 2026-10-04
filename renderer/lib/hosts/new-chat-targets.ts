@@ -71,20 +71,44 @@ export function remoteProjectChoices(
       return { id: row.id, name: text(row, "name") ?? "Untitled project", ...(detail ? { detail } : {}) };
     });
   // A project this window just created is offered at once, before the host's feed reports it.
-  return [...unlistedProjects(created, feed), ...listed];
+  const known = new Set(listed.map((project) => project.id));
+  return [...created.filter((project) => !known.has(project.id)), ...listed];
 }
 
 /**
- * The projects this window created that the host's feed has not listed yet.
- * Once the feed lists one, the feed alone speaks for it: a project the host
- * later deletes must not be revived by this window's memory of creating it.
+ * The projects this window created on one host that its feed has never
+ * listed. Once the feed lists one, the feed alone speaks for it, so a project
+ * the host later deletes is not revived by this window's memory of creating
+ * it. The feed's answer and the create's answer can arrive in either order.
  */
-export function unlistedProjects(
-  created: readonly RemoteProjectChoice[],
-  feed: PeerHostFeedSnapshot | null | undefined,
-): RemoteProjectChoice[] {
-  const listed = new Set((feed?.workspaces ?? []).map((row) => row.id));
-  return created.filter((project) => !listed.has(project.id));
+export interface CreatedProjects {
+  hostId: string;
+  /** Created here and not yet listed by the feed, newest first. */
+  pending: readonly RemoteProjectChoice[];
+  /** Every project ID the host's feed has listed since this window opened. */
+  listed: ReadonlySet<string>;
+}
+
+export type CreatedProjectsEvent =
+  | { type: "created"; hostId: string; project: RemoteProjectChoice }
+  | { type: "feed"; hostId: string; feed: PeerHostFeedSnapshot | null | undefined };
+
+export function createdProjects(hostId: string): CreatedProjects {
+  return { hostId, pending: [], listed: new Set() };
+}
+
+export function reduceCreatedProjects(state: CreatedProjects, event: CreatedProjectsEvent): CreatedProjects {
+  const current = event.hostId === state.hostId ? state : createdProjects(event.hostId);
+  if (event.type === "created") {
+    if (current.listed.has(event.project.id)) return current;
+    const others = current.pending.filter((project) => project.id !== event.project.id);
+    return { ...current, pending: [event.project, ...others] };
+  }
+  const rows = event.feed?.workspaces ?? [];
+  if (rows.every((row) => current.listed.has(row.id)) && current === state) return state;
+  const listed = new Set(current.listed);
+  for (const row of rows) listed.add(row.id);
+  return { ...current, listed, pending: current.pending.filter((project) => !listed.has(project.id)) };
 }
 
 /** A Bot that lives on a paired host. */

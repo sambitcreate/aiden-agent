@@ -50,6 +50,36 @@ function approval(approvalId: string) {
   return { approvalId, summary: "Run npm test", toolCallId: "call-a", toolName: "run_command" };
 }
 
+/** A complete, valid scheduled-task approval detail with a chosen prompt. */
+function scheduleDetails(prompt = "Summarize inbox changes.") {
+  return {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Inbox monitor",
+    prompt,
+    script: null,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    nextRunAt: 2_000_000_000_000,
+    notify: true,
+    mode: "llm",
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: ["gmail"],
+    mcpServerNames: ["Gmail"],
+    providerId: "local-provider",
+    providerName: "Local Provider",
+    model: "local-model",
+    modelName: "Local Model",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+  };
+}
+
 test("begin journals run_started once and announces the run", () => {
   const { registry, changes } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
@@ -75,7 +105,7 @@ test("begin journals run_started once and announces the run", () => {
   assert.equal(changes[0]!.summary.runId, "run-1");
 });
 
-test("deltas append contiguous text events without announcing a change", () => {
+test("unread deltas fold into one event without announcing a change", () => {
   const { registry, changes } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   for (const delta of ["Hel", "lo", " there"]) registry.publish("run-1", "chat:delta", { delta });
@@ -83,14 +113,102 @@ test("deltas append contiguous text events without announcing a change", () => {
   const read = registry.read("run-1", 1);
   assert.deepEqual(
     events(read).map(({ sequence, type, payload }) => ({ sequence, type, payload })),
+    [{ sequence: 2, type: "text_delta", payload: { text: "Hello there" } }],
+  );
+  assert.equal(read.summary.lastSequence, 2);
+  assert.equal(changes.length, 1, "only begin announced a change");
+});
+
+test("a delta read by an observer is final, so later text takes the next sequence", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.publish("run-1", "chat:delta", { delta: "Hel" });
+  registry.publish("run-1", "chat:delta", { delta: "lo" });
+  const seen = events(registry.read("run-1", 1));
+  registry.publish("run-1", "chat:delta", { delta: " the" });
+  registry.publish("run-1", "chat:delta", { delta: "re" });
+  const next = events(registry.read("run-1", last(seen).sequence));
+
+  assert.deepEqual(seen.map(({ sequence, payload }) => [sequence, payload.text]), [[2, "Hello"]]);
+  assert.deepEqual(next.map(({ sequence, payload }) => [sequence, payload.text]), [[3, " there"]]);
+  // A reader that resumes from the start still sees every character once.
+  assert.equal(
+    events(registry.read("run-1", 1)).map(({ payload }) => payload.text).join(""),
+    "Hello there",
+  );
+});
+
+test("folding keeps deltas ordered around other events and closes after its window", () => {
+  const { registry, clock } = harness({ deltaCoalesceMs: 250 });
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.publish("run-1", "chat:delta", { delta: "a" });
+  registry.publish("run-1", "chat:delta", { delta: "b" });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "think" });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "ing" });
+  registry.publish("run-1", "chat:delta", { delta: "c" });
+  registry.publish("run-1", "chat:tool", { phase: "call", toolName: "read_file" });
+  registry.publish("run-1", "chat:delta", { delta: "d" });
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  registry.publish("run-1", "chat:delta", { delta: "e" });
+  clock.now += 249;
+  registry.publish("run-1", "chat:delta", { delta: "f" });
+  clock.now += 1;
+  registry.publish("run-1", "chat:delta", { delta: "g" });
+  registry.publish("run-1", "chat:done", {});
+
+  assert.deepEqual(
+    events(registry.read("run-1", 1)).map(({ type, payload }) =>
+      typeof payload.text === "string" ? `${type}:${payload.text}` : type),
     [
-      { sequence: 2, type: "text_delta", payload: { text: "Hel" } },
-      { sequence: 3, type: "text_delta", payload: { text: "lo" } },
-      { sequence: 4, type: "text_delta", payload: { text: " there" } },
+      "text_delta:ab",
+      "reasoning_delta:thinking",
+      "text_delta:c",
+      "tool_started",
+      "text_delta:d",
+      "approval_required",
+      "text_delta:ef",
+      "text_delta:g",
+      "done",
     ],
   );
-  assert.equal(read.summary.lastSequence, 4);
-  assert.equal(changes.length, 1, "only begin announced a change");
+});
+
+test("a folded delta stays within the text bound and a frame mobile clients accept", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const chunk = "x".repeat(150_000);
+  registry.publish("run-1", "chat:delta", { delta: chunk });
+  registry.publish("run-1", "chat:delta", { delta: chunk });
+  // Control characters serialize as six-byte escapes.
+  const escaped = "\u0001".repeat(20_000);
+  for (let index = 0; index < 5; index += 1) registry.publish("run-1", "chat:delta", { delta: escaped });
+
+  const texts = events(registry.read("run-1", 1));
+  assert.deepEqual(texts.slice(0, 2).map(({ payload }) => (payload.text as string).length), [150_000, 150_000]);
+  assert.equal(texts.slice(2).map(({ payload }) => payload.text).join(""), escaped.repeat(5));
+  assert.ok(texts.length > 3, "escaped text split before a frame grew too large");
+  for (const event of texts) assert.ok(Buffer.byteLength(JSON.stringify(event)) <= 1_048_576);
+});
+
+test("a late observer replays a long answer instead of needing a snapshot", () => {
+  const { registry, clock } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  // 10,000 tokens over 50 seconds, well past the 4,096-event journal cap.
+  for (let token = 0; token < 10_000; token += 1) {
+    clock.now += 5;
+    registry.publish("run-1", "chat:delta", { delta: "t " });
+  }
+  registry.publish("run-1", "chat:done", {});
+
+  const read = registry.read("run-1", 0);
+  assert.equal(read.kind, "events");
+  const replayed = read.events;
+  assert.ok(replayed.length < 400, `journal holds ${replayed.length} events`);
+  assert.equal(
+    replayed.filter(({ type }) => type === "text_delta").map(({ payload }) => payload.text).join(""),
+    "t ".repeat(10_000),
+  );
+  assert.equal(last(replayed).type, "done");
 });
 
 test("a run needs approval until its last pending approval resolves", () => {
@@ -218,7 +336,7 @@ test("settling a run without an outcome fails it exactly once", () => {
 });
 
 test("a cursor behind per-run retention must snapshot while a recent cursor replays", () => {
-  const { registry } = harness({ maxEventsPerRun: 5 });
+  const { registry } = harness({ maxEventsPerRun: 5, deltaCoalesceMs: 0 });
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   for (let index = 0; index < 10; index += 1) {
     registry.publish("run-1", "chat:delta", { delta: `d${index}` });
@@ -275,7 +393,7 @@ test("terminal runs past retention are pruned lazily and their observers woken",
 });
 
 test("the total byte budget evicts terminal runs before trimming live ones", () => {
-  const { registry, changes } = harness({ maxTotalEventBytes: 4_000 });
+  const { registry, changes } = harness({ maxTotalEventBytes: 4_000, deltaCoalesceMs: 0 });
   const kilobyte = "x".repeat(1_000);
   registry.begin({ runId: "finished", chatId: "chat-1", origin: "renderer" });
   registry.publish("finished", "chat:delta", { delta: kilobyte });
@@ -382,29 +500,53 @@ test("malformed or oversized payloads never throw", () => {
 test("approval scopes and details are copied into the journal", () => {
   const { registry } = harness();
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
-  const details = { kind: "scheduled-task", task: { name: "Nightly" } };
+  const details = scheduleDetails();
   registry.publish("run-1", "chat:approval", {
     ...approval("approval-1"),
     scopes: ["chat", "bogus", "once"],
     details,
   });
-  details.task.name = "Mutated after publish";
+  details.mcpServerNames[0] = "Mutated after publish";
 
   const payload = events(registry.read("run-1", 1))[0]!.payload;
   assert.deepEqual(payload.scopes, ["chat", "once"]);
-  assert.deepEqual(payload.details, { kind: "scheduled-task", task: { name: "Nightly" } });
+  assert.deepEqual(payload.details, scheduleDetails());
+});
+
+test("observers never see approval detail fields outside the declared shape", () => {
+  const { registry } = harness();
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const woken: string[] = [];
+  registry.subscribe("run-1", () => {
+    woken.push(JSON.stringify(registry.read("run-1", 0)));
+  });
+  const secret = "classifier-secret-7f3a";
+  registry.publish("run-1", "chat:approval", {
+    ...approval("approval-known"),
+    details: { ...scheduleDetails(), state: { classifier: secret } },
+  });
+  registry.publish("run-1", "chat:approval", {
+    ...approval("approval-unknown"),
+    details: { kind: "permission-classifier", state: { classifier: secret } },
+  });
+
+  const [known, unknown] = events(registry.read("run-1", 1));
+  assert.deepEqual(known!.payload.details, scheduleDetails());
+  assert.equal("details" in unknown!.payload, false);
+  assert.equal(unknown!.payload.detailsOmitted, true);
+  assert.equal(woken.length, 2);
+  for (const view of [...woken, JSON.stringify(registry.read("run-1", 0))]) {
+    assert.equal(view.includes(secret), false);
+  }
 });
 
 test("an oversized approval detail cannot push retained events past the byte budgets", () => {
   // Each detail fits the default allowance but not these smaller budgets.
   const { registry } = harness({ maxEventBytesPerRun: 32 * 1_024, maxTotalEventBytes: 64 * 1_024 });
-  const workspaceLabel = "w".repeat(40 * 1_024);
+  const details = scheduleDetails("p".repeat(30 * 1_024));
   for (const runId of ["run-1", "run-2", "run-3", "run-4"]) {
     registry.begin({ runId, chatId: `chat-${runId}`, origin: "renderer" });
-    registry.publish(runId, "chat:approval", {
-      ...approval(`approval-${runId}`),
-      details: { kind: "subagent-shell", workspaceLabel, command: "npm test" },
-    });
+    registry.publish(runId, "chat:approval", { ...approval(`approval-${runId}`), details });
   }
 
   let retainedBytes = 0;
@@ -424,7 +566,7 @@ test("an oversized approval detail cannot push retained events past the byte bud
 
 test("approval details are counted with the rest of the prompt against the allowance", () => {
   // An 8 KiB run budget leaves a 4 KiB allowance for the whole prompt.
-  const details = { kind: "subagent-shell", workspaceLabel: "w".repeat(2_500) };
+  const details = scheduleDetails("p".repeat(2_500));
   const published = (summary: string) => {
     const { registry } = harness({ maxEventBytesPerRun: 8 * 1_024, maxRuns: 1 });
     registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });

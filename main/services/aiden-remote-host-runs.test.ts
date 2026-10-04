@@ -74,6 +74,36 @@ const observer = (id: string) => ({
 const KEY_A = "key-controller-a-0001";
 const KEY_B = "key-controller-b-0001";
 
+/** Approval details of a kind the journal's allowlist keeps (a scheduled task). */
+function scheduleDetails() {
+  return {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Nightly tests",
+    prompt: "Run npm test.",
+    script: null,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    nextRunAt: 2_000_000_000_000,
+    notify: true,
+    mode: "llm",
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: [],
+    mcpServerNames: [],
+    providerId: "local-provider",
+    providerName: "Local Provider",
+    model: "local-model",
+    modelName: "Local Model",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+  };
+}
+
 function approval(approvalId: string, extra: Record<string, unknown> = {}) {
   return {
     approvalId,
@@ -81,7 +111,7 @@ function approval(approvalId: string, extra: Record<string, unknown> = {}) {
     toolCallId: "call-a",
     toolName: "run_command",
     scopes: ["once", "chat"],
-    details: { command: "npm test", cwd: "/work/aiden" },
+    details: scheduleDetails(),
     ...extra,
   };
 }
@@ -216,7 +246,8 @@ test("Last-Event-ID resumes after the cursor, and a cursor ahead of the journal 
 });
 
 test("a cursor behind retention gets a gap snapshot carrying every pending prompt", () => {
-  const { registry, service } = harness({ maxEventsPerRun: 3 });
+  // Folding is off so each delta is its own event and the approval falls out of retention.
+  const { registry, service } = harness({ maxEventsPerRun: 3, deltaCoalesceMs: 0 });
   registry.publish("run-1", "chat:approval", approval("approval-1"));
   for (const delta of ["a", "b", "c", "d"]) registry.publish("run-1", "chat:delta", { delta });
 
@@ -229,7 +260,7 @@ test("a cursor behind retention gets a gap snapshot carrying every pending promp
   assert.equal(payload.state, "needs_approval");
   assert.deepEqual(payload.pendingApprovalIds, ["approval-1"]);
   assert.equal(payload.approvals[0]!.approvalId, "approval-1");
-  assert.deepEqual(payload.approvals[0]!.details, { command: "npm test", cwd: "/work/aiden" });
+  assert.deepEqual(payload.approvals[0]!.details, scheduleDetails());
   assert.equal(snapshot!.data.sequence, (payload.nextSequence as number) - 1);
   // After the snapshot the stream continues contiguously from the retained head.
   assert.deepEqual(
@@ -266,7 +297,7 @@ test("observers without runs:control see the approval summary but not its tool d
   const controlledPrompt = controlled.frames().find((frame) => frame.event === "approval_required")!;
   assert.equal(observedPrompt.data.payload.summary, "Run npm test");
   assert.equal("details" in observedPrompt.data.payload, false);
-  assert.deepEqual(controlledPrompt.data.payload.details, { command: "npm test", cwd: "/work/aiden" });
+  assert.deepEqual(controlledPrompt.data.payload.details, scheduleDetails());
 });
 
 test("two controllers racing one approval: one wins, the loser learns the winning decision", async () => {

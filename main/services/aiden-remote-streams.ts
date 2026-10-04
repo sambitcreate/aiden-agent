@@ -8,12 +8,6 @@ import {
 import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
-  isAssistantAutomationApprovalDetails,
-  isScheduledTaskApprovalDetails,
-  isSubagentMcpMutationApprovalDetails,
-  isSubagentShellApprovalDetails,
-  isSubagentRunGrantApprovalDetails,
-  isSubagentWorkspaceWriteApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import {
   createRemoteChatGenerationOwner,
@@ -44,7 +38,11 @@ import type {
 import {
   boundedText,
   createRunProjectionState,
+  isCoalescibleDelta,
+  MAX_COALESCED_DELTA_EVENT_BYTES,
+  mergeDeltaPayload,
   ownRecord,
+  projectApprovalDetails,
   projectRunContentNotification,
   type RunProjectionState,
 } from "./run-event-projection.js";
@@ -60,11 +58,15 @@ const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_PERSIST_COALESCE_MS = 250;
+// Prompts and structural transcript changes are written at once; only text,
+// reasoning and timeline progress wait for the coalescing window.
 const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
   "approval_required",
   "question_required",
   "cancelled",
   "snapshot",
+  "tool_started",
+  "tool_finished",
 ]);
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
 const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
@@ -179,6 +181,17 @@ interface StreamRecord {
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
   projection: RunProjectionState;
+  /**
+   * The newest delta event while no subscriber has been sent it. Later deltas
+   * of the same kind extend it within one persistence window instead of
+   * taking a sequence each, so replay after a disconnect stays compact.
+   */
+  openDelta?: { sequence: number; openedAt: number };
+}
+
+interface StreamEnvelopeBytes {
+  state: AidenRemoteStreamState;
+  bytesWithoutUpdatedAt: number;
 }
 
 interface ApprovalRecord {
@@ -205,17 +218,6 @@ interface QuestionRecord {
   questions: AskUserQuestionV1[];
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
-}
-
-function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
-  return isAssistantAutomationApprovalDetails(value)
-    || isScheduledTaskApprovalDetails(value)
-    || isSubagentWorkspaceWriteApprovalDetails(value)
-    || isSubagentMcpMutationApprovalDetails(value)
-    || isSubagentShellApprovalDetails(value)
-    || isSubagentRunGrantApprovalDetails(value)
-    ? structuredClone(value)
-    : undefined;
 }
 
 /** Keep only known scopes, in canonical order, and only when broader than once. */
@@ -435,6 +437,15 @@ export function removeRevokedDeviceStreams(
   };
 }
 
+const EMPTY_SNAPSHOT_BYTES = Buffer.byteLength(
+  JSON.stringify({ version: 1, streams: [], turnIndex: [] }),
+  "utf8",
+);
+
+function turnIndexEntryBytes(streamId: string, chatId: string, turnId: string): number {
+  return Buffer.byteLength(JSON.stringify({ streamId, chatId, turnId }), "utf8");
+}
+
 function sseFrame(event: AidenRemoteStreamEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -442,7 +453,9 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
   private readonly eventSizes = new WeakMap<AidenRemoteStreamEvent, number>();
+  private readonly envelopeSizes = new WeakMap<StreamRecord, StreamEnvelopeBytes>();
   private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
+  private turnIndexBytes = 0;
   private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly questions = new Map<string, QuestionRecord>();
   private persistTail: Promise<void> = Promise.resolve();
@@ -483,11 +496,13 @@ export class AidenRemoteStreamService {
       snapshot?: AidenRemoteStreamSnapshot;
       persist?: (snapshot: AidenRemoteStreamSnapshot) => Promise<void>;
       /**
-       * Streaming content (deltas, timeline, tool progress) is journaled at
-       * most this many milliseconds (default 250) after it arrives; terminal,
-       * prompt, cancel, snapshot and state-change events are written at once.
-       * A crash can therefore lose up to this window of non-boundary events;
-       * restart still recovers the stream as `server_interrupted`.
+       * Streaming content (text and reasoning deltas, timeline, status) is
+       * journaled at most this many milliseconds (default 250) after it
+       * arrives; terminal, prompt, cancel, snapshot, tool start/finish and
+       * state-change events are written at once. A crash can therefore lose
+       * up to this window of non-boundary events; restart still recovers the
+       * stream as `server_interrupted`. The same window bounds how long
+       * consecutive undelivered deltas fold into one journal event.
        */
       persistCoalesceMs?: number;
       idempotency?: AidenIdempotencyLedger;
@@ -614,9 +629,12 @@ export class AidenRemoteStreamService {
     if (this.turnIndex.has(streamId)) return;
     // Bounded oldest-first eviction; the index outlives stream records.
     if (this.turnIndex.size >= MAX_STREAMS * 4) {
-      this.turnIndex.delete(this.turnIndex.keys().next().value!);
+      const [evictedId, evicted] = this.turnIndex.entries().next().value!;
+      this.turnIndex.delete(evictedId);
+      this.turnIndexBytes -= turnIndexEntryBytes(evictedId, evicted.chatId, evicted.turnId);
     }
     this.turnIndex.set(streamId, { chatId, turnId });
+    this.turnIndexBytes += turnIndexEntryBytes(streamId, chatId, turnId);
   }
 
   private snapshotEnvelope(): AidenRemoteStreamSnapshot {
@@ -656,14 +674,48 @@ export class AidenRemoteStreamService {
     return bytes;
   }
 
+  /**
+   * Serialized size of one stream's metadata. Only `state` and `updatedAt`
+   * ever change; the timestamp is a finite number, so its JSON is its
+   * decimal string and the rest is cached per state.
+   */
+  private envelopeEntryBytes(stream: StreamRecord): number {
+    let cached = this.envelopeSizes.get(stream);
+    if (!cached || cached.state !== stream.state) {
+      const bytes = Buffer.byteLength(
+        JSON.stringify({
+          streamId: stream.streamId,
+          chatId: stream.chatId,
+          turnId: stream.turnId,
+          deviceId: stream.deviceId,
+          state: stream.state,
+          updatedAt: 0,
+          events: [],
+        }),
+        "utf8",
+      );
+      cached = { state: stream.state, bytesWithoutUpdatedAt: bytes - 1 };
+      this.envelopeSizes.set(stream, cached);
+    }
+    return cached.bytesWithoutUpdatedAt + String(stream.updatedAt).length;
+  }
+
   private snapshotBytes(): number {
-    // Serialize only bounded metadata (256 streams / 1,024 turn identities).
-    // The empty arrays already include brackets; add event bytes and commas.
-    // Rebuilding this envelope keeps deletion, expiry and delivery cleanup from
-    // having to maintain a second, fragile aggregate mutation ledger.
-    let bytes = Buffer.byteLength(JSON.stringify(this.snapshotEnvelope()), "utf8");
+    // Equal to the compact serialization of snapshot(), without building it.
+    // Each live stream's metadata size is cached against the only fields that
+    // change, so deletion, expiry and delivery cleanup need no ledger: they
+    // simply stop contributing once removed from the map.
+    const streamCount = this.streams.size;
+    let bytes =
+      EMPTY_SNAPSHOT_BYTES +
+      this.turnIndexBytes +
+      Math.max(0, this.turnIndex.size - 1) +
+      Math.max(0, streamCount - 1);
     for (const stream of this.streams.values()) {
-      bytes += stream.eventBytes + Math.max(0, stream.events.length - 1);
+      bytes +=
+        this.envelopeEntryBytes(stream) +
+        stream.eventBytes +
+        Math.max(0, stream.events.length - 1);
     }
     return bytes;
   }
@@ -930,6 +982,10 @@ export class AidenRemoteStreamService {
     state?: AidenRemoteStreamState,
   ): AidenRemoteStreamEvent {
     if (terminal(stream.state)) return stream.events[stream.events.length - 1]!;
+    if (!isTerminal && (state === undefined || state === stream.state)) {
+      const extended = this.extendOpenDelta(stream, type, payload);
+      if (extended) return extended;
+    }
     // A new journal, any state transition, and every event a client must not
     // miss across a crash are durable boundaries; plain content is coalesced.
     const boundary =
@@ -951,13 +1007,10 @@ export class AidenRemoteStreamService {
     const bytes = this.eventSize(event);
     stream.events.push(event);
     stream.eventBytes += bytes;
-    while (
-      stream.events.length > MAX_EVENTS_PER_STREAM ||
-      (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
-    ) {
-      const removed = stream.events.shift();
-      if (removed) stream.eventBytes -= this.eventSize(removed);
-    }
+    stream.openDelta = isCoalescibleDelta(type)
+      ? { sequence: event.sequence, openedAt: this.options.now() }
+      : undefined;
+    this.trimStream(stream);
     stream.state = state ?? stream.state;
     stream.updatedAt = this.options.now();
     this.enforceAggregateBudget(stream.streamId);
@@ -982,6 +1035,48 @@ export class AidenRemoteStreamService {
     }
     if (boundary) this.persist();
     else this.schedulePersist();
+    return event;
+  }
+
+  private trimStream(stream: StreamRecord): void {
+    while (
+      stream.events.length > MAX_EVENTS_PER_STREAM ||
+      (stream.eventBytes > MAX_STREAM_EVENT_BYTES && stream.events.length > 1)
+    ) {
+      const removed = stream.events.shift();
+      if (removed) stream.eventBytes -= this.eventSize(removed);
+    }
+  }
+
+  /**
+   * Fold a delta into the stream's open (still undelivered) delta event.
+   * The event keeps its sequence and timestamp; subscribers have not been
+   * sent it, so every cursor still precedes it and nothing is skipped.
+   */
+  private extendOpenDelta(
+    stream: StreamRecord,
+    type: string,
+    payload: Record<string, unknown>,
+  ): AidenRemoteStreamEvent | undefined {
+    const open = stream.openDelta;
+    const tail = stream.events[stream.events.length - 1];
+    if (!open || !tail || tail.sequence !== open.sequence || tail.type !== type) return undefined;
+    const now = this.options.now();
+    const window = this.options.persistCoalesceMs ?? DEFAULT_PERSIST_COALESCE_MS;
+    if (now - open.openedAt >= window) return undefined;
+    const merged = mergeDeltaPayload(type, tail.payload, payload);
+    if (!merged) return undefined;
+    // Replace rather than mutate: snapshots and cached sizes key on identity.
+    const event: AidenRemoteStreamEvent = { ...tail, payload: merged };
+    const bytes = this.eventSize(event);
+    if (bytes > MAX_COALESCED_DELTA_EVENT_BYTES) return undefined;
+    stream.events[stream.events.length - 1] = event;
+    stream.eventBytes += bytes - this.eventSize(tail);
+    this.trimStream(stream);
+    stream.updatedAt = now;
+    this.enforceAggregateBudget(stream.streamId);
+    for (const subscriber of [...stream.subscribers]) subscriber.flush();
+    this.schedulePersist();
     return event;
   }
 
@@ -1044,7 +1139,7 @@ export class AidenRemoteStreamService {
       const summary = boundedText(payload.summary, 2_000) || "Aiden needs approval.";
       const toolCallId = boundedText(payload.toolCallId, 128) || "remote-tool";
       const toolName = boundedText(payload.toolName, 120) || "Tool";
-      const details = approvalDetails(payload.details);
+      const details = projectApprovalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
       const scopes = offeredScopes(payload.scopes);
       const expiresAt = this.options.now() + APPROVAL_LIFETIME_MS;
@@ -1798,6 +1893,8 @@ export class AidenRemoteStreamService {
       for (let index = Math.max(0, after - firstSequence + 1); index < stream.events.length; index++) {
         const event = stream.events[index]!;
         after = event.sequence;
+        // Once sent, an event is final; later deltas take a new sequence.
+        if (stream.openDelta?.sequence === event.sequence) stream.openDelta = undefined;
         if (!write(sseFrame(event))) return;
       }
       if (terminal(stream.state)) close();
