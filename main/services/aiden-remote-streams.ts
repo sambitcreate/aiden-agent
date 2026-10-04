@@ -1,6 +1,5 @@
 import type { ServerResponse } from "node:http";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
   parseToolApprovalScope,
@@ -43,6 +42,13 @@ import type {
   ChatRunInputAdmissionResult,
 } from "./chat-run-input-admission.js";
 import {
+  boundedText,
+  createRunProjectionState,
+  ownRecord,
+  projectRunContentNotification,
+  type RunProjectionState,
+} from "./run-event-projection.js";
+import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
@@ -53,6 +59,13 @@ const STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_PERSIST_COALESCE_MS = 250;
+const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "approval_required",
+  "question_required",
+  "cancelled",
+  "snapshot",
+]);
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
 const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
 const MAX_ACTIVITY_PROJECTION_CHATS = 200;
@@ -165,8 +178,7 @@ interface StreamRecord {
   owner: RemoteChatGenerationOwnerController;
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
-  activeTools: Map<string, string[]>;
-  toolCounter: number;
+  projection: RunProjectionState;
 }
 
 interface ApprovalRecord {
@@ -193,35 +205,6 @@ interface QuestionRecord {
   questions: AskUserQuestionV1[];
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function boundedText(value: unknown, maximum: number): string {
-  if (typeof value !== "string") return "";
-  const sliced = value.slice(0, maximum);
-  let result = "";
-  for (let index = 0; index < sliced.length; index += 1) {
-    const code = sliced.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = sliced.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        result += sliced[index] + sliced[index + 1];
-        index += 1;
-      } else {
-        result += "\ufffd";
-      }
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      result += "\ufffd";
-    } else {
-      result += sliced[index];
-    }
-  }
-  return result;
 }
 
 function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
@@ -465,6 +448,7 @@ export class AidenRemoteStreamService {
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
   private persistRunning = false;
+  private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceError: unknown;
   private readonly idempotency: AidenIdempotencyLedger;
 
@@ -498,6 +482,14 @@ export class AidenRemoteStreamService {
       notifyApprovalChanged?: (chatId: string) => void;
       snapshot?: AidenRemoteStreamSnapshot;
       persist?: (snapshot: AidenRemoteStreamSnapshot) => Promise<void>;
+      /**
+       * Streaming content (deltas, timeline, tool progress) is journaled at
+       * most this many milliseconds (default 250) after it arrives; terminal,
+       * prompt, cancel, snapshot and state-change events are written at once.
+       * A crash can therefore lose up to this window of non-boundary events;
+       * restart still recovers the stream as `server_interrupted`.
+       */
+      persistCoalesceMs?: number;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       onPersistenceError?: (error: unknown) => void;
@@ -601,8 +593,7 @@ export class AidenRemoteStreamService {
         subscribers: new Set(),
         cancelRequested: false,
         cancellationSource: "server",
-        activeTools: new Map(),
-        toolCounter: 0,
+        projection: createRunProjectionState(),
       };
       const record: StreamRecord = { ...base, owner: this.ownerFor(base) };
       this.streams.set(record.streamId, record);
@@ -679,6 +670,9 @@ export class AidenRemoteStreamService {
 
   private persist(): void {
     if (!this.options.persist) return;
+    // The snapshot taken below already includes any coalesced events.
+    clearTimeout(this.persistTimer);
+    this.persistTimer = undefined;
     this.persistDirty = true;
     if (this.persistRunning) return;
     this.persistRunning = true;
@@ -699,8 +693,20 @@ export class AidenRemoteStreamService {
       });
   }
 
+  private schedulePersist(): void {
+    if (!this.options.persist || this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.persist();
+    }, this.options.persistCoalesceMs ?? DEFAULT_PERSIST_COALESCE_MS);
+    this.persistTimer.unref?.();
+  }
+
   async settlePersistence(): Promise<void> {
-    while (this.persistRunning || this.persistDirty) await this.persistTail;
+    while (this.persistTimer || this.persistRunning || this.persistDirty) {
+      if (this.persistTimer) this.persist();
+      await this.persistTail;
+    }
     if (this.persistenceError) throw this.persistenceError;
   }
 
@@ -901,8 +907,7 @@ export class AidenRemoteStreamService {
       subscribers: new Set(),
       cancelRequested: false,
       cancellationSource: "device",
-      activeTools: new Map(),
-      toolCounter: 0,
+      projection: createRunProjectionState(),
     };
     const owner = this.ownerFor(base);
     const record: StreamRecord = { ...base, owner };
@@ -920,6 +925,13 @@ export class AidenRemoteStreamService {
     state?: AidenRemoteStreamState,
   ): AidenRemoteStreamEvent {
     if (terminal(stream.state)) return stream.events[stream.events.length - 1]!;
+    // A new journal, any state transition, and every event a client must not
+    // miss across a crash are durable boundaries; plain content is coalesced.
+    const boundary =
+      isTerminal ||
+      IMMEDIATE_PERSIST_EVENT_TYPES.has(type) ||
+      stream.events.length === 0 ||
+      (state !== undefined && state !== stream.state);
     const event: AidenRemoteStreamEvent = {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
       streamId: stream.streamId,
@@ -963,7 +975,8 @@ export class AidenRemoteStreamService {
       }
       this.options.notifyChatChanged?.(stream.chatId);
     }
-    this.persist();
+    if (boundary) this.persist();
+    else this.schedulePersist();
     return event;
   }
 
@@ -1018,54 +1031,6 @@ export class AidenRemoteStreamService {
     rawPayload: unknown,
   ): void {
     const payload = ownRecord(rawPayload) ?? {};
-    if (channel === "chat:delta") {
-      if (payload.reset === true) {
-        const nextSequence = (stream.events[stream.events.length - 1]?.sequence ?? 0) + 2;
-        this.append(
-          stream,
-          "snapshot",
-          { chatId: stream.chatId, turnId: stream.turnId, nextSequence },
-          false,
-          "reconciling",
-        );
-        return;
-      }
-      const text = boundedText(payload.delta, 200_000);
-      if (text) this.append(stream, "text_delta", { text }, false, "running");
-      return;
-    }
-    if (channel === "chat:reasoning-delta") {
-      const text = boundedText(payload.delta, 200_000);
-      if (text) this.append(stream, "reasoning_delta", { text }, false, "running");
-      return;
-    }
-    if (channel === "chat:status") {
-      this.append(stream, "status", { state: "running" }, false, "running");
-      return;
-    }
-    if (channel === "chat:tool") {
-      const name = boundedText(payload.toolName, 120) || "Tool";
-      const phase = payload.phase;
-      if (phase === "call") {
-        const toolId = `tool_${++stream.toolCounter}`;
-        const queue = stream.activeTools.get(name) ?? [];
-        queue.push(toolId);
-        stream.activeTools.set(name, queue);
-        this.append(stream, "tool_started", { toolId, name }, false, "running");
-      } else {
-        const queue = stream.activeTools.get(name) ?? [];
-        const toolId = queue.shift() ?? `tool_${++stream.toolCounter}`;
-        if (queue.length === 0) stream.activeTools.delete(name);
-        const status = phase === "result" ? "succeeded" : "failed";
-        this.append(stream, "tool_finished", { toolId, status }, false, "running");
-      }
-      return;
-    }
-    if (channel === "chat:timeline") {
-      const timeline = parseGenerationTimeline(payload.timeline);
-      if (timeline) this.append(stream, "timeline", { timeline }, false, "running");
-      return;
-    }
     if (channel === "chat:approval") {
       const approvalId = boundedText(payload.approvalId, 128);
       if (!approvalId) return;
@@ -1175,52 +1140,15 @@ export class AidenRemoteStreamService {
       this.options.notifyApprovalChanged?.(stream.chatId);
       return;
     }
-    if (channel === "chat:error") {
-      const finalTimeline = parseGenerationTimeline(payload.timeline);
-      if (
-        stream.cancelRequested ||
-        payload.cancelled === true ||
-        finalTimeline?.status === "cancelled"
-      ) {
-        this.append(
-          stream,
-          "cancelled",
-          { source: stream.cancelRequested ? stream.cancellationSource : "server" },
-          true,
-          "cancelled",
-        );
-        return;
-      }
-      this.append(
-        stream,
-        "error",
-        { code: "internal_error", message: "The model provider could not complete this response." },
-        true,
-        "error",
-      );
-      return;
-    }
-    if (channel === "chat:done") {
-      const finalTimeline = parseGenerationTimeline(payload.timeline);
-      if (
-        stream.cancelRequested ||
-        payload.cancelled === true ||
-        finalTimeline?.status === "cancelled"
-      ) {
-        this.append(
-          stream,
-          "cancelled",
-          { source: stream.cancelRequested ? stream.cancellationSource : "server" },
-          true,
-          "cancelled",
-        );
-        return;
-      }
-      const chat = ownRecord(payload.chat);
-      const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-      const assistant = [...messages].reverse().find((message) => ownRecord(message)?.role === "assistant");
-      const messageId = boundedText(ownRecord(assistant)?.id, 128) || `assistant_${stream.turnId}`;
-      this.append(stream, "done", { messageId }, true, "done");
+    const projected = projectRunContentNotification(stream.projection, channel, payload, {
+      chatId: stream.chatId,
+      turnId: stream.turnId,
+      lastSequence: stream.events[stream.events.length - 1]?.sequence ?? 0,
+      cancelRequested: stream.cancelRequested,
+      cancellationSource: stream.cancellationSource,
+    });
+    if (projected.kind === "event") {
+      this.append(stream, projected.type, projected.payload, projected.terminal, projected.state);
     }
   }
 
@@ -1699,7 +1627,7 @@ export class AidenRemoteStreamService {
         this.append(stream, "cancelled", { source: "server" }, true, "cancelled");
       }
       stream.owner.invalidate();
-      stream.activeTools.clear();
+      stream.projection.activeTools.clear();
       for (const subscriber of stream.subscribers) {
         subscriber.close();
       }
