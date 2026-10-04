@@ -418,13 +418,15 @@ test("application startup reconciles private runs and worktree deletions before 
     "await gitFinalizeOrphanedManagedWorktreeDeletionJournals(",
     reconcileWorktrees,
   );
-  const createWindow = main.indexOf("await createMainWindow()", finalizeOrphanedJournals);
-  const startSchedules = main.indexOf("await scheduleService.start()", createWindow);
+  // The startup window loads during reconciliation, but the startup IPC
+  // admission holds every renderer invoke until this point.
+  const admitRenderer = main.indexOf("openProcessStartupIpcAdmission()", finalizeOrphanedJournals);
+  const startSchedules = main.indexOf("await scheduleService.start()", admitRenderer);
   assert.ok(initialize >= 0);
   assert.ok(reconcileDeletions > initialize);
   assert.ok(reconcileWorktrees > reconcileDeletions);
   assert.ok(finalizeOrphanedJournals > reconcileWorktrees);
-  assert.ok(createWindow > finalizeOrphanedJournals);
+  assert.ok(admitRenderer > finalizeOrphanedJournals);
   assert.ok(startSchedules > finalizeOrphanedJournals);
 });
 

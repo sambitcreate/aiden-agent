@@ -21,7 +21,7 @@ test("Settings exposes local-only reveal export delete and explicit crash consen
 
 test("renderer fault forwarding is main-policy-owned, categorical, and rate-limited", () => {
   const diagnostics = source("renderer/lib/dev-log.ts");
-  const rootEntry = source("renderer/main/index.tsx");
+  const rootEntry = source("renderer/main/app.tsx");
   const boundary = source("renderer/components/ui.tsx");
   assert.doesNotMatch(diagnostics, /import\.meta\.env\.DEV|\.message|\.stack|String\(reason\)/u);
   assert.match(diagnostics, /diagnosticsApi\.policy\(\)/u);
@@ -45,4 +45,12 @@ test("diagnostic IPC surface does not retain the arbitrary devlog writer", () =>
   assert.match(handlers, /failurePhase:/u);
   assert.match(source("main/index.ts"), /code: "renderer-crashed"/u);
   assert.doesNotMatch(index, /devlog:write|String\(message\)/u);
+});
+
+test("damaged chat files are reported only when some were set aside", async () => {
+  const { quarantinedChatsNotice } = await import("../../shared/diagnostics.js");
+  assert.equal(quarantinedChatsNotice(undefined), null);
+  assert.equal(quarantinedChatsNotice(0), null);
+  assert.match(quarantinedChatsNotice(1) ?? "", /^1 damaged chat file .*set it aside unchanged/u);
+  assert.match(quarantinedChatsNotice(3) ?? "", /^3 damaged chat files .*set them aside unchanged/u);
 });

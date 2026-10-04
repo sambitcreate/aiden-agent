@@ -138,12 +138,23 @@ function disposeClientIfCurrent(expected: ParakeetProcessClient): void {
   child = null;
 }
 
+// Whether the native engine loads is fixed for the life of the app, so the
+// first answer from the engine is reused. Settings polls this, and asking
+// again would fork the speech worker (and hold a model lease) every time.
+let knownEngineStatus: { ready: boolean; error: string | null } | null = null;
+
 export async function engineStatus(): Promise<{ ready: boolean; error: string | null }> {
+  if (knownEngineStatus) return knownEngineStatus;
   return withModelLease(async () => {
     try {
-      return await (await getClient()).status();
+      knownEngineStatus = await (await getClient()).status();
+      return knownEngineStatus;
     } catch (error) {
-      if (isolationUnavailable(error)) return engineStatusInProcess();
+      if (isolationUnavailable(error)) {
+        knownEngineStatus = engineStatusInProcess();
+        return knownEngineStatus;
+      }
+      // A failed launch may be transient; do not remember it.
       return { ready: false, error: error instanceof Error ? error.message : String(error) };
     }
   });

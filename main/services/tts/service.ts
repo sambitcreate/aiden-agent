@@ -30,7 +30,7 @@ import {
   type TtsUnarySynthesisResult,
   type TtsVoicesPage,
 } from "./gemini-wire.js";
-import { prepareSpeechText, SpeechTextError } from "./speech-text.js";
+import { ensureSpeechTextParser, prepareSpeechText, SpeechTextError } from "./speech-text.js";
 import {
   revalidateTtsSource,
   resolveLatestTtsSource,
@@ -577,6 +577,7 @@ export function createTtsService(deps: TtsServiceDeps) {
           throw new TtsStartError(sourceErrorToSafe(error));
         },
       );
+      await ensureSpeechTextParser();
       reservation.assertCurrent();
       const identity = JSON.stringify(["read-aloud", request.source.chatId,
         request.source.messageId, request.source.sourceRevision, settings.model, voice,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before } from "node:test";
 import {
+  ensureSpeechTextParser,
   prepareSpeechText,
   segmentSpeechText,
   SPEECH_TEXT_POLICY_VERSION,
@@ -10,6 +11,8 @@ import { TTS_LIMITS } from "../../../renderer/shared/tts.js";
 
 const BOTH = { inlineCode: true, fencedCode: true };
 const DEFAULTS = { inlineCode: true, fencedCode: false };
+
+before(ensureSpeechTextParser);
 
 test("plain prose is preserved with formatting markers removed", () => {
   const result = prepareSpeechText({

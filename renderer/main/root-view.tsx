@@ -10,6 +10,7 @@ import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/env
 import { toast } from "../components/ui";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
+import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
@@ -247,6 +248,8 @@ function RootContent() {
       ]);
     });
   }, [queryClient]);
+
+  React.useEffect(() => subscribeGitQuerySync(queryClient, onNotification), [queryClient]);
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {

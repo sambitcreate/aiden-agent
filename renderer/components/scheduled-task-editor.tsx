@@ -283,6 +283,7 @@ export function ScheduledTaskEditor({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={onOpenChange}
       title={draft.id ? "Edit scheduled task" : "Create scheduled task"}

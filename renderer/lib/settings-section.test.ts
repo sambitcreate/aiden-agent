@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   availableSettingsDestinations,
+  matchesSettingsSearch,
   parseSettingsSearch,
   parseSettingsSection,
   SETTINGS_DESTINATIONS,
@@ -108,4 +109,34 @@ test("settings can be found by the user's task without knowing feature names", (
     SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title,
     "Aiden On The Go",
   );
+});
+
+function searchIds(search: string, descriptions: Partial<Record<string, string>> = {}): string[] {
+  return SETTINGS_DESTINATIONS.filter((destination) =>
+    matchesSettingsSearch(destination, search, descriptions[destination.id]),
+  ).map((destination) => destination.id);
+}
+
+test("settings search matches every term in any order across title and keywords", () => {
+  assert.deepEqual(searchIds("phone connect"), searchIds("connect phone"));
+  assert.ok(searchIds("phone connect").includes("remoteAccess"));
+  assert.ok(searchIds("  Phone   CONNECT ").includes("remoteAccess"));
+  // A term that appears nowhere for a destination excludes it even when others match.
+  assert.equal(searchIds("phone zzqx").length, 0);
+});
+
+test("settings search finds About by update, diagnostics, logs, and reset terms", () => {
+  for (const term of ["update", "diagnostics", "logs", "reset onboarding"]) {
+    assert.ok(searchIds(term).includes("about"), term);
+  }
+});
+
+test("settings search also matches the page description", () => {
+  const destination = { title: "Voice", keywords: ["microphone"] };
+  assert.equal(matchesSettingsSearch(destination, "dictation"), false);
+  assert.equal(
+    matchesSettingsSearch(destination, "voice dictation", "Dictation and transcription."),
+    true,
+  );
+  assert.equal(searchIds("").length, SETTINGS_DESTINATIONS.length);
 });

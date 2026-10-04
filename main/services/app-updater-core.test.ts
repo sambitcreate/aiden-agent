@@ -322,7 +322,6 @@ test("production updater awaits downloads and exposes a sender-scoped retry entr
   const handler = main.slice(handlerStart, handlerEnd);
 
   assert.doesNotMatch(service, /checkForUpdatesAndNotify/u);
-  assert.match(service, /await autoUpdater\.downloadUpdate\(cancellation\)/u);
   assert.match(service, /DOWNLOAD_STALL_TIMEOUT_MS/u);
   assert.match(service, /appUpdateRetryDelay\(this\.retryAttempt\)/u);
   assert.match(handler, /event\.sender\.id !== mainWindow\.webContents\.id/u);
@@ -394,6 +393,7 @@ async function simulatedService() {
   let downloads = 0;
   let cancellations = 0;
   let installs = 0;
+  const loaded: string[] = [];
   const dialogs: unknown[] = [];
   const updater = Object.assign(new EventEmitter(), {
     checkForUpdates: () => check.promise,
@@ -434,6 +434,14 @@ async function simulatedService() {
     "node:fs/promises": {},
     "node:path": nodePath,
   };
+  // The service loads electron-updater lazily through createRequire.
+  mocks["node:module"] = {
+    createRequire: () => (name: string) => {
+      assert.ok(name in mocks, `unexpected dependency: ${name}`);
+      loaded.push(name);
+      return mocks[name];
+    },
+  };
   const bundle = await build({
     entryPoints: [new URL("./app-updater.ts", import.meta.url).pathname],
     bundle: true,
@@ -447,6 +455,7 @@ async function simulatedService() {
   run(
     (name: string) => {
       assert.ok(name in mocks, `unexpected dependency: ${name}`);
+      loaded.push(name);
       return mocks[name];
     },
     module,
@@ -459,6 +468,7 @@ async function simulatedService() {
     download,
     updater,
     dialogs,
+    loaded,
     downloads: () => downloads,
     cancellations: () => cancellations,
     installs: () => installs,
@@ -468,6 +478,19 @@ async function simulatedService() {
 async function flushUpdater() {
   for (let step = 0; step < 12; step += 1) await Promise.resolve();
 }
+
+test("service defers loading the updater SDK until an update check needs it", async () => {
+  const fixture = await simulatedService();
+  try {
+    assert.ok(!fixture.loaded.includes("electron-updater"), "startup must not load electron-updater");
+    const operation = fixture.service.checkNow(false);
+    fixture.check.resolve({ isUpdateAvailable: false, updateInfo: { version: "0.28.31" } });
+    assert.deepEqual(await operation, { outcome: "up-to-date" });
+    assert.equal(fixture.loaded.filter((name) => name === "electron-updater").length, 1);
+  } finally {
+    fixture.service.dispose();
+  }
+});
 
 test("service disposal prevents late feed downloads, manual dialogs, and restarts", async () => {
   const fixture = await simulatedService();
