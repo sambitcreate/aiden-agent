@@ -12,7 +12,7 @@ import { defaultHostModel } from "../../renderer/lib/hosts/host-resources.js";
 import { remoteAttachmentUploads } from "../../renderer/lib/hosts/remote-attachments.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
-import { RemoteNewChatControl, RemoteNewChatMemory } from "../../renderer/lib/hosts/remote-new-chat.js";
+import { hostFolderIdentity, RemoteNewChatControl, RemoteNewChatMemory } from "../../renderer/lib/hosts/remote-new-chat.js";
 
 /**
  * Starting work on another Mac end to end: the new-chat control over the
@@ -26,7 +26,6 @@ import { RemoteNewChatControl, RemoteNewChatMemory } from "../../renderer/lib/ho
 const NOW = new Date(5_000).toISOString();
 const token = (prefix: string, n: number) => `${prefix}_${String(n).padStart(43, "0")}`;
 const ROOT = token("loc", 1);
-const LAUNCH = token("loc", 2);
 
 function code(expected: string) {
   return (error: unknown) => error instanceof HostChatControlError && error.code === expected;
@@ -46,6 +45,14 @@ class StudioHost {
   /** Answers to lose after the host applied the request, as a dropped connection would. */
   readonly drop = { create: 0, turn: 0, workspace: 0 };
   private minted = 0;
+  /** Every handle B minted for its `launch` folder: like the real browser, each listing mints a fresh one. */
+  readonly launchHandles = new Set<string>();
+
+  private launchHandle(): string {
+    const handle = token("loc", 100 + this.launchHandles.size);
+    this.launchHandles.add(handle);
+    return handle;
+  }
 
   constructor() {
     this.host.capabilities = [...CAPABILITIES, "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write"];
@@ -89,12 +96,24 @@ class StudioHost {
       return { roots: [{ id: "root-1", label: "Projects", location: ROOT, policyRevision: "p1" }] };
     }
     if (url.pathname === "/workspace-browser/children" && method === "GET") {
-      if (url.searchParams.get("location") !== ROOT) throw new AidenRemoteServiceError("not_found", "No such folder.", 404);
+      const location = url.searchParams.get("location") ?? "";
+      if (location === ROOT) {
+        return {
+          rootId: "root-1",
+          label: "Projects",
+          breadcrumbs: [{ label: "Projects", location: ROOT }],
+          entries: [{ id: "e-launch", name: "launch", location: this.launchHandle() }],
+        };
+      }
+      if (!this.launchHandles.has(location)) throw new AidenRemoteServiceError("not_found", "No such folder.", 404);
       return {
         rootId: "root-1",
-        label: "Projects",
-        breadcrumbs: [{ label: "Projects", location: ROOT }],
-        entries: [{ id: "e-launch", name: "launch", location: LAUNCH }],
+        label: "launch",
+        breadcrumbs: [
+          { label: "Projects", location: ROOT },
+          { label: "launch", location: this.launchHandle() },
+        ],
+        entries: [],
       };
     }
     if (url.pathname === "/workspace-browser/selections" && method === "POST") {
@@ -111,7 +130,7 @@ class StudioHost {
           if (body.mode === "selected-folder") {
             // A selection names one browsed folder, once.
             const location = this.selections.get(String(body.selection));
-            if (location !== LAUNCH) throw new AidenRemoteServiceError("invalid_request", "That folder selection expired.", 400);
+            if (!location || !this.launchHandles.has(location)) throw new AidenRemoteServiceError("invalid_request", "That folder selection expired.", 400);
             this.selections.delete(String(body.selection));
             if ([...this.workspaces.values()].some((workspace) => workspace.name === "launch")) {
               throw new AidenRemoteServiceError("already_exists", "That folder is already registered as an Aiden workspace.", 409);
@@ -340,18 +359,28 @@ test("a folder browsed on B becomes B's project, and a lost answer still makes o
   const studio = new StudioHost();
   const { harness, control } = await start(studio);
   try {
-    const roots = await harness.adapter.roots();
-    assert.ok(roots.ok);
-    assert.deepEqual(roots.value.map((root) => root.label), ["Projects"]);
-    const page = await harness.adapter.children(roots.value[0]!.location);
-    assert.ok(page.ok);
-    const launch = page.value.entries.find((entry) => entry.name === "launch");
-    assert.ok(launch);
+    // Browses into `launch` the way the folder dialog does, and names the opened folder.
+    const browse = async () => {
+      const roots = await harness.adapter.roots();
+      assert.ok(roots.ok);
+      assert.deepEqual(roots.value.map((root) => root.label), ["Projects"]);
+      const listing = await harness.adapter.children(roots.value[0]!.location);
+      assert.ok(listing.ok);
+      const launch = listing.value.entries.find((entry) => entry.name === "launch");
+      assert.ok(launch);
+      const opened = await harness.adapter.children(launch.location);
+      assert.ok(opened.ok);
+      return { identity: hostFolderIdentity(opened.value), location: launch.location };
+    };
 
+    const first = await browse();
     studio.drop.workspace = 1;
-    await assert.rejects(control.createFolderWorkspace(launch.location), isOutcomeUnknown);
-    // Choosing the same folder again replays the original request instead of being refused as already registered.
-    const created = await control.createFolderWorkspace(launch.location);
+    await assert.rejects(control.createFolderWorkspace(first), isOutcomeUnknown);
+    // Reopening the browser lists the folder under a new handle; choosing it still replays the original request
+    // instead of minting a second selection the host would refuse as already registered.
+    const again = await browse();
+    assert.notEqual(again.location, first.location, "B minted a fresh handle for the same folder");
+    const created = await control.createFolderWorkspace(again);
     assert.equal(created.name, "launch");
     assert.equal(
       [...studio.workspaces.values()].filter((workspace) => workspace.name === "launch").length,

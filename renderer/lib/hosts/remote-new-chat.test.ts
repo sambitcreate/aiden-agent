@@ -10,7 +10,13 @@ import {
 } from "./host-chat-adapter";
 import type { HostCreatedChat, HostCreatedWorkspace, HostNewChatInput, HostWorkspaceCreate } from "./host-resources";
 import { ChatIntentLedger } from "./chat-intent-ledger";
-import { RemoteNewChatControl, RemoteNewChatMemory, type RemoteNewChatHost } from "./remote-new-chat";
+import {
+  hostFolderIdentity,
+  RemoteNewChatControl,
+  RemoteNewChatMemory,
+  type HostFolderChoice,
+  type RemoteNewChatHost,
+} from "./remote-new-chat";
 
 const lost = () => new HostChatControlError({ code: "outcome_unknown", message: "lost" });
 
@@ -37,7 +43,20 @@ class FakeHost implements RemoteNewChatHost {
   uploadLimit = Infinity;
   /** Single-use folder selections, by token. */
   readonly selections = new Map<string, string>();
+  /** The folder each handle from the latest listing points at; every listing mints new handles. */
+  private handles = new Map<string, string>();
+  private listings = 0;
+  /** While set, a send waits here before the host acts on it. */
+  hold: Promise<void> | null = null;
   private uploads = 0;
+
+  /** Lists a folder the way the host browser does, returning a handle valid until the next listing. */
+  list(folder: string): HostFolderChoice {
+    this.listings += 1;
+    const location = `loc-${this.listings}`;
+    this.handles = new Map([[location, folder]]);
+    return { identity: hostFolderIdentity({ rootId: "root-home", breadcrumbs: [{ label: "Home" }, { label: folder }] }), location };
+  }
 
   capabilities() {
     return this.granted;
@@ -100,9 +119,11 @@ class FakeHost implements RemoteNewChatHost {
   }
   async selectFolder(location: string) {
     this.calls.push(`select:${location}`);
+    const folder = this.handles.get(location);
+    if (!folder) throw new HostChatControlError({ code: "not_found", message: "That folder handle is stale." });
     const selection = `sel-${this.selections.size + this.calls.length}`;
-    this.selections.set(selection, location);
-    return { selection, displayName: location };
+    this.selections.set(selection, folder);
+    return { selection, displayName: folder };
   }
   async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
     if (this.staged.size >= this.uploadLimit) throw new HostChatControlError({ code: "rate_limited", message: "Too many unused attachments." });
@@ -118,6 +139,7 @@ class FakeHost implements RemoteNewChatHost {
   }
   async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.calls.push(`send:${chatId}`);
+    if (this.hold) await this.hold;
     if (this.vanish) {
       this.vanish = false;
       throw lost();
@@ -283,19 +305,51 @@ test("a lost first turn and a lost create both survive the control being rebuilt
   assert.equal(second.getSnapshot().unresolved, null, "every control sees it resolved");
 });
 
-test("choosing the same folder again after a lost answer makes one project", async () => {
+test("choosing the same folder again after a lost answer makes one project, even from a fresh listing", async () => {
   const { host, control: c } = control();
   host.lose.add("workspace");
-  await assert.rejects(c.createFolderWorkspace("launch"), { code: "outcome_unknown" });
-  const created = await c.createFolderWorkspace("launch");
+  await assert.rejects(c.createFolderWorkspace(host.list("launch")), { code: "outcome_unknown" });
+
+  // Reopening the browser lists the folder again under a new handle.
+  const again = host.list("launch");
+  const created = await c.createFolderWorkspace(again);
   assert.equal(created.name, "launch");
   assert.equal(host.workspaces.size, 1);
   assert.equal(host.calls.filter((call) => call.startsWith("select:")).length, 1, "the retry replayed the original selection");
 
   // A definite answer ends the intent: the next choice is a new request with a new selection.
-  await assert.rejects(c.createFolderWorkspace("launch"), { code: "already_exists" });
-  await assert.rejects(c.createFolderWorkspace("launch"), { code: "already_exists" });
+  await assert.rejects(c.createFolderWorkspace(host.list("launch")), { code: "already_exists" });
+  await assert.rejects(c.createFolderWorkspace(host.list("launch")), { code: "already_exists" });
   assert.equal(host.calls.filter((call) => call.startsWith("select:")).length, 3, "a refused request is not replayed");
+});
+
+test("a different folder after a lost answer is its own project", async () => {
+  const { host, control: c } = control();
+  host.lose.add("workspace");
+  await assert.rejects(c.createFolderWorkspace(host.list("launch")), { code: "outcome_unknown" });
+  const other = await c.createFolderWorkspace(host.list("notes"));
+  assert.equal(other.name, "notes");
+  assert.deepEqual([...host.workspaces.values()].map((workspace) => workspace.name).sort(), ["launch", "notes"]);
+});
+
+test("a control rebuilt while a first message is in flight cannot send another", async () => {
+  const { host, control: first, memory } = control();
+  let release!: () => void;
+  host.hold = new Promise((resolve) => (release = resolve));
+  const started = first.start(target, "Hello");
+  while (!host.calls.some((call) => call.startsWith("send:"))) await new Promise((resolve) => setImmediate(resolve));
+
+  // Leaving the page and coming back builds a new control while the host still holds the send.
+  const second = new RemoteNewChatControl(host, memory);
+  second.attach();
+  assert.equal(second.getSnapshot().starting, true, "the rebuilt page shows the start in progress");
+  await assert.rejects(second.start(target, "Hello"), { code: "busy" });
+
+  host.hold = null;
+  release();
+  assert.equal((await started).chatId, "chat-1");
+  assert.equal(host.calls.filter((call) => call.startsWith("send:")).length, 1, "the host received one first message");
+  assert.equal(second.getSnapshot().starting, false, "the rebuilt page sees the start finish");
 });
 
 test("dismissing a first turn that never arrived frees its uploads for the next chat", async () => {

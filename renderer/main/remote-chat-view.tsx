@@ -126,6 +126,31 @@ export function remoteComposerActions(
   };
 }
 
+/**
+ * True while a newly opened chat's composer must wait: a send or guidance
+ * submitted from it before is still in flight, and its stored text must not
+ * be offered as a fresh draft that could be sent again under a new key. The
+ * submitting composer settles that draft (in the microtasks after the ledger
+ * records the answer, before this render), so the composer mounts with the
+ * text consumed, held by the reconciliation notice, or restored if refused.
+ */
+function useComposerWaiting(control: ChatSessionControl | null): boolean {
+  // Captured once per control, before this pane's composer can submit anything.
+  const inFlight = React.useMemo(() => control?.submissionsSettled() ?? null, [control]);
+  const [settled, setSettled] = React.useState<Promise<void> | null>(null);
+  React.useEffect(() => {
+    if (!inFlight) return;
+    let current = true;
+    void inFlight.then(() => {
+      if (current) setSettled(inFlight);
+    });
+    return () => {
+      current = false;
+    };
+  }, [inFlight]);
+  return inFlight !== null && settled !== inFlight;
+}
+
 /** Toasts a control failure, unless the reconciliation banner already explains it. */
 function reportControlError(control: ChatSessionControl, error: unknown, fallback: string): void {
   if (isOutcomeUnknown(error) && control.getSnapshot().unresolved) return;
@@ -352,6 +377,7 @@ export function RemoteChatPane({
   const isGenerating = live && run?.status === "running";
   const showChatMenu = Boolean(capabilities?.has("rename") || capabilities?.has("remove"));
   const composerKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
+  const composerWaiting = useComposerWaiting(control);
 
   return (
     <>
@@ -517,6 +543,10 @@ export function RemoteChatPane({
                 submitting={state?.answeringQuestionId === openQuestion.promptId}
                 onRespond={(response) => answer(openQuestion, response)}
               />
+            ) : canSend && composerKey && composerWaiting ? (
+              <Text variant="small" color="secondary" as="p" className="px-1 text-center" data-remote-send-pending="true">
+                {`Waiting for ${host.label} to confirm your last message.`}
+              </Text>
             ) : canSend && composerKey ? (
               <Composer
                 // Keyed by host and chat, so drafts never cross hosts.

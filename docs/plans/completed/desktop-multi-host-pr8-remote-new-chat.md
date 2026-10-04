@@ -34,9 +34,12 @@ PR 7 made an existing remote chat controllable. This PR lets this Mac start work
   - A lost first message shows the unresolved banner with **Retry**, **Dismiss** and **Open chat**. Main reconciles a send with one `GET /chats/{id}` and never replays it. **Retry** resends with the same key, so the host returns the original turn.
   - The first message is recorded in PR 7's window-lifetime chat intent ledger under the new chat, so **Open chat** shows the same banner in the chat itself and its **Retry** replays the original key and uploads.
   - The pending create key and the unresolved first message also live in a window-lifetime `RemoteNewChatMemory` per host, so leaving the route or a grants change that rebuilds the adapter cannot mint a new key and create a second chat.
-  - A lost answer to a folder project keeps the original request (with its selection) and key per folder location. Choosing the same folder again replays them, so the host answers from its idempotency record rather than refusing the folder as already registered. A new selection is minted only for a new intent or after a definite answer.
+  - A start in progress is also recorded per host in `RemoteNewChatMemory`, so a control rebuilt while the first message is in flight shows it starting and refuses a second start as `busy`.
+  - A lost answer to a folder project keeps the original request (with its selection) and key per folder. The folder is identified by its root and the folder names below it (`hostFolderIdentity`), not by its `loc_` handle, because the host mints new handles on every listing. Choosing the same folder again, even from a fresh listing, replays the request, so the host answers from its idempotency record rather than refusing the folder as already registered. A new selection is minted only for a new intent or after a definite answer.
+  - A project created from the new-chat route (a folder or the scratch project) is offered in the project picker at once, until the host's feed reports it.
   - A refused first message keeps the empty chat for the next attempt.
   - Dismissing an unresolved send, or a retry the host definitely refuses, releases the uploads that send was staged with, in both a new and an existing chat, so they never count against the host's limit of 20 unused uploads.
+  - A send in an existing chat is recorded in the chat intent ledger before its uploads stage, so a pane reopened while files upload already waits for that send (PR 7's `submissionsSettled`) instead of offering its text as a new draft.
 - **Uploads are unkeyed.** An ambiguous upload becomes a retryable `upload_failed`. The client releases the uploads the host confirmed. An unconfirmed upload is never named in a turn and expires on the host.
 - **Queue and steer refuse attachments and skills** on a remote run, because the run-input contract carries text only.
 - **Bot chats are canonical.** The host returns a Bot's existing chat, so opening it twice lands in the same chat.
@@ -51,13 +54,13 @@ PR 7 made an existing remote chat controllable. This PR lets this Mac start work
   - a refused project leaves nothing behind;
   - a lost first message is retried without a second turn;
   - a lost first message is offered in the opened chat, whose retry sends it once with its uploads;
-  - a browsed folder becomes B's project, and a lost answer still makes one project;
+  - a browsed folder becomes B's project, and a lost answer still makes one project when the folder is chosen again from a fresh listing with new handles;
   - a Bot's chat opens canonically;
   - a host without the grants refuses before anything is sent.
 - The shared harness `peer-remote-chat-test-host.ts` gains per-host capabilities and features, a suite route hook and access to its idempotency ledger.
-- `renderer/lib/hosts/remote-new-chat.test.ts`: key retention and release, staging order, unresolved retry and dismiss, recovery after the control is rebuilt, folder replay after a lost answer, and upload release on dismiss or a refused retry.
+- `renderer/lib/hosts/remote-new-chat.test.ts`: key retention and release, staging order, unresolved retry and dismiss, recovery after the control is rebuilt, a rebuilt control refusing a second start while one is in flight, folder replay after a lost answer across listings, and upload release on dismiss or a refused retry.
 - `renderer/lib/hosts/host-resources.test.ts`: the model catalog and default model, folder pages and skills.
 - `renderer/lib/hosts/chat-session-control.test.ts`: attachment staging for an existing remote chat, and upload release when an unresolved send is dismissed or refused on retry.
-- `renderer/lib/hosts/new-chat-targets.test.ts`: machine availability reasons, project ordering, Bot grouping and search-parameter parsing.
+- `renderer/lib/hosts/new-chat-targets.test.ts`: machine availability reasons, project ordering (including projects just created on the host), Bot grouping and search-parameter parsing.
 - `renderer/main/remote-new-chat-view.test.tsx`: the pane's machine, project and model controls; blocked reasons; the unresolved banner; the folder list; and remote Bot grouping.
-- `renderer/components/composer-attachments-mounted.test.tsx`: a remote new chat attaches and sends a file without this Mac's workspace access control.
+- `renderer/components/composer-attachments-mounted.test.tsx`: a remote new chat attaches and sends a file without this Mac's workspace access control, and a remote chat reads skills only from its host, never this Mac's catalog.

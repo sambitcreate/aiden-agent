@@ -12,6 +12,8 @@ import {
   type HostChatTurnReceipt,
 } from "./host-chat-adapter";
 import type {
+  HostBrowserLocation,
+  HostBrowserPage,
   HostCreatedChat,
   HostCreatedWorkspace,
   HostFolderSelection,
@@ -71,16 +73,41 @@ interface FirstTurn {
 
 interface HostNewChatState {
   pending: PendingChat | null;
+  /** True from a start's create until its first turn settles, whichever control started it. */
+  starting: boolean;
   firstTurn: FirstTurn | null;
   intents: Map<string, PendingIntent>;
 }
 
+/** A browsed folder to make a project from. */
+export interface HostFolderChoice {
+  /**
+   * Names the folder across listings. The host mints a new `loc_` handle
+   * every time it lists a folder, so the handle cannot recognise the same
+   * folder chosen again; see `hostFolderIdentity`.
+   */
+  identity: string;
+  /** The current handle, spent once to mint the folder's selection. */
+  location: string;
+}
+
+/**
+ * A stable name for the folder a browser page shows: its approved root and
+ * the folder names below it. Both survive a re-listing, unlike the handles.
+ */
+export function hostFolderIdentity(page: {
+  rootId: HostBrowserPage["rootId"];
+  breadcrumbs: ReadonlyArray<Pick<HostBrowserLocation, "label">>;
+}): string {
+  return JSON.stringify([page.rootId, ...page.breadcrumbs.slice(1).map((crumb) => crumb.label)]);
+}
+
 /**
  * What starting new work on each host keeps for this window: the key of a
- * chat or project whose create answer was lost, and the chat whose first
- * turn is unresolved. It outlives the route and adapter that started the
- * work, so leaving the page or a grants change cannot make a retry mint a
- * new key and create a second chat or project.
+ * chat or project whose create answer was lost, a start still in flight, and
+ * the chat whose first turn is unresolved. It outlives the route and adapter
+ * that started the work, so leaving the page or a grants change cannot admit
+ * a second first message or make a retry mint a new key.
  */
 export class RemoteNewChatMemory {
   private readonly hosts = new Map<string, HostNewChatState>();
@@ -89,7 +116,7 @@ export class RemoteNewChatMemory {
   state(hostId: string): HostNewChatState {
     let state = this.hosts.get(hostId);
     if (!state) {
-      state = { pending: null, firstTurn: null, intents: new Map() };
+      state = { pending: null, starting: false, firstTurn: null, intents: new Map() };
       this.hosts.set(hostId, state);
     }
     return state;
@@ -99,6 +126,17 @@ export class RemoteNewChatMemory {
     const state = this.state(hostId);
     if (state.firstTurn === firstTurn) return;
     state.firstTurn = firstTurn;
+    this.changed(hostId);
+  }
+
+  setStarting(hostId: string, starting: boolean): void {
+    const state = this.state(hostId);
+    if (state.starting === starting) return;
+    state.starting = starting;
+    this.changed(hostId);
+  }
+
+  private changed(hostId: string): void {
     for (const listener of [...(this.listeners.get(hostId) ?? [])]) listener();
   }
 
@@ -158,7 +196,7 @@ export class RemoteNewChatControl {
     this.ledger = ledger;
     this.memory = memory;
     this.state = memory.state(host.hostId);
-    this.snapshot = { status: host.status(), starting: false, unresolved: this.firstTurn() };
+    this.snapshot = { status: host.status(), starting: this.state.starting, unresolved: this.firstTurn() };
   }
 
   attach(): () => void {
@@ -222,7 +260,7 @@ export class RemoteNewChatControl {
     const unresolved = this.firstTurn();
     // Retried or dismissed from the chat itself: nothing is pending here any more.
     if (!unresolved && this.state.firstTurn) this.memory.setFirstTurn(this.host.hostId, null);
-    this.update({ unresolved });
+    this.update({ unresolved, starting: this.state.starting });
   }
 
   private guard(capability: HostChatCapability): void {
@@ -264,7 +302,8 @@ export class RemoteNewChatControl {
     if (this.firstTurn()) {
       throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
     }
-    if (this.snapshot.starting) throw new HostChatControlError({ code: "busy", message: "Your new chat is still starting." });
+    // Shared with every control for this host, so a page rebuilt mid-start cannot send the first message again.
+    if (this.state.starting) throw new HostChatControlError({ code: "busy", message: "Your new chat is still starting." });
     const signature = targetSignature(target);
     if (!this.state.pending || this.state.pending.signature !== signature) {
       this.state.pending = { signature, key: mintPeerIdempotencyKey() };
@@ -273,7 +312,7 @@ export class RemoteNewChatControl {
     const settle = () => {
       if (this.state.pending === pending) this.state.pending = null;
     };
-    this.update({ starting: true });
+    this.setStarting(true);
     try {
       if (!pending.chatId) {
         try {
@@ -321,8 +360,14 @@ export class RemoteNewChatControl {
         throw error;
       }
     } finally {
-      this.update({ starting: false });
+      this.setStarting(false);
     }
+  }
+
+  private setStarting(starting: boolean): void {
+    this.memory.setStarting(this.host.hostId, starting);
+    // An attached control already refreshed through the memory; a detached one still reflects its own start.
+    if (!this.offMemory) this.update({ starting });
   }
 
   /** Replays the unresolved first message with its original key; resolves with the chat it belongs to. */
@@ -377,17 +422,17 @@ export class RemoteNewChatControl {
   /**
    * Makes a browsed folder a project on the host. The folder's selection is
    * minted just before it is spent, and only once per intent: after a lost
-   * answer, choosing the same folder again replays the original request and
-   * key, which the host answers from its record instead of refusing the
-   * folder as already registered.
+   * answer, choosing the same folder again (even from a fresh listing, with
+   * new handles) replays the original request and key, which the host answers
+   * from its record instead of refusing the folder as already registered.
    */
-  async createFolderWorkspace(location: string): Promise<HostCreatedWorkspace> {
+  async createFolderWorkspace(folder: HostFolderChoice): Promise<HostCreatedWorkspace> {
     this.guard("createWorkspace");
     this.guard("browseFolders");
     return this.keyed(
-      `folder:${location}`,
+      `folder:${folder.identity}`,
       ({ key, body }) => this.host.createWorkspace(body!, key),
-      async () => ({ mode: "selected-folder", selection: (await this.host.selectFolder(location)).selection }),
+      async () => ({ mode: "selected-folder", selection: (await this.host.selectFolder(folder.location)).selection }),
     );
   }
 

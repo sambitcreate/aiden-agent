@@ -32,8 +32,15 @@ export interface ChatIntentUnresolved {
   retrying: boolean;
 }
 
+interface PendingIntent {
+  intent: ChatIntent;
+  /** Resolves when the host's answer, or its loss, is recorded. */
+  settled: Promise<void>;
+  done(): void;
+}
+
 interface Entry {
-  pending: Map<string, ChatIntent>;
+  pending: Map<string, PendingIntent>;
   unresolved: ChatIntentUnresolved | null;
 }
 
@@ -51,7 +58,11 @@ export class ChatIntentLedger {
 
   /** Records an intent as in flight. */
   begin(ref: ChatIntentRef, intent: ChatIntent): void {
-    this.entry(ref).pending.set(intent.idempotencyKey, intent);
+    let done!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    this.entry(ref).pending.set(intent.idempotencyKey, { intent, settled, done });
     this.changed(ref);
   }
 
@@ -61,10 +72,13 @@ export class ChatIntentLedger {
    */
   settle(ref: ChatIntentRef, idempotencyKey: string, outcome: "known" | "unknown"): void {
     const entry = this.entries.get(refKey(ref));
-    const intent = entry?.pending.get(idempotencyKey);
-    if (!entry || !intent) return;
+    const pending = entry?.pending.get(idempotencyKey);
+    if (!entry || !pending) return;
     entry.pending.delete(idempotencyKey);
-    if (outcome === "unknown" && entry.unresolved?.intent.kind !== "send") entry.unresolved = { intent, retrying: false };
+    if (outcome === "unknown" && entry.unresolved?.intent.kind !== "send") {
+      entry.unresolved = { intent: pending.intent, retrying: false };
+    }
+    pending.done();
     this.prune(ref, entry);
     this.changed(ref);
   }
@@ -76,7 +90,18 @@ export class ChatIntentLedger {
   /** True while a send for this chat is still waiting for the host's answer. */
   sending(ref: ChatIntentRef): boolean {
     const pending = this.entries.get(refKey(ref))?.pending;
-    return pending ? [...pending.values()].some((intent) => intent.kind === "send") : false;
+    return pending ? [...pending.values()].some(({ intent }) => intent.kind === "send") : false;
+  }
+
+  /**
+   * Resolves once every send and guidance for this chat now in flight is
+   * settled, whichever pane submitted it; null when none is in flight.
+   * Never rejects.
+   */
+  submissionsSettled(ref: ChatIntentRef): Promise<void> | null {
+    const pending = this.entries.get(refKey(ref))?.pending;
+    const inFlight = [...(pending?.values() ?? [])].filter(({ intent }) => intent.text !== undefined);
+    return inFlight.length === 0 ? null : Promise.all(inFlight.map(({ settled }) => settled)).then(() => undefined);
   }
 
   /** Marks the unresolved intent as being retried, or not; ignored if it was replaced. */

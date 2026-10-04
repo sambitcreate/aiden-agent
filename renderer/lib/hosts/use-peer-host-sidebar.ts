@@ -28,6 +28,29 @@ export interface PeerHostSidebarData {
 
 const NO_FEEDS: ReadonlyMap<string, PeerHostFeedSnapshot> = new Map();
 
+/**
+ * Reads one host's feed snapshot and replays the broadcasts that arrived while
+ * it was in flight (the listener buffers them in `pending`).
+ */
+async function readPeerHostFeed(
+  pending: Map<string, PeerHostFeedMessage[]>,
+  hostId: string,
+): Promise<PeerHostFeedSnapshot | null> {
+  for (let read = 0; read < MAX_FEED_READS; read += 1) {
+    const buffered: PeerHostFeedMessage[] = [];
+    pending.set(hostId, buffered);
+    try {
+      const snapshot = await peerHostsApi.feed(hostId);
+      if (!snapshot) return null;
+      const replayed = replayPeerHostFeedMessages(snapshot, buffered);
+      if (replayed !== FEED_RESYNC) return replayed;
+    } finally {
+      if (pending.get(hostId) === buffered) pending.delete(hostId);
+    }
+  }
+  throw new Error("The host's rows kept changing while they were read.");
+}
+
 /** Stable `combine` for the feed queries; it reruns only when a result changes. */
 function feedsByHost(
   results: readonly { data: PeerHostFeedSnapshot | null | undefined }[],
@@ -104,10 +127,26 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
       batcher.push(message);
     });
     // Statuses and feeds cached while an earlier listener was installed may
-    // have missed broadcasts since it went away. Mark them stale without
-    // reading yet: the gated queries read afresh once they are enabled below.
-    void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses(), refetchType: "none" });
-    void queryClient.invalidateQueries({ queryKey: ["host"], refetchType: "none" });
+    // have missed broadcasts since it went away, so read them in full now that
+    // the listeners are back. The reads start here rather than waiting on a
+    // stale flag, which any broadcast landing before the queries enable would
+    // clear. Queries with nothing cached read once they are enabled below.
+    if (queryClient.getQueryData(hostQueryKeys.statuses()) !== undefined) {
+      void queryClient.prefetchQuery({
+        queryKey: hostQueryKeys.statuses(),
+        queryFn: statusSync.read,
+        staleTime: 0,
+      });
+    }
+    for (const query of queryClient.getQueryCache().findAll({ queryKey: ["host"] })) {
+      const [, hostId, kind] = query.queryKey;
+      if (kind !== "feed" || typeof hostId !== "string" || query.state.data === undefined) continue;
+      void queryClient.prefetchQuery({
+        queryKey: hostQueryKeys.feed(hostId),
+        queryFn: () => readPeerHostFeed(pending.current, hostId),
+        staleTime: 0,
+      });
+    }
     setListening(true);
     return () => {
       unsubscribeState();
@@ -127,21 +166,7 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
   const feeds = useQueries({
     queries: enabledIds.map((hostId) => ({
       queryKey: hostQueryKeys.feed(hostId),
-      queryFn: async (): Promise<PeerHostFeedSnapshot | null> => {
-        for (let read = 0; read < MAX_FEED_READS; read += 1) {
-          const buffered: PeerHostFeedMessage[] = [];
-          pending.current.set(hostId, buffered);
-          try {
-            const snapshot = await peerHostsApi.feed(hostId);
-            if (!snapshot) return null;
-            const replayed = replayPeerHostFeedMessages(snapshot, buffered);
-            if (replayed !== FEED_RESYNC) return replayed;
-          } finally {
-            if (pending.current.get(hostId) === buffered) pending.current.delete(hostId);
-          }
-        }
-        throw new Error("The host's rows kept changing while they were read.");
-      },
+      queryFn: () => readPeerHostFeed(pending.current, hostId),
       enabled: listening,
       staleTime: Infinity,
     })),

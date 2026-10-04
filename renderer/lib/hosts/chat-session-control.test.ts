@@ -302,6 +302,30 @@ test("attachments are staged on the chat's host and consumed by the turn they we
   assert.deepEqual(host.calls, ["upload:chat-1:notes.md", "upload:chat-1:shot.png", "send:chat-1"]);
 });
 
+test("a pane reopened while a send's files upload waits for that send instead of offering its text again", async () => {
+  const host = new FakeHost();
+  const ledger = new ChatIntentLedger();
+  const ref = { hostId: host.hostId, chatId: "chat-1" };
+  const gate = deferred<void>();
+  host.uploadGate = gate.promise;
+  const earlier = new ChatSessionControl(host, ref, ledger);
+  const detach = earlier.attach();
+  const sent = earlier.send("Read these", { attachments: [notes] });
+  detach();
+
+  const reopened = new ChatSessionControl(host, ref, ledger);
+  reopened.attach();
+  const settled = reopened.submissionsSettled();
+  assert.ok(settled, "the message is still in flight while its files upload");
+  assert.equal(reopened.getSnapshot().sending, true);
+
+  gate.resolve();
+  await sent;
+  await settled;
+  assert.equal(reopened.getSnapshot().sending, false);
+  assert.equal(host.turns.size, 1);
+});
+
 test("a lost upload releases the files already confirmed and sends nothing", async () => {
   const { host, control } = session();
   host.lostUploads.add(2);
