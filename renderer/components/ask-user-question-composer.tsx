@@ -173,7 +173,7 @@ export function AskUserQuestionComposer({
 
         <div
           className="mt-4 grid gap-1.5"
-          role={question.multiSelect ? "group" : "radiogroup"}
+          role="group"
           aria-label={question.header}
         >
           {question.options.map((option, optionIndex) => {
@@ -185,8 +185,11 @@ export function AskUserQuestionComposer({
                 key={option.label}
                 ref={optionIndex === 0 ? firstOptionRef : undefined}
                 type="button"
-                role={question.multiSelect ? "checkbox" : "radio"}
-                aria-checked={selected}
+                // Single-select options answer and advance on activation, so they
+                // are plain action buttons rather than radios that arrow keys
+                // would select. Multi-select options are real checkboxes.
+                role={question.multiSelect ? "checkbox" : undefined}
+                aria-checked={question.multiSelect ? selected : undefined}
                 disabled={submitting}
                 className={cn(
                   "ask-user-question-option group flex min-h-16 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left",
@@ -202,6 +205,9 @@ export function AskUserQuestionComposer({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-strong font-medium text-primary">{option.label}</span>
+                  {selected && !question.multiSelect ? (
+                    <span className="sr-only">, current answer</span>
+                  ) : null}
                   <span className="mt-0.5 block text-regular leading-snug text-secondary">
                     {option.description}
                   </span>

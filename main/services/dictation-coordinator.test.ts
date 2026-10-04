@@ -317,6 +317,35 @@ test("a Secure Input copy result reaches the pill and lingers longer than a past
   assert.ok(secure.hideDelay > pasted.hideDelay);
 });
 
+test("pill errors stay up long enough to read, longer for longer guidance", async () => {
+  async function failWith(message: string) {
+    const delays: number[] = [];
+    const subject = harness({
+      setTimer: (_callback, delayMs) => {
+        delays.push(delayMs);
+        return dormantTimer();
+      },
+    });
+    await subject.coordinator.ready();
+    await subject.coordinator.press();
+    await subject.coordinator.press();
+    const before = delays.length;
+    await subject.coordinator.error(message, subject.coordinator.currentOperationId!);
+    assert.equal(subject.events[subject.events.length - 1]?.state, "error");
+    assert.ok(delays.length > before, "an error schedules the pill hide");
+    return delays[delays.length - 1]!;
+  }
+
+  const short = await failWith("No speech detected.");
+  const long = await failWith(
+    "OpenAI needs an API key for voice input. Add it in Settings → Providers, then try again.",
+  );
+  const runaway = await failWith("x".repeat(5_000));
+  assert.ok(short >= 4_000, `short errors stay at least 4 s (got ${short})`);
+  assert.ok(long > short, "longer guidance stays up longer");
+  assert.ok(runaway <= 10_000, "a pathological message still clears");
+});
+
 test("hold release during cold startup is latched and stops after ready", async () => {
   const shown = deferred<boolean>();
   const subject = harness({

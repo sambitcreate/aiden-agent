@@ -399,21 +399,3 @@ export async function sendTelegramTurn(
   }
 }
 
-/** Check if the persistent chat is currently busy (a turn is in flight). */
-export function isTelegramChatIdle(deps: TelegramTurnDeps, chatId: string): boolean {
-  return !deps.llmClient.isChatBusy(chatId);
-}
-
-/** Wait for the chat to become idle (used during abort/cancel). */
-export async function waitForTelegramChatIdle(
-  deps: TelegramTurnDeps,
-  chatId: string,
-): Promise<boolean> {
-  return deps.llmClient.waitForChatIdle(chatId);
-}
-
-/** Abort and settle the persistent Telegram chat through Aiden's generation owner. */
-export async function abortTelegramChat(deps: TelegramTurnDeps, chatId: string): Promise<void> {
-  if (!deps.llmClient.cancelChat) return;
-  await deps.llmClient.cancelChat(chatId);
-}
