@@ -507,6 +507,11 @@ body {
   transition: background-color 150ms ease-out;
 }
 
+.composer-drop-overlay {
+  border-radius: inherit;
+  corner-shape: squircle;
+}
+
 .composer-shell:focus-within {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }

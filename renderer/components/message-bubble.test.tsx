@@ -863,3 +863,24 @@ test("paused speech keeps both Resume and Stop available", () => {
   assert.match(markup, /aria-label="Stop reading aloud"/u);
   assert.match(markup, /data-active="true"/u);
 });
+
+test("a live generation error is announced as an alert with its reason", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error="The model server closed the connection."
+    />,
+  );
+
+  const alert = markup.match(/<[^>]*role="alert"[^>]*>([\s\S]*?)The model server closed the connection\./u);
+  assert.ok(alert, "the failure reason sits inside the alert region");
+  assert.match(alert[0], /Generation failed/u);
+});
