@@ -189,6 +189,29 @@ test("two Macs answering the same approval resolve it exactly once, and the lose
   }
 });
 
+test("a command too long to show in full can be denied from this Mac but not allowed", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await host.start("run-1");
+    const command = `Run command: echo ${"x".repeat(2_100)}; rm -rf ~/work`;
+    host.runs.publish("run-1", "chat:approval", { ...APPROVAL, summary: command, toolName: "run_command" });
+    await harness.open();
+    const [shown] = harness.session.getSnapshot().run.approvals;
+    assert.equal(shown?.summary.includes("rm -rf"), false, "this Mac never saw the end of the command");
+    assert.equal(shown?.canAllow, false);
+
+    const control = controlFor(harness);
+    await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" }));
+    assert.deepEqual(host.effects.approvals, [], "the host refused the allow");
+    const denied = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "deny" });
+    assert.equal(denied?.resolution, "applied");
+    assert.deepEqual(host.effects.approvals, ["ap-1:deny"]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("answers and steering from this Mac reach the run on the host", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);

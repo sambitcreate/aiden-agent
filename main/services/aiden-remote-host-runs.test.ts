@@ -336,6 +336,25 @@ test("allowing an approval whose details were withheld must happen on the host",
   assert.equal(denied.decision, "deny");
 });
 
+test("a command whose summary was cut short can be denied remotely but allowed only on the host", async () => {
+  const { registry, service, access, effects } = harness();
+  // A generic command approval: the whole command is the summary, with no details.
+  const command = `Run command: echo ${"x".repeat(2_100)}; rm -rf ~/work`;
+  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: command, details: undefined }));
+  const journaled = registry.pendingPrompt("approval-1")!.payload;
+  assert.equal(String(journaled.summary).includes("rm -rf"), false, "the end of the command did not fit");
+  assert.equal(journaled.detailsOmitted, true);
+
+  const refused = await rejection(
+    service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+  );
+  assert.equal(refused.code, "capability_denied");
+  assert.deepEqual(effects.approvals, []);
+
+  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, KEY_B, access);
+  assert.equal(denied.decision, "deny");
+});
+
 test("a prompt from another run is not_found and an unoffered scope is invalid", async () => {
   const { registry, service, access } = harness();
   registry.begin({ runId: "run-2", chatId: "chat-2", origin: "remote" });
