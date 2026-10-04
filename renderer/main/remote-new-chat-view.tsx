@@ -262,7 +262,8 @@ export function RemoteFolderList({
             <Button
               variant="transparent"
               size="small"
-              disabled={busy || crumb.location === location?.location}
+              // The last breadcrumb is the open folder; its handle is freshly minted, so match by position.
+              disabled={busy || index === breadcrumbs.length - 1}
               onClick={() => place && onOpen(hostFolderPlaces.ancestor(place, crumb, index))}
             >
               {crumb.label}
