@@ -8990,48 +8990,31 @@
     "name": "Blue Claw",
     "doc": "https://blueclaw.network",
     "models": {
-      "Qwen3.6-27B": {
-        "id": "Qwen3.6-27B",
-        "name": "Qwen3.6 27B",
-        "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "Qwen3.8-27B": {
+        "id": "Qwen3.8-27B",
+        "name": "Qwen3.8 27B",
+        "description": "Dense 27B vision-language model for coding, agent tasks, and image and video understanding",
         "family": "qwen",
         "attachment": false,
         "reasoning": true,
-        "reasoning_options": [],
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        ],
         "tool_call": true,
         "structured_output": true,
         "temperature": true,
-        "release_date": "2026-04-22",
-        "last_updated": "2026-04-22",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 196608,
-          "output": 65536
-        },
-        "status": "beta",
-        "canonical_model_id": "alibaba/qwen3.6-27b"
-      },
-      "Qwen/Qwen3.6-35B-A3B-FP8": {
-        "id": "Qwen/Qwen3.6-35B-A3B-FP8",
-        "name": "Qwen3.6 35B A3B FP8",
-        "description": "Open multimodal Qwen MoE for local agents that need vision, audio, and code",
-        "family": "qwen",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-04-17",
-        "last_updated": "2026-04-17",
+        "release_date": "2026-08-14",
+        "last_updated": "2026-08-14",
         "modalities": {
           "input": [
             "text"
@@ -9043,10 +9026,10 @@
         "open_weights": true,
         "limit": {
           "context": 131072,
-          "output": 65536
+          "output": 32768
         },
         "status": "beta",
-        "canonical_model_id": "alibaba/qwen3.6-35b-a3b"
+        "canonical_model_id": "alibaba/qwen3.8-27b"
       }
     }
   },
@@ -73248,7 +73231,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.629,
+          "input": 0.6381,
           "output": 13,
           "cache_read": 0.45
         }
@@ -75253,9 +75236,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.13,
-          "output": 0.53,
-          "cache_read": 0.033
+          "input": 0.0825,
+          "output": 0.33,
+          "cache_read": 0.020625
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -75325,9 +75308,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.834,
-          "output": 2.501,
-          "cache_read": 0.042
+          "input": 0.7506,
+          "output": 2.2509,
+          "cache_read": 0.0378
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -77423,7 +77406,7 @@
         "cost": {
           "input": 0.0352,
           "output": 0.5,
-          "cache_read": 0.0352
+          "cache_read": 0.0232
         }
       },
       "~z-ai/glm-latest": {
@@ -77462,9 +77445,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.08,
+          "input": 0.06,
           "output": 5,
-          "cache_read": 0.07
+          "cache_read": 0.05
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -110561,7 +110544,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.629,
+          "input": 0.6381,
           "output": 13,
           "cache_read": 0.45
         }
@@ -112112,9 +112095,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.55,
-          "output": 4.2,
-          "cache_read": 0.45
+          "input": 0.85,
+          "output": 5,
+          "cache_read": 0.7
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -112623,9 +112606,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.132,
-          "output": 0.528,
-          "cache_read": 0.033
+          "input": 0.0825,
+          "output": 0.33,
+          "cache_read": 0.020625
         },
         "canonical_model_id": "tencent/hy3"
       },
@@ -112695,9 +112678,9 @@
           "output": 64000
         },
         "cost": {
-          "input": 0.834,
-          "output": 2.501,
-          "cache_read": 0.042
+          "input": 0.7506,
+          "output": 2.2509,
+          "cache_read": 0.0378
         },
         "canonical_model_id": "tencent/hy4-preview"
       },
@@ -113663,9 +113646,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.0504,
+          "input": 0.104,
           "output": 8,
-          "cache_read": 0.0504
+          "cache_read": 0.1
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -114837,7 +114820,7 @@
         "cost": {
           "input": 0.0352,
           "output": 0.5,
-          "cache_read": 0.0352
+          "cache_read": 0.0232
         }
       },
       "~z-ai/glm-latest": {
@@ -114876,9 +114859,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.08,
+          "input": 0.06,
           "output": 5,
-          "cache_read": 0.07
+          "cache_read": 0.05
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -128417,6 +128400,97 @@
           "cache_write": 0.23
         },
         "canonical_model_id": "zhipuai/glm-5.3-flash"
+      },
+      "deepseek-v4.1-flash-fast": {
+        "id": "deepseek-v4.1-flash-fast",
+        "name": "DeepSeek V4.1 Flash",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0,
+          "cache_write": 0.09
+        },
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
+      },
+      "glm-5.3-fast": {
+        "id": "glm-5.3-fast",
+        "name": "GLM-5.3",
+        "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+        "family": "glm",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": true,
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-14",
+        "last_updated": "2026-08-14",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 1.12,
+          "output": 4.4,
+          "cache_read": 0,
+          "cache_write": 1.68
+        },
+        "canonical_model_id": "zhipuai/glm-5.3"
       },
       "deepseek-v4.1-flash-fast-fp4": {
         "id": "deepseek-v4.1-flash-fast-fp4",
@@ -324731,41 +324805,6 @@
           "output": 12.952
         }
       },
-      "glm-5v-turbo": {
-        "id": "glm-5v-turbo",
-        "name": "GLM-5V-Turbo",
-        "description": "Fast GLM vision model for screenshots, documents, and multimodal agent tasks",
-        "family": "glm",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-04-01",
-        "last_updated": "2026-04-01",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 202752,
-          "output": 202752
-        },
-        "cost": {
-          "input": 1.186,
-          "output": 3.955,
-          "cache_read": 0.296,
-          "cache_write": 1.544
-        },
-        "canonical_model_id": "zhipuai/glm-5v-turbo"
-      },
       "gpt-4o": {
         "id": "gpt-4o",
         "name": "GPT-4o",
@@ -325005,8 +325044,8 @@
           "output": 262000
         },
         "cost": {
-          "input": 0.069,
-          "output": 0.455,
+          "input": 0.199,
+          "output": 0.598,
           "cache_read": 0.018
         },
         "canonical_model_id": "alibaba/qwen3-235b-a22b-instruct-2507"
@@ -325197,42 +325236,6 @@
         },
         "canonical_model_id": "openai/gpt-5-mini"
       },
-      "glm-5": {
-        "id": "glm-5",
-        "name": "GLM-5",
-        "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-02-12",
-        "last_updated": "2026-02-12",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 202752,
-          "output": 202752
-        },
-        "cost": {
-          "input": 0.988,
-          "output": 3.164,
-          "cache_read": 0.247
-        },
-        "canonical_model_id": "zhipuai/glm-5"
-      },
       "deepseek-v4.1-flash": {
         "id": "deepseek-v4.1-flash",
         "name": "DeepSeek V4.1 Flash",
@@ -325342,8 +325345,8 @@
           "output": 196000
         },
         "cost": {
-          "input": 0.296,
-          "output": 1.186,
+          "input": 0.348,
+          "output": 1.39,
           "cache_read": 0.075
         },
         "canonical_model_id": "minimax/MiniMax-M2.5"
@@ -325541,8 +325544,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 262144,
-          "output": 262144
+          "context": 256000,
+          "output": 256000
         },
         "cost": {
           "input": 0.475,
@@ -325932,80 +325935,6 @@
           "output": 0.368,
           "cache_read": 0.012
         }
-      },
-      "qwen3.5-122b-a10b": {
-        "id": "qwen3.5-122b-a10b",
-        "name": "Qwen3.5 122B-A10B",
-        "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
-        "family": "qwen",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "temperature": true,
-        "release_date": "2026-02-23",
-        "last_updated": "2026-02-23",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 262144
-        },
-        "cost": {
-          "input": 0.495,
-          "output": 3.46,
-          "cache_read": 0.124
-        },
-        "canonical_model_id": "alibaba/qwen3.5-122b-a10b"
-      },
-      "kimi-k2.5": {
-        "id": "kimi-k2.5",
-        "name": "Kimi K2.5",
-        "description": "Kimi reasoning model for long-horizon research, planning, and tool use",
-        "family": "kimi-k2",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-01",
-        "release_date": "2026-01",
-        "last_updated": "2026-01",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 262144
-        },
-        "cost": {
-          "input": 0.495,
-          "output": 2.768,
-          "cache_read": 0.124
-        },
-        "canonical_model_id": "moonshotai/kimi-k2.5"
       },
       "gpt-5.1": {
         "id": "gpt-5.1",
@@ -326588,8 +326517,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 262144,
-          "output": 262144
+          "context": 262000,
+          "output": 262000
         },
         "cost": {
           "input": 0.111,
@@ -327513,40 +327442,6 @@
           "cache_read": 0.022
         }
       },
-      "glm-5-turbo": {
-        "id": "glm-5-turbo",
-        "name": "GLM-5-Turbo",
-        "description": "Faster GLM-5 lane for coding agents that need lower latency",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-03-16",
-        "last_updated": "2026-03-16",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 202752,
-          "output": 202752
-        },
-        "cost": {
-          "input": 1.186,
-          "output": 3.955,
-          "cache_read": 0.296,
-          "cache_write": 1.544
-        },
-        "canonical_model_id": "zhipuai/glm-5-turbo"
-      },
       "gpt-6-luna": {
         "id": "gpt-6-luna",
         "name": "GPT-6 Luna",
@@ -327629,8 +327524,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 1048576
+          "context": 1000000,
+          "output": 384000
         },
         "cost": {
           "input": 1.7,
@@ -327798,48 +327693,6 @@
           "output": 0.312
         }
       },
-      "deepseek-r1-0528": {
-        "id": "deepseek-r1-0528",
-        "name": "DeepSeek R1 0528",
-        "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
-        "family": "deepseek-thinking",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2024-07",
-        "release_date": "2025-05-28",
-        "last_updated": "2025-05-28",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 164000,
-          "output": 164000
-        },
-        "cost": {
-          "input": 0.652,
-          "output": 2.57,
-          "cache_read": 0.163
-        }
-      },
       "gpt-5.6-terra": {
         "id": "gpt-5.6-terra",
         "name": "GPT-5.6 Terra",
@@ -327921,12 +327774,12 @@
         "open_weights": true,
         "limit": {
           "context": 163840,
-          "output": 163840
+          "output": 65536
         },
         "cost": {
-          "input": 0.296,
-          "output": 0.495,
-          "cache_read": 0.075
+          "input": 0.5,
+          "output": 1.499,
+          "cache_read": 0.15
         },
         "canonical_model_id": "deepseek/deepseek-v3.2"
       },
