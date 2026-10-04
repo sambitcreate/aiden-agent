@@ -12,7 +12,13 @@ export const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = path.join(PROJECT_ROOT, "package.json");
 const REGISTRY_JSON_PATH = path.join(PROJECT_ROOT, "scripts/ci-test-registry.json");
 const TEST_FILE_PATTERN = /\.test\.(?:cjs|mjs|js|ts|tsx)$/u;
-const SOURCE_SCRIPTS = ["pretest", "test"];
+// `npm test` runs the registry through scripts/run-ci-tests.mjs. The serial
+// npm graph stays the place new test files are registered, and the registry
+// must assign every file it reaches.
+const SOURCE_SCRIPTS = ["pretest:serial", "test:serial"];
+// npm would run these hooks around the registry runner without the registry
+// seeing their tests.
+const RUNNER_LIFECYCLE_HOOKS = ["pretest", "posttest"];
 const TERMINAL_COVERAGE_FLAGS = new Set([
   "--experimental-test-coverage",
   "--test-coverage-include=main/services/terminal-spawn-helper.ts",
@@ -363,6 +369,11 @@ export function validateRegistry({
   packageManifest = readPackageManifest(),
 } = {}) {
   if (registry.version !== 1) throw new Error(`Unsupported CI registry version: ${registry.version}`);
+  for (const hook of RUNNER_LIFECYCLE_HOOKS) {
+    if (typeof packageManifest.scripts?.[hook] === "string") {
+      throw new Error(`${hook} would bypass the CI registry; register its tests in pretest:serial or test:serial`);
+    }
+  }
   const source = collectSourceTests({
     packageManifest,
     sourceScripts: registry.sourceScripts,
@@ -439,7 +450,7 @@ export function validateRegistry({
   const telegram = packageManifest.scripts?.["test:telegram"];
   if (typeof telegram !== "string") throw new Error("test:telegram must remain registered");
   if (!source.files.has("main/services/telegram/telegram-profile-mutation-fence.test.ts")) {
-    throw new Error("test:telegram files are not reachable from pretest/test");
+    throw new Error("test:telegram files are not reachable from the serial test graph");
   }
   return {
     sourceFiles: [...sourceFiles].sort(),
