@@ -25,6 +25,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
 
@@ -78,6 +79,21 @@ class AidenRemoteCoordinator(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
     private var activationGeneration: Long = 0
+    private var pinnedHttp: Pair<PinnedHttpKey, OkHttpClient>? = null
+
+    private data class PinnedHttpKey(val serverSpkiSha256: String, val trust: AidenPairingTrust?)
+
+    /**
+     * One OkHttp client per pinned trust anchor. Retrying or re-activating the
+     * same installation reuses its connection pool, dispatcher threads, and TLS
+     * sessions instead of building a fresh client each time.
+     */
+    private fun pinnedHttpClient(installation: AidenInstallation): OkHttpClient {
+        val key = PinnedHttpKey(installation.serverSpkiSha256, installation.pairingTrust)
+        pinnedHttp?.let { (cachedKey, cached) -> if (cachedKey == key) return cached }
+        return AidenRemoteClient.createOkHttpClient(key.serverSpkiSha256, key.trust)
+            .also { pinnedHttp = key to it }
+    }
 
     val activeInstanceId: String?
         get() = installationStore.activeInstallation?.instanceId
@@ -122,7 +138,7 @@ class AidenRemoteCoordinator(
             return
         }
 
-        val newClient = AidenRemoteClient(installation, credential)
+        val newClient = AidenRemoteClient(installation, credential, pinnedHttpClient(installation))
         botCache.activate(installation.instanceId, installation.deviceId)
         _client.value = newClient
         _serverInfo.value = null

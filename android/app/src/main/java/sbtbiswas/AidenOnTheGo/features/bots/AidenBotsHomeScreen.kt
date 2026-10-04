@@ -40,6 +40,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 data class AidenBotsFavoriteMutation(
     val id: UUID,
@@ -300,15 +301,15 @@ fun AidenBotsHomeScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client by coordinator.client.collectAsState()
-    val connectionState by coordinator.connectionState.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
 
-    val botList by viewModel.botList.collectAsState()
-    val conversations by viewModel.conversations.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val remoteSearchResults by viewModel.remoteSearchResults.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
+    val botList by viewModel.botList.collectAsStateWithLifecycle()
+    val conversations by viewModel.conversations.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val remoteSearchResults by viewModel.remoteSearchResults.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     var isChoosingBotDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(client, connectionState) {

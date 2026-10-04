@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(messageText) {
     object SourceTooLarge : AidenBotGeneratedAvatarError("That image is too large. Choose another image.")
@@ -225,8 +225,8 @@ fun AidenBotGeneratedAvatarLifecycleView(
     botName: String,
     modifier: Modifier = Modifier
 ) {
-    val phase by model.phase.collectAsState()
-    val error by model.errorMessage.collectAsState()
+    val phase by model.phase.collectAsStateWithLifecycle()
+    val error by model.errorMessage.collectAsStateWithLifecycle()
 
     Column(
         modifier = modifier.fillMaxWidth(),

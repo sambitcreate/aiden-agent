@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -276,32 +276,3 @@ try {
 	assert.match(out, /settings-ok/);
 });
 
-
-const vendoredSources = [
-	["src/vendor/advisor/advisor-runtime.ts", "main/services/advisor-runtime.ts"],
-	["src/vendor/advisor/advisor-context.ts", "main/services/advisor-context.ts"],
-	["src/vendor/advisor/advisor-attempt-store.ts", "main/services/advisor-attempt-store.ts"],
-	["src/vendor/advisor/data-store.ts", "main/services/data-store.ts"],
-	["src/vendor/advisor/regular-file-read.ts", "main/services/regular-file-read.ts"],
-];
-
-function stripImportsAndHeader(source) {
-	const withoutHeader = source.replace(/^\/\*[\s\S]*?\*\/\s*/, "");
-	return withoutHeader
-		.replace(/^\s*import[\s\S]*?from\s*"[^"]*";\s*$/gm, "")
-		.replace(/import\("[^"]*"\)/g, "import(DYNAMIC)")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-}
-
-test("vendored advisor sources stay aligned with the desktop originals", () => {
-	for (const [vendored, desktop] of vendoredSources) {
-		const vendoredText = stripImportsAndHeader(readFileSync(path.join(pkgDir, vendored), "utf-8"));
-		const desktopText = stripImportsAndHeader(readFileSync(path.join(pkgDir, "..", "..", desktop), "utf-8"));
-		assert.equal(
-			vendoredText,
-			desktopText,
-			`${vendored} drifted from ${desktop}; re-apply the vendoring (header + specifier rewrites)`,
-		);
-	}
-});

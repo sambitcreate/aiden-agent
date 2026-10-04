@@ -37,6 +37,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { resolveRealPathInside } from "../../shared/path-containment.js";
 import { randomUUID } from "node:crypto";
 import type { TelegramModelChoice } from "./telegram-controls.js";
 import {
@@ -236,9 +237,8 @@ async function readWorkspaceAttachment(
   const candidate = path.isAbsolute(requestedPath)
     ? requestedPath
     : path.resolve(root, requestedPath);
-  const resolved = await realpath(candidate);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative))
+  const resolved = await resolveRealPathInside(root, candidate);
+  if (resolved === null)
     throw new Error("Attachments must stay inside the selected workspace.");
   const metadata = await stat(resolved);
   if (!metadata.isFile())

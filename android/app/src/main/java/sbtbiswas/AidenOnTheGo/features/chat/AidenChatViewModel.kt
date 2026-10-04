@@ -5,6 +5,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
@@ -16,7 +21,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -34,9 +38,11 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
+import sbtbiswas.AidenOnTheGo.notifications.throttleLatest
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
@@ -50,7 +56,8 @@ class AidenChatViewModel(
     private val chatCache: AidenChatCache,
     private val draftStore: AidenChatDraftStore,
     val initialChat: AidenChat? = null,
-    private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null
+    private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -79,6 +86,11 @@ class AidenChatViewModel(
 
     private val _reasoning = MutableStateFlow("")
     val reasoning: StateFlow<String> = _reasoning.asStateFlow()
+
+    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+        _liveText.value = text
+        _reasoning.value = reasoning
+    }
 
     private val _tools = MutableStateFlow<List<AidenLiveTool>>(emptyList())
     val tools: StateFlow<List<AidenLiveTool>> = _tools.asStateFlow()
@@ -146,7 +158,8 @@ class AidenChatViewModel(
     private val _draft = MutableStateFlow("")
     val draft: StateFlow<String> = _draft.asStateFlow()
 
-    private var draftSession: AidenChatDraftStore.Session? = null
+    private val draftWriteScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private var draftWriter: AidenDebouncedDraftWriter? = null
     private val _hasActiveStream = MutableStateFlow(false)
     val hasActiveStream: StateFlow<Boolean> = _hasActiveStream.asStateFlow()
     private var activeStreamId: String? = null
@@ -273,12 +286,11 @@ class AidenChatViewModel(
     init {
         val currentInstanceId = instanceId
         if (currentInstanceId.isNotEmpty()) {
-            draftSession = draftStore.beginSession(currentInstanceId, chatId)
-            draftSession?.let { session ->
-                val savedText = draftStore.load(session)
-                if (!savedText.isNullOrEmpty()) {
-                    _draft.value = savedText
-                }
+            val session = draftStore.beginSession(currentInstanceId, chatId)
+            draftWriter = AidenDebouncedDraftWriter(draftWriteScope) { text -> draftStore.save(text, session) }
+            val savedText = draftStore.load(session)
+            if (!savedText.isNullOrEmpty()) {
+                _draft.value = savedText
             }
             val cachedChat = chatCache.loadChat(currentInstanceId, chatId)
             if (cachedChat != null) {
@@ -291,7 +303,9 @@ class AidenChatViewModel(
         viewModelScope.launch {
             combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
                 Triple(state, text, timeline)
-            }.debounce(400).collect { (state, text, timeline) ->
+            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { (state, _, _) ->
+                state == null || state.isTerminal || state == AidenStreamState.WAITING_FOR_APPROVAL
+            }.collect { (state, text, timeline) ->
                 publishLiveNotification(state, text, timeline)
             }
         }
@@ -684,6 +698,9 @@ class AidenChatViewModel(
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
+        // The last keystrokes may still be inside the debounce window.
+        draftWriter?.flush()
+        draftWriteScope.cancel()
         super.onCleared()
     }
 
@@ -744,10 +761,14 @@ class AidenChatViewModel(
 
     fun updateDraft(text: String) {
         _draft.value = text
-        draftSession?.let { session ->
-            draftStore.save(text, session)
-        }
+        draftWriter?.schedule(text)
         prefetchComposerSuggestionData()
+    }
+
+    /** Persists a debounced draft now, off the main thread (screen paused). */
+    fun flushDraft() {
+        val writer = draftWriter ?: return
+        if (writer.hasPendingWrite) draftWriteScope.launch { writer.flush() }
     }
 
     fun selectProvider(providerId: String) {
@@ -919,7 +940,7 @@ class AidenChatViewModel(
         _isStarting.value = true
         _presentedError.value = null
         _draft.value = ""
-        draftSession?.let { draftStore.save("", it) }
+        val clearStoredDraft = draftWriter?.reserveWrite("")
         _pendingAttachments.value = emptyList()
 
         val updatedMessages = currentChat.messages + optimisticMessage
@@ -934,6 +955,8 @@ class AidenChatViewModel(
 
         viewModelScope.launch {
             try {
+                // Clear the stored draft before the turn can reach the server.
+                clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 val response = client.startTurn(chatId, request, idempotencyKey)
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
@@ -948,26 +971,27 @@ class AidenChatViewModel(
                     it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == pairingCreatedAt
                 }
                 if (!retainedInstallation) {
-                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
                     return@launch
                 }
                 val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
-                val accepted = chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
+                val accepted = withContext(ioDispatcher) {
+                    chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
+                }
                 if (activeClient() !== client) {
-                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
                     return@launch
                 }
                 if (accepted == null || !chatCache.isChatWriteRetained(instanceId, chatId, requestToken)) {
-                    _chat.value = chatCache.admittedChat(instanceId, chatId)
+                    _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
                     return@launch
                 }
                 _chat.value = accepted.chat
 
-                _liveText.value = ""
-                _reasoning.value = ""
+                liveTranscript.reset()
                 _tools.value = emptyList()
                 _activityTimeline.value = null
                 _pendingApproval.value = null
@@ -980,6 +1004,7 @@ class AidenChatViewModel(
                     val fallbackMessages = _chat.value?.messages?.filter { it.id != optimisticId } ?: emptyList()
                     _chat.value = _chat.value?.copy(messages = fallbackMessages, updatedAt = previousUpdatedAt)
                     updateDraft(AidenDraftSendReconciliation.failedDraft(text, _draft.value))
+                    draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
                     _presentedError.value = e.localizedMessage
@@ -1222,12 +1247,14 @@ class AidenChatViewModel(
 
     private suspend fun apply(event: AidenRemoteStreamEvent) {
         if (activeStreamId != event.streamId) return
+        val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
+        // Timeline offsets and terminal states describe the text received so far.
+        if (!isDelta) liveTranscript.flush()
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
                 _streamState.value = AidenStreamState.RECONCILING
                 if (_chat.value?.isBotChat == true) {
-                    _liveText.value = ""
-                    _reasoning.value = ""
+                    liveTranscript.reset()
                 }
                 reconcileChat()
             }
@@ -1248,12 +1275,12 @@ class AidenChatViewModel(
             }
             AidenRemoteEventType.TEXT_DELTA -> {
                 val delta = event.payload?.text ?: ""
-                _liveText.value += delta
+                liveTranscript.appendText(delta)
                 _streamState.value = AidenStreamState.RUNNING
             }
             AidenRemoteEventType.REASONING_DELTA -> {
                 val delta = event.payload?.text ?: ""
-                _reasoning.value += delta
+                liveTranscript.appendReasoning(delta)
             }
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = event.payload?.toolId
@@ -1797,7 +1824,7 @@ class AidenChatViewModel(
         val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
         if (remaining != _draft.value) {
             _draft.value = remaining
-            draftSession?.let { draftStore.save(remaining, it) }
+            draftWriter?.writeSoon(remaining)
         }
     }
 
@@ -1991,15 +2018,21 @@ class AidenChatViewModel(
         }
     }
 
-    private fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
+    private suspend fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
         if (_isStarting.value) return false
+        val generation = transcriptGeneration
+        val client = activeClient()
         val admitted = if (instanceId.isNotEmpty()) {
             // Admission is recorded before disk IO. A failed write must not lose the
             // winner or allow an older request in another presentation to replace it.
-            runCatching { chatCache.saveChat(remote, instanceId, writeToken) }
-            chatCache.admittedChat(instanceId, chatId)
+            withContext(ioDispatcher) {
+                runCatching { chatCache.saveChat(remote, instanceId, writeToken) }
+                chatCache.admittedChat(instanceId, chatId)
+            }
         } else remote
         if (admitted == null) return false
+        // A send or newer reconcile may have started while the cache was on disk.
+        if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
         _chat.value = admitted
         resolveModelSelection()
         if (scheduleTitleRefresh && admitted.isTitlePending) {
@@ -2069,8 +2102,7 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
-            _liveText.value = ""
-            _reasoning.value = ""
+            liveTranscript.reset()
             _tools.value = emptyList()
             _activityTimeline.value = null
             _pendingApproval.value = null
@@ -2126,6 +2158,8 @@ class AidenChatViewModel(
 
     companion object {
         private const val MAX_AGENT_ROSTER_HISTORY = 8
+        /** Ongoing-notification cadence; terminal and approval states skip it. */
+        private const val LIVE_NOTIFICATION_PERIOD_MILLIS = 1_000L
 
         fun factory(
             chatId: String,

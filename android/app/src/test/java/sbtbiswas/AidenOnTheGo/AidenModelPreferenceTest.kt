@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -244,7 +245,12 @@ class AidenModelPreferenceTest {
                 assertNull(afterRemoval.selectedThinkingLevel.value)
             }
         } finally {
-            runBlocking(main) { viewModels.clear() }
+            runBlocking(main) {
+                // Chat persistence hops to IO; join so no continuation resumes after resetMain.
+                val jobs = viewModels.keys().mapNotNull { viewModels.get(it)?.viewModelScope?.coroutineContext?.get(Job) }
+                viewModels.clear()
+                jobs.forEach { it.join() }
+            }
             Dispatchers.resetMain()
             main.close()
             server.shutdown()

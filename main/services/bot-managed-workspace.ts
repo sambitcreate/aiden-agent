@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import {
   botManagedHomeDirectoryName,
   createBotManagedWorkspaceCore,
@@ -116,12 +117,9 @@ function assertHomeDirectoryName(directoryName: string): void {
 }
 
 function assertDirectChild(parent: string, candidate: string): void {
-  const relative = path.relative(parent, candidate);
   if (
-    !relative ||
-    relative.startsWith("..") ||
-    path.isAbsolute(relative) ||
-    relative.includes(path.sep)
+    !isPathInside(parent, candidate, { allowRoot: false }) ||
+    path.relative(parent, candidate).includes(path.sep)
   ) {
     throw new Error("Bot managed workspace path escaped its private root.");
   }
