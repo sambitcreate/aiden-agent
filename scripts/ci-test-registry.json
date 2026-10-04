@@ -208,7 +208,8 @@
         "scripts/ci-test-registry.test.mjs",
         "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
-        "scripts/worktree-file-io.test.mjs"
+        "scripts/worktree-file-io.test.mjs",
+        "main/services/generation-delta-coalescer.test.ts"
       ],
       "preserved": [
         "browser",
@@ -648,14 +649,18 @@
         "renderer/shared/voice-models.test.ts",
         "scripts/aiden-remote-lan-transport-spike.test.mjs",
         "scripts/apple-developer-tools.test.mjs",
+        "scripts/build-electron.test.mjs",
         "scripts/check-macos-release.test.mjs",
+        "scripts/check-renderer-bundle-budget.test.mjs",
         "scripts/computer-use-packaged-acceptance.test.mjs",
         "scripts/configure-electron-fuses.test.mjs",
         "scripts/gemini-live-electron-spike-core.test.mjs",
         "scripts/gemini-live-google-acceptance.test.mjs",
         "scripts/hide-dmg-support-files.test.mjs",
+        "scripts/main-runtime-dependencies.test.mjs",
         "scripts/model-snapshot-core.test.mjs",
         "scripts/native-helpers.test.mjs",
+        "scripts/optimize-onboarding-assets.test.mjs",
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/prepare-macos-package-output.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
@@ -830,9 +835,278 @@
         "--test"
       ],
       "reason": "Native file-I/O fault-injection regression helper."
+    },
+    {
+      "id": "worktree-remover-build",
+      "for": [
+        "core-git",
+        "runtime-subagents",
+        "renderer-other",
+        "worktree-remover-native"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:worktree-remover"
+      ],
+      "reason": "Root pretest builds the managed-worktree helper once per job."
+    },
+    {
+      "id": "worktree-remover-test-build",
+      "for": [
+        "worktree-remover-native"
+      ],
+      "command": [
+        "node",
+        "scripts/build-worktree-remover.mjs",
+        "--test"
+      ],
+      "reason": "Native worktree remover test binary."
+    },
+    {
+      "id": "bot-inbox-writer-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:bot-inbox-writer"
+      ],
+      "reason": "pretest:bots production helper build."
+    },
+    {
+      "id": "bot-inbox-writer-test-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "node",
+        "scripts/build-bot-inbox-writer.mjs",
+        "--test"
+      ],
+      "reason": "pretest:bots test helper build."
+    },
+    {
+      "id": "subagent-run-store-build",
+      "for": [
+        "runtime-subagents",
+        "subagent-file-mutator-native"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:subagent-run-store"
+      ],
+      "reason": "pretest:subagents production helper build."
+    },
+    {
+      "id": "subagent-run-store-test-build",
+      "for": [
+        "runtime-subagents",
+        "subagent-file-mutator-native"
+      ],
+      "command": [
+        "node",
+        "scripts/build-subagent-run-store.mjs",
+        "--test"
+      ],
+      "reason": "pretest:subagents test helper build."
+    },
+    {
+      "id": "subagent-file-mutator-build",
+      "for": [
+        "runtime-subagents",
+        "subagent-file-mutator-native"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:subagent-file-mutator"
+      ],
+      "reason": "pretest:subagents production helper build."
+    },
+    {
+      "id": "subagent-file-mutator-test-build",
+      "for": [
+        "runtime-subagents",
+        "subagent-file-mutator-native"
+      ],
+      "command": [
+        "node",
+        "scripts/build-subagent-file-mutator.mjs",
+        "--test"
+      ],
+      "reason": "pretest:subagents test helper build."
+    },
+    {
+      "id": "subagent-shell-runner-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:subagent-shell-runner"
+      ],
+      "reason": "pretest:subagents production helper build."
+    },
+    {
+      "id": "subagent-shell-runner-test-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "node",
+        "scripts/build-subagent-shell-runner.mjs",
+        "--test"
+      ],
+      "reason": "pretest:subagents test helper build."
+    },
+    {
+      "id": "vcc-build",
+      "for": [
+        "core-git"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:vcc"
+      ],
+      "reason": "pretest:vcc builds the VCC worker before its tests."
+    },
+    {
+      "id": "worktree-file-io-build",
+      "command": [
+        "npm",
+        "run",
+        "build:worktree-file-io"
+      ],
+      "reason": "Managed worktree lifecycle tests require the confined native file-I/O helper."
+    },
+    {
+      "id": "worktree-file-io-test-build",
+      "command": [
+        "node",
+        "scripts/build-worktree-file-io.mjs",
+        "--test"
+      ],
+      "reason": "Native file-I/O fault-injection regression helper."
     }
   ],
   "preserved": [
+    {
+      "id": "browser",
+      "kind": "browser",
+      "sourceScripts": [
+        "test:browser"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:browser"
+      ],
+      "reason": "Keep browser service tests in their existing isolated npm command."
+    },
+    {
+      "id": "generative-ui-chromium",
+      "kind": "chromium",
+      "sourceScripts": [
+        "test:generative-ui"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:generative-ui"
+      ],
+      "reason": "Preserve the Playwright Chromium containment and fail-on-flaky gate."
+    },
+    {
+      "id": "terminal-coverage",
+      "kind": "coverage",
+      "sourceScripts": [
+        "test:terminal:coverage"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:terminal:coverage"
+      ],
+      "reason": "Preserve both terminal coverage threshold passes."
+    },
+    {
+      "id": "ios-release-policy",
+      "kind": "ios",
+      "sourceScripts": [
+        "test:ios-release"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:ios-release"
+      ],
+      "reason": "Preserve the Ruby TestFlight policy test and Node release policy tests."
+    },
+    {
+      "id": "worktree-remover-native",
+      "kind": "native",
+      "sourceScripts": [
+        "test:worktree-remover:native"
+      ],
+      "command": [
+        "node",
+        "--test",
+        "scripts/worktree-remover.test.mjs"
+      ],
+      "requires": [
+        "worktree-remover-build",
+        "worktree-remover-test-build"
+      ],
+      "reason": "Run the native lifecycle test after the shared production and test builds."
+    },
+    {
+      "id": "subagent-file-mutator-native",
+      "kind": "native",
+      "sourceScripts": [
+        "test:subagent-file-mutator:native"
+      ],
+      "command": [
+        "node",
+        "--test",
+        "scripts/subagent-file-mutator.test.mjs"
+      ],
+      "requires": [
+        "subagent-file-mutator-build",
+        "subagent-file-mutator-test-build"
+      ],
+      "reason": "Run the native lifecycle test after one production and one test build."
+    },
+    {
+      "id": "computer-use-rust-native",
+      "kind": "rust",
+      "sourceScripts": [
+        "test:computer-use:native"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:computer-use:native"
+      ],
+      "reason": "Preserve Rust fmt, locked tests, and clippy with warnings denied."
+    },
+    {
+      "id": "cli-package",
+      "kind": "cli",
+      "sourceScripts": [
+        "test:cli"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:cli"
+      ],
+      "reason": "Install, bundle, and test the standalone packages/cli workspace in one command."
+    },
     {
       "id": "browser",
       "kind": "browser",

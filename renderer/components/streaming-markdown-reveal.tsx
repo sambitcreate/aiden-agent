@@ -1,11 +1,12 @@
 import * as React from "react";
+import { CodeBlock } from "./code-block";
 import { MARKDOWN_CLASSNAME, MarkdownContent, MarkdownInline } from "./markdown";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import {
   advanceStreamingRevealSchedule,
   clampStreamingRevealSchedule,
-  parseStreamingReveal,
   splitStreamingRevealUnit,
+  StreamingRevealParser,
   streamingRevealHandoffDelay,
   type StreamingRevealBlock,
   type StreamingRevealScheduleInput,
@@ -57,7 +58,10 @@ export function StreamingMarkdownReveal({
   richLinks = false,
 }: StreamingMarkdownRevealProps) {
   const reducedMotion = useReducedMotion();
-  const blocks = React.useMemo(() => parseStreamingReveal(content, complete), [complete, content]);
+  const parserRef = React.useRef<StreamingRevealParser | null>(null);
+  parserRef.current ??= new StreamingRevealParser();
+  const parser = parserRef.current;
+  const blocks = React.useMemo(() => parser.parse(content, complete), [parser, complete, content]);
   const unitCount = React.useMemo(
     () => blocks.reduce((count, block) => count + block.units.length, 0),
     [blocks],
@@ -139,7 +143,12 @@ export function StreamingMarkdownReveal({
         }
         return block.units.map((unit) => (
           <div key={unit.id} className="streaming-reveal-block">
-            <MarkdownContent content={unit.text} richLinks={richLinks} />
+            {unit.openCode ? (
+              // Highlight once the fence closes instead of on every streamed line.
+              <CodeBlock code={unit.openCode.code} lang={unit.openCode.lang} plain />
+            ) : (
+              <MarkdownContent content={unit.text} richLinks={richLinks} />
+            )}
           </div>
         ));
       })}

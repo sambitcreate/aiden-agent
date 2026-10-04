@@ -833,3 +833,45 @@ test("history flush is a no-op before a history store is installed", async () =>
 
   await assert.doesNotReject(service.flushHistory());
 });
+
+test("bursty pty output reaches the renderer in few ordered messages and a bounded replay", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  const lines = Array.from({ length: 5_000 }, (_, index) => `line ${index}\n`);
+  for (const line of lines) child.emitData(line);
+  await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+  const data = owner.sent.filter((entry) => entry.channel === "terminal:data");
+  const payloads = data.map((entry) => entry.payload as { sequence: number; data: string });
+  assert.ok(payloads.length < 10, `sent ${payloads.length} messages for ${lines.length} chunks`);
+  assert.equal(payloads.map((payload) => payload.data).join(""), lines.join(""));
+  assert.deepEqual(
+    payloads.map((payload) => payload.sequence),
+    payloads.map((_, index) => index + 1),
+  );
+
+  // Large output keeps only the newest replay tail, and the snapshot's
+  // sequence covers every chunk already reflected in that tail.
+  const big = "x".repeat(150_000);
+  child.emitData(big);
+  child.emitData(`${big}END`);
+  const snapshot = service.snapshot(session.id, owner.owner);
+  assert.equal(snapshot.buffer.length, 200_000);
+  assert.ok(snapshot.buffer.endsWith("END"));
+  const last = owner.sent[owner.sent.length - 1]!.payload as { sequence: number; data: string };
+  assert.equal(snapshot.sequence, last.sequence);
+  assert.ok(last.data.endsWith("END"));
+
+  child.emitData("tail\n");
+  child.emitExit(0);
+  const tailIndex = owner.sent.findIndex(
+    (entry) => (entry.payload as { data?: string }).data === "tail\n",
+  );
+  const exitIndex = owner.sent.findIndex((entry) => entry.channel === "terminal:exit");
+  assert.ok(tailIndex >= 0 && tailIndex < exitIndex, "final output precedes exit");
+});

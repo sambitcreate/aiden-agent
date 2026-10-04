@@ -81,6 +81,8 @@ jobs:
         run: npm ci
       - name: Build production bundles once
         run: npm run build
+      - name: Check main-window initial JS budget
+        run: npm run check:bundle-budget
       - name: Package production bundles and native helpers
         run: tar -cf "$RUNNER_TEMP/desktop-build.tar" build
       - name: Upload production build
