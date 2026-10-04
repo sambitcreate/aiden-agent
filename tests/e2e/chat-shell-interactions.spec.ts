@@ -347,6 +347,134 @@ test.describe("with a workspace", () => {
     }, originalWindowBounds!);
   });
 
+  test("needs attention view orders chats by what is waiting on the user", async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+    expect(workspaceId).toBeTruthy();
+    await app.evaluate(({ ipcMain }, workspaceId) => {
+      // Newest first by activity, so the attention order differs from recency.
+      const chats = [
+        ["attention-idle", "Idle chat", 1_800_000_400_000],
+        ["attention-working", "Working chat", 1_800_000_300_000],
+        ["attention-input", "Input chat", 1_800_000_200_000],
+        ["attention-approval", "Approval chat", 1_800_000_100_000],
+      ].map(([id, title, at]) => ({
+        id,
+        workspaceId,
+        title,
+        createdAt: 1_800_000_000_000,
+        updatedAt: at,
+        messages: [],
+      }));
+      ipcMain.removeHandler("chats:list");
+      ipcMain.handle("chats:list", () => chats);
+    }, workspaceId);
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
+
+    await page.getByRole("button", { name: "Organize sidebar" }).click();
+    await page.getByRole("menuitemradio", { name: "Needs attention" }).click();
+    await expect(page.getByRole("menu")).toBeHidden();
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send("chats:activity-changed", {
+        revision: 1_000_000,
+        activeChatIds: ["attention-working"],
+        approvalChatIds: ["attention-approval"],
+        inputChatIds: ["attention-input"],
+      });
+    });
+
+    const sidebar = page.locator("[data-sidebar]");
+    const expected = [
+      "Needs approval",
+      "Approval chat",
+      "Needs input",
+      "Input chat",
+      "Working",
+      "Working chat",
+      "Other chats",
+      "Idle chat",
+    ];
+    await expect
+      .poll(async () => {
+        const text = await sidebar.innerText();
+        const positions = expected.map((label) => text.indexOf(label));
+        return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
+      })
+      .toBe(true);
+
+    // The view is a local preference and survives a reload.
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
+    await page.getByRole("button", { name: "Organize sidebar" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Needs attention" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(page.getByRole("menuitemradio", { name: "Manual" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+
+  test("manual workspace order moves by keyboard and drag and persists", async ({ aiden }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.evaluate(async () => {
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
+      for (const name of ["Manual order one", "Manual order two"]) {
+        await bridge.invoke("workspaces:create", { name, permission: "ask" });
+      }
+    });
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
+
+    const workspaceActions = page.getByRole("button", { name: /^Actions for /u });
+    const workspaceOrder = () =>
+      workspaceActions.evaluateAll((nodes) =>
+        nodes.map((node) => (node.getAttribute("aria-label") ?? "").replace(/^Actions for /u, "")),
+      );
+    await expect.poll(async () => (await workspaceOrder()).length).toBe(3);
+
+    await page.getByRole("button", { name: "Organize sidebar" }).click();
+    await page.getByRole("menuitemradio", { name: "Manual" }).click();
+    await expect(page.getByRole("menu")).toBeHidden();
+
+    // Switching to manual keeps the order on screen.
+    const initial = await workspaceOrder();
+    const [first, second, third] = initial as [string, string, string];
+
+    const openActions = async (name: string) => {
+      const trigger = page.getByRole("button", { name: `Actions for ${name}`, exact: true });
+      await trigger.focus();
+      await trigger.press("Enter");
+      await expect(page.getByRole("menu")).toBeVisible();
+    };
+
+    await openActions(first);
+    await expect(page.getByRole("menuitem", { name: "Move up" })).toBeDisabled();
+    await page.getByRole("menuitem", { name: "Move down" }).click();
+    await expect.poll(workspaceOrder).toEqual([second, first, third]);
+
+    await openActions(third);
+    await expect(page.getByRole("menuitem", { name: "Move down" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+
+    // Drag the last workspace above the first.
+    const header = (name: string) =>
+      page.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${name}$`, "u") });
+    await header(third).dragTo(header(second), { targetPosition: { x: 20, y: 2 } });
+    await expect.poll(workspaceOrder).toEqual([third, second, first]);
+
+    await page.reload();
+    await expect(page.locator("textarea")).toBeVisible();
+    await expect.poll(workspaceOrder).toEqual([third, second, first]);
+  });
+
   test("workspace access arrows move focus and explicit keys commit", async ({ aiden }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
