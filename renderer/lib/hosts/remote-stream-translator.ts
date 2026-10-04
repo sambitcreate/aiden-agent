@@ -134,7 +134,7 @@ function approvalPrompt(value: unknown): ApprovalPrompt | null {
     toolName: str(payload.toolName) ?? "Tool",
     summary: str(payload.summary) ?? "Aiden needs approval.",
     // The approval card validates details itself; any claim that fails its guard can only be denied.
-    ...(details ? { details: details as ApprovalPrompt["details"] } : {}),
+    ...(details ? { details: details as unknown as ApprovalPrompt["details"] } : {}),
     // A controller may allow only what it could see: details too large to journal must be allowed on the host.
     canAllow: payload.detailsOmitted !== true,
     ...(scopes.length > 0 ? { scopes } : {}),

@@ -115,6 +115,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
+import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -238,6 +239,8 @@ interface ComposerProps {
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
+  /** Affordances that act on this Mac; a remote chat turns them off. */
+  surfaces?: ComposerSurfaces;
 }
 const PERMISSION_META: Record<
   WorkspacePermission,
@@ -361,6 +364,7 @@ export function Composer({
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
+  surfaces = LOCAL_COMPOSER_SURFACES,
 }: ComposerProps) {
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
@@ -603,6 +607,7 @@ export function Composer({
 
   const slashSession = React.useMemo(
     () =>
+      !surfaces.slashCommands ||
       slashPaletteBlocked ||
       confirmFullAccess ||
       renameDialogOpen ||
@@ -620,6 +625,7 @@ export function Composer({
             tracker: slashTracker,
           }),
     [
+      surfaces.slashCommands,
       composing,
       confirmFullAccess,
       forkDialogOpen,
@@ -1458,6 +1464,7 @@ export function Composer({
   );
 
   const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+    if (!surfaces.attachments) return;
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1465,11 +1472,15 @@ export function Composer({
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    // Not accepting the drag leaves the drop to the system, so nothing is read from this Mac.
+    if (!surfaces.attachments) return;
     if (event.dataTransfer.types.includes("Files")) event.preventDefault();
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    // Without attachments, a paste is plain text only.
+    if (!surfaces.attachments) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1766,6 +1777,7 @@ export function Composer({
           ) : null}
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
+          {surfaces.localContext ? (
           <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
@@ -1844,15 +1856,18 @@ export function Composer({
             <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
+          ) : null}
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            <span id={attachmentDescriptionId} className="sr-only">
-              Drag files here or paste an image to attach it. Use Attach files or images to choose
-              files with the keyboard.
-            </span>
+            {surfaces.attachments ? (
+              <span id={attachmentDescriptionId} className="sr-only">
+                Drag files here or paste an image to attach it. Use Attach files or images to choose
+                files with the keyboard.
+              </span>
+            ) : null}
             {selectedSkill ? (
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
@@ -1975,7 +1990,7 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
-              aria-describedby={attachmentDescriptionId}
+              aria-describedby={surfaces.attachments ? attachmentDescriptionId : undefined}
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
               placeholder={composerPlaceholder({
@@ -2020,6 +2035,8 @@ export function Composer({
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
               <div className="flex shrink-0 items-center gap-1">
+                {surfaces.attachments ? (
+                <>
                 <Button
                   variant="transparent"
                   size="small"
@@ -2039,6 +2056,9 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
+                </>
+                ) : null}
+                {surfaces.localContext ? (
                 <div
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
                   data-open={permissionMenuOpen || undefined}
@@ -2172,6 +2192,7 @@ export function Composer({
                     })}
                   </div>
                 </div>
+                ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}

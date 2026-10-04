@@ -9,6 +9,8 @@ import * as React from "react";
 import type { Composer } from "./composer.js";
 import type { Attachment } from "../lib/types.js";
 import { attachmentInlineBytesRemaining } from "../shared/attachment-contract.js";
+import { composerSurfacesFor, LOCAL_COMPOSER_SURFACES } from "../lib/hosts/composer-surfaces.js";
+import type { HostChatCapability } from "../lib/hosts/host-chat-adapter.js";
 
 // Mount the production Composer and its send/restore/attachment logic. Replace only
 // peripheral UI, device hooks, and IPC; no lifecycle logic is copied into this fixture.
@@ -328,6 +330,106 @@ test("mounted established Composer blocks attachment intake until failed send re
         "attachment intake resumes after the send settles and space is available",
       );
     }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("mounted Composer for a remote chat offers no local attachment or workspace surface and sends plain text", async () => {
+  const mounted = installDom();
+  const calls = { picker: 0, drop: 0, clipboard: 0 };
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        async pickAndRead() {
+          calls.picker++;
+          return { attachments: [], skipped: 0 };
+        },
+        async readDroppedFiles() {
+          calls.drop++;
+          return [];
+        },
+        async readClipboardImages() {
+          calls.clipboard++;
+          return [];
+        },
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const labels = () =>
+    Array.from(mounted.container.getElementsByTagName("button")).map((element) => element.getAttribute("aria-label"));
+  const render = (surfaces: React.ComponentProps<typeof Composer>["surfaces"], onSend: React.ComponentProps<typeof Composer>["onSend"]) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          chatId="host-b/chat-1"
+          ready
+          hasMessages
+          initialText="Ship it"
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          surfaces={surfaces}
+          onSend={onSend}
+        />,
+      ),
+    );
+  try {
+    // This Mac's own chats keep the attachment button and workspace access control.
+    await render(LOCAL_COMPOSER_SURFACES, async () => {});
+    assert.ok(labels().includes("Attach files or images"));
+    assert.ok(labels().some((label) => label?.startsWith("Workspace access")));
+
+    const sent: Array<{ text: string; attachments: number }> = [];
+    const remoteCapabilities = new Set<HostChatCapability>(["send", "cancel", "respondApproval"]);
+    await render(composerSurfacesFor(remoteCapabilities), async (value, attachments) => {
+      sent.push({ text: value, attachments: attachments.length });
+    });
+    assert.equal(labels().includes("Attach files or images"), false);
+    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    // A Finder drop is neither accepted nor read from this Mac.
+    const dropZone = Array.from(mounted.container.getElementsByTagName("div")).find(
+      (element) => handlers(element).onDrop,
+    );
+    assert.ok(dropZone);
+    let dragAccepted = false;
+    await React.act(async () => {
+      handlers(dropZone).onDragOver({
+        preventDefault() {
+          dragAccepted = true;
+        },
+        dataTransfer: { types: ["Files"] },
+      });
+      handlers(dropZone).onDrop({ preventDefault() {}, dataTransfer: { files: [{}] } });
+    });
+    assert.equal(dragAccepted, false);
+
+    // A pasted image is not read from this Mac's clipboard; the paste stays an ordinary text paste.
+    let prevented = false;
+    await React.act(async () => {
+      handlers(mounted.container.getElementsByTagName("textarea")[0]).onPaste({
+        preventDefault() {
+          prevented = true;
+        },
+        clipboardData: {
+          getData: () => "",
+          items: [{ kind: "file", type: "image/png", getAsFile: () => ({ size: 1, type: "image/png" }) }],
+        },
+      });
+    });
+    assert.equal(prevented, false);
+
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
+    assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
