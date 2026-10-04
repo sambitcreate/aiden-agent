@@ -1,12 +1,9 @@
 import { ipcMain } from "../platform.js";
-import { hostIdentifier } from "../../renderer/shared/peer-host.js";
+import { getPeerHostManager } from "../services/peer-host-manager-main.js";
 import { getPeerHostRegistry } from "../services/peer-host-service-main.js";
 import { parsePeerPairing, peerText } from "../services/peer-pairing.js";
-import {
-  peerOperationRequest,
-  peerOperationResult,
-} from "../services/peer-operation.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { registerPeerHostLiveHandlers } from "./peer-host-live.js";
 
 export function registerPeerHostHandlers(): void {
   ipcMain.handle("remote:peersList", () => getPeerHostRegistry().list());
@@ -26,40 +23,20 @@ export function registerPeerHostHandlers(): void {
       detach();
     }
   });
-  ipcMain.handle(
-    "remote:peersSetEnabled",
-    async (_event, id: unknown, enabled: unknown) => {
-      if (typeof enabled !== "boolean")
-        throw new Error("Invalid connection state.");
-      await getPeerHostRegistry().setEnabled(hostIdentifier(id), enabled);
-    },
-  );
-  ipcMain.handle("remote:peersRemove", async (_event, id: unknown) => {
-    await getPeerHostRegistry().remove(hostIdentifier(id));
-  });
-  ipcMain.handle(
-    "remote:peerOperation",
-    async (event, id: unknown, operation: unknown) => {
+  registerPeerHostLiveHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => {
       const owner = rendererDocumentOwner(
         event,
         () =>
           new Error("Device actions require an active application document."),
       );
-      const controller = new AbortController();
-      const detach = owner.onInvalidated(() => controller.abort());
-      try {
-        if (owner.isDestroyed())
-          throw new Error("The application document changed.");
-        const result = await getPeerHostRegistry().request(hostIdentifier(id), {
-          ...peerOperationRequest(operation),
-          signal: controller.signal,
-        });
-        if (owner.isDestroyed())
-          throw new Error("The application document changed.");
-        return await peerOperationResult(operation, result);
-      } finally {
-        detach();
-      }
+      return {
+        key: `${owner.id}:${owner.documentId}`,
+        isDestroyed: owner.isDestroyed,
+        onInvalidated: owner.onInvalidated,
+      };
     },
-  );
+    manager: getPeerHostManager,
+  });
 }
