@@ -13,7 +13,7 @@ import { ChatPane } from "./chat-pane";
 import type { QueryClient } from "@tanstack/react-query";
 import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
-import { RemoteChatPlaceholder } from "./remote-chat-placeholder";
+import { RemoteChatView } from "./remote-chat-view";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
@@ -144,7 +144,7 @@ const hostChatRoute = createRoute({
   path: "/host/$hostId/chat/$chatId",
   component: function HostChatRoute() {
     const { hostId, chatId } = hostChatRoute.useParams();
-    return <RemoteChatPlaceholder hostId={hostId} chatId={chatId} />;
+    return <RemoteChatView key={`${hostId}/${chatId}`} hostId={hostId} chatId={chatId} />;
   },
   staticData: { title: "Remote chat" },
 });

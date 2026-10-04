@@ -67,7 +67,10 @@ export function isRemoteSidebarChat(chat: SidebarChatSummary): chat is RemoteSid
   return (chat as Partial<RemoteSidebarChat>).remote === true;
 }
 
-function availabilityOf(status: PeerHostStatus | undefined): Pick<SidebarHost, "availability" | "blockedReason"> {
+/** A host's supervisor state as the availability every remote surface shows. */
+export function hostAvailability(
+  status: PeerHostStatus | undefined,
+): Pick<SidebarHost, "availability" | "blockedReason"> {
   switch (status?.state.kind) {
     case "connected":
       return { availability: "online" };
@@ -104,7 +107,7 @@ export function sidebarHosts(
     return {
       id: view.id,
       label: shared ? `${name} (${view.id.slice(-4)})` : name,
-      ...availabilityOf(byStatus.get(view.id)),
+      ...hostAvailability(byStatus.get(view.id)),
     };
   });
 }

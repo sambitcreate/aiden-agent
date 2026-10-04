@@ -41,7 +41,7 @@ Status: **In review**. This is the remote half of §6 ("Sidebar organization") o
 
 ## Interfaces for PR 6, 7 and 8
 
-- **Route.** `/host/$hostId/chat/$chatId` (`hostChatRoute` in `renderer/main/router.tsx`) renders `RemoteChatPlaceholder` from `renderer/main/remote-chat-placeholder.tsx`. PR 6 replaces the component; the path and params stay.
+- **Route.** `/host/$hostId/chat/$chatId` (`hostChatRoute` in `renderer/main/router.tsx`) rendered a placeholder in this PR. PR 6 replaced it with `RemoteChatView` (`renderer/main/remote-chat-view.tsx`); the path and params stay.
 - **Selection.** `ChatSidebar` takes `activeRemoteChat: { hostId, chatId } | null`, kept apart from the local `activeChatId`. The composer host is not set here.
 - **Rows.** These live in `renderer/lib/sidebar-remote-groups.ts`.
   - `RemoteSidebarProject` and `RemoteSidebarChat` carry `remote: true`, `hostId`, `hostLabel` and `stale`.

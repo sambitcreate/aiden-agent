@@ -43,6 +43,66 @@ export function peerRunKey(target: PeerRunTarget): string {
 }
 
 /**
+ * Prompts still pending as of the newest event dropped from a stream's
+ * buffer, keyed by approval or prompt id with the host's own payload.
+ */
+interface EvictedAttention {
+  approvals: Map<string, Record<string, unknown>>;
+  questions: Map<string, Record<string, unknown>>;
+  /** The newest dropped event, which the summary stands in for. */
+  last: PeerRunEvent | null;
+  /** A dropped event settled the run; `run.ended` settles its viewers. */
+  settled: boolean;
+}
+
+function noAttention(): EvictedAttention {
+  return { approvals: new Map(), questions: new Map(), last: null, settled: false };
+}
+
+function promptEntries(value: unknown, idKey: string): [string, Record<string, unknown>][] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): [string, Record<string, unknown>][] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const id = (entry as Record<string, unknown>)[idKey];
+    return typeof id === "string" && id ? [[id, entry as Record<string, unknown>]] : [];
+  });
+}
+
+/** Folds a dropped event into the prompts pending at the buffer's floor. */
+function foldAttention(attention: EvictedAttention, event: PeerRunEvent): void {
+  attention.last = event;
+  const payload = event.payload;
+  switch (event.type) {
+    case "approval_required":
+      if (typeof payload.approvalId === "string" && payload.approvalId)
+        attention.approvals.set(payload.approvalId, payload);
+      return;
+    case "approval_resolved":
+      if (typeof payload.approvalId === "string") attention.approvals.delete(payload.approvalId);
+      return;
+    case "question_required":
+      if (typeof payload.promptId === "string" && payload.promptId)
+        attention.questions.set(payload.promptId, payload);
+      return;
+    case "question_resolved":
+      if (typeof payload.promptId === "string") attention.questions.delete(payload.promptId);
+      return;
+    case "snapshot":
+      if (payload.reason === "gap") {
+        attention.approvals = new Map(promptEntries(payload.approvals, "approvalId"));
+        attention.questions = new Map(promptEntries(payload.questions, "promptId"));
+      }
+      return;
+    default:
+      if (event.terminal || event.type === "run.ended") {
+        attention.approvals.clear();
+        attention.questions.clear();
+        attention.settled = true;
+      }
+  }
+}
+
+/**
  * One shared run stream on one host: the event buffer every viewer replays
  * from, deduplicated by sequence across reconnects.
  */
@@ -57,6 +117,12 @@ export class PeerRunStream {
   private floor: number;
   private buffer: { event: PeerRunEvent; bytes: number }[] = [];
   private bytes = 0;
+  /**
+   * What the dropped events still had pending. A viewer whose replay starts
+   * below `floor` gets it as a `gap` snapshot, so an unanswered approval or
+   * question outlives the bounded buffer.
+   */
+  private evicted: EvictedAttention = noAttention();
   /** Viewer subscription ids. */
   readonly subscribers = new Set<string>();
   evictTimer: unknown;
@@ -86,6 +152,7 @@ export class PeerRunStream {
     this.ended = false;
     this.buffer = [];
     this.bytes = 0;
+    this.evicted = noAttention();
   }
 
   /** True when the event is new and was buffered for delivery. */
@@ -108,6 +175,8 @@ export class PeerRunStream {
         this.buffer = [];
         this.bytes = 0;
         this.floor = event.sequence - 1;
+        // The snapshot itself carries what was pending before it.
+        this.evicted = noAttention();
       }
     } else if (event.sequence <= this.cursor) return false;
     this.cursor = event.sequence;
@@ -121,8 +190,34 @@ export class PeerRunStream {
       const dropped = this.buffer.shift()!;
       this.bytes -= dropped.bytes;
       this.floor = Math.max(this.floor, dropped.event.sequence);
+      foldAttention(this.evicted, dropped.event);
     }
     return true;
+  }
+
+  /**
+   * What dropped events left pending, summarised as the host summarises a
+   * gap. It is sent even when nothing is pending, so a viewer resubscribing
+   * after a resolution it missed drops the prompt it still shows.
+   */
+  private evictedSnapshot(): PeerRunEvent | null {
+    const { approvals, questions, last, settled } = this.evicted;
+    if (!last || settled) return null;
+    return {
+      protocolVersion: last.protocolVersion,
+      streamId: last.streamId,
+      sequence: this.floor,
+      timestamp: last.timestamp,
+      type: "snapshot",
+      terminal: false,
+      payload: {
+        reason: "gap",
+        state: approvals.size > 0 ? "needs_approval" : questions.size > 0 ? "needs_input" : "working",
+        approvals: [...approvals.values()],
+        questions: [...questions.values()],
+        nextSequence: this.floor + 1,
+      },
+    };
   }
 
   view(subscriptionId: string, afterSequence: number): PeerRunSubscription {
@@ -133,14 +228,17 @@ export class PeerRunStream {
           event.sequence > afterSequence ||
           (event.type === "run.ended" && event.sequence === afterSequence),
       );
+    const truncated = afterSequence < this.floor;
+    // Prompts dropped from the buffer may still be pending on the host.
+    const summary = truncated ? this.evictedSnapshot() : null;
     return {
       subscriptionId,
       key: this.key,
       runId: this.runId,
       chatId: this.chatId,
       state: this.state,
-      events,
-      truncated: afterSequence < this.floor,
+      events: summary ? [summary, ...events] : events,
+      truncated,
     };
   }
 }
