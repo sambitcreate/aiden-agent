@@ -61,6 +61,23 @@ test("a host's projects are offered most recently used first, with a name even w
   assert.deepEqual(remoteProjectChoices(null), [], "a host with no feed yet offers no projects");
 });
 
+test("a project just created on the host is offered at once, and only once after its feed catches up", () => {
+  const listed: PeerFeedRow[] = [{ id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" }];
+  const created = [{ id: "w-launch", name: "launch" }];
+  assert.deepEqual(
+    remoteProjectChoices(feed("host-b", { workspaces: listed }), created).map((project) => project.name),
+    ["launch", "Site"],
+    "the new project can be chosen before the host's feed reports it",
+  );
+  assert.deepEqual(remoteProjectChoices(null, created), [{ id: "w-launch", name: "launch" }]);
+
+  const caughtUp: PeerFeedRow[] = [...listed, { id: "w-launch", name: "launch", repositoryName: "launch-repo", updatedAt: "2026-03-01T00:00:00.000Z" }];
+  assert.deepEqual(remoteProjectChoices(feed("host-b", { workspaces: caughtUp }), created), [
+    { id: "w-launch", name: "launch", detail: "launch-repo" },
+    { id: "w-site", name: "Site" },
+  ]);
+});
+
 test("Bots are grouped by host, without archived Bots or hosts that have none", () => {
   const botGrants = [...CHAT_GRANTS, "bot:read", "bot:write"];
   const groups = remoteBotGroups(

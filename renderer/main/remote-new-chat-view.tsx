@@ -27,7 +27,7 @@ import {
 } from "../lib/hosts/host-resources";
 import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
-import { RemoteNewChatControl, type RemoteNewChatSnapshot } from "../lib/hosts/remote-new-chat";
+import { hostFolderIdentity, RemoteNewChatControl, type RemoteNewChatSnapshot } from "../lib/hosts/remote-new-chat";
 import { newChatMachines, remoteProjectChoices, type NewChatMachine, type RemoteProjectChoice } from "../lib/hosts/new-chat-targets";
 import { peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
@@ -341,12 +341,14 @@ function RemoteFolderBrowserDialog({
     staleTime: 30_000,
   });
 
+  // The open folder's page names it stably across listings; its handles change every time.
+  const page = location ? children.data?.pages[0] : undefined;
   const chooseFolder = async () => {
-    if (!location) return;
+    if (!location || !page) return;
     setBusy(true);
     try {
       // The control mints the single-use selection just before spending it, and replays it after a lost answer.
-      const workspace = await control.createFolderWorkspace(location.location);
+      const workspace = await control.createFolderWorkspace({ identity: hostFolderIdentity(page), location: location.location });
       onCreated(workspace);
       onOpenChange(false);
     } catch (error) {
@@ -367,7 +369,7 @@ function RemoteFolderBrowserDialog({
       title={`Choose a folder on ${hostLabel}`}
       description="The new project uses this folder on that Mac."
       confirmLabel={busy ? "Creating project…" : "Use this folder"}
-      confirmDisabled={!location}
+      confirmDisabled={!location || !page}
       busy={busy}
       onConfirm={chooseFolder}
       size="large"
@@ -445,7 +447,21 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
     enabled: Boolean(binding) && capabilities.has("createChat") && snapshot?.status.availability === "online",
     staleTime: 60_000,
   });
-  const projects = React.useMemo(() => remoteProjectChoices(feed.data), [feed.data]);
+  const [created, setCreated] = React.useState<{ hostId: string; projects: RemoteProjectChoice[] }>({ hostId, projects: [] });
+  const projects = React.useMemo(
+    () => remoteProjectChoices(feed.data, created.hostId === hostId ? created.projects : []),
+    [feed.data, created, hostId],
+  );
+  const adopt = React.useCallback(
+    (workspace: HostCreatedWorkspace) => {
+      setCreated((current) => ({
+        hostId,
+        projects: [{ id: workspace.id, name: workspace.name }, ...(current.hostId === hostId ? current.projects : [])],
+      }));
+      setProject(workspace.id);
+    },
+    [hostId],
+  );
   const [project, setProject] = React.useState<string>(workspaceId ?? "");
   const [model, setModel] = React.useState<HostModelChoice | undefined>(undefined);
   const [browsing, setBrowsing] = React.useState(false);
@@ -494,8 +510,9 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
     let target = project;
     if (target === SCRATCH_PROJECT) {
       // Once created, the scratch project is the selection, so a retry never makes another.
-      target = (await binding.control.createWorkspace({ mode: "scratch" })).id;
-      setProject(target);
+      const scratch = await binding.control.createWorkspace({ mode: "scratch" });
+      target = scratch.id;
+      adopt(scratch);
     }
     try {
       const started = await binding.control.start({ workspaceId: target, ...(model ? { model } : {}) }, text, uploads);
@@ -543,7 +560,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
           hostLabel={listed.label}
           adapter={binding.adapter}
           control={binding.control}
-          onCreated={(workspace) => setProject(workspace.id)}
+          onCreated={adopt}
         />
       ) : null}
     </>

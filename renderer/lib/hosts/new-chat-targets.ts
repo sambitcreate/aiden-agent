@@ -60,13 +60,19 @@ function updatedAt(row: PeerFeedRow): number {
 }
 
 /** The host's projects, most recently used first. */
-export function remoteProjectChoices(feed: PeerHostFeedSnapshot | null | undefined): RemoteProjectChoice[] {
-  return [...(feed?.workspaces ?? [])]
+export function remoteProjectChoices(
+  feed: PeerHostFeedSnapshot | null | undefined,
+  created: readonly RemoteProjectChoice[] = [],
+): RemoteProjectChoice[] {
+  const listed = [...(feed?.workspaces ?? [])]
     .sort((a, b) => updatedAt(b) - updatedAt(a))
     .map((row) => {
       const detail = text(row, "repositoryName");
       return { id: row.id, name: text(row, "name") ?? "Untitled project", ...(detail ? { detail } : {}) };
     });
+  // A project this window just created is offered at once, before the host's feed reports it.
+  const known = new Set(listed.map((project) => project.id));
+  return [...created.filter((project) => !known.has(project.id)), ...listed];
 }
 
 /** A Bot that lives on a paired host. */
