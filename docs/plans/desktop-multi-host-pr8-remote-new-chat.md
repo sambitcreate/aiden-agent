@@ -39,6 +39,7 @@ PR 7 made an existing remote chat controllable. This PR lets this Mac start work
   - A project created from the new-chat route (a folder or the scratch project) is offered in the project picker at once, until the host's feed reports it.
   - A refused first message keeps the empty chat for the next attempt.
   - Dismissing an unresolved send, or a retry the host definitely refuses, releases the uploads that send was staged with, in both a new and an existing chat, so they never count against the host's limit of 20 unused uploads.
+  - A send in an existing chat is recorded in the chat intent ledger before its uploads stage, so a pane reopened while files upload already waits for that send (PR 7's `submissionsSettled`) instead of offering its text as a new draft.
 - **Uploads are unkeyed.** An ambiguous upload becomes a retryable `upload_failed`. The client releases the uploads the host confirmed. An unconfirmed upload is never named in a turn and expires on the host.
 - **Queue and steer refuse attachments and skills** on a remote run, because the run-input contract carries text only.
 - **Bot chats are canonical.** The host returns a Bot's existing chat, so opening it twice lands in the same chat.

@@ -161,8 +161,6 @@ export class ChatSessionControl {
   private offStatus: (() => void) | null = null;
   private offLedger: (() => void) | null = null;
   private attached = false;
-  /** True while a send's attachments upload, before its keyed turn is recorded in the ledger. */
-  private staging = false;
 
   constructor(adapter: HostChatAdapter, ref: ChatSessionRef, ledger: ChatIntentLedger = chatIntentLedger) {
     if (adapter.hostId !== ref.hostId) throw new Error("The adapter belongs to another host.");
@@ -183,7 +181,7 @@ export class ChatSessionControl {
   /** The ledger's view of this chat: a send still in flight, and any unknown outcome. */
   private recorded(): Pick<ChatSessionSnapshot, "sending" | "unresolved"> {
     const unresolved = this.ledger.unresolved(this.ref);
-    const sending = this.staging || this.ledger.sending(this.ref);
+    const sending = this.ledger.sending(this.ref);
     if (!unresolved) return { sending, unresolved: null };
     const { intent, retrying } = unresolved;
     return {
@@ -283,6 +281,18 @@ export class ChatSessionControl {
   }
 
   /**
+   * For a newly opened chat: resolves once every send and guidance submitted
+   * from it, by this or an earlier pane, has the host's answer recorded; null
+   * when none is in flight. Until then that text belongs to the submission,
+   * so a composer must not offer it as a fresh draft. The pane that submitted
+   * it settles the stored draft as the answer lands (consumed when the host
+   * took it or the reconciliation notice holds it, restored when refused).
+   */
+  submissionsSettled(): Promise<void> | null {
+    return this.ledger.submissionsSettled(this.ref);
+  }
+
+  /**
    * Starts a turn with a fresh key, after staging its attachments on the
    * host. Throws `outcome_unknown` when the host's answer was lost; a retry
    * then replays the same key with the same staged uploads.
@@ -296,34 +306,39 @@ export class ChatSessionControl {
       throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
     }
     const { chatId } = this.ref;
-    let attachmentIds: string[];
-    this.staging = true;
-    this.update(this.recorded());
+    // Recorded before its uploads stage, so a pane reopened meanwhile already sees the text as in flight.
+    const key = mintPeerIdempotencyKey();
+    let attachmentIds: string[] = [];
+    const intent: ChatIntent = {
+      kind: "send",
+      idempotencyKey: key,
+      text,
+      replay: (adapter, idempotencyKey) =>
+        adapter.send(chatId, {
+          text,
+          idempotencyKey,
+          ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+          ...(extras.skill ? { skill: extras.skill } : {}),
+        }),
+    };
+    this.ledger.begin(this.ref, intent);
     try {
       attachmentIds = await stageAttachments(this.adapter, chatId, uploads);
     } catch (error) {
-      this.staging = false;
-      this.update(this.recorded());
+      // Nothing was sent: the turn definitely did not start.
+      this.ledger.settle(this.ref, key, "known");
       throw error;
     }
-    // `intent` records the send in the ledger synchronously, so `sending` stays true across the hand-off.
-    this.staging = false;
+    if (attachmentIds.length > 0) intent.attachmentIds = attachmentIds;
     try {
-      return await this.intent(
-        "send",
-        (adapter, idempotencyKey) =>
-          adapter.send(chatId, {
-            text,
-            idempotencyKey,
-            ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
-            ...(extras.skill ? { skill: extras.skill } : {}),
-          }),
-        text,
-        attachmentIds,
-      );
+      const receipt = await intent.replay(this.adapter, key);
+      this.ledger.settle(this.ref, key, "known");
+      return receipt as HostChatTurnReceipt;
     } catch (error) {
+      const unknown = isOutcomeUnknown(error);
+      this.ledger.settle(this.ref, key, unknown ? "unknown" : "known");
       // A definite refusal leaves the uploads unused; an unknown outcome may have consumed them.
-      if (!isOutcomeUnknown(error)) releaseAttachments(this.adapter, chatId, attachmentIds);
+      if (!unknown) releaseAttachments(this.adapter, chatId, attachmentIds);
       throw error;
     }
   }

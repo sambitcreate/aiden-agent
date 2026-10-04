@@ -77,6 +77,8 @@ class StubHost implements HostChatAdapter {
   readonly granted: Set<HostChatCapability>;
   readonly current: HostChatStatus;
   sendFails: HostChatControlError | null = null;
+  /** While set, a send waits for it before the host answers. */
+  sendHeld: Promise<void> | null = null;
   approval: HostChatApprovalResult = { resolution: "applied" };
   input: ChatRunInputAdmissionResult = { admitted: true, committed: true };
   inputs: string[] = [];
@@ -110,6 +112,7 @@ class StubHost implements HostChatAdapter {
     return { ok: true as const, value: undefined };
   }
   async send() {
+    if (this.sendHeld) await this.sendHeld;
     if (this.sendFails) throw this.sendFails;
     return { turnId: "turn-1", streamId: "run-2" };
   }
@@ -367,6 +370,36 @@ test("a lost send acknowledgement holds the message for a same-key retry and blo
   assert.ok(view.button(/^Dismiss$/));
   assert.match(view.text, /Retry or dismiss the message above before sending another\./);
   assert.ok(view.button(/Send message/)?.hasAttribute("disabled"));
+});
+
+test("a reopened chat offers no composer until the host answers the message sent from its earlier pane", async () => {
+  const ledger = new ChatIntentLedger();
+  const adapter = new StubHost(online, RUN_CONTROL);
+  const ref = { hostId: "host-b", chatId: "chat-1" };
+  let answer!: () => void;
+  adapter.sendHeld = new Promise((resolve) => {
+    answer = resolve;
+  });
+  const earlier = new ChatSessionControl(adapter, ref, ledger);
+  const detach = earlier.attach();
+  const sent = earlier.send("Tag the build");
+  detach();
+
+  const reopened = new ChatSessionControl(adapter, ref, ledger);
+  reopened.attach();
+  const view = () => render({ host: online, snapshot: snapshot(online), chat: { control: reopened, snapshot: reopened.getSnapshot() } });
+  const waiting = view();
+  assert.equal(waiting.button(/Send message|Queue/), undefined, "the text cannot be sent again under a new key");
+  assert.match(waiting.text, /Waiting for Studio to confirm your last message\./);
+
+  answer();
+  await sent;
+  // A pane opened after the answer has nothing to wait for.
+  const later = new ChatSessionControl(adapter, ref, ledger);
+  later.attach();
+  const ready = render({ host: online, snapshot: snapshot(online), chat: { control: later, snapshot: later.getSnapshot() } });
+  assert.ok(ready.button(/Send message/));
+  assert.doesNotMatch(ready.text, /Waiting for/);
 });
 
 test("guidance keeps the composer's text only when the host did not save it", async () => {

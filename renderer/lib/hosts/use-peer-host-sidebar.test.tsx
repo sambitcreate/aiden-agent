@@ -60,6 +60,8 @@ function fakeMain() {
   const broadcast = (method: string, payload?: unknown) => {
     for (const listener of listeners.get(method) ?? []) listener(payload);
   };
+  // One-shot changes main makes just after the renderer starts listening to a method.
+  const onListen = new Map<string, () => void>();
   const ipc = {
     invoke: async (channel: string, ...args: unknown[]) => {
       if (channel === "remote:peersList") return state.views;
@@ -71,11 +73,18 @@ function fakeMain() {
       const set = listeners.get(method) ?? new Set();
       set.add(handler);
       listeners.set(method, set);
+      const change = onListen.get(method);
+      onListen.delete(method);
+      // Lands after the listener is installed but before React's next render.
+      if (change) queueMicrotask(change);
       return () => set.delete(handler);
     },
   };
   return {
     ipc,
+    afterListening(method: string, change: () => void) {
+      onListen.set(method, change);
+    },
     pair(next: PeerHostView, status: PeerHostStatus, rows: PeerHostFeedSnapshot) {
       state.views = [...state.views, next];
       state.statuses = [...state.statuses, status];
@@ -158,12 +167,11 @@ async function mountSidebar(container: Element, queryClient: QueryClient) {
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
   const root = createRoot(container);
-  flushSync(() =>
-    root.render(
-      <QueryClientProvider client={queryClient}>
-        <Harness />
-      </QueryClientProvider>,
-    ),
+  // A route change renders as an ordinary update, not a synchronous one.
+  root.render(
+    <QueryClientProvider client={queryClient}>
+      <Harness />
+    </QueryClientProvider>,
   );
   await settle();
   return {
@@ -222,6 +230,50 @@ test("changes made while the sidebar is away (in Settings) show once it returns"
       chats: [
         ["studio", ["a", "b", "c"]],
         ["laptop", ["x", "y"]],
+      ],
+    });
+    await second.unmount();
+  } finally {
+    queryClient.clear();
+    dom.restore();
+  }
+});
+
+test("broadcasts heard as the sidebar returns do not stand in for the rows it missed", async () => {
+  const main = fakeMain();
+  const dom = installDocument(main.ipc);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  try {
+    const first = await mountSidebar(dom.container, queryClient);
+    main.pair(view("laptop", "Laptop"), connected("laptop", 1), feed("laptop", 1, ["x"]));
+    await settle();
+    assert.deepEqual(first.rows(), {
+      hosts: [
+        ["studio", "online"],
+        ["laptop", "online"],
+      ],
+      chats: [
+        ["studio", ["a"]],
+        ["laptop", ["x"]],
+      ],
+    });
+
+    await first.unmount();
+    main.setStatus(blocked("laptop", 2));
+    main.addChat("studio", "missed");
+    // As the listeners come back, studio reports in and gains a chat before any read starts.
+    main.afterListening("remote:peer-host-state", () => main.setStatus(connected("studio", 2)));
+    main.afterListening("remote:host-feed", () => main.addChat("studio", "live"));
+
+    const second = await mountSidebar(dom.container, queryClient);
+    assert.deepEqual(second.rows(), {
+      hosts: [
+        ["studio", "online"],
+        ["laptop", "blocked"],
+      ],
+      chats: [
+        ["studio", ["a", "missed", "live"]],
+        ["laptop", ["x"]],
       ],
     });
     await second.unmount();
