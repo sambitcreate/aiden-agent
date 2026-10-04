@@ -288,6 +288,7 @@ test("Stop pauses queued messages instead of erasing them, and Resume sends them
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   await composer.fill("Keep me after Stop");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
   await composer.press("Enter");
   const queue = page.getByRole("region", { name: "Queued messages", exact: true });
   await expect(queue.getByRole("listitem")).toHaveCount(1);
@@ -565,7 +566,10 @@ test("revisiting a running chat can queue and stop its exact response", async ({
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
-  await expect(queue).toBeHidden();
+  await expect(queue.getByRole("status")).toContainText("Paused");
+  await expect(queue.getByRole("listitem")).toContainText("Queue after revisiting");
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"))
+    .toHaveLength(0);
 });
 
 test("Stop after revisiting cancels the detached response and permits a new message", async ({ aiden }) => {
@@ -605,7 +609,7 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   ).length).toBe(1);
 });
 
-test("Stop clears queued image and text follow-ups without sending them", async ({
+test("Stop pauses queued image and text follow-ups without sending them", async ({
   aiden,
 }) => {
   const { page, lmStudio } = aiden;
@@ -663,7 +667,8 @@ test("Stop clears queued image and text follow-ups without sending them", async 
   await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
-  await expect(queue).toBeHidden();
+  await expect(queue.getByRole("status")).toContainText("2 queued · Paused");
+  await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
   expect(
     lmStudio.requests.filter((request) => lastUserText(request)?.startsWith("Queued ")),
   ).toHaveLength(0);
