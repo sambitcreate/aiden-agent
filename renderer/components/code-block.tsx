@@ -12,13 +12,16 @@ interface CodeBlockProps {
   code: string;
   /** Language hint parsed from the ```lang fence, if any. */
   lang?: string;
+  /** Skip highlighting, e.g. while a streamed fence is still growing. */
+  plain?: boolean;
 }
 
-export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlockProps) {
+export const CodeBlock = React.memo(function CodeBlock({ code, lang, plain = false }: CodeBlockProps) {
   const display = code.replace(/\n$/, "");
   const language = lang;
 
   const html = React.useMemo(() => {
+    if (plain) return null;
     try {
       if (language && hljs.getLanguage(language)) {
         return hljs.highlight(display, { language, ignoreIllegals: true }).value;
@@ -27,7 +30,7 @@ export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlock
     } catch {
       return null;
     }
-  }, [display, language]);
+  }, [display, language, plain]);
 
   return (
     <div className="group/code my-2 overflow-hidden rounded-lg border border-separator bg-well">
