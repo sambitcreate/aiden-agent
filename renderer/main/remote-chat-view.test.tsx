@@ -13,12 +13,13 @@ import {
   type HostChatStatus,
 } from "../lib/hosts/host-chat-adapter";
 import type { ChatSession } from "../lib/hosts/use-chat-session";
-import type { PeerRunEvent } from "../shared/peer-host";
+import type { PeerHostStatus, PeerHostView, PeerRunEvent } from "../shared/peer-host";
+import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import type { ChatMessage } from "../lib/types";
 import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
-import { RemoteChatPane, type RemoteChatPaneProps } from "./remote-chat-view";
+import { RemoteChatPane, RemoteChatRoute, type RemoteChatPaneProps } from "./remote-chat-view";
 
 const noop = () => undefined;
 const reconnect = async () => undefined;
@@ -126,6 +127,11 @@ function session(host: SidebarHost, granted: HostChatCapability[] = RUN_CONTROL)
   const control = new ChatSessionControl(adapter, { hostId: "host-b", chatId: "chat-1" });
   control.attach();
   return { control, adapter, chat: (): ChatSession => ({ control, snapshot: control.getSnapshot() }) };
+}
+
+function parse(markup: string) {
+  const document = new DOMParser().parseFromString(`<!doctype html><html><body>${markup}</body></html>`, "text/html");
+  return (document.documentElement?.textContent ?? "").replace(/\s+/g, " ");
 }
 
 function render(props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, "host" | "snapshot">) {
@@ -395,4 +401,66 @@ test("the pane shows loading before the first window and the read failure when n
   });
   assert.match(failed.text, /This chat could not be opened/);
   assert.match(failed.text, /This chat is no longer on Studio\./);
+});
+
+const studioView: PeerHostView = {
+  id: "host-b",
+  name: "Studio",
+  enabled: true,
+  state: "connected",
+  features: [],
+  capabilities: [],
+};
+
+/** The route as it renders against the host queries the sidebar fills in. */
+function route(seed: (client: QueryClient) => unknown = noop) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return Promise.resolve(seed(client)).then(() =>
+    parse(
+      renderToStaticMarkup(
+        <QueryClientProvider client={client}>
+          <RemoteChatRoute hostId="host-b" chatId="chat-1" onManage={noop} onRemoved={noop} />
+        </QueryClientProvider>,
+      ),
+    ),
+  );
+}
+
+test("opening a remote chat directly waits for the paired hosts before calling the Mac disconnected", async () => {
+  const cold = await route();
+  assert.doesNotMatch(cold, /not connected/);
+  assert.match(cold, /Loading…/);
+
+  // The hosts are known but this one has not reported a status yet.
+  const listed = await route((client) => client.setQueryData(hostQueryKeys.list(), [studioView]));
+  assert.doesNotMatch(listed, /not connected/);
+  assert.match(listed, /Studio · Connecting…/);
+
+  const connected: PeerHostStatus = {
+    hostId: "host-b",
+    generation: 3,
+    state: { kind: "connected", since: 1 },
+    feed: "live",
+    stale: false,
+  };
+  const live = await route((client) => {
+    client.setQueryData(hostQueryKeys.list(), [studioView]);
+    client.setQueryData(hostQueryKeys.statuses(), [connected]);
+  });
+  assert.match(live, /Studio · Connected/);
+});
+
+test("a remote chat whose Mac is unpaired, turned off or unreadable says so once the hosts are known", async () => {
+  const unpaired = await route((client) => client.setQueryData(hostQueryKeys.list(), []));
+  assert.match(unpaired, /This Mac is not connected/);
+
+  const off = await route((client) => client.setQueryData(hostQueryKeys.list(), [{ ...studioView, enabled: false }]));
+  assert.match(off, /This Mac is not connected/);
+
+  const failed = await route((client) =>
+    client.prefetchQuery({ queryKey: hostQueryKeys.list(), queryFn: () => Promise.reject(new Error("Keychain locked")) }),
+  );
+  assert.doesNotMatch(failed, /Loading…/);
+  assert.match(failed, /Paired Macs could not be read/);
+  assert.match(failed, /Keychain locked/);
 });

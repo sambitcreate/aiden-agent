@@ -9,6 +9,7 @@ import {
   applyRemoteRunEvent,
   applyRemoteRunStreamState,
   applyRemoteRunSubscription,
+  handOffRemoteRun,
   initialRemoteRunView,
   type RemoteRunStep,
   type RemoteRunView,
@@ -196,6 +197,8 @@ export class RemoteChatSession {
       return;
     }
     this.setTranscript(mergeNewestWindow(this.snapshot.transcript, result.value));
+    const run = handOffRemoteRun(this.snapshot.run);
+    if (run !== this.snapshot.run) this.update({ run });
     this.markNewestRead();
   }
 

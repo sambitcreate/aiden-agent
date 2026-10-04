@@ -157,6 +157,35 @@ test("a window joining a run whose shared buffer overflowed still shows the pend
   }
 });
 
+test("a reply the host announces without its message id hands off once the newest window is read", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    host.append({ id: "u2", role: "user", content: "Name the release", createdAt: 2_000 });
+    await host.start("run-1");
+    await settle();
+    host.runs.publish("run-1", "chat:delta", { delta: "Call it Juniper." });
+    await settle();
+    await harness.session.idle();
+    assert.equal(harness.transcript().row.streamingText, "Call it Juniper.");
+
+    // The host persists the reply but its done payload omits the chat, so the
+    // run stream names a synthetic message id.
+    host.append({ id: "a3", role: "assistant", content: "Call it Juniper.", createdAt: 3_000 });
+    host.runs.publish("run-1", "chat:done", {});
+    await settle();
+    await harness.session.idle();
+    const view = harness.transcript();
+    assert.equal(view.run.status, "done");
+    assert.equal(last(view.transcript.messages)?.id, "a3");
+    assert.equal(view.row.streamingText, null, "the reply is not shown twice");
+    assert.equal(view.row.streamComplete, false);
+  } finally {
+    harness.close();
+  }
+});
+
 test("a large chat opens on its newest page and pages back to the start", async () => {
   const host = new FakeHost("host_b", numbered(500));
   const harness = await setup(host);

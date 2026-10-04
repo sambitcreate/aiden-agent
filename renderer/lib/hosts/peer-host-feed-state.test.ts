@@ -1,20 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type {
   PeerHostFeedChange,
   PeerHostFeedMessage,
   PeerHostFeedSnapshot,
   PeerHostStatus,
+  PeerHostView,
 } from "../../shared/peer-host";
 import {
   applyPeerHostFeedMessage,
   FEED_RESYNC,
+  createPeerHostStatusSync,
   mergePeerHostStatuses,
-  readPeerHostStatuses,
   replayPeerHostFeedMessages,
+  type PeerHostStatusSync,
 } from "./peer-host-feed-state";
 import { hostQueryKeys } from "./host-query-keys";
+import { sidebarHosts } from "../sidebar-remote-groups";
 
 const base: PeerHostFeedSnapshot = {
   hostId: "studio",
@@ -179,35 +182,88 @@ test("host statuses only move forward by generation", () => {
   assert.deepEqual(mergePeerHostStatuses(undefined, [status("studio", 1, "connecting")]).length, 1);
 });
 
+function blocked(hostId: string, generation: number): PeerHostStatus {
+  return { hostId, generation, state: { kind: "blocked", reason: "auth" }, feed: "live", stale: false };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** The sidebar's status query: gated until the broadcast listener is installed, never stale. */
+function watchStatuses(queryClient: QueryClient, sync: PeerHostStatusSync) {
+  const options = {
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: sync.read,
+    staleTime: Infinity,
+  };
+  const observer = new QueryObserver(queryClient, { ...options, enabled: false });
+  const unsubscribe = observer.subscribe(() => {});
+  return {
+    enable: () => observer.setOptions({ ...options, enabled: true }),
+    availability: (views: PeerHostView[]) =>
+      sidebarHosts(views, queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()) ?? []).map(
+        (host) => [host.id, host.availability],
+      ),
+    stop: () => {
+      unsubscribe();
+      queryClient.clear();
+    },
+  };
+}
+
+const views: PeerHostView[] = [
+  { id: "studio", name: "Studio", enabled: true, state: "connected", features: [], capabilities: [] },
+  { id: "laptop", name: "Laptop", enabled: true, state: "connected", features: [], capabilities: [] },
+];
+
+test("a host's broadcast before the first status read does not stand in for every host's status", async () => {
+  const queryClient = new QueryClient();
+  let reads = 0;
+  const sync = createPeerHostStatusSync(queryClient, async () => {
+    reads += 1;
+    return [status("studio", 1, "connecting"), blocked("laptop", 4)];
+  });
+  const statuses = watchStatuses(queryClient, sync);
+  // Studio connects after the listener is installed but before the read starts.
+  sync.receive(status("studio", 2, "connected"));
+  statuses.enable();
+  await settle();
+
+  assert.equal(reads, 1);
+  assert.deepEqual(statuses.availability(views), [
+    ["studio", "online"],
+    ["laptop", "blocked"],
+  ]);
+  statuses.stop();
+});
+
 test("a status reply that lands after a newer broadcast keeps the broadcast", async () => {
   const queryClient = new QueryClient();
-  const key = hostQueryKeys.statuses();
-  queryClient.setQueryData<PeerHostStatus[]>(key, [status("studio", 1, "connecting")]);
   let reply: (statuses: PeerHostStatus[]) => void = () => {};
-  const pendingReply = new Promise<PeerHostStatus[]>((resolve) => (reply = resolve));
-  const read = queryClient.fetchQuery({
-    queryKey: key,
-    queryFn: () =>
-      readPeerHostStatuses(
-        () => pendingReply,
-        () => queryClient.getQueryData<PeerHostStatus[]>(key),
-      ),
-  });
-  await Promise.resolve();
-  // The supervisor connects and broadcasts while the read is still waiting.
-  queryClient.setQueryData<PeerHostStatus[]>(key, (current) =>
-    mergePeerHostStatuses(current, [status("studio", 2, "connected")]),
+  const sync = createPeerHostStatusSync(
+    queryClient,
+    () => new Promise<PeerHostStatus[]>((resolve) => (reply = resolve)),
   );
-  reply([status("studio", 1, "connecting"), status("laptop", 1, "connecting")]);
-  await read;
+  const statuses = watchStatuses(queryClient, sync);
+  statuses.enable();
+  await settle();
+  // The supervisor connects and broadcasts while the first read is still waiting.
+  sync.receive(status("studio", 2, "connected"));
+  reply([status("studio", 1, "connecting"), blocked("laptop", 1)]);
+  await settle();
+  assert.deepEqual(statuses.availability(views), [
+    ["studio", "online"],
+    ["laptop", "blocked"],
+  ]);
 
-  const cached = queryClient.getQueryData<PeerHostStatus[]>(key) ?? [];
-  assert.deepEqual(
-    cached.map((entry) => [entry.hostId, entry.generation, entry.state.kind]),
-    [
-      ["studio", 2, "connected"],
-      ["laptop", 1, "connecting"],
-    ],
-  );
-  queryClient.clear();
+  // A later full read (after the host list changes) keeps a broadcast that beat its reply.
+  void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses() });
+  await settle();
+  sync.receive(status("laptop", 2, "connected"));
+  reply([status("studio", 2, "connected"), blocked("laptop", 1)]);
+  await settle();
+  assert.deepEqual(statuses.availability(views), [
+    ["studio", "online"],
+    ["laptop", "online"],
+  ]);
+  statuses.stop();
 });
