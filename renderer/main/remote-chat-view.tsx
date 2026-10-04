@@ -71,6 +71,53 @@ function availabilityLabel(host: SidebarHost): string {
   }
 }
 
+export interface RemoteComposerActions {
+  send(text: string): Promise<void>;
+  submitInput(mode: ChatRunInputMode): (text: string) => Promise<void>;
+}
+
+/**
+ * The remote composer's submit callbacks. Resolving consumes the composer's
+ * draft and rejecting restores it, so text is restored only when the host
+ * certainly did not save it: an unknown outcome is held by the reconciliation
+ * banner, and guidance the host saved after its run ended is consumed.
+ */
+export function remoteComposerActions(
+  control: ChatSessionControl | null,
+  runId: string | null,
+  hostLabel: string,
+): RemoteComposerActions {
+  return {
+    async send(text) {
+      if (!control) throw new Error(`Connecting to ${hostLabel}…`);
+      try {
+        await control.send(text);
+      } catch (error) {
+        // The banner keeps the text and retries it with the same key; the composer clears.
+        if (isOutcomeUnknown(error)) return;
+        throw error;
+      }
+    },
+    submitInput: (mode) => async (text) => {
+      if (!control) throw new Error(`Connecting to ${hostLabel}…`);
+      if (!runId) throw new Error("Wait for the run to start on that Mac.");
+      try {
+        const result = await control.submitInput(runId, mode, text);
+        if (result.admitted) return;
+        if (result.committed) {
+          // The host saved it to the chat; restoring it would invite a duplicate send.
+          toast.info("The run ended first, so your message was saved to the conversation.");
+          return;
+        }
+        throw new Error(INPUT_REJECTION[result.reason ?? "invalid"]);
+      } catch (error) {
+        if (isOutcomeUnknown(error)) return;
+        throw error;
+      }
+    },
+  };
+}
+
 /** Toasts a control failure, unless the reconciliation banner already explains it. */
 function reportControlError(control: ChatSessionControl, error: unknown, fallback: string): void {
   if (isOutcomeUnknown(error) && control.getSnapshot().unresolved) return;
@@ -246,28 +293,7 @@ export function RemoteChatPane({
     }
   };
 
-  const send = async (text: string) => {
-    if (!control) throw new Error(`Connecting to ${host.label}…`);
-    try {
-      await control.send(text);
-    } catch (error) {
-      // The banner keeps the text and retries it with the same key; the composer clears.
-      if (isOutcomeUnknown(error)) return;
-      throw error;
-    }
-  };
-
-  const submitInput = (mode: ChatRunInputMode) => async (text: string) => {
-    if (!control) throw new Error(`Connecting to ${host.label}…`);
-    if (!runId) throw new Error("Wait for the run to start on that Mac.");
-    try {
-      const result = await control.submitInput(runId, mode, text);
-      if (!result.admitted) throw new Error(INPUT_REJECTION[result.reason ?? "invalid"]);
-    } catch (error) {
-      if (isOutcomeUnknown(error)) return;
-      throw error;
-    }
-  };
+  const { send, submitInput } = remoteComposerActions(control, runId, host.label);
 
   const stop = () => {
     if (!control || !runId) return;

@@ -10,6 +10,7 @@ import {
   type HostChatAdapter,
   type HostChatApprovalResult,
   type HostChatCapability,
+  type HostChatInput,
   type HostChatStatus,
 } from "../lib/hosts/host-chat-adapter";
 import type { ChatSession } from "../lib/hosts/use-chat-session";
@@ -19,7 +20,8 @@ import type { ChatMessage } from "../lib/types";
 import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
-import { RemoteChatPane, RemoteChatRoute, type RemoteChatPaneProps } from "./remote-chat-view";
+import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
+import { RemoteChatPane, RemoteChatRoute, remoteComposerActions, type RemoteChatPaneProps } from "./remote-chat-view";
 
 const noop = () => undefined;
 const reconnect = async () => undefined;
@@ -75,6 +77,8 @@ class StubHost implements HostChatAdapter {
   readonly current: HostChatStatus;
   sendFails: HostChatControlError | null = null;
   approval: HostChatApprovalResult = { resolution: "applied" };
+  input: ChatRunInputAdmissionResult = { admitted: true, committed: true };
+  inputs: string[] = [];
 
   constructor(host: SidebarHost, granted: HostChatCapability[]) {
     this.granted = new Set(granted);
@@ -114,8 +118,9 @@ class StubHost implements HostChatAdapter {
   async answerQuestion() {
     return { status: "answered" as const };
   }
-  async submitInput() {
-    return { admitted: true, committed: true };
+  async submitInput(_chatId: string, input: HostChatInput) {
+    this.inputs.push(input.text);
+    return this.input;
   }
   async rename() {}
   async remove() {}
@@ -358,6 +363,21 @@ test("a lost send acknowledgement holds the message for a same-key retry and blo
   assert.ok(view.button(/^Dismiss$/));
   assert.match(view.text, /Retry or dismiss the message above before sending another\./);
   assert.ok(view.button(/Send message/)?.hasAttribute("disabled"));
+});
+
+test("guidance keeps the composer's text only when the host did not save it", async () => {
+  const { control, adapter } = session(online);
+  const steer = remoteComposerActions(control, "run-1", "Studio Mac").submitInput("steer");
+
+  // The run ended before the guidance landed, but the host saved it to the chat.
+  adapter.input = { admitted: false, reason: "cancelled", committed: true, messageId: "message-9" };
+  await steer("Use the release branch");
+
+  // Rejected outright: the composer must keep the text for the person to resend.
+  adapter.input = { admitted: false, reason: "cancelled", committed: false };
+  await assert.rejects(steer("Use main instead"), /.+/);
+
+  assert.deepEqual(adapter.inputs, ["Use the release branch", "Use main instead"]);
 });
 
 test("an approval answered first on another device says so", async () => {
