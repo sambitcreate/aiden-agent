@@ -90,6 +90,8 @@ Credentials, endpoints and pins stay in main and never reach a renderer.
    Bonjour IPv4 address (`main/services/peer-lan-addresses.ts`). Pairing at that address, a
    connection request or a discovered setup code, remembers it for the installation. Discovery
    also reports it, and the registry keeps it only for a paired host pinned to the key seen there.
+   A paired device is probed over the LAN even when Tailscale reached it first, so its address is
+   relearned whichever route answers first; Tailscale stays its listed pairing route.
    Connections resolve the `.local` name through the system first and use the address only when
    that fails. TLS still verifies the `.local` name, the private CA and the SPKI pin, so a wrong
    address can only fail. Addresses live in memory, so after a restart one is learned again when

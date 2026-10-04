@@ -252,14 +252,21 @@ export class PeerDiscovery {
     if (this.session !== session || session.lanServices >= MAX_LAN_CANDIDATES) return;
     session.lanServices += 1;
     const instance = txtInstance(service.txt);
-    // A device Tailscale already reached needs no LAN probe.
-    if (instance && session.found.get(instance)?.route === "tailscale") return;
     const endpoints = lanEndpoints(service).filter((endpoint) => !session.probed.has(endpoint));
     if (endpoints.length === 0) return;
     for (const endpoint of endpoints) session.probed.add(endpoint);
     this.schedule(session, async () => {
+      // A device Tailscale already reached needs no LAN probe to be listed.
+      // A paired one is still probed, so a LAN pairing can relearn the
+      // address its `.local` name stands for; Tailscale stays its route here.
+      if (instance && session.found.get(instance)?.route === "tailscale" && !(await this.paired(instance)))
+        return;
       for (const endpoint of endpoints) if (await this.probe(session, endpoint, "lan")) return;
     });
+  }
+
+  private async paired(instanceId: string): Promise<boolean> {
+    return (await this.options.pairedIds().catch((): string[] => [])).includes(instanceId);
   }
 
   private enqueue(session: Session, endpoint: string, route: Found["route"]): void {

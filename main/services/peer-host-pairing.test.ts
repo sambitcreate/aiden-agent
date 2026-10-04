@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import dns from "node:dns";
 import type { LookupFunction } from "node:net";
 import test from "node:test";
+import type { PeerDiscoveryState } from "../../renderer/shared/peer-host.js";
 import { PeerBootstrapTransport } from "./peer-bootstrap-transport.js";
+import { PeerDiscovery, type PeerBonjourService } from "./peer-discovery.js";
 import { PeerHostRegistry, type StoredPeerHost } from "./peer-host-registry.js";
 import { PeerLanAddresses } from "./peer-lan-addresses.js";
 import { PeerPairingOutcomeError, type PeerPairingFailure } from "./peer-pairing-client.js";
@@ -388,4 +390,78 @@ test("after a restart, a paired LAN host is reachable again once discovery repor
     impersonated.request(host.instanceId, { path: "/server" }),
     (error: unknown) => error instanceof PeerTransportError && error.code === "identity_changed",
   );
+});
+
+test("after a restart, discovery recovers a LAN host's address even when Tailscale reached it first", async (t) => {
+  const host = await startPeerTestHost({ lanHostname: "studio-mac.local" });
+  t.after(() => host.close());
+  const saved = { hosts: [] as StoredPeerHost[] };
+  await registryWithoutMdns(saved).pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanAddressEndpoint, route: "lan" },
+    answer(host, "allow"),
+  );
+  const restarted = registryWithoutMdns(saved);
+  await assert.rejects(
+    restarted.request(host.instanceId, { path: "/server" }),
+    (error: unknown) => error instanceof PeerTransportError && error.code === "unavailable",
+  );
+
+  let announce: ((service: PeerBonjourService) => void) | undefined;
+  const reports: Promise<void>[] = [];
+  let state: PeerDiscoveryState = { scanning: true, devices: [] };
+  const discovery = new PeerDiscovery({
+    tailscale: async () => ({
+      run: async () =>
+        JSON.stringify({
+          Peer: { node: { DNSName: "studio.tail0.ts.net.", OS: "macOS", Online: true } },
+        }),
+    }),
+    browse: (onService) => {
+      announce = onService;
+      return () => undefined;
+    },
+    // The Tailscale name maps onto the fixture; `.local` names do not resolve here.
+    bootstrap: (options) => {
+      const { hostname } = new URL(options.endpoint);
+      if (hostname.endsWith(".local"))
+        return {
+          observedSpki: undefined,
+          json: async () => {
+            throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+          },
+        };
+      return new PeerBootstrapTransport({
+        ...options,
+        endpoint: hostname === "studio.tail0.ts.net" ? host.tailscaleEndpoint : options.endpoint,
+        ca: host.caPem,
+      });
+    },
+    localInstanceId: async () => "install_self",
+    pairedIds: async () => (await restarted.list()).map((entry) => entry.id),
+    publish: (next) => {
+      state = next;
+    },
+    lanAddress: (id, address, spki) => {
+      reports.push(restarted.rememberLanAddress(id, address, spki));
+    },
+    browseSettleMs: 0,
+  });
+  t.after(() => discovery.stop());
+  discovery.start();
+  await eventually(() => state.devices[0]?.route === "tailscale");
+
+  // Its Bonjour answer arrives second, with the usual instance TXT field.
+  announce?.({
+    host: "studio-mac.local",
+    port: Number(new URL(host.lanAddressEndpoint).port),
+    addresses: ["127.0.0.1"],
+    txt: { instance: host.instanceId },
+  });
+  await eventually(() => reports.length > 0);
+  await Promise.all(reports);
+  const server = (await restarted.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(server.instanceId, host.instanceId);
+  await eventually(() => !state.scanning);
+  assert.equal(state.devices.length, 1);
+  assert.equal(discovery.target(host.instanceId)?.route, "tailscale", "Tailscale stays the pairing route");
 });
