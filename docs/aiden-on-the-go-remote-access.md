@@ -38,6 +38,35 @@ Use **Remove access** beside a paired device to invalidate it immediately. Revoc
 
 Closing the Aiden window does not stop Remote Access. Quitting Aiden does. The mobile app may retain its bounded offline read cache, but it cannot start new work or mutate the Mac while Aiden is stopped or unreachable. Temporary connection loss does not grant broader access and does not make an invalid or revoked credential valid.
 
+## Control another computer
+
+Any computer running Aiden Agent can use the chats, workspaces and Bots of another computer running Aiden, and be used by it in turn. Work stays on the computer that owns it: its chats, models, tools and files run there, and this Mac sends your actions to it.
+
+### Pair a computer
+
+1. On the computer you want to control, open **Settings → Connections → Control this device** and leave **Accept connection requests** on.
+2. On this Mac, open **Settings → Connections → Control other devices** and choose **Add device**. While the sheet is open, Aiden looks for computers on the same network and on your Tailscale tailnet. It never searches in the background.
+3. Choose **Connect** beside the computer. Both screens show the same six-digit match code.
+4. On the other computer, check the code and choose **Allow**. A request that is denied, cancelled or left for two minutes pairs nothing.
+
+When nobody is at the other computer, choose **Enter setup code** instead and type the code it showed for **Connect a device**. **Paste pairing link** is an advanced fallback.
+
+Pairing a computer gives it full control of this computer's chats: it can read them, send messages, stop runs and answer approvals, including runs started on this computer's own screen, its phone, Bots or schedules. Pair only computers you own. To end that access, remove the computer under **Control this device**.
+
+### Use a paired computer
+
+- **Sidebar.** The paired computer's workspaces and chats appear in the sidebar with a globe marker. The **Organize sidebar** menu chooses the view (Workspaces, Recent or Needs attention), the sort orders, a machine filter and whether workspaces from the same repository on different machines are grouped together (**Group across machines**).
+- **Chats.** Open a remote chat to read it, load older messages, send, stop, approve or deny tools, answer questions and steer, as for a local chat. Runs started anywhere on the other computer appear live.
+- **New chats.** On a new chat, choose the computer in the composer's machine picker, then one of its workspaces and models. Attachments upload to that computer.
+- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own. The Assistant stays on its own computer.
+- **Not available remotely.** Terminal, the Environment browser, computer use and open-in-editor work only on the computer you are sitting at.
+
+### Offline and identity changes
+
+When a paired computer is asleep or unreachable, its rows stay in the sidebar marked stale and read-only, and actions are disabled until it returns. Aiden reconnects on its own after sleep, unlock or a network change; choose **Reconnect** to try at once. Nothing is queued while a computer is offline.
+
+If a computer reached over the local network presents a different identity, Aiden blocks it and asks you to pair again rather than trust the new key. Use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
+
 ## Mobile usage summary
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.

@@ -1,6 +1,6 @@
 # Multi-host PR 8: new chat on a paired Mac, remote Bots — 2026-10-04
 
-Branch `feat/multi-host-pr8-remote-new-chat`, stacked on PR 7 (`feat/multi-host-pr7-remote-control`). Plan doc: `docs/plans/desktop-multi-host-pr8-remote-new-chat.md`.
+Branch `feat/multi-host-pr8-remote-new-chat`, stacked on PR 7 (`feat/multi-host-pr7-remote-control`). Plan doc: `docs/plans/completed/desktop-multi-host-pr8-remote-new-chat.md`.
 
 ## Where things live
 

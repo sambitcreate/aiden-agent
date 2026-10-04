@@ -1,6 +1,6 @@
 # Desktop multi-host PR 3 — controller supervisor and stream IPC
 
-Status: Implemented; in review.
+Status: **Complete**; merges with the multi-host stack.
 Parent plan: [Desktop multi-host control](desktop-multi-host-control-plan.md), delivery row 3.
 Stack: PR 1 (#310) ← PR 2 (#313, contract revision 19) ← this PR.
 

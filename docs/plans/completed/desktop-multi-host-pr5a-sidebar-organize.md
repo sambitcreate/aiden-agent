@@ -1,6 +1,6 @@
 # Multi-host PR 5a: local sidebar organization
 
-Status: **In review**. This is the local-only first half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is based on `main` and can merge on its own.
+Status: **Complete**; merges with the multi-host stack. This is the local-only first half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is based on `main` and can merge on its own.
 
 PR 5b adds remote rows, the machine filter, the globe marker, cross-machine grouping and offline/stale state. It plugs into the projection module from this PR and does not change it.
 

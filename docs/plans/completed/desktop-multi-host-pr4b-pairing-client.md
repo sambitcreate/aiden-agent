@@ -1,6 +1,6 @@
 # Desktop multi-host PR 4b: pairing client and Connections settings
 
-Status: Implemented; in review.
+Status: **Complete**; merges with the multi-host stack.
 Parent plan: [Desktop multi-host control](desktop-multi-host-control-plan.md), delivery row 4 (client half).
 Stack: PR 1 (#310) ← PR 2 (#313) ← PR 3 (#314) ← this PR, which also merges PR 4a (#315).
 

@@ -1,6 +1,6 @@
 # Multi-host PR 6: remote chat view and live observation
 
-Status: **In review**. Row 6 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 5b ([remote sidebar rows](desktop-multi-host-pr5b-remote-sidebar.md)), which is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and PR 2 ([host contract](desktop-multi-host-pr2-host-contract.md)).
+Status: **Complete**; merges with the multi-host stack. Row 6 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 5b ([remote sidebar rows](desktop-multi-host-pr5b-remote-sidebar.md)), which is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and PR 2 ([host contract](desktop-multi-host-pr2-host-contract.md)).
 
 This PR is about viewing and live observation only. Send, stop, approvals, questions, steer, rename and delete come in PR 7.
 
