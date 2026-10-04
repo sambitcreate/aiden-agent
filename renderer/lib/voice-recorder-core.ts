@@ -4,7 +4,7 @@
 // cloud provider, or (for the on-device provider) decoded and resampled to
 // 16 kHz mono PCM in the renderer and transcribed locally via sherpa-onnx.
 
-import { voiceApi } from "./ipc";
+import { voiceApi } from "./ipc-voice";
 import type { VoiceProvider } from "./types";
 import { bytesToBase64 } from "./live-pcm-capture";
 import { encodeMonoPcm16Wav } from "./wav-audio";

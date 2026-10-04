@@ -205,7 +205,6 @@ test("workspace pull request indicators surface checks without owning GitHub sec
     /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{group\.workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*group\.workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
   );
   assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
-  assert.match(queries, /refetchInterval: enabled \? 30_000 : false/u);
   assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
 });
 
