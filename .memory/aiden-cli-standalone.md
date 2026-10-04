@@ -8,11 +8,10 @@
   the thin desktop wrappers, port the behavior into the core too. The 2026-09-26
   merge ported: schedule `isCurrent` fencing, subagent `compactionEngine` and
   `maxTurns` / V2 tree turn allowance, and the vision per-request id.
-- `packages/cli/src/vendor/advisor/*` are vendored desktop files with rewritten
-  import specifiers. `packages/cli/tests/extensions.test.mjs` requires parity
-  with the originals after imports are stripped. Re-vendor them whenever
-  `main/services/{advisor-runtime,advisor-context,advisor-attempt-store,data-store,regular-file-read}.ts`
-  changes.
+- The advisor imports `main/services/advisor-runtime.ts` and
+  `advisor-attempt-store.ts` directly (lazy-loaded chunk). The former
+  `src/vendor/advisor/*` copies and their drift test were removed in
+  `perf/cli-bundle-startup` (see `.memory/cli-bundle-startup.md`).
 - The CLI build uses `prebuilt/native/*` helpers only when the manifest source
   hashes match. After changing native sources (including
   `native/subagent-shell-runner/setsid-fixture.c`), rebuild them with:

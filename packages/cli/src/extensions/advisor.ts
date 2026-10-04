@@ -1,8 +1,7 @@
 /**
- * Advisor in the terminal: reuses Aiden's AdvisorRuntime core (vendored at
- * src/vendor/advisor — byte-identical to main/services/advisor-runtime.ts
- * modulo import specifiers, see the vendored file's header) — the same
- * one-consultation-per-response, tool-free second opinion as the desktop —
+ * Advisor in the terminal: reuses Aiden's AdvisorRuntime core
+ * (main/services/advisor-runtime.ts, bundled straight from the desktop
+ * source) — the same one-consultation-per-response, tool-free second opinion as the desktop —
  * with the model runtime resolved through pi's extension ModelRegistry
  * instead of the Electron provider stores. The desktop builds one runtime per
  * response; the CLI registers one delegating tool and refreshes the
@@ -15,12 +14,12 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type, type Api, type Model } from "@earendil-works/pi-ai";
-import { AdvisorAttemptStore } from "../vendor/advisor/advisor-attempt-store.ts";
+import { AdvisorAttemptStore } from "../../../../main/services/advisor-attempt-store.js";
 import type {
 	AdvisorCandidate,
 	AdvisorExtensionInput,
 	AdvisorGenerationScope,
-} from "../vendor/advisor/advisor-runtime.ts";
+} from "../../../../main/services/advisor-runtime.js";
 import { GENERATION_THINKING_LEVELS } from "../../../../renderer/shared/generation-thinking.js";
 import {
 	asModelRuntimeContext,
@@ -49,7 +48,7 @@ function candidatesFromContext(ctx: ModelRuntimeContext): AdvisorCandidate[] {
 	}));
 }
 
-/** Structural surface the CLI needs from the prebundled AdvisorRuntime. */
+/** Structural surface the CLI needs from the lazily loaded AdvisorRuntime. */
 interface VendorAdvisorRuntime {
 	extensionForGeneration(input: AdvisorExtensionInput): Promise<{
 		id: string;
@@ -71,9 +70,9 @@ export function createAdvisorInlineExtension(context: {
 	const runtimeContext = () => context.latestContext() ?? turnContext;
 	const ensureRuntime = async (): Promise<VendorAdvisorRuntime> => {
 		if (runtime) return runtime;
-		// The vendor bundle (dist/app/advisor-runtime.vendor.mjs) is built by
-		// scripts/build.mjs ahead of the main bundle and kept external.
-		const module = (await import("../../dist/app/advisor-runtime.vendor.mjs")) as {
+		// Loaded on first use so sessions that never consult the advisor skip
+		// evaluating the runtime; esbuild emits it as its own shared chunk.
+		const module = (await import("../../../../main/services/advisor-runtime.js")) as unknown as {
 			AdvisorRuntime: new (dependencies: Record<string, unknown>) => VendorAdvisorRuntime;
 		};
 		runtime = new module.AdvisorRuntime({
