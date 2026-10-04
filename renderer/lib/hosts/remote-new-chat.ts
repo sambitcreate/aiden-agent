@@ -14,6 +14,7 @@ import {
 import type {
   HostBrowserLocation,
   HostBrowserPage,
+  HostBrowserRoot,
   HostCreatedChat,
   HostCreatedWorkspace,
   HostFolderSelection,
@@ -84,7 +85,7 @@ export interface HostFolderChoice {
   /**
    * Names the folder across listings. The host mints a new `loc_` handle
    * every time it lists a folder, so the handle cannot recognise the same
-   * folder chosen again; see `hostFolderIdentity`.
+   * folder chosen again; see `hostFolderChoice`.
    */
   identity: string;
   /** The current handle, spent once to mint the folder's selection. */
@@ -92,14 +93,34 @@ export interface HostFolderChoice {
 }
 
 /**
- * A stable name for the folder a browser page shows: its approved root and
- * the folder names below it. Both survive a re-listing, unlike the handles.
+ * A folder open in a host's browser: its current handle and the opaque IDs
+ * the host gave its approved root and each folder down to it. The IDs come
+ * from the folder itself rather than its name, so they survive a re-listing
+ * and stay distinct for two folders whose names the host shows alike.
  */
-export function hostFolderIdentity(page: {
-  rootId: HostBrowserPage["rootId"];
-  breadcrumbs: ReadonlyArray<Pick<HostBrowserLocation, "label">>;
-}): string {
-  return JSON.stringify([page.rootId, ...page.breadcrumbs.slice(1).map((crumb) => crumb.label)]);
+export interface HostFolderPlace {
+  location: HostBrowserLocation;
+  /** The root's ID, then each opened folder's entry ID, one per breadcrumb. */
+  trail: readonly string[];
+}
+
+/** How the browser moves between folders, carrying the trail of IDs along. */
+export const hostFolderPlaces = {
+  root(root: HostBrowserRoot): HostFolderPlace {
+    return { location: { label: root.label, location: root.location }, trail: [root.id] };
+  },
+  entry(from: HostFolderPlace, entry: HostBrowserPage["entries"][number]): HostFolderPlace {
+    return { location: { label: entry.name, location: entry.location }, trail: [...from.trail, entry.id] };
+  },
+  /** The ancestor at `index` of the open folder's breadcrumbs; index 0 is its root. */
+  ancestor(from: HostFolderPlace, crumb: HostBrowserLocation, index: number): HostFolderPlace {
+    return { location: crumb, trail: from.trail.slice(0, index + 1) };
+  },
+};
+
+/** The project request for an open folder, named by its root's ID and its own. */
+export function hostFolderChoice(place: HostFolderPlace): HostFolderChoice {
+  return { identity: JSON.stringify([place.trail[0], place.trail[place.trail.length - 1]]), location: place.location.location };
 }
 
 /**

@@ -71,8 +71,20 @@ export function remoteProjectChoices(
       return { id: row.id, name: text(row, "name") ?? "Untitled project", ...(detail ? { detail } : {}) };
     });
   // A project this window just created is offered at once, before the host's feed reports it.
-  const known = new Set(listed.map((project) => project.id));
-  return [...created.filter((project) => !known.has(project.id)), ...listed];
+  return [...unlistedProjects(created, feed), ...listed];
+}
+
+/**
+ * The projects this window created that the host's feed has not listed yet.
+ * Once the feed lists one, the feed alone speaks for it: a project the host
+ * later deletes must not be revived by this window's memory of creating it.
+ */
+export function unlistedProjects(
+  created: readonly RemoteProjectChoice[],
+  feed: PeerHostFeedSnapshot | null | undefined,
+): RemoteProjectChoice[] {
+  const listed = new Set((feed?.workspaces ?? []).map((row) => row.id));
+  return created.filter((project) => !listed.has(project.id));
 }
 
 /** A Bot that lives on a paired host. */

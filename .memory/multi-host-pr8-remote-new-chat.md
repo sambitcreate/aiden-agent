@@ -17,9 +17,10 @@ Branch `feat/multi-host-pr8-remote-new-chat`, stacked on PR 7 (`feat/multi-host-
 - A remote route never reaches a local API. Every `/host/...` route suppresses the workbench, terminal and browser.
 - A lost create keeps its key for the same project and model, so a retry returns the same chat. A definite refusal releases the key.
 - A lost first message is reconciled by main with one `GET /chats/{id}` and is never replayed automatically. Retry reuses the same key, from the new-chat route or the opened chat.
-- A folder project's selection is minted once per intent; a retry after a lost answer replays the original body and key (a new selection would be refused as `already_exists`). The intent is keyed by `hostFolderIdentity(page)` (root ID plus breadcrumb labels), never the `loc_` handle, which the host re-mints on every listing.
+- A folder project's selection is minted once per intent; a retry after a lost answer replays the original body and key (a new selection would be refused as `already_exists`). The intent is keyed by `hostFolderChoice(place)`: the host's opaque root ID and the folder's entry ID (`sha256(rootId, device, inode)`), carried through the browser as `HostFolderPlace.trail`. Never the `loc_` handle, which the host re-mints on every listing, and never the labels, which `safeLabel` can make identical for distinct folders.
 - `RemoteNewChatMemory.starting` is shared per host, so a control rebuilt mid-start refuses a second first message as `busy`.
-- Projects created from the route are merged into the picker via `remoteProjectChoices(feed, created)` until the feed lists them.
+- Projects created from the route are merged into the picker via `remoteProjectChoices(feed, created)`. The route retires each one with `unlistedProjects(created, feed)` as soon as the feed lists it, so a project the host later deletes is not revived.
+- Switching machines navigates with `search: {}`, so one host's `workspaceId` never carries to another. A project the host's feed does not list blocks sending ("Choose a project on X first.") and is replaced by the newest listed project once the feed has loaded.
 - `ChatIntent.attachmentIds` carries a send's staged uploads; dismiss and a definitely refused retry release them (host limit: 20 unused uploads per device and chat).
 - Uploads are unkeyed. An ambiguous upload is `upload_failed`, and an unconfirmed upload expires on the host.
 - Queue and steer refuse attachments and skills.
