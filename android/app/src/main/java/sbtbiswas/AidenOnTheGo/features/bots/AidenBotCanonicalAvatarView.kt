@@ -19,6 +19,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 object AidenBotAvatarMemoryCache {
     private val lruCache = object : android.util.LruCache<String, Bitmap>(64) {}
@@ -40,7 +41,7 @@ fun AidenBotCanonicalAvatarView(
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
 ) {
-    val coordinatorClient = coordinator?.client?.collectAsState()?.value
+    val coordinatorClient = coordinator?.client?.collectAsStateWithLifecycle()?.value
     val effectiveClient = client ?: coordinatorClient
     val effectiveBotCache = botCache ?: coordinator?.botCache
     val asset = avatar.asset

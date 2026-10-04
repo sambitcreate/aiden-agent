@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import type {
   AidenRemoteApprovedRoot,
   AidenRemoteStateRegistry,
@@ -13,11 +14,6 @@ export interface AidenRemoteApprovedRootDependencies {
   now(): number;
   randomBytes(size: number): Buffer;
   homeDirectory(): string;
-}
-
-function isWithin(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function displayLabel(folderPath: string): string {
@@ -53,10 +49,10 @@ export class AidenRemoteApprovedRootService {
     }
 
     const existing = (await this.state.snapshot()).approvedRoots;
-    if (existing.some((root) => isWithin(root.folderPath, canonicalPath))) {
+    if (existing.some((root) => isPathInside(root.folderPath, canonicalPath))) {
       throw new Error("This folder is already covered by an approved root.");
     }
-    if (existing.some((root) => isWithin(canonicalPath, root.folderPath))) {
+    if (existing.some((root) => isPathInside(canonicalPath, root.folderPath))) {
       throw new Error("This folder would overlap an existing approved root.");
     }
 

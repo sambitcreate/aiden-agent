@@ -1,5 +1,5 @@
 import os from "node:os";
-import { app, ipcMain, safeStorage } from "../platform.js";
+import { app, ipcMain } from "../platform.js";
 import { DataStore } from "./data-store.js";
 import {
   EncryptedPeerHostStorage,
@@ -7,6 +7,7 @@ import {
 } from "./peer-host-storage.js";
 import { PeerHostRegistry } from "./peer-host-registry.js";
 import { getAidenRemoteRuntime } from "./aiden-remote-service-main.js";
+import { secureStorage } from "./secure-storage.js";
 
 let registry: PeerHostRegistry | undefined;
 
@@ -43,16 +44,7 @@ export function getPeerHostRegistry(): PeerHostRegistry {
         },
         save: (value, isCurrent) => store.save(value, isCurrent),
       },
-      {
-        isEncryptionAvailable: () =>
-          safeStorage.isEncryptionAvailable() &&
-          (process.platform !== "linux" ||
-            !["basic_text", "unknown"].includes(
-              safeStorage.getSelectedStorageBackend(),
-            )),
-        encryptString: (value) => safeStorage.encryptString(value),
-        decryptString: (value) => safeStorage.decryptString(value),
-      },
+      secureStorage,
     ),
     localInstanceId: async () =>
       (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId,

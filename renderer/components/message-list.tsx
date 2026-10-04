@@ -435,7 +435,7 @@ export function MessageList({
 
         <EventPresence present={Boolean(error)}>
           {error ? (
-            <Callout color="red">
+            <Callout color="red" role="alert" aria-atomic="true">
               <Text variant="small-strong" color="red">
                 Generation failed
               </Text>

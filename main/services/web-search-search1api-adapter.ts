@@ -1,5 +1,6 @@
 /** Search1API Search endpoint adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -22,10 +23,6 @@ export interface Search1APIWebSearchApiKeyCredential {
 }
 
 export type Search1APIWebSearchCredential = Search1APIWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("search1api", value);
@@ -83,19 +80,6 @@ export function buildSearch1APIWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Parse Search1API's `{ searchParameters, results: [{ title, link, snippet }] }`. */
 export function parseSearch1APIWebSearchResponse(
   payload: unknown,
@@ -115,7 +99,7 @@ export function parseSearch1APIWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.link);
+    const url = normalizeWebSearchSourceUrl(item.link);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({

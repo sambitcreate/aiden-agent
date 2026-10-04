@@ -1,3 +1,5 @@
+import { stripIpcErrorPrefix } from "./ipc-error";
+
 /** Invalidates async capture/transcription work when dictation is cancelled. */
 export class DictationOperationGate {
   private generation = 0;
@@ -101,11 +103,13 @@ export function transcriptionTimeoutError(): Error {
 
 /** Do not expose Electron's remote-method wrapper or provider internals in UI. */
 export function voiceErrorMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error ?? "");
-  const message = raw
-    .replace(/^Error invoking remote method ['"][^'"]+['"]:\s*/iu, "")
-    .replace(/^Error:\s*/iu, "")
-    .trim();
+  const message = stripIpcErrorPrefix(
+    error instanceof Error ? error.message : String(error ?? ""),
+  ).replace(/^Error:\s*/iu, "");
+  // Name the provider the failing transcription path actually needs.
+  if (/set up openai/iu.test(message)) {
+    return "OpenAI needs an API key for voice input. Add it in Settings → Providers, then try again.";
+  }
   if (/providers|api key|set up google gemini/iu.test(message)) {
     return "Gemini needs an API key. Add it in Settings → Providers, then try again.";
   }

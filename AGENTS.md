@@ -37,6 +37,7 @@ The headless Aiden Agent lives in `packages/cli` as a self-contained npm package
 - Never hand-edit `packages/cli/themes/*.json`: they are generated from `renderer/shared/appearance.ts` by `npm run themes` (in `packages/cli`), and the fidelity test fails on drift. Change palettes in `appearance.ts`, then regenerate.
 - The rebrand depends on the bundle layout: `dist/app/cli.js` plus the generated `dist/app/package.json` (`piConfig`) must stay the nearest package.json to the bundled code. Restructure `dist/app/` only with that contract and `tests/bundle.test.mjs` in mind.
 - Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
+- The CLI bundles `main/services` and `renderer/shared` sources directly; `aidenRelativeTsRewritePlugin` in `packages/cli/scripts/build.mjs` maps their NodeNext `.js` specifiers to `.ts`. Do not reintroduce vendored copies (the former `src/vendor/advisor/` copies and their drift test were removed); import the original instead.
 - The CLI keeps the same manual-only network posture as the desktop for models.dev, Artificial Analysis, and OpenRouter benchmark data.
 
 ## Pull requests, CI, and branches
@@ -49,7 +50,6 @@ The headless Aiden Agent lives in `packages/cli` as a self-contained npm package
 - Known merge-conflict hotspots need a recheck after every `main` merge:
   - the root `package.json` `test` chain. Append new scripts and resolve conflicts by union, keeping every script from both sides.
   - the Aiden Remote protocol revision. Claim the next revision after the one on `main` when the PR merges, not when it was written, and update the iOS, Android, and fixture contracts together.
-  - the vendored advisor sources under `packages/cli/src/vendor/advisor/`. When one of their `main/services/` originals changes, re-vendor the copy (keep its header comment) in the same PR; `packages/cli/tests/extensions.test.mjs` fails on drift.
 - Stacked PRs: GitHub closes any open PR whose base branch is deleted. Before deleting a branch by hand, check that no open PR uses it as `baseRefName` as well as `headRefName`. Merged branches are deleted automatically on merge, and GitHub retargets their stacked PRs.
 - Never delete a branch or worktree that holds uncommitted or unpushed work. Check `git status` and that the tip is on a remote first.
 
