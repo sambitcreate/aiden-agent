@@ -27,6 +27,10 @@ PR 6 made a paired host's chat viewable. This PR makes it controllable from this
   - A send keeps its idempotency key until the host confirms it.
   - On `outcome_unknown` the composer is cleared and a reconciliation notice says the message may not have been sent. **Retry** resends with the same key, so the host returns the original turn instead of starting a second one. **Dismiss** forgets the intent.
   - Nothing is resent automatically.
+  - Keyed intents live in a per-window ledger (`chat-intent-ledger.ts`) keyed by `{hostId, chatId}`, not in the pane. Leaving and reopening a chat keeps the notice and its key, and an answer that lands after the pane left is still recorded for the reopened chat.
+- **Guidance.** A steer or queue that the host saved to the chat after its run ended (`committed` without `admitted`) clears the composer and says so. Only an uncommitted rejection restores the text.
+- **Rename and delete.** Both are guarded by the chat's revision. After a rename, or after a rename or delete the host refused as stale or whose outcome is unknown, the open chat rereads its newest window. It never adopts a revision that may not match the messages it shows.
+- **Shortened approvals.** The host bounds an approval summary to 2,000 characters. A summary it had to shorten marks the prompt `detailsOmitted`, so it can only be denied from another device.
 - **Files and Git.** A remote chat has no Environment, Files or Git surface yet, so nothing there can act on another Mac. When those views arrive they are read-only for remote chats.
 - **Drafts.** A remote chat's draft key is `hostResourceKey({hostId, resourceId: chatId})`, so it never collides with a local chat of the same ID. Local draft keys are unchanged.
 - **Peer errors.** `PeerOperationError` passes through the host's sanitized `details` (decision, outcome, resolvedAt, currentRevision), so the renderer can name an approval race's winner. This is not a host contract change.
@@ -49,8 +53,11 @@ PR 6 made a paired host's chat viewable. This PR makes it controllable from this
   - stopping a run started on the host;
   - an approval race between two Macs, which resolves once and shows the loser the winner's decision;
   - question answering and steer;
+  - leaving a chat whose send is unresolved, or still in flight, then reopening it: the text and key survive and the retry starts one turn;
+  - a command approval too long to show in full, which can be denied but not allowed;
+  - a rename followed by a delete, and a stale delete that rereads instead of overwriting;
   - an unreachable host refusing every mutation, with nothing sent once it is back;
   - the same `ChatSessionControl` driving a local chat (through `LocalHostAdapter`) and a remote one to the same outcome.
 - `renderer/lib/hosts/chat-session-control.test.ts`: host binding, offline gating, reconciliation and retry with the same key, approval "elsewhere" notices.
 - `renderer/lib/hosts/local-host-adapter.test.ts`: the local adapter delegates to the existing local APIs.
-- `renderer/main/remote-chat-view.test.tsx`: composer and header gating, approval and question controls, offline disabled reasons and the reconciliation notice, all through `renderToStaticMarkup`.
+- `renderer/main/remote-chat-view.test.tsx`: composer and header gating, approval and question controls, offline disabled reasons and the reconciliation notice, all through `renderToStaticMarkup`, plus guidance the host saved after its run ended.

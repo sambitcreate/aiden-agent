@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ChatSessionControl } from "./chat-session-control";
+import { ChatIntentLedger } from "./chat-intent-ledger";
 import {
   HostChatControlError,
   type HostChatAdapter,
@@ -40,6 +41,8 @@ class FakeHost implements HostChatAdapter {
   refuseNextSend = false;
   /** Upload attempts (1-based) whose acknowledgement is lost. */
   readonly lostUploads = new Set<number>();
+  /** Holds every upload until it settles, to observe the session mid-upload. */
+  uploadGate: Promise<void> | null = null;
   private uploads = 0;
   approval: (chatId: string, input: HostChatApprovalInput) => Promise<HostChatApprovalResult> = async () => ({
     resolution: "applied",
@@ -63,6 +66,9 @@ class FakeHost implements HostChatAdapter {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  onChatChanged() {
+    return () => {};
+  }
   getMessagesWindow(): never {
     throw new Error("unused");
   }
@@ -73,6 +79,7 @@ class FakeHost implements HostChatAdapter {
     return Promise.resolve({ ok: true as const, value: undefined });
   }
   async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
+    await this.uploadGate;
     this.uploads += 1;
     const id = `att-${this.uploads}`;
     this.calls.push(`upload:${chatId}:${upload.name}`);
@@ -132,7 +139,7 @@ class FakeHost implements HostChatAdapter {
 }
 
 function session(host = new FakeHost(), chatId = "chat-1") {
-  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId });
+  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId }, new ChatIntentLedger());
   const detach = control.attach();
   return { host, control, detach };
 }
@@ -270,7 +277,13 @@ const shot: HostChatAttachmentUpload = { name: "shot.png", mimeType: "image/png"
 
 test("attachments are staged on the chat's host and consumed by the turn they were sent with", async () => {
   const { host, control } = session();
-  await control.send("Read these", { attachments: [notes, shot] });
+  const gate = deferred<void>();
+  host.uploadGate = gate.promise;
+  const sent = control.send("Read these", { attachments: [notes, shot] });
+  assert.equal(control.getSnapshot().sending, true, "the composer shows the send as in progress while files upload");
+  gate.resolve();
+  await sent;
+  assert.equal(control.getSnapshot().sending, false);
 
   const [turn] = [...host.turns.values()];
   assert.deepEqual(turn, { chatId: "chat-1", text: "Read these", attachmentIds: ["att-1", "att-2"] });
@@ -291,6 +304,7 @@ test("a lost upload releases the files already confirmed and sends nothing", asy
   // The first upload is released; the one whose answer was lost has no known id and expires on the host.
   assert.deepEqual([...host.staged.keys()], ["att-2"]);
   assert.equal(control.getSnapshot().unresolved, null, "an upload failure is a plain retryable error, not an unresolved send");
+  assert.equal(control.getSnapshot().sending, false, "the composer can send again");
 });
 
 test("a turn the host refuses releases its uploads, while a lost turn keeps them for the retry", async () => {

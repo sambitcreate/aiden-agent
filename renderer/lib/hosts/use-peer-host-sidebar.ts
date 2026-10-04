@@ -55,14 +55,18 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
   );
   const supervised = enabledIds.length > 0;
 
-  useEffect(
-    () =>
-      peerHostsApi.onChanged(() => {
-        void queryClient.invalidateQueries({ queryKey: hostQueryKeys.list() });
-        void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses() });
-      }),
-    [queryClient],
-  );
+  useEffect(() => {
+    const unsubscribe = peerHostsApi.onChanged(() => {
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.list() });
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses() });
+    });
+    // A list cached by an earlier mount (before Settings replaced the chat
+    // shell) may have missed changes while nothing listened; read it again.
+    if (queryClient.getQueryData(hostQueryKeys.list()) !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: hostQueryKeys.list() });
+    }
+    return unsubscribe;
+  }, [queryClient]);
 
   // Drop cached rows for hosts that were unpaired or disabled.
   useEffect(() => {
@@ -96,6 +100,11 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
       if (next === FEED_RESYNC) void queryClient.invalidateQueries({ queryKey: key });
       else if (next !== current) queryClient.setQueryData(key, next);
     });
+    // Statuses and feeds cached while an earlier listener was installed may
+    // have missed broadcasts since it went away. Mark them stale without
+    // reading yet: the gated queries read afresh once they are enabled below.
+    void queryClient.invalidateQueries({ queryKey: hostQueryKeys.statuses(), refetchType: "none" });
+    void queryClient.invalidateQueries({ queryKey: ["host"], refetchType: "none" });
     setListening(true);
     return () => {
       unsubscribeState();

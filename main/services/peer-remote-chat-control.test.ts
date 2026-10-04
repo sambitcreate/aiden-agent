@@ -3,8 +3,9 @@ import test from "node:test";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PEER_WAKE_COALESCE_MS } from "./peer-host-manager.js";
 import { FakeHost, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
+import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
-import { HostChatControlError, isOutcomeUnknown } from "../../renderer/lib/hosts/host-chat-adapter.js";
+import { HostChatControlError, isOutcomeUnknown, type HostChatAdapter } from "../../renderer/lib/hosts/host-chat-adapter.js";
 import { LocalHostAdapter } from "../../renderer/lib/hosts/local-host-adapter.js";
 
 /**
@@ -33,8 +34,12 @@ const QUESTION = {
   ],
 };
 
-function controlFor(harness: Awaited<ReturnType<typeof setup>>) {
-  const control = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId: "chat-1" });
+function controlFor(
+  harness: Awaited<ReturnType<typeof setup>>,
+  adapter: HostChatAdapter = harness.adapter,
+  ledger = new ChatIntentLedger(),
+) {
+  const control = new ChatSessionControl(adapter, { hostId: adapter.hostId, chatId: "chat-1" }, ledger);
   control.attach();
   return control;
 }
@@ -83,6 +88,75 @@ test("a lost send acknowledgement retried with the same key starts exactly one t
     host.runs.publish("run-turn-1", "chat:done", {});
     await control.send("Another thought");
     assert.deepEqual(host.turns, ["Ship the release", "Another thought"]);
+  } finally {
+    harness.close();
+  }
+});
+
+test("leaving a chat whose message may not have been sent, then reopening it, keeps the message and its retry key", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const ledger = new ChatIntentLedger();
+    const first = await harness.adapterFor();
+    const leaving = new ChatSessionControl(first, { hostId: first.hostId, chatId: "chat-1" }, ledger);
+    const detach = leaving.attach();
+    host.dropAcks = 1;
+    await assert.rejects(leaving.send("Ship the release"), isOutcomeUnknown);
+
+    // Navigation detaches the pane's control and disposes its adapter.
+    detach();
+    first.dispose();
+
+    const reopened = controlFor(harness, await harness.adapterFor(), ledger);
+    assert.equal(reopened.getSnapshot().unresolved?.text, "Ship the release", "the reopened chat still holds the message");
+    await assert.rejects(reopened.send("Ship the release"), code("unresolved"), "it cannot be resent under a new key");
+
+    await reopened.retryUnresolved();
+    assert.deepEqual(host.turns, ["Ship the release"], "the retry replayed the original turn");
+    assert.equal(reopened.getSnapshot().unresolved, null);
+    assert.equal(await sentCopies(harness, "Ship the release"), 1);
+  } finally {
+    harness.close();
+  }
+});
+
+test("leaving a chat while its message is in flight records the lost answer for the reopened chat", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const ledger = new ChatIntentLedger();
+    const first = await harness.adapterFor();
+    const leaving = new ChatSessionControl(first, { hostId: first.hostId, chatId: "chat-1" }, ledger);
+    const detach = leaving.attach();
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    host.turnGate = () => gate;
+    const sent = leaving.send("Tag the build");
+    await settle();
+    assert.deepEqual(host.turns, ["Tag the build"], "the host already started the turn");
+
+    // The person opens another chat before the host answers.
+    detach();
+    first.dispose();
+    const reopened = controlFor(harness, await harness.adapterFor(), ledger);
+    assert.equal(reopened.getSnapshot().sending, true, "the reopened chat knows a message is still on its way");
+
+    host.turnGate = undefined;
+    release();
+    await assert.rejects(sent, isOutcomeUnknown);
+    assert.equal(leaving.getSnapshot().unresolved, null, "the pane that left is not updated");
+    assert.equal(reopened.getSnapshot().sending, false);
+    assert.equal(reopened.getSnapshot().unresolved?.text, "Tag the build");
+
+    await reopened.retryUnresolved();
+    assert.deepEqual(host.turns, ["Tag the build"], "exactly one turn");
+    assert.equal(await sentCopies(harness, "Tag the build"), 1);
   } finally {
     harness.close();
   }
@@ -189,6 +263,29 @@ test("two Macs answering the same approval resolve it exactly once, and the lose
   }
 });
 
+test("a command too long to show in full can be denied from this Mac but not allowed", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await host.start("run-1");
+    const command = `Run command: echo ${"x".repeat(2_100)}; rm -rf ~/work`;
+    host.runs.publish("run-1", "chat:approval", { ...APPROVAL, summary: command, toolName: "run_command" });
+    await harness.open();
+    const [shown] = harness.session.getSnapshot().run.approvals;
+    assert.equal(shown?.summary.includes("rm -rf"), false, "this Mac never saw the end of the command");
+    assert.equal(shown?.canAllow, false);
+
+    const control = controlFor(harness);
+    await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" }));
+    assert.deepEqual(host.effects.approvals, [], "the host refused the allow");
+    const denied = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "deny" });
+    assert.equal(denied?.resolution, "applied");
+    assert.deepEqual(host.effects.approvals, ["ap-1:deny"]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("answers and steering from this Mac reach the run on the host", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);
@@ -211,6 +308,41 @@ test("answers and steering from this Mac reach the run on the host", async () =>
     assert.equal(steered.admitted, true);
     assert.equal(steered.queue, "steer");
     assert.deepEqual(host.effects.inputs, ["run-1:steer:Use tables"]);
+  } finally {
+    harness.close();
+  }
+});
+
+test("a chat renamed from this Mac can be deleted from it next, and a stale delete rereads instead of overwriting", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const control = controlFor(harness);
+    // The pane guards each change with the revision of the transcript it shows.
+    const shown = () => harness.session.getSnapshot().transcript.revision ?? undefined;
+    const reread = async () => {
+      await settle();
+      await harness.session.idle();
+    };
+
+    await control.rename("Release checklist", shown());
+    assert.equal(host.chat.title, "Release checklist");
+    await reread();
+
+    // Someone renames it on the host before this Mac deletes it.
+    host.chat = { ...host.chat, title: "Renamed on the host", updatedAt: host.chat.updatedAt + 1 };
+    const stale = shown();
+    await assert.rejects(
+      control.remove(stale),
+      (error: unknown) => error instanceof HostChatControlError && error.remoteCode === "revision_conflict",
+    );
+    assert.equal(host.removed, false, "a delete against an older revision is refused, not forced");
+    await reread();
+    assert.notEqual(shown(), stale, "the open chat reread the host's current revision");
+
+    await control.remove(shown());
+    assert.equal(host.removed, true);
   } finally {
     harness.close();
   }
@@ -282,7 +414,7 @@ test("the same session control drives a chat on this Mac and one on another Mac 
   });
   localRuns.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   localRuns.publish("run-1", "chat:approval", APPROVAL);
-  const localControl = new ChatSessionControl(localAdapter, { hostId: localAdapter.hostId, chatId: "chat-1" });
+  const localControl = new ChatSessionControl(localAdapter, { hostId: localAdapter.hostId, chatId: "chat-1" }, new ChatIntentLedger());
   localControl.attach();
 
   // Another Mac: the remote adapter over the peer connection.

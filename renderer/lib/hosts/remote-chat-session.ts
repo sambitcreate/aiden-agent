@@ -101,6 +101,12 @@ export class RemoteChatSession {
     if (this.started || this.disposed) return;
     this.started = true;
     this.cleanups.push(this.adapter.onStatus((status) => this.acceptStatus(status)));
+    this.cleanups.push(
+      this.adapter.onChatChanged((chatId) => {
+        // Reread rather than adopt a revision: the window's revision must match the messages shown.
+        if (chatId === this.chatId) this.enqueue(() => this.refreshNewest());
+      }),
+    );
     this.enqueue(async () => {
       await this.adapter.ready();
       if (this.disposed) return;

@@ -564,6 +564,7 @@
         "renderer/lib/hosts/remote-chat-mapper.test.ts",
         "renderer/lib/hosts/remote-new-chat.test.ts",
         "renderer/lib/hosts/remote-stream-translator.test.ts",
+        "renderer/lib/hosts/use-peer-host-sidebar.test.tsx",
         "renderer/lib/ipc-stream.test.ts",
         "renderer/lib/live-pcm-capture.test.ts",
         "renderer/lib/mcp-preset-state.test.ts",
