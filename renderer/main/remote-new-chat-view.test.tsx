@@ -174,8 +174,9 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
             rootId: "r1",
             label: "site",
             breadcrumbs: [
-              { label: "Projects", location: "loc-r1" },
-              { label: "site", location: "loc-site" },
+              // The host mints fresh handles for breadcrumbs on every listing.
+              { label: "Projects", location: "loc-r1-again" },
+              { label: "site", location: "loc-site-again" },
             ],
             entries: [
               { id: "e1", name: "docs", location: "loc-docs" },
