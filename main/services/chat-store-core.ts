@@ -115,6 +115,7 @@ export function createChatStore(
     migrateLegacyPiProviderId(providerId),
   durability: ChatStoreDurability = {},
 ) {
+  const indexListeners = new Set<() => void>();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
   const readFile =
@@ -447,6 +448,13 @@ export function createChatStore(
     }
     memo = sorted;
     memoStamp = await currentIndexStamp();
+    for (const listener of [...indexListeners]) {
+      try {
+        listener();
+      } catch {
+        // Observers are best-effort signals; the durable write already succeeded.
+      }
+    }
   }
 
   async function writeIndex(index: readonly ChatMeta[]): Promise<void> {
@@ -1010,6 +1018,15 @@ export function createChatStore(
   }
 
   return {
+    /**
+     * Observe committed summary-index writes (save, delete, metadata). Lets the
+     * Remote host feed refresh without reading or scanning transcripts.
+     */
+    onIndexChanged(listener: () => void): () => void {
+      indexListeners.add(listener);
+      return () => indexListeners.delete(listener);
+    },
+
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
       return shared([], true, () => withIndexLock(async () => {

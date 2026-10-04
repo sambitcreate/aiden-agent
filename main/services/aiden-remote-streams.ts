@@ -880,13 +880,18 @@ export class AidenRemoteStreamService {
     };
   }
 
-  private resolveQuestion(promptId: string, response: AskUserQuestionResponseV1): boolean {
+  private resolveQuestion(
+    promptId: string,
+    response: AskUserQuestionResponseV1 | "settled_by_host",
+  ): boolean {
     const question = this.questions.get(promptId);
     if (!question) return false;
     clearTimeout(question.expiry);
-    const resolved = this.options.respondQuestion
-      ? this.options.respondQuestion(promptId, response, question.ownerDocumentId)
-      : false;
+    const resolved = response === "settled_by_host"
+      ? true
+      : this.options.respondQuestion
+        ? this.options.respondQuestion(promptId, response, question.ownerDocumentId)
+        : false;
     this.questions.delete(promptId);
     const stream = this.streams.get(question.streamId);
     const nextQuestion = stream ? this.pendingQuestionForStream(stream.streamId) : undefined;
@@ -1539,6 +1544,15 @@ export class AidenRemoteStreamService {
       return false;
     }
     return this.resolveApproval(approvalId, decision, scope);
+  }
+
+  /**
+   * A paired controller already settled this device-owned question through
+   * host authority. Retire the device record and advance the device stream
+   * exactly as an owner answer would, without settling the prompt twice.
+   */
+  retireQuestionSettledByHost(promptId: string): void {
+    this.resolveQuestion(promptId, "settled_by_host");
   }
 
   async cancel(deviceId: string, streamId: string, key: string): Promise<AidenRemoteStreamStatus> {

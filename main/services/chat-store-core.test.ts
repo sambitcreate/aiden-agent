@@ -39,6 +39,29 @@ test("seeds only the first user message and preserves a manual rename", async (t
   assert.equal((await store.get(chat.id))?.title, "Keep my title");
 });
 
+test("index observers see each committed summary change and stop after unsubscribing", async (t) => {
+  const store = await testStore(t);
+  const observed: Promise<string[]>[] = [];
+  const unsubscribe = store.onIndexChanged(() => {
+    observed.push(store.listSummaryMetadata().then((chats) => chats.map((chat) => chat.title)));
+  });
+
+  const chat = await store.create({});
+  await store.rename(chat.id, "Remote feed title");
+  const afterRename = observed.length;
+  assert.ok(afterRename >= 2, "create and rename each notify");
+  assert.deepEqual(await observed[afterRename - 1], ["Remote feed title"]);
+
+  await store.remove(chat.id);
+  assert.ok(observed.length > afterRename, "delete notifies");
+  assert.deepEqual(await observed[observed.length - 1], []);
+
+  unsubscribe();
+  const beforeQuiet = observed.length;
+  await store.create({});
+  assert.equal(observed.length, beforeQuiet);
+});
+
 test("serializes assistant persistence with a background title update", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});

@@ -136,7 +136,13 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 18)
+        XCTAssertEqual(fixture.contractRevision, 19)
+        // Revision 19 run-control losers learn the winning decision; phones keep
+        // their mobile-only grants, so the fixture never offers host capabilities.
+        let runControlError = try XCTUnwrap(fixture.runControlError?.error)
+        XCTAssertEqual(runControlError.code, AidenRemoteErrorCode(rawValue: "approval_resolved"))
+        XCTAssertEqual(runControlError.details?.decision, "deny")
+        XCTAssertNotNil(runControlError.details?.resolvedAt)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -976,6 +982,9 @@ final class AidenRemotePhase0Tests: XCTestCase {
             ],
         ])
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: invalidDetails))
+
+        let unknownDecision = Data(#"{"error":{"code":"approval_resolved","message":"safe","requestId":"request-1","retryable":false,"details":{"decision":"maybe"}}}"#.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: unknownDecision))
     }
 
     func testNullMembersAreNotTreatedAsAbsent() throws {

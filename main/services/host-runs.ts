@@ -1,6 +1,6 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
-import type { HostRunOrigin, HostRunRegistry } from "./host-run-registry.js";
+import type { HostRunOrigin, HostRunPromptResolution, HostRunRegistry } from "./host-run-registry.js";
 
 export function hostRunOriginFor(owner: Pick<ChatGenerationOwner, "kind" | "id">): HostRunOrigin {
   if (owner.kind === "remote") return "remote";
@@ -23,7 +23,11 @@ export interface HostRunRecorders {
     channel: NotificationChannel,
     payload: unknown,
   ): void;
-  recordRunAttentionResolved(registry: HostRunRegistry, promptId: string): void;
+  recordRunAttentionResolved(
+    registry: HostRunRegistry,
+    promptId: string,
+    resolution?: HostRunPromptResolution,
+  ): void;
   recordRunSettled(registry: HostRunRegistry, streamId: string): void;
 }
 
@@ -47,9 +51,9 @@ export function createHostRunRecorders(warn: HostRunWarn): HostRunRecorders {
         warn("remote", `Could not journal ${channel} for run ${streamId}.`, error);
       }
     },
-    recordRunAttentionResolved(registry, promptId) {
+    recordRunAttentionResolved(registry, promptId, resolution) {
       try {
-        registry.resolveAttention(promptId);
+        registry.resolveAttention(promptId, resolution);
       } catch (error) {
         warn("remote", "Could not journal a resolved run prompt.", error);
       }

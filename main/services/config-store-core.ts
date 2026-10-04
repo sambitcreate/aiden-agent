@@ -257,12 +257,25 @@ function hasProviderCache(
 
 export type ConfigStore = ReturnType<typeof createConfigStore>;
 
+
+/** Notify change listeners; a throwing listener never fails the write that triggered it. */
+function notifyListeners(listeners: ReadonlySet<() => void>): void {
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch {
+      // Observers are best-effort signals.
+    }
+  }
+}
+
 export function createConfigStore(
   configStores: PortableConfigStores,
   secrets: SecretsPort,
   reportDeferredError: (area: string, error: unknown) => void = () => undefined,
 ) {
   const { portable, settings: settingsStore, local: localStore, modelCache } = configStores;
+  const workspaceListeners = new Set<() => void>();
   let seedPromise: Promise<boolean> | null = null;
   let secretMigrationAliases: Array<readonly [source: string, target: string]> = [];
   let secretMigrationTargets: Array<Readonly<{ id: string; binding: string }>> = [];
@@ -1109,12 +1122,14 @@ export function createConfigStore(
       }
       const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
       await requireSeededForWrite();
-      return localStore.update((config) => {
+      const saved = await localStore.update((config) => {
         const idx = config.workspaces.findIndex((w) => w.id === next.id);
         if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
         else config.workspaces.push(next);
         return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
       });
+      notifyListeners(workspaceListeners);
+      return saved;
     },
 
     async removeWorkspace(id: string): Promise<void> {
@@ -1124,6 +1139,13 @@ export function createConfigStore(
         // Never leave the app without a workspace.
         if (config.workspaces.length === 0) config.workspaces = [defaultWorkspace()];
       });
+      notifyListeners(workspaceListeners);
+    },
+
+    /** Observe committed workspace saves and removals (the Remote host feed). */
+    onWorkspacesChanged(listener: () => void): () => void {
+      workspaceListeners.add(listener);
+      return () => workspaceListeners.delete(listener);
     },
   };
 }

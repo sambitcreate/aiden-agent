@@ -20,6 +20,11 @@ import type {
 } from "./aiden-remote-chats.js";
 
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
+/**
+ * Contract revision of the v1 wire contract. Additive revisions keep protocol
+ * version 1; the revision is published on `/health` and in the shared fixture.
+ */
+export const AIDEN_REMOTE_CONTRACT_REVISION = 19 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -87,10 +92,27 @@ export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
 export type AidenRemoteSimulatorCapability =
   (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
 
+/**
+ * Desktop-only host-wide authority for multi-host control (contract revision
+ * 19). `host:events` reads the host feed, `runs:observe` streams any run in a
+ * visible chat whatever started it, and `runs:control` stops runs, answers
+ * their approvals and questions, and steers them. Only `mac` and `linux`
+ * device records may hold these grants; phones keep device-scoped access.
+ */
+export const AIDEN_REMOTE_HOST_CAPABILITIES = [
+  "host:events",
+  "runs:observe",
+  "runs:control",
+] as const;
+
+export type AidenRemoteHostCapability =
+  (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number];
+
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -101,6 +123,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -150,6 +173,92 @@ export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
  * servers omit the token and clients must keep the roster read-only.
  */
 export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1" as const;
+
+/**
+ * Server feature token for `GET /chats/{chatId}/messages?before=&limit=`, a
+ * bounded (at most 1 MiB) window of a chat's newest messages with a truthful
+ * `hasOlder` flag. `GET /chats/{chatId}` is unchanged for older clients.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1" as const;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT = 50;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT = 200;
+
+/** Server feature token for the `GET /host/events` host feed (`host:events`). */
+export const AIDEN_REMOTE_HOST_EVENTS_FEATURE = "host-events-v1" as const;
+/** Server feature token for the `/runs/{runId}/events` run streams (`runs:observe`). */
+export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
+/** Server feature token for the `/runs/{runId}/*` control routes (`runs:control`). */
+export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
+
+/** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
+export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
+export const AIDEN_REMOTE_HOST_FEED_MAX_BYTES = 8 * 1_048_576;
+/**
+ * Item budget of one host-feed `snapshot` frame. A larger host projection is
+ * split into `partial` frames so every frame stays well inside the 1 MiB SSE
+ * frame limit.
+ */
+export const AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES = 256 * 1_024;
+export const AIDEN_REMOTE_SSE_HEARTBEAT_MS = 15_000;
+
+/** Host platforms published by the opt-in `GET /health?detail=host` descriptor. */
+export const AIDEN_REMOTE_HOST_PLATFORMS = ["mac", "linux", "windows"] as const;
+export type AidenRemoteHostPlatform = (typeof AIDEN_REMOTE_HOST_PLATFORMS)[number];
+
+export function aidenRemoteHostPlatform(platform: NodeJS.Platform): AidenRemoteHostPlatform | undefined {
+  if (platform === "darwin") return "mac";
+  if (platform === "linux") return "linux";
+  if (platform === "win32") return "windows";
+  return undefined;
+}
+
+/** Event types on `GET /host/events`. */
+export const AIDEN_REMOTE_HOST_FEED_EVENT_TYPES = [
+  "snapshot",
+  "chat.upsert",
+  "chat.remove",
+  "workspace.upsert",
+  "workspace.remove",
+  "bot.upsert",
+  "bot.remove",
+  "run.state",
+] as const;
+export type AidenRemoteHostFeedEventType = (typeof AIDEN_REMOTE_HOST_FEED_EVENT_TYPES)[number];
+
+/**
+ * Event types on the run streams. Content events share the vocabulary of
+ * `/streams/{streamId}/events`; `run.started`, `run.ended` and the two
+ * resolution events exist only on run streams.
+ */
+export const AIDEN_REMOTE_RUN_EVENT_TYPES = [
+  "snapshot",
+  "run.started",
+  "status",
+  "text_delta",
+  "reasoning_delta",
+  "tool_started",
+  "tool_finished",
+  "timeline",
+  "approval_required",
+  "approval_resolved",
+  "question_required",
+  "question_resolved",
+  "done",
+  "error",
+  "cancelled",
+  "run.ended",
+] as const;
+export type AidenRemoteRunEventType = (typeof AIDEN_REMOTE_RUN_EVENT_TYPES)[number];
+
+export const AIDEN_REMOTE_RUN_STATES = [
+  "working",
+  "needs_approval",
+  "needs_input",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+export type AidenRemoteRunState = (typeof AIDEN_REMOTE_RUN_STATES)[number];
 
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
@@ -206,7 +315,9 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "handle_capacity",
   "turn_already_active",
   "stream_gone",
+  "run_gone",
   "approval_already_resolved",
+  "approval_resolved",
   "approval_expired",
   "question_already_resolved",
   "question_expired",
@@ -235,9 +346,18 @@ export interface AidenRemoteErrorEnvelope {
       minimumClientVersion?: string;
       limit?: number;
       field?: string;
+      /** The winning decision on `approval_resolved` (run control only). */
+      decision?: AidenRemoteResolvedApprovalDecision;
+      /** The winning outcome on a run-control `question_already_resolved`. */
+      outcome?: AidenRemoteResolvedQuestionOutcome;
+      /** When the winning resolution was committed, on either of the above. */
+      resolvedAt?: string;
     };
   };
 }
+
+export type AidenRemoteResolvedApprovalDecision = "allow" | "deny" | "expired" | "cancelled";
+export type AidenRemoteResolvedQuestionOutcome = "answered" | "expired" | "cancelled";
 
 export interface AidenRemoteStreamEvent {
   protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
@@ -894,6 +1014,43 @@ export interface AidenRemoteContractFixture {
   chatProgressEvents: AidenRemoteStreamEvent[];
   legacyNonNegotiating: AidenRemoteLegacyNonNegotiatingFixture;
   error: AidenRemoteErrorEnvelope;
+  /** Revision 19: `GET /health?detail=host`. */
+  hostHealth?: AidenRemoteHostHealth;
+  /** Revision 19: a `GET /host/events` sequence opening with its snapshot. */
+  hostFeedEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /** Revision 19: one complete run stream, ending with `run.ended`. */
+  runEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /** Revision 19: one `GET /chats/{chatId}/messages` page. */
+  messagesWindow?: {
+    chatId: string;
+    revision: string;
+    messages: unknown[];
+    hasOlder: boolean;
+  };
+  /** Revision 19: a run-control loser's `409 approval_resolved`. */
+  runControlError?: AidenRemoteErrorEnvelope;
+}
+
+/** `GET /health?detail=host`: non-secret host identity for desktop controllers. */
+export interface AidenRemoteHostHealth {
+  ok: true;
+  protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
+  instanceId: string;
+  displayName: string;
+  platform?: AidenRemoteHostPlatform;
+  contractRevision: number;
+  pairingRequests: boolean;
+}
+
+/** Envelope shared by the host feed and run streams in fixtures. */
+export interface AidenRemoteHostFeedFixtureEvent {
+  protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
+  streamId: string;
+  sequence: number;
+  timestamp: string;
+  type: string;
+  terminal: boolean;
+  payload: Record<string, unknown>;
 }
 
 export const AIDEN_REMOTE_FORBIDDEN_WIRE_KEYS = new Set([
@@ -5008,41 +5165,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "Ordinary turn streams must not carry chat progress projections.",
     );
   }
-  if (!isRecord(value.error) || !isRecord(value.error.error)) {
-    throw new Error("Fixture error envelope is invalid.");
-  }
-  assertExactKeys(value.error, ["error"], "Error envelope");
-  const errorBody = value.error.error;
-  assertExactKeys(errorBody, ["code", "message", "requestId", "retryable", "details"], "Error envelope error");
-  const code = requiredString(errorBody, "code");
-  if (!(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code)) {
-    throw new Error(`Unknown Aiden Remote error code ${code}.`);
-  }
-  if (characterLength(requiredString(errorBody, "message")) > 2_000) throw new Error("Error message is too long.");
-  if (characterLength(requiredString(errorBody, "requestId")) > 128) throw new Error("Error requestId is too long.");
-  if (typeof errorBody.retryable !== "boolean") throw new Error("Error retryable must be boolean.");
-  if (errorBody.details !== undefined) {
-    if (!isRecord(errorBody.details)) throw new Error("Error details must be an object.");
-    assertExactKeys(errorBody.details, ["currentRevision", "retryAfterSeconds", "chatId", "minimumClientVersion", "limit", "field"], "Error details");
-    const stringDetailMaxima = {
-      currentRevision: 128,
-      chatId: 128,
-      minimumClientVersion: 40,
-      field: 120,
-    } as const;
-    for (const [key, maximum] of Object.entries(stringDetailMaxima)) {
-      const detail = errorBody.details[key];
-      if (detail !== undefined && (typeof detail !== "string" || detail.length === 0 || characterLength(detail) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
-    }
-    const boundedNumericDetails = {
-      retryAfterSeconds: 86_400,
-      limit: 1_000_000,
-    } as const;
-    for (const [key, maximum] of Object.entries(boundedNumericDetails)) {
-      const detail = errorBody.details[key];
-      if (detail !== undefined && (!Number.isSafeInteger(detail) || (detail as number) < 0 || (detail as number) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
-    }
-  }
+  const error = parseErrorEnvelopeFixture(value.error, "Fixture error envelope");
+  const revision19 = contractRevision >= 19
+    ? parseRevision19Fixture(value, { instanceId, contractRevision })
+    : {};
   assertNoForbiddenWireKeys(value);
   return {
     ...value,
@@ -5110,7 +5236,219 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     chatProgressEvents,
     legacyNonNegotiating,
     events,
-    error: value.error as unknown as AidenRemoteErrorEnvelope,
+    error,
+    ...revision19,
+  };
+}
+
+const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
+const ERROR_DETAIL_OUTCOMES = ["answered", "expired", "cancelled"] as const;
+
+function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteErrorEnvelope {
+  if (!isRecord(value) || !isRecord(value.error)) throw new Error(`${label} is invalid.`);
+  assertExactKeys(value, ["error"], label);
+  const errorBody = value.error;
+  assertExactKeys(errorBody, ["code", "message", "requestId", "retryable", "details"], `${label} error`);
+  const code = requiredString(errorBody, "code");
+  if (!(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code)) {
+    throw new Error(`Unknown Aiden Remote error code ${code}.`);
+  }
+  if (characterLength(requiredString(errorBody, "message")) > 2_000) throw new Error("Error message is too long.");
+  if (characterLength(requiredString(errorBody, "requestId")) > 128) throw new Error("Error requestId is too long.");
+  if (typeof errorBody.retryable !== "boolean") throw new Error("Error retryable must be boolean.");
+  if (errorBody.details !== undefined) {
+    if (!isRecord(errorBody.details)) throw new Error("Error details must be an object.");
+    const details = errorBody.details;
+    assertExactKeys(
+      details,
+      ["currentRevision", "retryAfterSeconds", "chatId", "minimumClientVersion", "limit", "field", "decision", "outcome", "resolvedAt"],
+      "Error details",
+    );
+    const stringDetailMaxima = {
+      currentRevision: 128,
+      chatId: 128,
+      minimumClientVersion: 40,
+      field: 120,
+    } as const;
+    for (const [key, maximum] of Object.entries(stringDetailMaxima)) {
+      const detail = details[key];
+      if (detail !== undefined && (typeof detail !== "string" || detail.length === 0 || characterLength(detail) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
+    }
+    const boundedNumericDetails = {
+      retryAfterSeconds: 86_400,
+      limit: 1_000_000,
+    } as const;
+    for (const [key, maximum] of Object.entries(boundedNumericDetails)) {
+      const detail = details[key];
+      if (detail !== undefined && (!Number.isSafeInteger(detail) || (detail as number) < 0 || (detail as number) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
+    }
+    if (details.decision !== undefined && !(ERROR_DETAIL_DECISIONS as readonly unknown[]).includes(details.decision)) {
+      throw new Error("Error detail decision is invalid.");
+    }
+    if (details.outcome !== undefined && !(ERROR_DETAIL_OUTCOMES as readonly unknown[]).includes(details.outcome)) {
+      throw new Error("Error detail outcome is invalid.");
+    }
+    if (details.resolvedAt !== undefined) {
+      if (typeof details.resolvedAt !== "string") throw new Error("Error detail resolvedAt is invalid.");
+      parseStrictRfc3339(details.resolvedAt, "Error detail resolvedAt");
+    }
+  }
+  return value as unknown as AidenRemoteErrorEnvelope;
+}
+
+/** Credential-free `host/owner/name`; never a URL, userinfo, port or local path. */
+const REPOSITORY_CANONICAL_KEY = /^[a-z0-9.-]+(?:\/[A-Za-z0-9._~+-]+)+$/u;
+
+function parseHostEnvelope(
+  value: unknown,
+  label: string,
+  types: readonly string[],
+): { streamId: string; sequence: number; type: string; terminal: boolean; payload: Record<string, unknown> } {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["protocolVersion", "streamId", "sequence", "timestamp", "type", "terminal", "payload"], label);
+  if (value.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION) throw new Error(`${label} protocolVersion must be 1.`);
+  const streamId = assertBoundedString(value, "streamId", 128);
+  const sequence = requiredInteger(value, "sequence");
+  if (sequence < 0) throw new Error(`${label} sequence must not be negative.`);
+  parseStrictRfc3339(requiredString(value, "timestamp"), `${label} timestamp`);
+  const type = requiredString(value, "type");
+  if (!types.includes(type)) throw new Error(`${label} has unknown type ${type}.`);
+  if (typeof value.terminal !== "boolean") throw new Error(`${label} terminal must be boolean.`);
+  if (!isRecord(value.payload)) throw new Error(`${label} payload must be an object.`);
+  return { streamId, sequence, type, terminal: value.terminal, payload: value.payload };
+}
+
+function parseHostFeedWorkspaceRepository(workspace: unknown, label: string): void {
+  if (!isRecord(workspace) || workspace.repository === undefined) return;
+  const repository = workspace.repository;
+  if (!isRecord(repository)) throw new Error(`${label} repository must be an object.`);
+  assertExactKeys(repository, ["canonicalKey", "relativePath"], `${label} repository`);
+  const canonicalKey = boundedText(repository.canonicalKey, `${label} repository canonicalKey`, 512);
+  if (!REPOSITORY_CANONICAL_KEY.test(canonicalKey)) {
+    throw new Error(`${label} repository canonicalKey is not a credential-free host/owner/name key.`);
+  }
+  const relativePath = boundedText(repository.relativePath, `${label} repository relativePath`, 1_024, true);
+  if (relativePath.startsWith("/") || relativePath.split("/").some((part) => part === "..")) {
+    throw new Error(`${label} repository relativePath must stay inside the repository.`);
+  }
+}
+
+function parseRevision19Fixture(
+  value: Record<string, unknown>,
+  context: { instanceId: string; contractRevision: number },
+): Required<Pick<
+  AidenRemoteContractFixture,
+  "hostHealth" | "hostFeedEvents" | "runEvents" | "messagesWindow" | "runControlError"
+>> {
+  const health = value.hostHealth;
+  if (!isRecord(health) || health.ok !== true || health.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION) {
+    throw new Error("Fixture host health response is invalid.");
+  }
+  assertExactKeys(
+    health,
+    ["ok", "protocolVersion", "instanceId", "displayName", "platform", "contractRevision", "pairingRequests"],
+    "Fixture host health response",
+  );
+  if (health.instanceId !== context.instanceId) throw new Error("Fixture host health names another instance.");
+  boundedText(health.displayName, "Fixture host health displayName", 80);
+  if (health.platform !== undefined && !(AIDEN_REMOTE_HOST_PLATFORMS as readonly unknown[]).includes(health.platform)) {
+    throw new Error("Fixture host health platform is invalid.");
+  }
+  if (health.contractRevision !== context.contractRevision) {
+    throw new Error("Fixture host health contractRevision must match the fixture.");
+  }
+  if (typeof health.pairingRequests !== "boolean") throw new Error("Fixture host health pairingRequests must be boolean.");
+
+  if (!Array.isArray(value.hostFeedEvents) || value.hostFeedEvents.length === 0) {
+    throw new Error("Fixture host feed events must be a non-empty array.");
+  }
+  let feedSequence = -1;
+  value.hostFeedEvents.forEach((entry, index) => {
+    const event = parseHostEnvelope(entry, `Host feed event ${index}`, AIDEN_REMOTE_HOST_FEED_EVENT_TYPES);
+    if (event.streamId !== "host" || event.terminal) throw new Error("Host feed events use stream host and never end.");
+    if (index === 0 ? event.type !== "snapshot" : event.sequence !== feedSequence + 1) {
+      throw new Error("Host feed fixture must open with a snapshot and then advance one sequence at a time.");
+    }
+    feedSequence = event.sequence;
+    if (event.type === "snapshot") {
+      assertExactKeys(event.payload, ["epoch", "sequence", "summaries", "workspaces", "bots"], "Host feed snapshot");
+      boundedText(event.payload.epoch, "Host feed epoch", 64);
+      if (event.payload.sequence !== event.sequence) throw new Error("Host feed snapshot sequence must match its envelope.");
+      if (!Array.isArray(event.payload.summaries) || !Array.isArray(event.payload.workspaces) || !Array.isArray(event.payload.bots)) {
+        throw new Error("Host feed snapshot lists must be arrays.");
+      }
+      event.payload.workspaces.forEach((workspace) => parseHostFeedWorkspaceRepository(workspace, "Host feed workspace"));
+    } else if (event.type === "workspace.upsert") {
+      parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
+    } else if (event.type === "run.state") {
+      assertExactKeys(event.payload, ["chatId", "runId", "state", "unread"], "Host feed run state");
+      boundedText(event.payload.chatId, "Host feed run chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      boundedText(event.payload.runId, "Host feed runId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      if (!(AIDEN_REMOTE_RUN_STATES as readonly unknown[]).includes(event.payload.state)) {
+        throw new Error("Host feed run state is invalid.");
+      }
+      if (typeof event.payload.unread !== "boolean") throw new Error("Host feed run unread must be boolean.");
+    } else if (event.type.endsWith(".remove")) {
+      assertExactKeys(event.payload, ["id"], "Host feed removal");
+      boundedText(event.payload.id, "Host feed removal id", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    }
+  });
+
+  if (!Array.isArray(value.runEvents) || value.runEvents.length === 0) {
+    throw new Error("Fixture run events must be a non-empty array.");
+  }
+  let runStream: string | undefined;
+  let runSequence = 0;
+  let runEnded = false;
+  value.runEvents.forEach((entry, index) => {
+    const event = parseHostEnvelope(entry, `Run event ${index}`, AIDEN_REMOTE_RUN_EVENT_TYPES);
+    if (runEnded) throw new Error("A run stream carries nothing after run.ended.");
+    runStream ??= event.streamId;
+    if (event.streamId !== runStream) throw new Error("A run stream fixture names one run.");
+    // run.ended repeats the last event's sequence so a resumed cursor stays valid.
+    const expected = event.type === "run.ended" ? runSequence : runSequence + 1;
+    if (event.sequence !== expected) throw new Error(`Run event ${index} must use sequence ${expected}.`);
+    runSequence = event.sequence;
+    if (event.type === "run.started") {
+      assertExactKeys(event.payload, ["runId", "chatId", "origin"], "Run started");
+      if (event.payload.runId !== runStream) throw new Error("run.started names another run.");
+    } else if (event.type === "run.ended") {
+      assertExactKeys(event.payload, ["runId", "chatId", "state"], "Run ended");
+      if (!event.terminal || event.payload.runId !== runStream) throw new Error("run.ended must be terminal for its run.");
+      if (!["done", "failed", "cancelled"].includes(event.payload.state as string)) {
+        throw new Error("run.ended must carry a terminal run state.");
+      }
+      runEnded = true;
+    } else if (event.type === "approval_resolved") {
+      assertExactKeys(event.payload, ["approvalId", "decision"], "Approval resolved");
+      boundedText(event.payload.approvalId, "Approval resolved approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (event.type === "question_resolved") {
+      assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
+      boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (event.type !== "snapshot") {
+      // Content events reuse the `/streams` envelope and validation unchanged.
+      parseAidenRemoteStreamEvent(entry);
+    }
+  });
+  if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
+
+  const window = value.messagesWindow;
+  if (!isRecord(window)) throw new Error("Fixture messages window is invalid.");
+  assertExactKeys(window, ["chatId", "revision", "messages", "hasOlder"], "Fixture messages window");
+  boundedText(window.chatId, "Messages window chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+  boundedRevision(window.revision, "Messages window revision");
+  if (!Array.isArray(window.messages) || window.messages.length > AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT) {
+    throw new Error("Messages window messages must be a bounded array.");
+  }
+  if (typeof window.hasOlder !== "boolean") throw new Error("Messages window hasOlder must be boolean.");
+
+  const runControlError = parseErrorEnvelopeFixture(value.runControlError, "Fixture run control error");
+  return {
+    hostHealth: health as unknown as AidenRemoteHostHealth,
+    hostFeedEvents: value.hostFeedEvents as AidenRemoteContractFixture["hostFeedEvents"] & object,
+    runEvents: value.runEvents as AidenRemoteContractFixture["runEvents"] & object,
+    messagesWindow: window as unknown as AidenRemoteContractFixture["messagesWindow"] & object,
+    runControlError,
   };
 }
 

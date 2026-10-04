@@ -5,10 +5,15 @@ import type { Chat, ChatMessage } from "./types.js";
 import {
   AidenRemoteChatService,
   projectAidenRemoteChat,
+  projectAidenRemoteChatMessagesWindow,
   type AidenRemoteBotTurnAuthorityPreflight,
   type AidenRemoteRetainedBotChatAuthorizer,
 } from "./aiden-remote-chats.js";
-import { parseAidenRemoteChatProjection } from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  parseAidenRemoteChatProjection,
+} from "./aiden-remote-protocol.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import {
   AIDEN_REMOTE_ATTACHMENT_TTL_MS,
@@ -1925,4 +1930,61 @@ test("remote skill turn aborts the append when its workspace changes mid-prepare
   } finally {
     endMutation?.();
   }
+});
+
+function conversation(count: number, content = (index: number) => `Message ${index}`): Chat {
+  return chat({
+    messages: Array.from({ length: count }, (_, index) => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: content(index),
+      createdAt: 2_000 + index,
+    })),
+  });
+}
+
+test("the messages window pages backwards from the newest message without gaps", () => {
+  const source = conversation(7);
+  const pages: string[][] = [];
+  let before: string | undefined;
+  for (;;) {
+    const page = projectAidenRemoteChatMessagesWindow(source, { ...(before ? { before } : {}), limit: 3 });
+    assert.equal(page.chatId, "chat-1");
+    assert.equal(page.revision, projectAidenRemoteChat(source).revision);
+    pages.push(page.messages.map((message) => message.id));
+    if (!page.hasOlder) break;
+    before = page.messages[0]!.id;
+  }
+  assert.deepEqual(pages, [
+    ["message-4", "message-5", "message-6"],
+    ["message-1", "message-2", "message-3"],
+    ["message-0"],
+  ]);
+});
+
+test("the messages window hides system messages and refuses an unknown anchor", () => {
+  const source = conversation(3);
+  source.messages.splice(1, 0, { id: "system-1", role: "system", content: "instructions", createdAt: 2_000 });
+  const page = projectAidenRemoteChatMessagesWindow(source, { limit: 50 });
+  assert.deepEqual(page.messages.map((message) => message.id), ["message-0", "message-1", "message-2"]);
+  assert.equal(page.hasOlder, false);
+
+  for (const before of ["system-1", "message-missing"]) {
+    assert.throws(
+      () => projectAidenRemoteChatMessagesWindow(source, { before, limit: 10 }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
+    );
+  }
+});
+
+test("a messages window stays within the JSON budget and reports the trimmed history", () => {
+  const source = conversation(8, (index) => `${index}`.padEnd(300_000, "x"));
+  const page = projectAidenRemoteChatMessagesWindow(source, { limit: 8 });
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
+  assert.ok(page.messages.length > 0 && page.messages.length < 8);
+  // The newest messages are kept and the trimmed older ones stay reachable.
+  assert.equal(page.messages[page.messages.length - 1]!.id, "message-7");
+  assert.equal(page.hasOlder, true);
+  const older = projectAidenRemoteChatMessagesWindow(source, { before: page.messages[0]!.id, limit: 8 });
+  assert.equal(older.messages[older.messages.length - 1]!.id, `message-${8 - page.messages.length - 1}`);
 });
