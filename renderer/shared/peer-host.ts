@@ -191,3 +191,57 @@ export type PeerOperationOutcome =
 export function mintPeerIdempotencyKey(): string {
   return `aiden-${crypto.randomUUID()}`;
 }
+
+/**
+ * A desktop found while the Add device sheet is open. Its address stays in
+ * the main process; the renderer refers to it by `id` only.
+ */
+export interface PeerDiscoveredDevice {
+  /** The other installation's instance ID. */
+  id: string;
+  name: string;
+  platform?: "mac" | "linux";
+  /** How this device would be reached; Tailscale wins when both answer. */
+  route: "tailscale" | "lan";
+  /** The device accepts connection requests right now. */
+  pairingRequests: boolean;
+  /** Already saved on this device. */
+  paired: boolean;
+}
+
+export interface PeerDiscoveryState {
+  scanning: boolean;
+  devices: PeerDiscoveredDevice[];
+}
+
+/** Why a pairing attempt ended without a paired host. */
+export type PeerPairingFailure =
+  | { status: "denied" }
+  | { status: "expired" }
+  | { status: "cancelled" }
+  | { status: "rate_limited"; retryAfterSeconds?: number }
+  /** The other device is not accepting connection requests. */
+  | { status: "closed" }
+  /** The other device runs an Aiden without connection requests. */
+  | { status: "unsupported" }
+  /** The setup code was wrong or the payload did not authenticate. */
+  | { status: "invalid_code" }
+  | { status: "failed"; message: string };
+
+export type PeerPairingResult =
+  | { ok: true; host: PeerHostView }
+  | { ok: false; outcome: PeerPairingFailure };
+
+/** Pushed to the requesting window once both screens can show the same code. */
+export interface PeerPairingProgress {
+  attemptId: string;
+  matchCode: string;
+  expiresAt: string;
+}
+
+/** A renderer-minted handle for one pairing attempt, used to cancel it. */
+export function peerPairingAttemptId(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{8,64}$/u.test(value))
+    throw new Error("Invalid pairing attempt.");
+  return value;
+}

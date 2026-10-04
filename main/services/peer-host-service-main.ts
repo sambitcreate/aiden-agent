@@ -1,6 +1,7 @@
 import os from "node:os";
 import { app, ipcMain, safeStorage } from "../platform.js";
 import { DataStore } from "./data-store.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import {
   EncryptedPeerHostStorage,
   type PeerEncryptedDocument,
@@ -60,6 +61,14 @@ export function getPeerHostRegistry(): PeerHostRegistry {
     clientVersion: app.getVersion(),
     platform: process.platform === "linux" ? "linux" : "mac",
     changed: () => ipcMain.broadcast("remote:peers-changed", {}),
+    // No host name, address or key leaves the registry in diagnostics.
+    repinned: () =>
+      void writeDiagnosticEvent({
+        level: "info",
+        area: "remote",
+        event: "peer-host-repinned",
+        outcome: "recovered",
+      }),
   });
   app.once("before-quit", () => registry?.close());
   return registry;

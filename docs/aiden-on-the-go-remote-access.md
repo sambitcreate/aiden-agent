@@ -4,7 +4,7 @@ Aiden Agent can expose a small authenticated API to Aiden On The Go on phones an
 
 ## Local Network setup
 
-1. Open **Settings → Aiden On The Go** in Aiden Agent.
+1. Open **Settings → Connections → Control this device** in Aiden Agent.
 2. Choose **On the same Wi-Fi**, then **Connect a device**.
 3. Review what Aiden will enable and choose **Enable and show code**.
 4. Scan the code in Aiden On The Go. If the camera is unavailable, use the setup code instead.
@@ -18,7 +18,7 @@ The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network acc
 Tailscale supplies reachability and network encryption, but Aiden still requires its own device credential on every request.
 
 1. Install Tailscale on the Mac and phone, sign in to the intended network, and make sure HTTPS is authorized for the Mac’s Tailscale name.
-2. Open **Settings → Aiden On The Go** and choose **Away from home**.
+2. Open **Settings → Connections → Control this device** and choose **Away from home**.
 3. Choose **Connect a device → Enable and show code**. Aiden turns on access, sets up its private connection, checks it, and shows the one-time code.
 4. Scan the code on your phone.
 

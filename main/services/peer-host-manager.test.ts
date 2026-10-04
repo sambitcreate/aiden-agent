@@ -342,6 +342,13 @@ function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))
     clientVersion: "1",
     platform: "mac",
     client: (trust) => byId.get((trust as StoredPeerHost).id)!.client(),
+    // No fake host presents a WebPKI-valid renewed key, so a pin mismatch is never re-pinned.
+    bootstrap: () => ({
+      observedSpki: undefined,
+      json: async () => {
+        throw new PeerTransportError("identity_changed");
+      },
+    }),
   });
   const sent: { channel: string; payload: unknown }[] = [];
   const manager = new PeerHostManager({
@@ -452,6 +459,19 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
     await settle();
     assert.equal(harness.status("host_a").state.kind, "connected");
     assert.equal(harness.status("host_b").state.kind, "blocked");
+
+    // A plain Reconnect leaves an auth block alone...
+    revoked.server = () => ({ protocolVersion: 1, instanceId: "host_b", capabilities: CAPABILITIES, features: FEATURES });
+    await harness.manager.reconnect("host_b");
+    await settle();
+    assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "auth" });
+    assert.deepEqual(revoked.calls, ["GET /server"]);
+
+    // ...while the reconnect that follows a re-pair clears it at once.
+    await harness.manager.reconnect("host_b", { repaired: true });
+    await settle();
+    assert.equal(harness.status("host_b").state.kind, "connected");
+    assert.deepEqual(revoked.calls.slice(0, 2), ["GET /server", "GET /server"]);
   } finally {
     harness.close();
   }
