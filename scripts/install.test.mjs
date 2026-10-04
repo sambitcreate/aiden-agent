@@ -99,6 +99,7 @@ async function linuxDownloadFixture({
   asset = "Aiden-Agent-1.2.3-amd64-linux.deb",
   checksum = "valid",
   includeGh = true,
+  ghVersion = "2.68.0",
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-install-download-"));
   const bin = path.join(root, "bin");
@@ -151,9 +152,29 @@ esac
       path.join(bin, "gh"),
       String.raw`#!/bin/sh
 printf '%s\n' "$*" >> "$FIXTURE_GH_LOG"
+if [ "$1" = --version ]; then
+  printf 'gh version %s (fixture)\n' "$FIXTURE_GH_VERSION"
+  exit 0
+fi
 if [ "$1" = api ]; then
   printf '%s\n' 0123456789abcdef0123456789abcdef01234567
+  exit 0
 fi
+if [ "$FIXTURE_GH_VERSION" = 2.46.0 ]; then
+  printf 'unknown command "%s" for "gh"\n' "$1" >&2
+  exit 1
+fi
+case " $* " in
+  *" --help "*) printf '%s\n' '--cert-identity --signer-digest --source-digest --source-ref'; exit 0 ;;
+esac
+# Real gh rejects these identity flags when they are combined.
+identities=0
+for argument in "$@"; do
+  case "$argument" in
+    --cert-identity|--cert-identity-regex|--signer-repo|--signer-workflow) identities=$((identities + 1)) ;;
+  esac
+done
+[ "$identities" -le 1 ] || exit 1
 `,
     );
   }
@@ -186,6 +207,7 @@ fi
       FIXTURE_PACKAGE: packagePath,
       FIXTURE_CHECKSUMS: checksumPath,
       FIXTURE_GH_LOG: ghLog,
+      FIXTURE_GH_VERSION: ghVersion,
     },
   };
 }
@@ -224,6 +246,17 @@ test("rejects a bad checksum and the absence of GitHub provenance verification",
     ),
     /GitHub CLI is required/u,
   );
+
+  const outdatedGh = await linuxDownloadFixture({ ghVersion: "2.46.0" });
+  await assert.rejects(
+    execFileAsync(
+      shell,
+      [installer, "--version", "1.2.3", "--format", "deb", "--download-only", outdatedGh.output],
+      { env: outdatedGh.env },
+    ),
+    /installed GitHub CLI \(gh version 2\.46\.0 \(fixture\)\) is too old/u,
+  );
+  await assert.rejects(lstat(path.join(outdatedGh.output, outdatedGh.asset)));
 });
 
 test("AppImage install uses private staging and produces one regular payload plus launcher", async () => {
@@ -352,7 +385,11 @@ test("installer and standalone Linux workflow preserve verification boundaries",
       readFile(new URL("../.github/workflows/linux-installers.yml", import.meta.url), "utf8")),
   ]);
   assert.match(source, /gh attestation verify/u);
-  assert.match(source, /--signer-workflow "\$\{repository\}\/\.github\/workflows\/release\.yml"/u);
+  assert.match(
+    source,
+    /--cert-identity "https:\/\/github\.com\/\$\{repository\}\/\.github\/workflows\/release\.yml@refs\/heads\/main"/u,
+  );
+  assert.doesNotMatch(source, /--signer-(?:repo|workflow)/u, "gh rejects these alongside --cert-identity");
   assert.match(source, /--source-digest "\$expected_commit"/u);
   assert.match(source, /--deny-self-hosted-runners/u);
   assert.match(source, /codesign --verify --strict/u);
