@@ -98,6 +98,8 @@ function deleteDetachedProjection(streamId: string): void {
 
 function appendBounded(current: string, delta: string, maximum: number): string {
   if (current.length >= maximum) return current;
+  // Concatenation alone stays a cheap rope; only crossing the cap needs a slice.
+  if (current.length + delta.length <= maximum) return current + delta;
   return (current + delta).slice(0, maximum);
 }
 
