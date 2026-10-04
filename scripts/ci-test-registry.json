@@ -358,6 +358,7 @@
         "main/services/subagents/approval-v2.test.ts",
         "main/services/subagents/authority-v2.test.ts",
         "main/services/subagents/background-lifecycle-v2.test.ts",
+        "main/services/subagents/background-subagent-coordinator-v2.test.ts",
         "main/services/subagents/capability-profile.test.ts",
         "main/services/subagents/forked-context-supervisor.test.ts",
         "main/services/subagents/forked-context.test.ts",
