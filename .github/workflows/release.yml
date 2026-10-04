@@ -143,6 +143,20 @@ jobs:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
 
+      # Source maps are excluded from app.asar; keep them for symbolication.
+      # The name must not match the publish job's release-* download pattern.
+      - name: Keep source maps for crash symbolication
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: symbols-macos-${{ github.run_id }}
+          path: |
+            build/main/*.map
+            build/preload/*.map
+            build/renderer/**/*.map
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Verify reboot-safe subagent migration in the signed app
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:subagents:migration:packaged
