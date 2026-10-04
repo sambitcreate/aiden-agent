@@ -13,9 +13,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Separator,
   Select,
   SelectContent,
@@ -57,9 +57,9 @@ function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
     return p.hasKey ? <Badge color="green" icon={<Check />}>Ready</Badge> : null;
   }
-  if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
-  if (p.hasKey) return <Badge color="green" icon={<Check />}>Key set</Badge>;
-  return <Badge color="secondary">No key</Badge>;
+  if (!p.needsKey) return <Badge color="blue">No key needed</Badge>;
+  if (p.hasKey) return <Badge color="green" icon={<Check />}>Key saved</Badge>;
+  return <Badge color="warning">Needs API key</Badge>;
 }
 
 function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.ReactNode {
@@ -69,14 +69,14 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
     case "model_preparing":
       return <Badge color="blue" icon={<Loader2 className="animate-spin motion-reduce:animate-none" />}>Preparing</Badge>;
     case "apple_intelligence_disabled":
-      return <Badge color="secondary">Apple Intelligence off</Badge>;
+      return <Badge>Apple Intelligence off</Badge>;
     case "device_not_eligible":
     case "unsupported_os":
-      return <Badge color="secondary">Not supported</Badge>;
+      return <Badge>Not supported</Badge>;
     case "helper_unavailable":
     case "unavailable":
     case "error":
-      return <Badge color="secondary">Unavailable</Badge>;
+      return <Badge>Unavailable</Badge>;
   }
 }
 
@@ -86,21 +86,22 @@ function ProviderInfo({
   children,
 }: React.PropsWithChildren<{ label: string; title: string }>) {
   return (
-    <HoverCard openDelay={250} closeDelay={100}>
-      <HoverCardTrigger asChild>
+    // Click/keyboard-opened so the explanation is reachable without a pointer and is announced as a dialog.
+    <Popover>
+      <PopoverTrigger asChild>
         <Button iconOnly size="small" variant="transparent" aria-label={label} className="size-7">
           <span aria-hidden className="text-xs font-semibold leading-none">
             i
           </span>
         </Button>
-      </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-80">
+      </PopoverTrigger>
+      <PopoverContent align="start" aria-label={title} className="w-80 p-3">
         <Text variant="small-strong">{title}</Text>
         <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
           {children}
         </Text>
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -168,6 +169,8 @@ export function ProvidersSettings() {
   const [geminiBusy, setGeminiBusy] = React.useState(false);
   const [geminiError, setGeminiError] = React.useState<string | null>(null);
   const [removing, setRemoving] = React.useState<Provider | null>(null);
+  const [removeBusy, setRemoveBusy] = React.useState(false);
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
   const [refreshingProviders, setRefreshingProviders] = React.useState(false);
@@ -328,10 +331,23 @@ export function ProvidersSettings() {
   };
 
   const confirmRemove = async () => {
-    if (!removing) return;
-    await providersApi.remove(removing.id);
-    await invalidate();
+    if (!removing || removeBusy) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await providersApi.remove(removing.id);
+    } catch (error) {
+      setRemoveError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Aiden could not remove this provider. Try again.",
+      );
+      return;
+    } finally {
+      setRemoveBusy(false);
+    }
     setRemoving(null);
+    await invalidate();
   };
 
   return (
@@ -350,15 +366,6 @@ export function ProvidersSettings() {
           </Text>
         </div>
         <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
-          <Button
-            variant="muted"
-            size="small"
-            disabled={refreshingProviders}
-            onClick={() => void refreshProviders()}
-          >
-            <RefreshCw className={`size-4 ${refreshingProviders ? "animate-spin" : ""}`} />
-            {refreshingProviders ? "Updating…" : "Update model catalogs"}
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button ref={addProviderTriggerRef} variant="filled" size="small">
@@ -424,49 +431,6 @@ export function ProvidersSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </div>
-
-      <div className="-mt-4 settings-card rounded-card border border-separator px-4 py-3" aria-live="polite">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Text variant="small" color="secondary">
-            {catalogOutcome ??
-              "Provider catalogs determine what can run; model details improve names and capability hints."}
-          </Text>
-          <Button
-            variant="transparent"
-            size="small"
-            aria-expanded={catalogDetailsOpen}
-            aria-controls="provider-catalog-details"
-            onClick={() => setCatalogDetailsOpen((open) => !open)}
-          >
-            Catalog details
-            <ChevronDown
-              className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
-            />
-          </Button>
-        </div>
-        <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-          This foreground update contacts built-in catalog services and models.dev. It sends no
-          prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
-          identifier.
-        </Text>
-        {catalogDetailsOpen ? (
-          <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
-            <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
-              Downloaded models.dev data affects display details only, never which models can run or
-              their runtime limits.
-            </Text>
-            <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-              Model details:{" "}
-              {modelCatalogStatus.data?.source === "device-cache"
-                ? "device cache"
-                : "bundled snapshot"}
-              {modelCatalogStatus.data?.fetchedAt
-                ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
-                : ""}
-            </Text>
-          </div>
-        ) : null}
       </div>
 
       <CodexProviderSettings />
@@ -693,8 +657,11 @@ export function ProvidersSettings() {
                     variant="transparent"
                     size="small"
                     iconOnly
-                    aria-label="Remove provider"
-                    onClick={() => setRemoving(p)}
+                    aria-label={`Remove ${p.label}`}
+                    onClick={() => {
+                      setRemoveError(null);
+                      setRemoving(p);
+                    }}
                   >
                     <Trash2 className="size-4" />
                   </Button>
@@ -704,6 +671,68 @@ export function ProvidersSettings() {
           </div>
         </div>
       ) : null}
+
+      <div className="grid min-w-0 grid-cols-1 gap-2">
+        <div className="px-1">
+          <Text as="h2" variant="small-strong">Model catalog</Text>
+          <Text variant="small" color="tertiary" className="mt-0.5 block">
+            Provider catalogs determine what can run; model details improve names and capability hints.
+          </Text>
+        </div>
+        <div className="settings-card rounded-card border border-separator px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Text variant="small" color="secondary" aria-live="polite">
+              {catalogOutcome ??
+                `Model details: ${
+                  modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
+                }${
+                  modelCatalogStatus.data?.fetchedAt
+                    ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                    : ""
+                }`}
+            </Text>
+            <div className="flex flex-wrap items-center gap-1">
+              <Button
+                variant="transparent"
+                size="small"
+                aria-expanded={catalogDetailsOpen}
+                aria-controls="provider-catalog-details"
+                onClick={() => setCatalogDetailsOpen((open) => !open)}
+              >
+                Catalog details
+                <ChevronDown
+                  className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
+                />
+              </Button>
+              <Button
+                variant="filled"
+                size="small"
+                disabled={refreshingProviders}
+                aria-busy={refreshingProviders}
+                onClick={() => void refreshProviders()}
+              >
+                <RefreshCw
+                  className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
+                />
+                {refreshingProviders ? "Updating…" : "Update model catalogs"}
+              </Button>
+            </div>
+          </div>
+          <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
+            This foreground update contacts built-in catalog services and models.dev. It sends no
+            prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
+            identifier.
+          </Text>
+          {catalogDetailsOpen ? (
+            <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
+              <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
+                Downloaded models.dev data affects display details only, never which models can run or
+                their runtime limits.
+              </Text>
+            </div>
+          ) : null}
+        </div>
+      </div>
 
       {editing ? (
         <ProviderEditor
@@ -748,11 +777,29 @@ export function ProvidersSettings() {
 
       <AlertDialog
         open={removing !== null}
-        onOpenChange={(open) => !open && setRemoving(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoving(null);
+            setRemoveError(null);
+          }
+        }}
         title="Remove this provider?"
-        description={removing ? `“${removing.label}” and its saved key will be removed.` : null}
-        confirmLabel="Remove"
+        description={
+          removing ? (
+            <>
+              <span>“{removing.label}” and its saved key will be removed.</span>
+              {removeError ? (
+                <Text as="p" variant="small" className="mt-2 text-red" role="alert">
+                  {removeError}
+                </Text>
+              ) : null}
+            </>
+          ) : null
+        }
+        confirmLabel={removeBusy ? "Removing…" : "Remove"}
         confirmVariant="destructive"
+        busy={removeBusy}
+        keepOpenOnConfirm
         onConfirm={confirmRemove}
       />
     </div>

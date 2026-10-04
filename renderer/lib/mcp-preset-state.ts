@@ -18,7 +18,7 @@ export function mcpPresetCredentialReady({
 
 export function mcpPresetConnectionBadge(
   state: McpPresetState,
-): { label: string; color: "green" | "red" | "secondary" } | null {
+): { label: string; color: "green" | "red" | "gray" } | null {
   if (!state.configured) return null;
   if (!state.ready) {
     return {
@@ -26,7 +26,7 @@ export function mcpPresetConnectionBadge(
       color: "red",
     };
   }
-  if (!state.enabled) return { label: "Disabled", color: "secondary" };
+  if (!state.enabled) return { label: "Disabled", color: "gray" };
   return { label: "Configured", color: "green" };
 }
 

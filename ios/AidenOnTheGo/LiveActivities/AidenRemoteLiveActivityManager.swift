@@ -9,9 +9,22 @@ final class AidenRemoteLiveActivityManager {
 
     static let responseExcerptPreferenceKey = "aiden.live-activities.response-excerpts"
 
+    /// ActivityKit budgets updates, so streamed tokens, reasoning, and tool
+    /// churn coalesce to the newest state at most once per interval. Phase
+    /// changes (status, approval, stale, end) bypass the window.
+    static let coalescedUpdateInterval: Duration = .seconds(1)
+
+    private enum UpdateUrgency {
+        case coalesced
+        case immediate
+    }
+
+    private typealias ContentState = AgentRunActivityAttributes.ContentState
+
     private let defaults: UserDefaults
     private var currentActivity: Activity<AgentRunActivityAttributes>?
-    private var stateByActivityID: [String: AgentRunActivityAttributes.ContentState] = [:]
+    private var stateByActivityID: [String: ContentState] = [:]
+    private var throttleByActivityID: [String: AidenLatestValueThrottle<ContentState>] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -48,7 +61,7 @@ final class AidenRemoteLiveActivityManager {
         if let existing = activity(instanceID: instanceID, streamID: streamID) {
             currentActivity = existing
             stateByActivityID[existing.id] = state
-            await existing.update(content(for: state))
+            await throttle(for: existing).submitUrgent(state)
             return
         }
 
@@ -60,6 +73,7 @@ final class AidenRemoteLiveActivityManager {
             )
             currentActivity = activity
             stateByActivityID[activity.id] = state
+            throttle(for: activity).markDelivered(state)
         } catch {
             currentActivity = nil
             AidenDiagnostics.record(.liveActivity, event: .liveActivityFailed, outcome: .degraded, code: .unavailable)
@@ -73,7 +87,7 @@ final class AidenRemoteLiveActivityManager {
     ) async {
         switch state {
         case .queued, .reconciling:
-            await update(instanceID: instanceID, streamID: streamID) {
+            await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
                 AgentRunActivityStateReducer.refreshedStatus(
                     .starting,
                     activity: String(localized: "Starting response"),
@@ -81,7 +95,7 @@ final class AidenRemoteLiveActivityManager {
                 )
             }
         case .running:
-            await update(instanceID: instanceID, streamID: streamID) {
+            await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
                 AgentRunActivityStateReducer.refreshedStatus(
                     .responding,
                     activity: String(localized: "Writing response"),
@@ -89,7 +103,7 @@ final class AidenRemoteLiveActivityManager {
                 )
             }
         case .waitingForApproval:
-            await update(instanceID: instanceID, streamID: streamID) {
+            await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
                 AgentRunActivityStateReducer.refreshedStatus(
                     .waitingForApproval,
                     activity: String(localized: "Waiting for approval"),
@@ -136,13 +150,13 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func approvalRequired(instanceID: String, streamID: String) async {
-        await update(instanceID: instanceID, streamID: streamID) {
+        await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
             AgentRunActivityStateReducer.waitingForApproval(state: $0)
         }
     }
 
     func markStale(instanceID: String, streamID: String) async {
-        await update(instanceID: instanceID, streamID: streamID) {
+        await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
             AgentRunActivityStateReducer.stale(state: $0)
         }
     }
@@ -151,7 +165,7 @@ final class AidenRemoteLiveActivityManager {
         for activity in Activity<AgentRunActivityAttributes>.activities where isLive(activity) {
             let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
             stateByActivityID[activity.id] = state
-            await activity.update(content(for: state))
+            await throttle(for: activity).submitUrgent(state)
         }
     }
 
@@ -164,6 +178,7 @@ final class AidenRemoteLiveActivityManager {
                 state: state(for: activity)
             )
             stateByActivityID[activity.id] = state
+            discardThrottle(for: activity.id)
             await activity.end(content(for: state), dismissalPolicy: .immediate)
             stateByActivityID[activity.id] = nil
             if currentActivity?.id == activity.id { currentActivity = nil }
@@ -185,6 +200,7 @@ final class AidenRemoteLiveActivityManager {
             errorSummary: errorSummary
         )
         stateByActivityID[activity.id] = state
+        discardThrottle(for: activity.id)
         let policy: ActivityUIDismissalPolicy = status == .complete
             ? .after(Date().addingTimeInterval(300))
             : .after(Date().addingTimeInterval(30))
@@ -204,6 +220,7 @@ final class AidenRemoteLiveActivityManager {
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             guard isCurrent() else { return }
             guard let streamID = activity.attributes.streamID else {
+                discardThrottle(for: activity.id)
                 await activity.end(nil, dismissalPolicy: .immediate)
                 stateByActivityID[activity.id] = nil
                 continue
@@ -224,7 +241,7 @@ final class AidenRemoteLiveActivityManager {
                 guard isCurrent() else { return }
                 let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
                 stateByActivityID[activity.id] = state
-                await activity.update(content(for: state))
+                await throttle(for: activity).submitUrgent(state)
             }
         }
     }
@@ -232,7 +249,8 @@ final class AidenRemoteLiveActivityManager {
     private func update(
         instanceID: String,
         streamID: String,
-        transform: (AgentRunActivityAttributes.ContentState) -> AgentRunActivityAttributes.ContentState
+        urgency: UpdateUrgency = .coalesced,
+        transform: (ContentState) -> ContentState
     ) async {
         guard let activity = activity(instanceID: instanceID, streamID: streamID), isLive(activity) else { return }
         currentActivity = activity
@@ -240,8 +258,33 @@ final class AidenRemoteLiveActivityManager {
         if !includesResponseExcerpts, !state.responseExcerpt.isEmpty {
             state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state)
         }
+        // The reducer state always advances; only the ActivityKit write is
+        // coalesced, so a later urgent update or end carries every token.
         stateByActivityID[activity.id] = state
-        await activity.update(content(for: state))
+        switch urgency {
+        case .coalesced:
+            await throttle(for: activity).submit(state)
+        case .immediate:
+            await throttle(for: activity).submitUrgent(state)
+        }
+    }
+
+    private func throttle(
+        for activity: Activity<AgentRunActivityAttributes>
+    ) -> AidenLatestValueThrottle<ContentState> {
+        if let existing = throttleByActivityID[activity.id] { return existing }
+        let throttle = AidenLatestValueThrottle<ContentState>(
+            interval: Self.coalescedUpdateInterval
+        ) { [weak self, weak activity] state in
+            guard let self, let activity, self.isLive(activity) else { return }
+            await activity.update(self.content(for: state))
+        }
+        throttleByActivityID[activity.id] = throttle
+        return throttle
+    }
+
+    private func discardThrottle(for activityID: String) {
+        throttleByActivityID.removeValue(forKey: activityID)?.cancel()
     }
 
     private func state(
