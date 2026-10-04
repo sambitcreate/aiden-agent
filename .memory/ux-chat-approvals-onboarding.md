@@ -29,6 +29,9 @@ Branch `ux/chat-approvals-onboarding`. The finding IDs refer to the audit's rend
   - Skip provider sits above the absolute drag strip (`relative z-10`); before, mouse clicks landed on the strip.
   - Without `aria-live`, the modal provider dialog correctly hides the background choices, because `hideOthers` skips aria-live nodes. E2E checks behind the dialog need `includeHidden`.
 
+- UI-77: Escape in the focused, empty composer (no text, attachments, or skill) stops the running response (`escapeStopsGeneration` in `composer-type-focus.ts`; Stop button carries `aria-keyshortcuts="Escape"`). Slash palette, menus and dialogs own Escape first; a draft keeps Escape harmless.
+- UI-78: blocked sends (attachments/Git busy, 1 MB, Steer/Redirect text-only, invalid skill, vision) show an inline `role=status` hint linked to the textarea via `aria-describedby` instead of toasts. The hint is derived from a snapshot of draft/attachments/skill/mode/busy, so it clears on any change without an effect. Genuine send failures still toast.
+
 ## Deferred
 
 - **UI-45:** needs main to return per-file skip reasons, which is an IPC contract change.

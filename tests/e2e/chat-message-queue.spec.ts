@@ -825,3 +825,56 @@ test("dragging files over the composer shows a drop target that clears when the 
   await shell.dispatchEvent("dragleave", { dataTransfer: files });
   await expect(dropHint).toHaveCount(0);
 });
+
+test("Escape in an empty composer stops the response, but not while a draft or menu owns it", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  const stop = page.getByRole("button", { name: "Stop generating" });
+  await composer.fill("Response to stop from the keyboard");
+  await composer.press("Enter");
+  await expect(stop).toBeEnabled();
+  await expect(stop).toHaveAttribute("aria-keyshortcuts", "Escape");
+
+  // A draft keeps Escape harmless.
+  await composer.fill("Half-written follow-up");
+  await composer.press("Escape");
+  await expect(composer).toHaveValue("Half-written follow-up");
+  await expect(stop).toBeEnabled();
+
+  // An open menu consumes Escape to close itself.
+  await composer.fill("");
+  await page.getByRole("button", { name: "Choose message action" }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(stop).toBeEnabled();
+
+  await composer.focus();
+  await composer.press("Escape");
+  await expect(stop).toBeHidden();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+});
+
+test("a blocked send explains itself beside the composer and clears when the draft changes", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  const reason = "Message text exceeds the 1 MB limit.";
+  await composer.fill("x".repeat(1024 * 1024 + 1));
+  await composer.press("Enter");
+
+  await expect(composer).toHaveAccessibleDescription(new RegExp(reason.replace(/\./gu, "\\.")));
+  await expect(page.getByRole("status").filter({ hasText: reason })).toBeVisible();
+  await expect(page.getByRole("region", { name: /Notifications/u }).getByText(reason)).toHaveCount(0);
+  expect(lmStudio.requests.filter((request) => (lastUserText(request)?.length ?? 0) > 1024 * 1024))
+    .toHaveLength(0);
+
+  await composer.fill("A message that fits");
+  await expect(page.getByText(reason)).toHaveCount(0);
+});

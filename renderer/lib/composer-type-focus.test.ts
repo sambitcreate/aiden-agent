@@ -4,6 +4,7 @@ import {
   approvalShouldTakeFocus,
   composerInsertTextFromKey,
   decideComposerTypeFocus,
+  escapeStopsGeneration,
   type ComposerTypeFocusContext,
 } from "./composer-type-focus.js";
 
@@ -149,4 +150,19 @@ test("a new approval takes focus only when the user is not typing or in an overl
   // Mid-typing in the composer: a Space or Enter must not land on Deny.
   assert.equal(approvalShouldTakeFocus({ typing: true, overlayOpen: false }), false);
   assert.equal(approvalShouldTakeFocus({ typing: false, overlayOpen: true }), false);
+});
+
+test("Escape stops a running response only from an empty composer", () => {
+  const running = { key: "Escape", canStop: true, draftEmpty: true };
+  assert.equal(escapeStopsGeneration(running), true);
+  // A draft is in progress: Escape must not throw away the running response.
+  assert.equal(escapeStopsGeneration({ ...running, draftEmpty: false }), false);
+  // Nothing to stop, or Stop is not available yet.
+  assert.equal(escapeStopsGeneration({ ...running, canStop: false }), false);
+  // A palette or menu already consumed Escape, or IME composition is cancelling.
+  assert.equal(escapeStopsGeneration({ ...running, defaultPrevented: true }), false);
+  assert.equal(escapeStopsGeneration({ ...running, isComposing: true }), false);
+  // Holding the key must not keep firing Stop.
+  assert.equal(escapeStopsGeneration({ ...running, repeat: true }), false);
+  assert.equal(escapeStopsGeneration({ ...running, key: "Enter" }), false);
 });
