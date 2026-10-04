@@ -18,6 +18,12 @@ export interface ChatIntent {
   idempotencyKey: string;
   /** For a send or guidance: the text that may not have arrived. */
   text?: string;
+  /**
+   * For a send: the uploads it was staged with. They are released when the
+   * send is dismissed or definitely refused, so they never count against the
+   * host's limit on unused uploads.
+   */
+  attachmentIds?: readonly string[];
   replay(adapter: HostChatAdapter, idempotencyKey: string): Promise<unknown>;
 }
 

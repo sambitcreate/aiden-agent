@@ -43,6 +43,10 @@ class FakeHost implements HostChatAdapter {
   readonly lostUploads = new Set<number>();
   /** Holds every upload until it settles, to observe the session mid-upload. */
   uploadGate: Promise<void> | null = null;
+  /** Unused uploads the host keeps per chat before refusing more, like the real host's limit. */
+  uploadLimit = Infinity;
+  /** The next send is lost on the way: the host never sees it and the answer never arrives. */
+  dropNextSend = false;
   private uploads = 0;
   approval: (chatId: string, input: HostChatApprovalInput) => Promise<HostChatApprovalResult> = async () => ({
     resolution: "applied",
@@ -80,6 +84,9 @@ class FakeHost implements HostChatAdapter {
   }
   async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
     await this.uploadGate;
+    if ([...this.staged.values()].filter((entry) => entry.chatId === chatId).length >= this.uploadLimit) {
+      throw new HostChatControlError({ code: "rate_limited", message: "Too many unused attachments." });
+    }
     this.uploads += 1;
     const id = `att-${this.uploads}`;
     this.calls.push(`upload:${chatId}:${upload.name}`);
@@ -93,6 +100,10 @@ class FakeHost implements HostChatAdapter {
   }
   async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.calls.push(`send:${chatId}`);
+    if (this.dropNextSend) {
+      this.dropNextSend = false;
+      throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
+    }
     if (this.refuseNextSend) {
       this.refuseNextSend = false;
       throw new HostChatControlError({ code: "busy", message: "A turn is already running." });
@@ -320,6 +331,32 @@ test("a turn the host refuses releases its uploads, while a lost turn keeps them
   await control.retryUnresolved();
   assert.equal(host.turns.size, 1, "the retry replayed the same turn");
   assert.deepEqual([...host.turns.values()][0]?.attachmentIds, ["att-2"]);
+});
+
+test("dismissing a send that never arrived frees its uploads, so the next attachment still fits", async () => {
+  const { host, control } = session();
+  host.uploadLimit = 1;
+  host.dropNextSend = true;
+  await assert.rejects(control.send("First", { attachments: [notes] }), { code: "outcome_unknown" });
+  assert.equal(host.staged.size, 1, "the host still holds the upload the lost turn never used");
+
+  control.dismissUnresolved();
+  await control.send("Second", { attachments: [notes] });
+  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Second"]);
+  assert.equal(host.staged.size, 0);
+});
+
+test("a retry the host refuses frees the original uploads, so the next attachment still fits", async () => {
+  const { host, control } = session();
+  host.uploadLimit = 1;
+  host.dropNextSend = true;
+  await assert.rejects(control.send("First", { attachments: [notes] }), { code: "outcome_unknown" });
+
+  host.refuseNextSend = true;
+  await assert.rejects(control.retryUnresolved(), { code: "busy" });
+  assert.equal(control.getSnapshot().unresolved, null);
+  await control.send("Second", { attachments: [notes] });
+  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Second"]);
 });
 
 test("attachments and skills are refused when the host does not grant them, before anything is uploaded", async () => {

@@ -261,9 +261,16 @@ export class ChatSessionControl {
     kind: ChatIntentKind,
     run: (adapter: HostChatAdapter, key: string) => Promise<T>,
     text?: string,
+    attachmentIds: readonly string[] = [],
   ): Promise<T> {
     const key = mintPeerIdempotencyKey();
-    const intent: ChatIntent = { kind, idempotencyKey: key, ...(text !== undefined ? { text } : {}), replay: run };
+    const intent: ChatIntent = {
+      kind,
+      idempotencyKey: key,
+      ...(text !== undefined ? { text } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+      replay: run,
+    };
     this.ledger.begin(this.ref, intent);
     try {
       const result = await run(this.adapter, key);
@@ -312,6 +319,7 @@ export class ChatSessionControl {
             ...(extras.skill ? { skill: extras.skill } : {}),
           }),
         text,
+        attachmentIds,
       );
     } catch (error) {
       // A definite refusal leaves the uploads unused; an unknown outcome may have consumed them.
@@ -332,16 +340,28 @@ export class ChatSessionControl {
       this.ledger.resolve(this.ref, intent.idempotencyKey);
     } catch (error) {
       // Still unknown: keep the same key for the next retry.
-      if (isOutcomeUnknown(error)) this.ledger.retrying(this.ref, intent.idempotencyKey, false);
-      else this.ledger.resolve(this.ref, intent.idempotencyKey);
+      if (isOutcomeUnknown(error)) {
+        this.ledger.retrying(this.ref, intent.idempotencyKey, false);
+      } else {
+        // The host refused the turn, so it never used the uploads.
+        this.ledger.resolve(this.ref, intent.idempotencyKey);
+        releaseAttachments(this.adapter, this.ref.chatId, intent.attachmentIds ?? []);
+      }
       throw error;
     }
   }
 
-  /** Forgets the unresolved intent without resending it. */
+  /**
+   * Forgets the unresolved intent without resending it. A dismissed send's
+   * uploads are released; if the host did start that turn, it already used
+   * them and the release is a no-op.
+   */
   dismissUnresolved(): ChatSessionUnresolved | null {
+    const recorded = this.ledger.unresolved(this.ref);
     const unresolved = this.recorded().unresolved;
-    if (unresolved) this.ledger.resolve(this.ref, unresolved.idempotencyKey);
+    if (!recorded || !unresolved) return null;
+    this.ledger.resolve(this.ref, recorded.intent.idempotencyKey);
+    releaseAttachments(this.adapter, this.ref.chatId, recorded.intent.attachmentIds ?? []);
     return unresolved;
   }
 
