@@ -139,6 +139,8 @@ interface PairingRequestRecord {
   envelope?: AidenPairingRequestEnvelope;
   issuedDeviceId?: string;
   delivered: boolean;
+  /** The requester withdrew the approved request; its device must be revoked. */
+  withdrawn?: boolean;
   waiter?: () => void;
   cancelTimer?: () => void;
 }
@@ -443,7 +445,9 @@ export class AidenRemotePairingRequestService {
    * Requester-side cancel. An approved request is withdrawn too, delivered
    * or not: only the requester can open the envelope, so a requester that
    * cancels after collecting it is abandoning its own credential (it could
-   * not confirm or save the pairing). The issued device is revoked.
+   * not confirm or save the pairing). The issued device is revoked before
+   * the cancel is acknowledged. If the revocation cannot be recorded the
+   * cancel fails and may be retried; retirement and close() also revoke it.
    */
   async cancel(requestId: string, secret: string | undefined): Promise<{ requestId: string; state: AidenPairingRequestState }> {
     const record = this.authorize(requestId, secret);
@@ -451,12 +455,27 @@ export class AidenRemotePairingRequestService {
     if (isOpen(record)) {
       this.finish(record, "cancelled");
     } else if (record.state === "approved") {
-      record.envelope = undefined;
       const deviceId = record.issuedDeviceId;
-      record.issuedDeviceId = undefined;
-      record.state = "cancelled";
-      this.changed();
-      if (deviceId) await this.revokeIssued(deviceId);
+      if (deviceId) {
+        record.withdrawn = true;
+        try {
+          await this.dependencies.devices.revokeDevice(deviceId);
+        } catch {
+          this.orphanedDeviceIds.add(deviceId);
+          throw new AidenRemoteServiceError(
+            "internal_error",
+            "Aiden could not withdraw this connection request. Try again.",
+            500,
+          );
+        }
+        this.orphanedDeviceIds.delete(deviceId);
+      }
+      if (record.state === "approved") {
+        record.envelope = undefined;
+        record.issuedDeviceId = undefined;
+        record.state = "cancelled";
+        this.changed();
+      }
     }
     return { requestId, state: publicState(record.state) };
   }
@@ -510,14 +529,14 @@ export class AidenRemotePairingRequestService {
     }
   }
 
-  /** Stop admitting requests, cancel open ones and revoke undelivered grants. */
+  /** Stop admitting requests, cancel open ones and revoke undelivered or withdrawn grants. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.cancelOpen();
     const revocations: Promise<void>[] = [];
     for (const record of [...this.records.values()]) {
-      if (record.state === "approved" && !record.delivered && record.issuedDeviceId) {
+      if (record.state === "approved" && (!record.delivered || record.withdrawn) && record.issuedDeviceId) {
         revocations.push(this.revokeIssued(record.issuedDeviceId));
       }
       record.waiter?.();
@@ -660,10 +679,14 @@ export class AidenRemotePairingRequestService {
 
   private async retireAndRevoke(record: PairingRequestRecord): Promise<void> {
     if (this.records.get(record.requestId) !== record) return;
-    const undelivered = record.state === "approved" && !record.delivered ? record.issuedDeviceId : undefined;
+    const abandoned =
+      record.state === "approved" && (!record.delivered || record.withdrawn)
+        ? record.issuedDeviceId
+        : undefined;
     this.retire(record.requestId);
-    // Nobody collected this credential before its record retired.
-    if (undelivered) await this.revokeIssued(undelivered);
+    // Nobody collected this credential before its record retired, or its
+    // requester withdrew it and the revocation has not been recorded yet.
+    if (abandoned) await this.revokeIssued(abandoned);
   }
 
   private retire(requestId: string): void {

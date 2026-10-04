@@ -547,6 +547,48 @@ test("a requester that cancels before or after collecting its grant leaves no wo
   assert.equal(after.envelope, undefined);
 });
 
+test("a withdrawal the host cannot record is refused and can be retried until the credential is revoked", async () => {
+  const { service, registry, clock, liveDevices, failNextSave } = harness();
+  const { created, keys } = await open(service);
+  await service.respond(created.requestId, "allow");
+  const status = await service.poll(created.requestId, created.pollSecret);
+  const grant = openPeerPairingRequestGrant(status.envelope, {
+    requestId: created.requestId,
+    publicKey: keys.publicKey,
+    privateKey: keys.privateKey,
+    serverSpkiSha256: SPKI,
+    endpoint: ENDPOINT,
+  });
+
+  failNextSave();
+  await assert.rejects(
+    service.cancel(created.requestId, created.pollSecret),
+    assertRemoteError("internal_error", 500),
+  );
+  // Nothing claims the withdrawal happened: the credential still works.
+  assert.equal((await registry.authenticate(grant.credential))?.revoked, false);
+
+  assert.deepEqual(await service.cancel(created.requestId, created.pollSecret), {
+    requestId: created.requestId,
+    state: "cancelled",
+  });
+  assert.equal((await registry.authenticate(grant.credential))?.revoked, true);
+  assert.equal(liveDevices().length, 0);
+
+  // A withdrawal nobody retries is revoked when its record retires.
+  const abandoned = await open(service, { source: "10.0.0.2", transport: "lan" });
+  await service.respond(abandoned.created.requestId, "allow");
+  await service.poll(abandoned.created.requestId, abandoned.created.pollSecret);
+  failNextSave();
+  await assert.rejects(
+    service.cancel(abandoned.created.requestId, abandoned.created.pollSecret),
+    assertRemoteError("internal_error", 500),
+  );
+  assert.equal(liveDevices().length, 1);
+  await clock.advance(60_000);
+  assert.equal(liveDevices().length, 0);
+});
+
 test("the reveal is one-shot and the prompt appears only after it", async () => {
   const { service, clock } = harness();
   const keys = generatePairingRequestKeyPair();

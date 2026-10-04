@@ -4755,7 +4755,7 @@
       "delete": {
         "operationId": "cancelPairingRequest",
         "security": [],
-        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Requester cancel. A denied, expired or cancelled request reports its state unchanged. Cancelling an approved request revokes its device and reports cancelled, even after the envelope was fetched.",
+        "description": "Contract revision 19 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Requester cancel. A denied, expired or cancelled request reports its state unchanged. Cancelling an approved request revokes its device and reports cancelled, even after the envelope was fetched. The cancel is acknowledged only once the revocation is recorded; otherwise it fails with internal_error and can be retried.",
         "parameters": [
           {
             "name": "requestId",
