@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  approvalShouldTakeFocus,
   composerInsertTextFromKey,
   decideComposerTypeFocus,
   type ComposerTypeFocusContext,
@@ -141,4 +142,11 @@ test("function keys and empty insert text are rejected", () => {
   assert.equal(composerInsertTextFromKey("F12"), null);
   assert.equal(composerInsertTextFromKey("Enter"), null);
   assert.equal(composerInsertTextFromKey("a"), "a");
+});
+
+test("a new approval takes focus only when the user is not typing or in an overlay", () => {
+  assert.equal(approvalShouldTakeFocus({ typing: false, overlayOpen: false }), true);
+  // Mid-typing in the composer: a Space or Enter must not land on Deny.
+  assert.equal(approvalShouldTakeFocus({ typing: true, overlayOpen: false }), false);
+  assert.equal(approvalShouldTakeFocus({ typing: false, overlayOpen: true }), false);
 });

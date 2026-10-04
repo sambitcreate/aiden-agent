@@ -277,6 +277,37 @@ test("queued messages edit, reorder and delete without changing the composer dra
   ).toHaveLength(0);
 });
 
+test("Stop pauses queued messages instead of erasing them, and Resume sends them", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Response that will be stopped");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Keep me after Stop");
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("listitem")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect(queue.getByRole("listitem")).toContainText("Keep me after Stop");
+  await expect(queue.getByRole("status")).toContainText("Paused");
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Keep me after Stop"),
+  ).toHaveLength(0);
+
+  lmStudio.releaseCompletions!();
+  await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === "Keep me after Stop",
+  ).length).toBe(1);
+  await expect(queue).toBeHidden();
+});
+
 test("choosing Redirect does not submit, confirmation is required, and Stop keeps a new draft", async ({ aiden }) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
