@@ -14,6 +14,22 @@ import {
 
 const target = "http://127.0.0.1:43177/api/aiden/v1";
 
+// Controllers under test take the real kernel route lock on a private port.
+// The production port sits in the OS ephemeral range, so any unrelated socket
+// on the machine (or a running Aiden) could otherwise make these tests busy.
+let isolatedRouteLockPort: Promise<number> | undefined;
+class IsolatedTailscaleController extends AidenRemoteTailscaleController {
+  constructor(...[runner, options]: ConstructorParameters<typeof AidenRemoteTailscaleController>) {
+    super(runner, {
+      withRouteLock: async (action) =>
+        withAidenTailscaleRouteLock(action, {
+          port: await (isolatedRouteLockPort ??= availableLoopbackPort()),
+        }),
+      ...options,
+    });
+  }
+}
+
 test("system Tailscale runner forces CLI mode for Finder-style production launches", async () => {
   const executions: Array<{
     binary: string;
@@ -45,7 +61,7 @@ test("system Tailscale runner forces CLI mode for Finder-style production launch
   });
   assert.ok(runner);
 
-  const inspection = await new AidenRemoteTailscaleController(runner).inspectRoute(target);
+  const inspection = await new IsolatedTailscaleController(runner).inspectRoute(target);
   assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
   assert.equal(inspection.assessment.state, "available");
   assert.equal(executions.length, 2);
@@ -109,7 +125,7 @@ test("Linux operator denial maps to an actionable stable code", () => {
 });
 
 test("a named but offline Tailscale node remains disconnected", async () => {
-  const controller = new AidenRemoteTailscaleController({
+  const controller = new IsolatedTailscaleController({
     run: async (args) =>
       args[0] === "status"
         ? JSON.stringify({
@@ -167,7 +183,7 @@ function fixture(options: { emptyServeStatus?: boolean; certDomains?: unknown } 
       return "";
     },
   };
-  return { controller: new AidenRemoteTailscaleController(runner), calls };
+  return { controller: new IsolatedTailscaleController(runner), calls };
 }
 
 test("Tailscale controller connects and verifies only Aiden's route", async () => {
@@ -203,7 +219,7 @@ test("Linux operator denial leaves the route untouched with a typed permission c
     },
   };
   const outcomes: unknown[] = [];
-  const controller = new AidenRemoteTailscaleController(runner, {
+  const controller = new IsolatedTailscaleController(runner, {
     outcomeStore: {
       begin: async (outcome) => { outcomes.push(outcome); },
       snapshot: async () => undefined,
@@ -254,7 +270,7 @@ test("combined route inspection uses one coherent node and Serve snapshot", asyn
 test("combined route inspection retries a transient CLI read and recovers", async () => {
   const calls: string[][] = [];
   let nodeAttempts = 0;
-  const controller = new AidenRemoteTailscaleController({
+  const controller = new IsolatedTailscaleController({
     run: async (args) => {
       calls.push([...args]);
       if (args[0] === "status" && ++nodeAttempts === 1) {
@@ -288,7 +304,7 @@ test("combined route inspection fails closed after bounded CLI retries", async (
     final: boolean;
     category: AidenTailscaleStatusReadFailureCategory;
   }> = [];
-  const controller = new AidenRemoteTailscaleController({
+  const controller = new IsolatedTailscaleController({
     run: async (args) => {
       calls.push([...args]);
       if (args[0] === "status") throw new Error("transient node status failure");
@@ -314,7 +330,7 @@ test("combined route inspection categorizes zero-exit non-JSON CLI output withou
     final: boolean;
     category: AidenTailscaleStatusReadFailureCategory;
   }> = [];
-  const controller = new AidenRemoteTailscaleController({
+  const controller = new IsolatedTailscaleController({
     run: async () => "The Tailscale GUI failed to start with private details.",
   }, { onStatusReadFailure: (input) => diagnostics.push(input) });
 
@@ -340,7 +356,7 @@ test("combined route inspection categorizes both Node CLI timeout shapes", async
       final: boolean;
       category: AidenTailscaleStatusReadFailureCategory;
     }> = [];
-    const controller = new AidenRemoteTailscaleController({
+    const controller = new IsolatedTailscaleController({
       run: async () => {
         throw timeoutError;
       },
@@ -409,7 +425,7 @@ test("first-listener verification rejects a route without explicit TCP 443 HTTPS
       return "";
     },
   };
-  const controller = new AidenRemoteTailscaleController(runner);
+  const controller = new IsolatedTailscaleController(runner);
   let persistCalls = 0;
   await assert.rejects(
     controller.connect(target, undefined, async () => { persistCalls += 1; }),
@@ -441,7 +457,7 @@ test("an owned handler without TCP 443 HTTPS is never accepted as a connected no
 });
 
 test("missing Tailscale is explicit and cannot mutate routes", async () => {
-  const controller = new AidenRemoteTailscaleController(null);
+  const controller = new IsolatedTailscaleController(null);
   assert.deepEqual(await controller.status(), {
     installed: false,
     errorCode: "not_installed",
@@ -516,7 +532,7 @@ function takeoverFixture(options: {
       return "";
     },
   };
-  const controller = new AidenRemoteTailscaleController(runner, {
+  const controller = new IsolatedTailscaleController(runner, {
     now: () => now,
     monotonicNow: () => monotonicNow,
     randomToken: () => "A".repeat(32),
@@ -774,7 +790,7 @@ test("takeover re-reads Serve immediately after the health probe", async () => {
   const app = takeoverFixture();
   let probes = 0;
   const successor = "http://127.0.0.1:43183/api/aiden/v1";
-  const controller = new AidenRemoteTailscaleController(app.runner, {
+  const controller = new IsolatedTailscaleController(app.runner, {
     now: () => 1_000,
     monotonicNow: () => 1_000,
     randomToken: () => "C".repeat(32),
@@ -821,7 +837,7 @@ test("an old owner cannot disconnect a successor route", async () => {
 
 test("separate Aiden controllers serialize competing takeovers across the Mac", async () => {
   const app = takeoverFixture();
-  const second = new AidenRemoteTailscaleController(app.runner, {
+  const second = new IsolatedTailscaleController(app.runner, {
     now: () => 1_000,
     randomToken: () => "B".repeat(32),
     probeHealth: async () => false,
