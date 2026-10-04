@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, rename, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +12,7 @@ import {
   GEMINI_LIVE_CAPTURE_ACCEPTANCE_RECEIPT,
   parseCaptureAcceptanceLaunch,
 } from "./display-capture-acceptance-core.js";
+import { writeJsonAtomic } from "../durable-fs.js";
 
 const ACCEPTANCE_TIMEOUT_MS = 15 * 60 * 1_000;
 const AIDEN_BUNDLE_ID = "com.sambitcreate.aiden-agent";
@@ -94,13 +94,7 @@ async function withDeadline<T>(promise: Promise<T>): Promise<T> {
 }
 
 async function writePrivateJson(file: string, value: unknown): Promise<void> {
-  const temporary = `${file}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await chmod(temporary, 0o600);
-  await rename(temporary, file);
+  await writeJsonAtomic(file, value, { mode: 0o600, space: 2, trailingNewline: true });
 }
 
 export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Promise<number> {
