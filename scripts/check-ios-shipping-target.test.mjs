@@ -67,9 +67,11 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
+  "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift",
+  "AidenOnTheGo/Features/Remote/AidenSceneRefreshGate.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
@@ -87,6 +89,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Web.swift",
   "AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift",
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
+  "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
@@ -116,6 +119,7 @@ const testSources = [
   "AidenRemoteClientTests.swift",
   "AidenRemotePhase0Tests.swift",
   "AidenScheduledTaskTests.swift",
+  "AidenStreamingPerformanceTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
 
