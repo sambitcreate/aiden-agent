@@ -15,7 +15,7 @@ import {
   CustomDropdownMenuContent,
   CustomDropdownMenuTrigger,
   Input,
-  Separator,
+  CommandSeparator,
   Text,
   toast,
 } from "./ui";
@@ -81,6 +81,7 @@ export function GitBranchPicker({
     openManagedWorktree ? "worktree" : null,
   );
   const [newName, setNewName] = React.useState("");
+  const [query, setQuery] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
   const branches = useGitBranches(workspaceId, open);
@@ -124,6 +125,14 @@ export function GitBranchPicker({
   const reset = () => {
     setCreateMode(null);
     setNewName("");
+    setQuery("");
+  };
+
+  // Keep the search text when entering a create form so Cancel returns to it,
+  // and seed the new name from it so typing a missing branch is one step.
+  const startCreate = (mode: Exclude<CreateMode, null>) => {
+    setNewName(query.trim());
+    setCreateMode(mode);
   };
 
   const backToList = () => {
@@ -132,7 +141,8 @@ export function GitBranchPicker({
       reset();
       return;
     }
-    reset();
+    setCreateMode(null);
+    setNewName("");
     requestAnimationFrame(() => searchRef.current?.focus());
   };
 
@@ -199,6 +209,7 @@ export function GitBranchPicker({
     }
   };
 
+  const trimmedQuery = query.trim();
   const creatingLabel = createMode === "worktree" ? "Creating workspace…" : "Creating branch…";
 
   return (
@@ -312,7 +323,12 @@ export function GitBranchPicker({
               if (event.key !== "Escape") event.stopPropagation();
             }}
           >
-            <CommandInput ref={searchRef} placeholder="Search branches" />
+            <CommandInput
+              ref={searchRef}
+              value={query}
+              onValueChange={setQuery}
+              placeholder="Search branches"
+            />
             <div className="px-3 pt-2">
               <Text variant="small" color="tertiary">
                 Local branches
@@ -402,32 +418,36 @@ export function GitBranchPicker({
                   </div>
                 </CommandItem>
               ))}
-            </CommandList>
-            <Separator />
-            <button
-              type="button"
-              disabled={unavailable || unborn}
-              onClick={() => setCreateMode("branch")}
-              className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
-            >
-              <Plus className="size-4 shrink-0" />
-              <span className="min-w-0 truncate text-left text-small-strong">
-                Create and checkout new branch…
-              </span>
-            </button>
-            {onCreateWorktree ? (
-              <button
-                type="button"
+              <CommandSeparator alwaysRender />
+              <CommandItem
+                forceMount
+                value="__create-branch__"
                 disabled={unavailable || unborn}
-                onClick={() => setCreateMode("worktree")}
-                className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+                onSelect={() => startCreate("branch")}
+                className="gap-2 text-secondary"
               >
-                <FolderGit2 className="size-4 shrink-0" />
-                <span className="min-w-0 truncate text-left text-small-strong">
-                  New isolated worktree…
+                <Plus className="size-4 shrink-0" />
+                <span className="min-w-0 truncate text-small-strong">
+                  {trimmedQuery && !list.includes(trimmedQuery)
+                    ? `Create branch “${trimmedQuery}”…`
+                    : "Create and checkout new branch…"}
                 </span>
-              </button>
-            ) : null}
+              </CommandItem>
+              {onCreateWorktree ? (
+                <CommandItem
+                  forceMount
+                  value="__create-worktree__"
+                  disabled={unavailable || unborn}
+                  onSelect={() => startCreate("worktree")}
+                  className="gap-2 text-secondary"
+                >
+                  <FolderGit2 className="size-4 shrink-0" />
+                  <span className="min-w-0 truncate text-small-strong">
+                    New isolated worktree…
+                  </span>
+                </CommandItem>
+              ) : null}
+            </CommandList>
           </Command>
         )}
       </CustomDropdownMenuContent>
