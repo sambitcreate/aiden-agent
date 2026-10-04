@@ -340,8 +340,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     { version: 1, streams: [] },
     () => userData,
     {
-      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
+      // The journal budgets its compact JSON; allow the trailing newline.
+      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
       fileMode: 0o600,
+      compact: true,
       normalize: normalizeAidenRemoteStreamSnapshot,
       isSafe: (value) => {
         try {

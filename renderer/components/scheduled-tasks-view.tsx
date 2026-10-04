@@ -36,6 +36,7 @@ import {
   Switch,
   Text,
   toast,
+  type BadgeColor,
 } from "./ui";
 import { ScheduledTaskEditor } from "./scheduled-task-editor";
 import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
@@ -161,7 +162,7 @@ function newTask(
   };
 }
 
-function statusPresentation(task: ScheduledTask) {
+function statusPresentation(task: ScheduledTask): { label: string; dot: string; badge: BadgeColor } {
   const status = scheduledTaskStatus(task);
   if (status === "error") return { label: "Needs attention", dot: "bg-red", badge: "red" };
   if (status === "paused") return { label: "Paused", dot: "bg-tertiary", badge: "gray" };

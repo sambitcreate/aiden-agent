@@ -92,7 +92,7 @@ import {
   recordRunBegin,
   recordRunNotification,
   recordRunSettled,
-} from "./host-runs.js";
+} from "./host-runs-main.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,

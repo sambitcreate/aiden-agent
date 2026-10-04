@@ -29508,9 +29508,9 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.4,
-          "output": 1.7,
-          "cache_read": 0.2
+          "input": 0.5,
+          "output": 2.15,
+          "cache_read": 0.35
         }
       },
       "deepseek-ai/DeepSeek-V3.1-Terminus": {
@@ -53088,7 +53088,7 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.15,
+          "input": 0.2,
           "output": 0.4
         },
         "canonical_model_id": "google/gemma-4-31b-it"
@@ -73248,9 +73248,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.576,
+          "input": 0.6438,
           "output": 13,
-          "cache_read": 0.3
+          "cache_read": 0.45
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -110561,9 +110561,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.576,
+          "input": 0.6518,
           "output": 13,
-          "cache_read": 0.3
+          "cache_read": 0.45
         }
       },
       "poolside/laguna-s-2.1:free": {
@@ -112112,9 +112112,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.17,
-          "output": 4.2,
-          "cache_read": 0.14
+          "input": 0.85,
+          "output": 5,
+          "cache_read": 0.7
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -114877,7 +114877,7 @@
         },
         "cost": {
           "input": 0.05,
-          "output": 4.4,
+          "output": 5,
           "cache_read": 0.04
         }
       },
@@ -116188,9 +116188,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 0.136,
+          "input": 0.1901,
           "output": 4.2,
-          "cache_read": 0.14
+          "cache_read": 0.19
         }
       },
       "~deepseek/deepseek-v4-flash-latest": {
@@ -121005,9 +121005,10 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.42,
-          "output": 3,
-          "cache_read": 0.085
+          "input": 0.425,
+          "output": 2.55,
+          "cache_read": 0.085,
+          "cache_write": 0.53125
         },
         "canonical_model_id": "alibaba/qwen3.8-27b"
       },
