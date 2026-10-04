@@ -43,6 +43,7 @@ import {
   toast,
 } from "../ui";
 import { CopyButton } from "../copy-button";
+import { AcceptConnectionRequestsField } from "./remote-connection-requests-field";
 import { aidenRemoteApi } from "../../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../../lib/queries";
 import type {
@@ -614,6 +615,18 @@ export function RemoteAccessSettings() {
             />
           </div>
         </Field>
+        {status.acceptPairingRequests !== undefined ? (
+          <AcceptConnectionRequestsField
+            accept={status.acceptPairingRequests}
+            hostLabel={hostLabel}
+            busy={busy === "pairingRequests"}
+            disabled={busy !== null}
+            onChange={(accept) => void mutate(
+              "pairingRequests",
+              () => aidenRemoteApi.setAcceptPairingRequests(accept),
+            )}
+          />
+        ) : null}
         <Field
           label="Desktop name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}

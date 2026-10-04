@@ -6,7 +6,7 @@ const SETTINGS_SECTIONS = [
   "Skills",
   "Plugins",
   "Web Search",
-  "Aiden On The Go",
+  "Connections",
   "Scheduled tasks",
   "Aiden Live",
   ...(process.platform === "darwin" ? (["Computer Use"] as const) : []),
@@ -48,9 +48,9 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
       ).toBeVisible();
       return;
-    case "Aiden On The Go":
+    case "Connections":
       await expect(
-        page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Connections", exact: true }),
       ).toBeVisible();
       await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
       await expect(page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true })).toBeVisible();

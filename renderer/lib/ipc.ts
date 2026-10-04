@@ -208,11 +208,14 @@ import {
   type DeviceToolchainState,
 } from "../shared/devices";
 import type {
+  PeerDiscoveryState,
   PeerHostFeedMessage,
   PeerHostFeedSnapshot,
   PeerHostStatus,
   PeerHostView,
   PeerOperationOutcome,
+  PeerPairingProgress,
+  PeerPairingResult,
   PeerRepositoryIdentity,
   PeerRunFrameMessage,
   PeerRunSubscription,
@@ -237,7 +240,11 @@ export const peerHostsApi = {
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
   remove: (id: string) => invoke<void>("remote:peersRemove", id),
-  /** Restarts a host that is backing off; a blocked host stays blocked. */
+  /**
+   * Retries a host now: one backing off, or one blocked by a version
+   * mismatch. A connected host is left alone; an auth or identity block
+   * clears only by re-pairing.
+   */
   reconnect: (id: string) => invoke<void>("remote:peerReconnect", id),
   operation: (hostId: string, operation: PeerOperation) =>
     invoke<unknown>("remote:peerOperation", hostId, operation),
@@ -258,6 +265,25 @@ export const peerHostsApi = {
     onNotification<PeerRunFrameMessage>("remote:peer-run-frame", handler),
   onHostState: (handler: (status: PeerHostStatus) => void) =>
     onNotification<PeerHostStatus>("remote:peer-host-state", handler),
+  rename: (id: string, name: string) => invoke<PeerHostView>("remote:peersRename", id, name),
+  /** Search for other desktops while the Add device sheet is open. */
+  discoveryStart: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryStart"),
+  discoveryRefresh: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryRefresh"),
+  discoveryStop: () => invoke<void>("remote:peerDiscoveryStop"),
+  onDiscovery: (handler: (state: PeerDiscoveryState) => void) =>
+    onNotification<PeerDiscoveryState>("remote:peer-discovery", handler),
+  pairRequest: (attemptId: string, deviceId: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairRequest", attemptId, deviceId, replaceHostId),
+  pairSetupCode: (
+    attemptId: string,
+    input: { deviceId: string; code: string } | { address: string; code: string },
+    replaceHostId?: string,
+  ) => invoke<PeerPairingResult>("remote:peerPairSetupCode", attemptId, input, replaceHostId),
+  pairLink: (attemptId: string, link: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairLink", attemptId, link, replaceHostId),
+  pairCancel: (attemptId: string) => invoke<boolean>("remote:peerPairCancel", attemptId),
+  onPairingProgress: (handler: (progress: PeerPairingProgress) => void) =>
+    onNotification<PeerPairingProgress>("remote:peer-pairing-progress", handler),
 };
 
 export const appApi = {
@@ -623,6 +649,20 @@ export const aidenRemoteApi = {
   onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
     onNotification("remote:approval-changed", handler),
+  setAcceptPairingRequests: (accept: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setAcceptPairingRequests", accept),
+  listPairingRequests: () =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestPrompt[]>(
+      "remote:listPairingRequests",
+    ),
+  respondPairingRequest: (requestId: string, decision: "allow" | "deny") =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestDecisionView>(
+      "remote:respondPairingRequest",
+      requestId,
+      decision,
+    ),
+  onPairingRequestsChanged: (handler: () => void) =>
+    onNotification("remote:pairing-requests-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

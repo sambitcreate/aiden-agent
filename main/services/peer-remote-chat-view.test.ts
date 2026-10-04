@@ -76,6 +76,56 @@ test("a run started on the host streams into the open chat and hands off to the 
   }
 });
 
+test("a burst of streamed tokens re-renders the open chat once per frame", async () => {
+  const pending: Array<() => void> = [];
+  const frame = (flush: () => void) => {
+    pending.push(flush);
+    return () => {
+      const index = pending.indexOf(flush);
+      if (index >= 0) pending.splice(index, 1);
+    };
+  };
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host, "desktop", { frame });
+  try {
+    await harness.open();
+    await host.start("run-1");
+    await settle();
+    await harness.session.idle();
+    for (const flush of pending.splice(0)) flush();
+
+    let renders = 0;
+    const stop = harness.session.subscribe(() => {
+      renders += 1;
+    });
+    const words = Array.from({ length: 60 }, (_, index) => `w${index} `);
+    for (const delta of words) host.runs.publish("run-1", "chat:delta", { delta });
+    await settle();
+    await harness.session.idle();
+    // Every token is applied, but the view has not been asked to render yet.
+    assert.equal(harness.transcript().row.streamingText, words.join(""));
+    assert.equal(renders, 0);
+    assert.equal(pending.length, 1, "the whole burst waits on one frame");
+
+    for (const flush of pending.splice(0)) flush();
+    assert.equal(renders, 1);
+
+    // A change that cannot wait (the run ends and the transcript is reread)
+    // renders at once and takes the pending tokens with it.
+    host.runs.publish("run-1", "chat:delta", { delta: "end." });
+    host.append({ id: "a2", role: "assistant", content: `${words.join("")}end.`, createdAt: 3_000 });
+    host.runs.publish("run-1", "chat:done", { chat: { messages: [{ id: "a2", role: "assistant" }] } });
+    await settle();
+    await harness.session.idle();
+    assert.ok(renders > 1, "the reread rendered without waiting for a frame");
+    assert.equal(last(harness.transcript().transcript.messages)?.id, "a2");
+    assert.equal(harness.transcript().row.streamingText, null);
+    stop();
+  } finally {
+    harness.close();
+  }
+});
+
 test("opening a chat whose run outgrew the host's journal recovers through the gap snapshot", async () => {
   const host = new FakeHost("host_b", numbered(2), 6);
   host.append({ id: "u2", role: "user", content: "Write the migration", createdAt: 2_000 });

@@ -5,6 +5,8 @@ import { AidenRemoteTlsEndpointError } from "../services/aiden-remote-tls-identi
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import {
+  parseAidenPairingRequestDecision,
+  parseAidenPairingRequestId,
   parseAidenRemoteConnectionMode,
   parseAidenRemoteScopedIdentifier,
   parseAidenRemoteTakeoverToken,
@@ -245,6 +247,39 @@ export function registerAidenRemoteHandlers(): void {
     const runtime = await getAidenRemoteRuntime();
     const removed = await runtime.approvedRoots.removeLocalRoot(parseIdentifier(rootId, "root_"));
     if (!removed) throw new Error("This approved root is no longer available.");
+    return settingsSnapshot();
+  });
+
+  ipcMain.handle("remote:listPairingRequests", async (event) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Connection requests require the active application document."),
+    );
+    const prompts = (await getAidenRemoteRuntime()).service.listPairingRequests();
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return prompts;
+  });
+
+  ipcMain.handle(
+    "remote:respondPairingRequest",
+    async (event, requestId: unknown, decision: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Connection requests require the active application document."),
+      );
+      const id = parseAidenPairingRequestId(requestId);
+      const parsedDecision = parseAidenPairingRequestDecision(decision);
+      const service = (await getAidenRemoteRuntime()).service;
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      const result = await service.respondPairingRequest(id, parsedDecision);
+      if (!result) throw new Error("This connection request is no longer available.");
+      return result;
+    },
+  );
+
+  ipcMain.handle("remote:setAcceptPairingRequests", async (_event, accept: unknown) => {
+    if (typeof accept !== "boolean") throw new Error("Invalid connection request setting.");
+    await (await getAidenRemoteRuntime()).service.setAcceptPairingRequests(accept);
     return settingsSnapshot();
   });
 }

@@ -5,12 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, ipcMain, logger, onBroadcast } from "../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification, onBroadcast } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { recordRemoteRequestHealth } from "./diagnostic-health.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
+import {
+  aidenPairingRequestHostNoun,
+  createAidenPairingRequestNotifier,
+  createAidenPairingRequestSettingsStore,
+} from "./aiden-remote-pairing-request-host.js";
 import {
   AidenRemoteService,
   createAidenRemoteBonjourPublisher,
@@ -428,6 +433,24 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeHostFeed: AidenRemoteHostFeedService | undefined;
   let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
+  const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
+    list: () => service.listPairingRequests(),
+    broadcast: () => ipcMain.broadcast("remote:pairing-requests-changed", {}),
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    focusApp: () => {
+      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+      if (!window) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+    hostNoun: aidenPairingRequestHostNoun(process.platform),
+    onError: (stage) => {
+      // Native errors can carry the device name; keep only the phase.
+      logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);
+    },
+  });
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
@@ -440,6 +463,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    pairingRequestSettings: createAidenPairingRequestSettingsStore(() => userData),
+    notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     workspaceApi: async (instanceId) => {

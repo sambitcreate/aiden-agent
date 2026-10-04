@@ -72,6 +72,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "remote-request-failed",
   "remote-request-slow",
   "tailscale-status-read-unavailable",
+  "peer-host-repinned",
   "process-monitor-installed",
   "uncaught-exception",
   "node-warning",

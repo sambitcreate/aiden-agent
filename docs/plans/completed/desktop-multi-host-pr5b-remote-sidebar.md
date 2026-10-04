@@ -1,6 +1,6 @@
 # Multi-host PR 5b: remote sidebar rows
 
-Status: **In review**. This is the remote half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and merges PR 5a ([local sidebar organization](desktop-multi-host-pr5a-sidebar-organize.md)).
+Status: **Complete**; merges with the multi-host stack. This is the remote half of §6 ("Sidebar organization") of the [desktop multi-host control plan](desktop-multi-host-control-plan.md). It is stacked on PR 3 ([peer manager](desktop-multi-host-pr3-peer-manager.md)) and merges PR 5a ([local sidebar organization](desktop-multi-host-pr5a-sidebar-organize.md)).
 
 ## Scope
 

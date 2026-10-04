@@ -1,6 +1,6 @@
 # Multi-host PR 7: remote control
 
-Status: **In review**. Row 7 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 6 ([remote chat view](desktop-multi-host-pr6-remote-chat-view.md)).
+Status: **Complete**; merges with the multi-host stack. Row 7 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 6 ([remote chat view](desktop-multi-host-pr6-remote-chat-view.md)).
 
 PR 6 made a paired host's chat viewable. This PR makes it controllable from this Mac: send, stop, approvals, questions, steer and queue, rename and delete, through the same adapter interface the local pane now uses.
 

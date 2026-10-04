@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in review. PR 2 (contract revision 19: host feed, run streams, control and paging) is in review. PR 3 (controller supervisor and stream IPC) is in progress. PRs 5a through 7 are in review as a stack. PR 8 ([new chat on a remote machine and remote Bots](desktop-multi-host-pr8-remote-new-chat.md)) is in review, stacked on PR 7.
+Status: Complete in code; packaged two-machine acceptance outstanding. All nine PRs are implemented. PR 1 (#310) is on main. PRs 2–9 are open as a stack (#313, #314, #315, #318, #311, #316, #317, #319, #336 and #337) and merge in that order. PR 9 added the end-to-end acceptance test over real TLS, the 1/5/10-host budgets below, per-frame coalescing of feed and token updates, and a fix that makes a resumed host-feed stream report itself open at once. Not yet done: the packaged Mac↔Mac run over LAN and Tailscale, and measured idle CPU, wakeups and memory on real machines.
 Date: 2026-09-09; revised 2026-10-02.
 Source baseline: `d724ff76d` (origin/main, 2026-10-02). Remote contract revision 18.
 
@@ -252,16 +252,43 @@ Nine PRs, each mergeable on its own, with the narrow suites green locally before
 | 6 | Remote chat view + live observation | Host route, mapper, translator, messages window with "load older", observing runs started on B's screen | A run started on B's screen streams on A. Gap → snapshot recovery. Large chat opens. |
 | 7 | Control | `useChatSession` extraction, send/stop/approve/answer/steer through adapters, composer capability gating | Same pane drives local and remote. Lost acknowledgement + retry yields no duplicate turn. Stop of a run started on B. Approval race. |
 | 8 | New chat on a remote machine + Bots | Composer machine picker, remote projects/folder browser, createWorkspace/createChat, remote models/skills, attachment upload, per-host drafts, remote Bots | New chat runs on B in B's project. No remote path reaches a local API. |
-| 9 | Acceptance + docs | 1/5/10-host performance budgets, packaged Mac↔Mac LAN + Tailscale run, `.memory/` notes, plan index | Measured idle CPU, wakeups, memory and wire bytes recorded. Local-only behaviour with no peers is unchanged. |
+| 9 | Acceptance + docs | 1/5/10-host performance budgets, packaged Mac↔Mac LAN + Tailscale run, `.memory/` notes, plan index | Wire bytes, request fan-out and renderer work recorded (see [Efficiency budgets](#efficiency-budgets)). Local-only behaviour with no peers is unchanged. Outstanding: the packaged run and idle CPU, wakeups and memory. |
 
 Linux→Mac and Mac→Linux acceptance waits for the reconciled Linux branch (PR #71/#89 lineage). The protocol and platform seams are built against current main, and Linux completion is not claimed from historical CI.
 
-## Efficiency budgets (initial; finalized from PR 9 measurements)
+## Efficiency budgets
 
-- One feed connection per enabled, connected host. Live subscriptions only for visible, running or open chats.
-- No transcript fetch to build the sidebar. No per-chat Git watchers. No provider enumeration while only showing status.
-- Bounded per-host summary cache: at most 2,000 chats per host in memory. Older rows page in on demand.
-- Token rendering for remote streams is batched per animation frame, and feed invalidations are coalesced per frame.
+The budgets are enforced by deterministic tests at 1, 5 and 10 paired hosts. No test reads the clock to judge speed; each counts bytes, requests, messages or row reads.
+
+| Budget | Rule | Measured in PR 9 | Test |
+| --- | --- | --- | --- |
+| Feed connections | One `/host/events` subscription per enabled, connected host. Disabled hosts send nothing. Live run subscriptions only for visible, running or open chats. | 1 per host at every host count. | `main/services/peer-host-manager.test.ts` |
+| Sidebar reads | No transcript, list or Git read to build the sidebar. | The only request per host is `/host/events`. | `main/services/peer-host-manager.test.ts` |
+| Feed cache | At most 2,000 chats per host (`PEER_FEED_MAX_CHATS`); the newest are kept and older rows page in on demand. | A host with 2,500 chats keeps its newest 2,000. | `main/services/peer-host-manager.test.ts` |
+| Snapshot size | Snapshots are split into 256 KiB chunks; each frame stays within one chunk plus a 4 KiB envelope, and only the last carries an event id. A host's wire cost does not depend on how many other hosts are paired. | 2,500 chats: 3 frames of 262,286, 262,211 and 40,436 bytes (564,933 in total) per host; one renderer reset of about 453 KB per host. | `main/services/peer-host-manager.test.ts` |
+| Reconnect fan-out | Sleep, unlock and network changes within 500 ms (`PEER_WAKE_COALESCE_MS`) coalesce into one reconnect: one identity check and one feed resume from its cursor per host, with no new snapshot. | 2 requests per host at 1, 5 and 10 hosts; 0 for a disabled host. | `main/services/peer-host-manager.test.ts` |
+| Renderer feed updates | Feed messages are held per host and applied once per animation frame; more than 512 queued for one host (a hidden window) collapse into one resync. | A 200-message burst per host renders once per host in one frame. | `renderer/lib/hosts/peer-host-feed-state.test.ts` |
+| Token rendering | The open remote chat re-renders streamed tokens once per frame; the end of a run renders at once. | 60 streamed tokens render once, in one frame. | `main/services/peer-remote-chat-view.test.ts` |
+| Sidebar organize | Organizing all hosts' rows stays within 12·n·log₂n row reads for every view and grouping. | 10 hosts × 2,000 chats: projects 751,338, recent 1,402,676, needs attention 1,920,902 reads, against a budget of 3,429,051 (about 7·n·log₂n). | `renderer/lib/sidebar-remote-groups.test.ts` |
+
+Idle CPU, wakeups and resident memory need the packaged two-machine run and are not yet measured.
+
+## Acceptance
+
+`main/services/peer-multi-host-acceptance.test.ts` runs one Mac controlling another over real TLS. The host side uses the real router, run registry, host feed and run services; the client side uses the real registry, `PeerHostManager`, renderer IPC, sidebar projection, `RemoteHostAdapter`, `RemoteChatSession`, `ChatSessionControl` and `RemoteNewChatControl`. In one pass it:
+
+1. pairs by setup code;
+2. builds the sidebar from the feed alone (project, repository, both chats, no transcript reads);
+3. opens a remote chat and reads its messages window;
+4. watches a run, shows Needs approval in the sidebar, approves one request, denies another, then stops the run;
+5. sends a message and follows the reply to its end;
+6. starts a new chat in the host's project and opens a Bot chat, which is reused on the second open;
+7. drops every connection, shows the host offline, and resumes the feed from its cursor;
+8. serves a new key, blocks the host as `identity_changed` with stale rows, refuses a plain reconnect, and recovers after re-pairing.
+
+Step 7 found a real bug: Node does not send response headers until the first body write, so a resumed feed with nothing to replay stayed "syncing" and stale until the next change or the 15 s heartbeat. `openCursorSse` now flushes the headers when it opens the stream. The host feed and run streams are the only users, and both are desktop-only, so the native clients are unaffected.
+
+The per-flow suites from PRs 2–8 stay the detailed coverage: `peer-host-pairing.test.ts` and `main/handlers/peer-pairing.test.ts` (pairing paths), `peer-host-manager.test.ts` (supervisor, budgets), `sidebar-remote-groups.test.ts` (sidebar), `peer-remote-chat-view.test.ts` (observation), `peer-remote-chat-control.test.ts` (control and races) and `peer-remote-new-chat.test.ts` (new chats, uploads and Bots).
 
 ## Verification matrix
 
@@ -313,3 +340,4 @@ Tests stay behavioural, following the `AGENTS.md` rules: no source-grep contract
 
 - 2026-09-09: Original plan. Three exploration lanes and two planning lanes. Peer foundation merged in PR #104 (`900af0c2a`, `5ef3d28dd`). Connections/sidebar/composer proposal approved (`6397b4863`).
 - 2026-10-02: Re-scoped after three research lanes covered current Aiden backend/renderer state and the t3code/OpenCode reference implementations. The user approved symmetric peers, full chat parity including runs started elsewhere, full authority on pairing, Tailscale-first one-click pairing, t3code-style sidebar organizations, Bots in scope, and no tour tile. The nine-PR sequence above replaces the earlier seven-milestone sequence.
+- 2026-10-04: PR 9 added the acceptance pass and the 1/5/10-host budgets, and moved this plan and its task plans to `completed/`. The packaged two-machine run and idle measurements remain.

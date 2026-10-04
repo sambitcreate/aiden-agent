@@ -1,4 +1,5 @@
 import https from "node:https";
+import type { LookupFunction } from "node:net";
 import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { createHash, X509Certificate } from "node:crypto";
 import { TextDecoder } from "node:util";
@@ -72,7 +73,22 @@ const IDENTITY_TLS_CODES = new Set([
   "CERT_SIGNATURE_FAILURE",
 ]);
 
-function identityError(message: string): Error {
+/** True for TLS failures that mean a different identity, not an unreachable peer. */
+export function isPeerIdentityTlsError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && IDENTITY_TLS_CODES.has(code);
+}
+
+/** The `sha256/<base64>` pin of a DER certificate's subject public key. */
+export function peerSpkiFingerprint(certificateDer: Buffer): string {
+  const key = new X509Certificate(certificateDer).publicKey.export({
+    type: "spki",
+    format: "der",
+  });
+  return `sha256/${createHash("sha256").update(key).digest("base64")}`;
+}
+
+export function identityError(message: string): Error {
   return Object.assign(new Error(message), { code: PEER_IDENTITY_ERROR });
 }
 
@@ -95,11 +111,7 @@ export function peerTlsOptions(trust: PeerTrust): {
       const invalid = checkServerIdentity(hostname, certificate);
       if (invalid) return invalid;
       try {
-        const key = new X509Certificate(certificate.raw).publicKey.export(
-          { type: "spki", format: "der" },
-        );
-        const fingerprint = `sha256/${createHash("sha256").update(key).digest("base64")}`;
-        if (fingerprint !== trust.serverSpkiSha256)
+        if (peerSpkiFingerprint(certificate.raw) !== trust.serverSpkiSha256)
           return identityError("Server identity changed.");
       } catch {
         return identityError("Invalid server identity.");
@@ -180,6 +192,8 @@ export interface PeerRemoteError {
     outcome?: "answered" | "expired";
     resolvedAt?: string;
     currentRevision?: string;
+    /** A rate-limited host's hint, in whole seconds (1 to 3600). */
+    retryAfterSeconds?: number;
   };
 }
 
@@ -237,6 +251,14 @@ export function parsePeerErrorEnvelope(text: string): PeerRemoteError | undefine
       if (typeof field === "string" && /^[\x21-\x7e]{1,128}$/u.test(field))
         details[key] = field;
     }
+    const retryAfter = raw.retryAfterSeconds;
+    if (
+      typeof retryAfter === "number" &&
+      Number.isSafeInteger(retryAfter) &&
+      retryAfter >= 1 &&
+      retryAfter <= 3600
+    )
+      details.retryAfterSeconds = retryAfter;
     return {
       code,
       retryable: error.retryable === true,
@@ -247,7 +269,11 @@ export function parsePeerErrorEnvelope(text: string): PeerRemoteError | undefine
   }
 }
 
-function statusError(status: number, remote: PeerRemoteError | undefined): PeerTransportError {
+/** Map a non-2xx status and its parsed envelope to a typed transport error. */
+export function peerStatusError(
+  status: number,
+  remote: PeerRemoteError | undefined,
+): PeerTransportError {
   // A 403 for a single capability is an answer, not a lost credential.
   const authFailure =
     status === 401 ||
@@ -351,9 +377,21 @@ function headers(input: PeerRequest, mode: ReadMode): Record<string, string> {
 export class PeerTransport {
   readonly trust: PeerTrust;
   private readonly agent: https.Agent | undefined;
-  constructor(trust: PeerTrust, options: { agent?: https.Agent } = {}) {
+  private readonly lookup: LookupFunction | undefined;
+  constructor(
+    trust: PeerTrust,
+    options: {
+      agent?: https.Agent;
+      /**
+       * Resolves the endpoint's host for new connections. TLS still verifies
+       * the endpoint's own name, so this changes only where a socket goes.
+       */
+      lookup?: LookupFunction;
+    } = {},
+  ) {
     this.trust = validatePeerTrust(trust);
     this.agent = options.agent;
+    this.lookup = options.lookup;
   }
 
   private async read(
@@ -402,6 +440,7 @@ export class PeerTransport {
           method: input.method ?? "GET",
           headers: requestHeaders,
           ...(this.agent ? { agent: this.agent } : { agent: false }),
+          ...(this.lookup ? { lookup: this.lookup } : {}),
           ...peerTlsOptions(this.trust),
         },
         (response) => {
@@ -422,7 +461,7 @@ export class PeerTransport {
           if (status < 200 || status >= 300) {
             // Read a bounded JSON error envelope so callers can tell answered refusals apart.
             if (mime !== "application/json") {
-              fail(statusError(status, undefined));
+              fail(peerStatusError(status, undefined));
               return;
             }
             const chunks: Buffer[] = [];
@@ -430,19 +469,19 @@ export class PeerTransport {
             response.on("data", (chunk: Buffer) => {
               if (settled) return;
               size += chunk.length;
-              if (size > MAX_ERROR_BYTES) fail(statusError(status, undefined));
+              if (size > MAX_ERROR_BYTES) fail(peerStatusError(status, undefined));
               else chunks.push(chunk);
             });
             response.on("end", () =>
               finish(
-                statusError(
+                peerStatusError(
                   status,
                   parsePeerErrorEnvelope(Buffer.concat(chunks).toString("utf8")),
                 ),
               ),
             );
-            response.on("error", () => finish(statusError(status, undefined)));
-            response.on("aborted", () => finish(statusError(status, undefined)));
+            response.on("error", () => finish(peerStatusError(status, undefined)));
+            response.on("aborted", () => finish(peerStatusError(status, undefined)));
             return;
           }
           const binaryMime = mime === "image/png" || mime === "image/jpeg";
@@ -536,9 +575,7 @@ export class PeerTransport {
       request.on("error", (error: Error & { code?: unknown }) =>
         finish(
           new PeerTransportError(
-            typeof error.code === "string" && IDENTITY_TLS_CODES.has(error.code)
-              ? "identity_changed"
-              : "unavailable",
+            isPeerIdentityTlsError(error) ? "identity_changed" : "unavailable",
           ),
         ),
       );

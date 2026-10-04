@@ -109,9 +109,9 @@ export function registerPeerHostLiveHandlers<Event>(
     await dependencies.manager().remove(hostIdentifier(hostId));
   });
 
-  handle("remote:peerReconnect", (event, hostId) => {
+  handle("remote:peerReconnect", async (event, hostId) => {
     active(event);
-    dependencies.manager().reconnect(hostIdentifier(hostId));
+    await dependencies.manager().reconnect(hostIdentifier(hostId));
   });
 
   handle("remote:peerRunSubscribe", async (event, hostId, target, afterSequence) => {

@@ -6,12 +6,25 @@ import {
 } from "../../renderer/shared/peer-host.js";
 import {
   assertPeerPairingExpiry,
+  decryptPeerPairing,
   peerRecord,
   peerStrings,
+  peerDisplayName,
   peerText,
   type PeerPairing,
 } from "./peer-pairing.js";
 import type https from "node:https";
+import { isIPv4 } from "node:net";
+import {
+  createPeerBootstrapTransport,
+  type PeerBootstrapFactory,
+} from "./peer-bootstrap-transport.js";
+import {
+  peerPairingFailure,
+  PeerPairingOutcomeError,
+  requestPeerPairing,
+} from "./peer-pairing-client.js";
+import { PeerLanAddresses, peerLanAddresses } from "./peer-lan-addresses.js";
 import {
   createPeerAgent,
   PeerTransport,
@@ -31,6 +44,28 @@ import {
   AIDEN_REMOTE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
 } from "./aiden-remote-protocol.js";
+
+/** The IPv4 literal an endpoint names, if it names one. */
+function endpointIPv4(endpoint: string): string | undefined {
+  const { hostname } = new URL(endpoint);
+  return isIPv4(hostname) ? hostname : undefined;
+}
+
+/** True for a host's canonical LAN endpoint, a `.local` name. */
+function isLocalEndpoint(endpoint: string): boolean {
+  return /\.local\.?$/iu.test(new URL(endpoint).hostname);
+}
+
+/**
+ * A saved name: the host's own name or one chosen locally. Both are bounded
+ * to 80 Unicode characters; a local name may keep format characters such as
+ * the joiners inside an emoji.
+ */
+function storedPeerName(value: unknown): string {
+  if (typeof value !== "string" || !value.length || [...value].length > 80 || /\p{Cc}/u.test(value))
+    throw new Error("Invalid peer text.");
+  return value;
+}
 
 export interface StoredPeerHost extends PeerTrust {
   id: string;
@@ -80,6 +115,25 @@ export const PEER_STREAMS_TOTAL = 64;
 
 export type PeerRequestPartition = "unary" | "stream";
 
+/** A discovered installation the user chose to send a connection request to. */
+export interface PeerPairingTarget {
+  instanceId: string;
+  endpoint: string;
+  /** Tailscale names are checked against system roots; LAN rests on the match code. */
+  route: "tailscale" | "lan";
+}
+
+export interface PeerPairingOptions {
+  /** Re-pair this saved host in place, keeping its local name. */
+  replaceHostId?: string;
+}
+
+const REPIN_TIMEOUT_MS = 10_000;
+
+function failed(message: string): PeerPairingOutcomeError {
+  return new PeerPairingOutcomeError({ status: "failed", message });
+}
+
 function sameStrings(
   left: readonly string[],
   right: readonly string[],
@@ -123,7 +177,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
       id,
       credential,
       enabled: record.enabled,
-      name: peerText(record.name, 80),
+      name: storedPeerName(record.name),
       deviceId: hostIdentifier(record.deviceId),
       capabilities: peerStrings(record.capabilities),
       features: peerStrings(record.features, 32),
@@ -154,6 +208,8 @@ export class PeerHostRegistry {
   private epochs = new Map<string, number>();
   private verified = new Set<string>();
   private pairings = new Map<string, AbortController>();
+  private repins = new Map<string, Promise<StoredPeerHost | null>>();
+  private instanceMismatches = new WeakSet<Error>();
   private closed = false;
   private queued = 0;
   constructor(
@@ -164,9 +220,21 @@ export class PeerHostRegistry {
       deviceName: string;
       platform: "mac" | "linux";
       client?(trust: PeerTrust): PeerClient;
+      /** Unauthenticated sessions for pairing routes and Tailscale re-pins. */
+      bootstrap?: PeerBootstrapFactory;
+      /** Bonjour addresses for `.local` endpoints. Defaults to the process-wide book. */
+      lanAddresses?: PeerLanAddresses;
       changed?(): void;
+      /** A Tailscale host's renewed key was confirmed and saved. */
+      repinned?(): void;
     },
   ) {}
+
+  private bootstrap(
+    ...args: Parameters<PeerBootstrapFactory>
+  ): ReturnType<PeerBootstrapFactory> {
+    return (this.options.bootstrap ?? createPeerBootstrapTransport)(...args);
+  }
 
   private locked<T>(work: () => Promise<T>): Promise<T> {
     if (this.closed)
@@ -190,17 +258,45 @@ export class PeerHostRegistry {
       this.hosts = parseStoredPeerHosts(await this.options.storage.load());
     return this.hosts;
   }
-  private client(trust: PeerTrust, hostId?: string): PeerClient {
+  private get lanAddresses(): PeerLanAddresses {
+    return this.options.lanAddresses ?? peerLanAddresses;
+  }
+  /**
+   * `instanceId` names the installation behind `trust`; it defaults to
+   * `hostId`. A `.local` endpoint can then fall back to the address Bonjour
+   * gave for that installation.
+   */
+  private client(trust: PeerTrust, hostId?: string, instanceId = hostId): PeerClient {
     const injected = this.options.client?.(trust);
     if (injected) return injected;
+    const lookup =
+      instanceId !== undefined && isLocalEndpoint(trust.endpoint)
+        ? { lookup: this.lanAddresses.lookupFor(instanceId) }
+        : {};
     // Pairing runs before a host exists and keeps a single-use connection.
-    if (hostId === undefined) return new PeerTransport(trust);
+    if (hostId === undefined) return new PeerTransport(trust, lookup);
+    // A request admitted before a re-pin must not pool a socket on the old key.
+    const stored = this.hosts?.find((host) => host.id === hostId);
+    if (stored && stored.serverSpkiSha256 !== trust.serverSpkiSha256)
+      return new PeerTransport(trust, lookup);
     let agent = this.agents.get(hostId);
     if (!agent) {
       agent = createPeerAgent(trust);
       this.agents.set(hostId, agent);
     }
-    return new PeerTransport(trust, { agent });
+    return new PeerTransport(trust, { agent, ...lookup });
+  }
+
+  /**
+   * Discovery reached a paired LAN host at an IPv4 address and saw `spki`
+   * there. Keep the address for its `.local` endpoint only when that is the
+   * key this host is pinned to, so an impostor cannot redirect it.
+   */
+  async rememberLanAddress(id: string, address: string, spki: string | undefined): Promise<void> {
+    if (spki === undefined || !isIPv4(address)) return;
+    const host = (await this.load()).find((entry) => entry.id === id);
+    if (!host || host.serverSpkiSha256 !== spki || !isLocalEndpoint(host.endpoint)) return;
+    this.lanAddresses.remember(id, address);
   }
   private invalidate(id: string): void {
     this.verified.delete(id);
@@ -255,8 +351,12 @@ export class PeerHostRegistry {
     if (!current()) throw new Error("Device operation was superseded.");
     if (server.protocolVersion !== 1)
       throw new PeerTransportError("unsupported_protocol");
-    if (server.instanceId !== host.id)
-      throw new PeerTransportError("identity_changed");
+    if (server.instanceId !== host.id) {
+      // The pinned key answered as another installation: never re-pin this.
+      const mismatch = new PeerTransportError("identity_changed");
+      this.instanceMismatches.add(mismatch);
+      throw mismatch;
+    }
     const capabilities = peerStrings(server.capabilities);
     const features = peerStrings(server.features ?? [], 32);
     const advertised = Array.isArray(server.serverCapabilities)
@@ -340,51 +440,139 @@ export class PeerHostRegistry {
     );
   }
 
-  async pair(
-    pairing: PeerPairing,
-    signal?: AbortSignal,
-  ): Promise<PeerHostView> {
+  /** Link a pairing to its caller's signal; the registry's close aborts it too. */
+  private attempt(signal: AbortSignal | undefined) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
     const current = () => !this.closed && !controller.signal.aborted;
-    const assertCurrent = () => {
-      if (!current()) throw new Error("Pairing was cancelled.");
+    return {
+      controller,
+      current,
+      assertCurrent: () => {
+        if (!current()) throw new PeerPairingOutcomeError({ status: "cancelled" });
+      },
+      detach: () => signal?.removeEventListener("abort", abort),
     };
+  }
+
+  /** Claim one of the two pairing slots for an installation before any network work. */
+  private reserve(
+    instanceId: string,
+    attempt: ReturnType<PeerHostRegistry["attempt"]>,
+    options: PeerPairingOptions,
+    expiresAt?: string,
+  ): Promise<void> {
+    return this.locked(async () => {
+      attempt.assertCurrent();
+      const hosts = await this.load();
+      if (
+        instanceId === (await this.options.localInstanceId()) ||
+        instanceId === LOCAL_HOST_ID
+      )
+        throw failed("This is the current Aiden installation.");
+      attempt.assertCurrent();
+      const replacing = options.replaceHostId !== undefined;
+      if (replacing && options.replaceHostId !== instanceId)
+        throw failed("A different device answered. Pair it as a new device.");
+      const saved = hosts.some((host) => host.id === instanceId);
+      if (replacing && !saved) throw failed("This device is no longer paired.");
+      if ((!replacing && saved) || this.pairings.has(instanceId))
+        throw failed("This device is already paired or pairing.");
+      if (
+        (!replacing && hosts.length + this.pairings.size >= MAX_PEER_HOSTS) ||
+        this.pairings.size >= 2
+      )
+        throw failed("The saved or pairing device limit has been reached.");
+      if (expiresAt !== undefined) assertPeerPairingExpiry(expiresAt);
+      this.pairings.set(instanceId, attempt.controller);
+    });
+  }
+
+  /**
+   * Confirm a new credential over the pinned transport, then persist it
+   * before the host becomes visible. A failed save publishes nothing.
+   */
+  private async finish(
+    input: {
+      trust: PeerTrust;
+      instanceId: string;
+      deviceId: unknown;
+      credential: string;
+      grants: string[];
+    },
+    attempt: ReturnType<PeerHostRegistry["attempt"]>,
+    options: PeerPairingOptions,
+  ): Promise<PeerHostView> {
+    const server = peerRecord(
+      await this.client(input.trust, undefined, input.instanceId).json({
+        path: "/server",
+        credential: input.credential,
+        signal: attempt.controller.signal,
+      }),
+    );
+    attempt.assertCurrent();
+    if (server.instanceId !== input.instanceId || server.protocolVersion !== 1)
+      throw failed("The paired server identity changed.");
+    const serverGrants = peerStrings(server.capabilities);
+    const paired = parseStoredPeerHosts([
+      {
+        id: input.instanceId,
+        name: peerDisplayName(server.name),
+        deviceId: input.deviceId,
+        credential: input.credential,
+        enabled: true,
+        endpoint: input.trust.endpoint,
+        serverSpkiSha256: input.trust.serverSpkiSha256,
+        ...(input.trust.caCertificateDerBase64
+          ? { caCertificateDerBase64: input.trust.caCertificateDerBase64 }
+          : {}),
+        capabilities: input.grants.filter((grant) => serverGrants.includes(grant)),
+        features: peerStrings(server.features ?? [], 32),
+      },
+    ])[0]!;
+    return this.locked(async () => {
+      attempt.assertCurrent();
+      const hosts = await this.load();
+      const previous = hosts.find((entry) => entry.id === paired.id);
+      let host = paired;
+      let next: StoredPeerHost[];
+      if (options.replaceHostId !== undefined) {
+        if (!previous) throw failed("Paired devices changed during pairing.");
+        host = { ...paired, name: previous.name };
+        next = hosts.map((entry) => (entry.id === host.id ? host : entry));
+      } else {
+        if (previous || hosts.length >= MAX_PEER_HOSTS)
+          throw failed("Paired devices changed during pairing.");
+        next = [...hosts, host];
+      }
+      await this.options.storage.save(next, attempt.current);
+      this.hosts = next;
+      // Connections still holding the replaced credential or pin are retired.
+      if (previous) this.invalidate(host.id);
+      this.states.set(host.id, "connected");
+      this.notify();
+      return this.view(host);
+    });
+  }
+
+  /** Pair from a pairing link or a decrypted setup code. */
+  async pair(
+    pairing: PeerPairing,
+    signal?: AbortSignal,
+    options: PeerPairingOptions = {},
+  ): Promise<PeerHostView> {
+    const attempt = this.attempt(signal);
     let reserved = false;
     try {
-      await this.locked(async () => {
-        assertCurrent();
-        const hosts = await this.load();
-        if (
-          pairing.instanceId === (await this.options.localInstanceId()) ||
-          pairing.instanceId === LOCAL_HOST_ID
-        )
-          throw new Error("This is the current Aiden installation.");
-        assertCurrent();
-        if (
-          hosts.some((host) => host.id === pairing.instanceId) ||
-          this.pairings.has(pairing.instanceId)
-        )
-          throw new Error("This device is already paired or pairing.");
-        if (
-          hosts.length + this.pairings.size >= MAX_PEER_HOSTS ||
-          this.pairings.size >= 2
-        )
-          throw new Error(
-            "The saved or pairing device limit has been reached.",
-          );
-        assertPeerPairingExpiry(pairing.expiresAt);
-        this.pairings.set(pairing.instanceId, controller);
-        reserved = true;
-      });
-      const client = this.client(pairing);
+      await this.reserve(pairing.instanceId, attempt, options, pairing.expiresAt);
+      reserved = true;
       const exchange = peerRecord(
-        await client.json({
+        await this.client(pairing, undefined, pairing.instanceId).json({
           method: "POST",
           path: "/pairing/exchange",
-          signal: controller.signal,
+          signal: attempt.controller.signal,
           body: {
             secret: pairing.secret,
             deviceName: this.options.deviceName,
@@ -398,64 +586,175 @@ export class PeerHostRegistry {
           },
         }),
       );
-      assertCurrent();
+      attempt.assertCurrent();
       if (
         exchange.protocolVersion !== 1 ||
         exchange.instanceId !== pairing.instanceId ||
         exchange.endpoint !== pairing.endpoint ||
         exchange.serverSpkiSha256 !== pairing.serverSpkiSha256
       )
-        throw new Error("The pairing identity did not match.");
-      const credential = peerText(exchange.credential, 43);
-      const server = peerRecord(
-        await client.json({
-          path: "/server",
-          credential,
-          signal: controller.signal,
-        }),
-      );
-      assertCurrent();
-      if (
-        server.instanceId !== pairing.instanceId ||
-        server.protocolVersion !== 1
-      )
-        throw new Error("The paired server identity changed.");
-      const grants = peerStrings(exchange.capabilities);
-      const serverGrants = peerStrings(server.capabilities);
-      const host = parseStoredPeerHosts([
+        throw failed("The pairing identity did not match.");
+      return await this.finish(
         {
-          id: pairing.instanceId,
-          name: peerText(server.name, 80),
+          trust: pairing,
+          instanceId: pairing.instanceId,
           deviceId: exchange.deviceId,
-          credential,
-          enabled: true,
-          endpoint: pairing.endpoint,
-          serverSpkiSha256: pairing.serverSpkiSha256,
-          ...(pairing.caCertificateDerBase64
-            ? { caCertificateDerBase64: pairing.caCertificateDerBase64 }
-            : {}),
-          capabilities: grants.filter((grant) => serverGrants.includes(grant)),
-          features: peerStrings(server.features ?? [], 32),
+          credential: peerText(exchange.credential, 43),
+          grants: peerStrings(exchange.capabilities),
         },
-      ])[0]!;
-      return await this.locked(async () => {
-        assertCurrent();
-        const hosts = await this.load();
-        if (
-          hosts.some((entry) => entry.id === host.id) ||
-          hosts.length >= MAX_PEER_HOSTS
-        )
-          throw new Error("Paired devices changed during pairing.");
-        await this.options.storage.save([...hosts, host], current);
-        this.hosts = [...hosts, host];
-        this.states.set(host.id, "connected");
-        this.notify();
-        return this.view(host);
-      });
+        attempt,
+        options,
+      );
     } finally {
-      signal?.removeEventListener("abort", abort);
+      attempt.detach();
       if (reserved) this.pairings.delete(pairing.instanceId);
     }
+  }
+
+  /**
+   * Send a connection request to a discovered desktop and wait for the
+   * person there to allow it. `onMatchCode` fires once both screens can show
+   * the same code. Every ending other than a paired host throws
+   * `PeerPairingOutcomeError`.
+   */
+  async pairWithRequest(
+    target: PeerPairingTarget,
+    onMatchCode: (code: string, expiresAt: string) => void,
+    signal?: AbortSignal,
+    options: PeerPairingOptions = {},
+  ): Promise<PeerHostView> {
+    const attempt = this.attempt(signal);
+    let reserved = false;
+    try {
+      const instanceId = hostIdentifier(target.instanceId);
+      await this.reserve(instanceId, attempt, options);
+      reserved = true;
+      return await requestPeerPairing({
+        session: this.bootstrap({
+          endpoint: target.endpoint,
+          mode: target.route === "tailscale" ? "webpki" : "unverified",
+        }),
+        instanceId,
+        ...(target.route === "tailscale" ? { endpoint: target.endpoint } : {}),
+        deviceName: this.options.deviceName,
+        deviceType: this.options.platform,
+        clientVersion: this.options.clientVersion,
+        signal: attempt.controller.signal,
+        onMatchCode,
+        // The request is withdrawn (revoking the credential) unless this
+        // confirms and saves the host.
+        install: async (grant) => {
+          attempt.assertCurrent();
+          // The match code covered the key seen at this address, and TLS checks
+          // the sealed `.local` name against it, so the address may stand in for
+          // a name this device cannot resolve.
+          const address = target.route === "lan" ? endpointIPv4(target.endpoint) : undefined;
+          if (address) this.lanAddresses.remember(instanceId, address);
+          return await this.finish(
+            {
+              trust: {
+                endpoint: grant.endpoint,
+                serverSpkiSha256: grant.serverSpkiSha256,
+                ...(grant.caCertificateDerBase64
+                  ? { caCertificateDerBase64: grant.caCertificateDerBase64 }
+                  : {}),
+              },
+              instanceId: grant.instanceId,
+              deviceId: grant.deviceId,
+              credential: grant.credential,
+              grants: grant.capabilities,
+            },
+            attempt,
+            options,
+          );
+        },
+      });
+    } catch (error) {
+      if (!attempt.current())
+        throw new PeerPairingOutcomeError({ status: "cancelled" });
+      throw error instanceof PeerPairingOutcomeError
+        ? error
+        : new PeerPairingOutcomeError(peerPairingFailure(error));
+    } finally {
+      attempt.detach();
+      if (reserved) this.pairings.delete(target.instanceId);
+    }
+  }
+
+  /**
+   * Fetch the sealed setup payload from an address and open it with the code
+   * shown on the other device. The code authenticates the whole trust
+   * payload, so the first connection is not verified.
+   */
+  async pairWithSetupCode(
+    input: {
+      endpoint: string;
+      code: string;
+      /** Set for a discovered device: the payload must name this installation. */
+      instanceId?: string;
+    },
+    signal?: AbortSignal,
+    options: PeerPairingOptions = {},
+  ): Promise<PeerHostView> {
+    try {
+      let envelope: unknown;
+      try {
+        envelope = await this.bootstrap({
+          endpoint: input.endpoint,
+          mode: "unverified",
+        }).json({
+          method: "POST",
+          path: "/pairing/manual-bootstrap",
+          body: {},
+          ...(signal ? { signal } : {}),
+        });
+      } catch (error) {
+        if (error instanceof PeerTransportError && error.status === 404)
+          throw new PeerPairingOutcomeError({ status: "unsupported" });
+        throw error;
+      }
+      let pairing: PeerPairing;
+      try {
+        pairing = decryptPeerPairing(
+          envelope,
+          input.code,
+          input.instanceId === undefined
+            ? input.endpoint
+            : { instanceId: input.instanceId },
+        );
+      } catch {
+        throw new PeerPairingOutcomeError({ status: "invalid_code" });
+      }
+      // A discovered device may be reachable only at the address it was
+      // found at. The exchange still verifies the sealed name, CA and key.
+      const address = input.instanceId === undefined ? undefined : endpointIPv4(input.endpoint);
+      if (address) this.lanAddresses.remember(pairing.instanceId, address);
+      return await this.pair(pairing, signal, options);
+    } catch (error) {
+      if (signal?.aborted || this.closed)
+        throw new PeerPairingOutcomeError({ status: "cancelled" });
+      throw error instanceof PeerPairingOutcomeError
+        ? error
+        : new PeerPairingOutcomeError(peerPairingFailure(error));
+    }
+  }
+
+  /** Rename a paired host on this device only. */
+  rename(id: string, name: string): Promise<PeerHostView> {
+    const trimmed = name.replace(/\s+/gu, " ").trim();
+    if (!trimmed || [...trimmed].length > 80 || /\p{Cc}/u.test(trimmed))
+      return Promise.reject(new Error("Enter a name of up to 80 characters."));
+    return this.locked(async () => {
+      const hosts = await this.load();
+      const found = hosts.find((host) => host.id === id);
+      if (!found) throw new Error("Unknown paired device.");
+      const renamed = { ...found, name: trimmed };
+      const next = hosts.map((host) => (host.id === id ? renamed : host));
+      await this.options.storage.save(next);
+      this.hosts = next;
+      this.notify();
+      return this.view(renamed);
+    });
   }
 
   setEnabled(id: string, enabled: boolean): Promise<void> {
@@ -546,14 +845,32 @@ export class PeerHostRegistry {
       !controller.signal.aborted &&
       (this.epochs.get(id) ?? 0) === epoch;
     try {
-      if (!current()) throw new Error("Device operation was superseded.");
-      const client = this.client(host, host.id);
-      await this.verify(host, client, controller.signal, current);
-      if (!current()) throw new Error("Device operation was superseded.");
-      const result = await work(host, client, current);
-      if (!current()) throw new Error("Device operation was superseded.");
-      this.states.set(id, "connected");
-      return result;
+      let attempt = host;
+      for (let retried = false; ; retried = true) {
+        try {
+          if (!current()) throw new Error("Device operation was superseded.");
+          const client = this.client(attempt, attempt.id);
+          await this.verify(attempt, client, controller.signal, current);
+          if (!current()) throw new Error("Device operation was superseded.");
+          const result = await work(attempt, client, current);
+          if (!current()) throw new Error("Device operation was superseded.");
+          this.states.set(id, "connected");
+          return result;
+        } catch (error) {
+          // A TLS identity failure happens before any request byte is sent,
+          // so retrying once on a confirmed new key is safe for mutations.
+          const repinnable =
+            !retried &&
+            current() &&
+            error instanceof PeerTransportError &&
+            error.code === "identity_changed" &&
+            !this.instanceMismatches.has(error) &&
+            attempt.caCertificateDerBase64 === undefined;
+          const repinned = repinnable ? await this.repin(attempt) : null;
+          if (!repinned || !current()) throw error;
+          attempt = repinned;
+        }
+      }
     } catch (error) {
       // A 4xx is an answer from a reachable, verified peer, e.g. an older Aiden
       // without an optional route. 401/403 arrive as authentication_required.
@@ -575,6 +892,75 @@ export class PeerHostRegistry {
       pool.get(id)?.delete(controller);
       if (pool.get(id)?.size === 0) pool.delete(id);
     }
+  }
+
+  /**
+   * A system-trust (Tailscale) host presented a key other than its pin. Its
+   * certificate may simply have been renewed, so ask the exact paired name
+   * over WebPKI, with our credential, which installation it is. Only the same
+   * installation, answering with a different key, is re-pinned. Private-CA
+   * LAN hosts never reach this path and stay strictly pinned.
+   */
+  private repin(snapshot: StoredPeerHost): Promise<StoredPeerHost | null> {
+    let pending = this.repins.get(snapshot.id);
+    if (!pending) {
+      pending = this.confirmRepin(snapshot)
+        .catch(() => null)
+        .finally(() => this.repins.delete(snapshot.id));
+      this.repins.set(snapshot.id, pending);
+    }
+    return pending;
+  }
+  private async confirmRepin(
+    snapshot: StoredPeerHost,
+  ): Promise<StoredPeerHost | null> {
+    const stored = this.hosts?.find((entry) => entry.id === snapshot.id);
+    if (!stored?.enabled || stored.caCertificateDerBase64 !== undefined)
+      return null;
+    // Another request already confirmed the renewed key.
+    if (stored.serverSpkiSha256 !== snapshot.serverSpkiSha256) return stored;
+    const session = this.bootstrap({ endpoint: stored.endpoint, mode: "webpki" });
+    const server = peerRecord(
+      await session.json({
+        path: "/server",
+        credential: stored.credential,
+        timeoutMs: REPIN_TIMEOUT_MS,
+      }),
+    );
+    const observed = session.observedSpki;
+    if (
+      server.protocolVersion !== 1 ||
+      server.instanceId !== stored.id ||
+      !observed ||
+      observed === stored.serverSpkiSha256
+    )
+      return null;
+    return this.locked(async () => {
+      const hosts = await this.load();
+      const latest = hosts.find((entry) => entry.id === stored.id);
+      if (
+        !latest?.enabled ||
+        latest.caCertificateDerBase64 !== undefined ||
+        latest.credential !== stored.credential ||
+        latest.endpoint !== stored.endpoint ||
+        latest.serverSpkiSha256 !== stored.serverSpkiSha256
+      )
+        return null;
+      const updated = { ...latest, serverSpkiSha256: observed };
+      const next = hosts.map((entry) => (entry.id === updated.id ? updated : entry));
+      await this.options.storage.save(next);
+      this.hosts = next;
+      // Pooled sockets were pinned to the old key; in-flight work keeps its epoch.
+      this.agents.get(updated.id)?.destroy();
+      this.agents.delete(updated.id);
+      this.verified.delete(updated.id);
+      try {
+        this.options.repinned?.();
+      } catch {
+        // Diagnostics must not undo a saved pin.
+      }
+      return updated;
+    });
   }
 
   /**

@@ -107,7 +107,7 @@ test("settings can be found by the user's task without knowing feature names", (
   }
   assert.equal(
     SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title,
-    "Aiden On The Go",
+    "Connections",
   );
 });
 

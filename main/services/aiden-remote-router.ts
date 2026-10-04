@@ -32,6 +32,7 @@ import {
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
+  AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE,
   AIDEN_REMOTE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
   parseAidenRemoteBotConversationQuery,
@@ -54,6 +55,8 @@ import {
   asAidenRemoteServiceError,
 } from "./aiden-remote-errors.js";
 import type { AidenRemotePairingService } from "./aiden-remote-pairing.js";
+import type { AidenRemotePairingRequestService } from "./aiden-remote-pairing-requests.js";
+import { AIDEN_PAIRING_REQUEST_ID_PATTERN } from "./aiden-remote-sealed-envelope.js";
 import type {
   AidenRemoteAuthenticatedDevice,
   AidenRemoteConnectionMode,
@@ -139,6 +142,15 @@ export interface AidenRemoteRouterDependencies {
   devices: AidenRemoteRouterDeviceRegistry;
   pairing: Pick<AidenRemotePairingService, "exchange">
     & Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
+  /**
+   * Unauthenticated desktop connection requests (`pairing-requests-v1`).
+   * Absent: `/pairing/requests*` is `not_found`, `/health?detail=host`
+   * reports `pairingRequests: false` and `/server` omits the feature.
+   */
+  pairingRequests?: Pick<
+    AidenRemotePairingRequestService,
+    "accepting" | "create" | "reveal" | "poll" | "cancel"
+  >;
   workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
@@ -290,6 +302,9 @@ export type AidenRemoteRouteLabel =
   | "health"
   | "pairingManualBootstrap"
   | "pairingExchange"
+  | "pairingRequests"
+  | "pairingRequest"
+  | "pairingRequestReveal"
   | "server"
   | "deviceIdentity"
   | "deviceCapabilities"
@@ -354,6 +369,9 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   health: ["/health"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
+  pairingRequests: ["/pairing/requests"],
+  pairingRequest: ["/pairing/requests/:requestId"],
+  pairingRequestReveal: ["/pairing/requests/:requestId/reveal"],
   server: ["/server"],
   deviceIdentity: ["/device/identity"],
   deviceCapabilities: ["/device/capabilities"],
@@ -1124,6 +1142,11 @@ function approvalDecision(value: unknown): {
   return scope ? { decision: record.decision, scope } : { decision: record.decision };
 }
 
+function pairingSecretHeader(request: IncomingMessage): string | undefined {
+  const value = request.headers["aiden-pairing-secret"];
+  return typeof value === "string" ? value : undefined;
+}
+
 function requiredHeader(
   request: IncomingMessage,
   name: "if-match" | "idempotency-key",
@@ -1507,7 +1530,7 @@ export function createAidenRemoteRequestHandler(
                 displayName: dependencies.displayName(),
                 ...(dependencies.platform ? { platform: dependencies.platform } : {}),
                 contractRevision: AIDEN_REMOTE_CONTRACT_REVISION,
-                pairingRequests: true,
+                pairingRequests: dependencies.pairingRequests?.accepting() === true,
               }
             : {}),
         });
@@ -1522,6 +1545,56 @@ export function createAidenRemoteRequestHandler(
         );
         writeJson(response, 200, result);
         return;
+      }
+      const pairingRequestMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})$/u.exec(path);
+      const pairingRequestRevealMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})\/reveal$/u.exec(path);
+      if (path === "/pairing/requests" || pairingRequestMatch || pairingRequestRevealMatch) {
+        const requestIdSegment = pairingRequestMatch?.[1] ?? pairingRequestRevealMatch?.[1];
+        route = pairingRequestMatch
+          ? "pairingRequest"
+          : pairingRequestRevealMatch
+            ? "pairingRequestReveal"
+            : "pairingRequests";
+        const service = dependencies.pairingRequests;
+        if (
+          !service ||
+          (requestIdSegment !== undefined && !AIDEN_PAIRING_REQUEST_ID_PATTERN.test(requestIdSegment))
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireNoQuery(query);
+        // The poll secret travels only in a header so it never reaches a URL.
+        const secret = pairingSecretHeader(request);
+        if (route === "pairingRequests" && request.method === "POST") {
+          const created = await service.create(await readJsonBody(request, 2_048), {
+            source: sourceIdentity(request),
+            transport: dependencies.acceptStrippedBasePath === true ? "tailscale" : "lan",
+          });
+          writeJson(response, 201, created);
+          return;
+        }
+        if (route === "pairingRequestReveal" && request.method === "POST") {
+          writeJson(response, 200, service.reveal(requestIdSegment!, secret, await readJsonBody(request, 256)));
+          return;
+        }
+        if (route === "pairingRequest" && request.method === "GET") {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          response.once("close", abort);
+          try {
+            const status = await service.poll(requestIdSegment!, secret, controller.signal);
+            if (controller.signal.aborted) return;
+            writeJson(response, 200, status);
+          } finally {
+            response.off("close", abort);
+          }
+          return;
+        }
+        if (route === "pairingRequest" && request.method === "DELETE") {
+          writeJson(response, 200, await service.cancel(requestIdSegment!, secret));
+          return;
+        }
+        throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
       }
       if (request.method === "POST" && path === "/pairing/manual-bootstrap") {
         requireNoQuery(query);
@@ -1594,6 +1667,9 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
               ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE]
+              : []),
+            ...(isDesktopDevice(device) && dependencies.pairingRequests
+              ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),

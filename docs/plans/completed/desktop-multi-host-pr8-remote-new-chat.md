@@ -1,6 +1,6 @@
 # Multi-host PR 8: new chat on a remote machine, and remote Bots
 
-Status: **In review**. Row 8 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 7 ([remote control](desktop-multi-host-pr7-remote-control.md)).
+Status: **Complete**; merges with the multi-host stack. Row 8 of the [desktop multi-host control plan](desktop-multi-host-control-plan.md) (§5 Renderer). Stacked on PR 7 ([remote control](desktop-multi-host-pr7-remote-control.md)).
 
 PR 7 made an existing remote chat controllable. This PR lets this Mac start work on a paired Mac: choose the machine in the composer, pick or create one of that Mac's projects, pick one of its models, attach files, and send. It also lists the paired Macs' Bots so their chats can be opened from here. Acceptance: a new chat runs on B in B's project, and no remote path reaches a local API.
 

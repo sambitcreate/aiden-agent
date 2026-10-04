@@ -108,7 +108,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 19);
+  assert.equal(fixture.contractRevision, 20);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -305,6 +305,77 @@ test("revision 19 fixtures carry host health, host feed, run stream and run cont
   );
 });
 
+test("pairing request fixtures only carry a sealed envelope for an approved request and fail closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.pairingRequests;
+  assert.ok(section);
+  assert.equal(section.feature, "pairing-requests-v1");
+  assert.deepEqual(
+    section.status.map((status) => [status.state, status.envelope !== undefined]),
+    [["pending", false], ["approved", true], ["denied", false]],
+  );
+  assert.ok(section.matchCodeVectors.every((vector) => /^[0-9]{6}$/u.test(vector.matchCode)));
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy.pairingRequests as Record<string, unknown>);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const statuses = (copy: Record<string, unknown>) => copy.status as Record<string, unknown>[];
+  assert.throws(
+    mutate((copy) => {
+      statuses(copy)[2]!.envelope = structuredClone(statuses(copy)[1]!.envelope);
+    }),
+    /Only an approved pairing request carries an envelope/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete statuses(copy)[1]!.envelope;
+    }),
+    /Only an approved pairing request carries an envelope/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(statuses(copy)[1]!.envelope, "envelope").requestId = "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5";
+    }),
+    /bound to its request/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.create, "create").request, "request").deviceType = "iphone";
+    }),
+    /only from mac or linux/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.create, "create").response, "response").credential = "secret";
+    }),
+    /unsupported field credential/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      (copy.matchCodeVectors as Record<string, unknown>[])[0]!.matchCode = "48334";
+    }),
+    /six digits/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.reveal, "reveal").response, "response").hostNonce = "short";
+    }),
+    /32 bytes of unpadded base64url/u,
+  );
+
+  // Pairing requests arrived in revision 20: a revision-19 fixture still
+  // parses without the section and is refused with it.
+  const revision19 = structuredClone(raw);
+  revision19.contractRevision = 19;
+  record(revision19.hostHealth, "hostHealth").contractRevision = 19;
+  assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
+  delete revision19.pairingRequests;
+  assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
+});
+
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const roster = fixture.agentRoster;
@@ -445,6 +516,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/runs/{runId}/approvals/{approvalId}/respond",
     "/runs/{runId}/questions/{promptId}/respond",
     "/runs/{runId}/inputs",
+    "/pairing/requests",
+    "/pairing/requests/{requestId}/reveal",
+    "/pairing/requests/{requestId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -634,15 +708,32 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.deepEqual(manualPairingPost.security, []);
 
   const methods = new Set(["get", "post", "put", "patch", "delete"]);
+  // Only readiness and pairing admission are reachable without a credential.
+  const unauthenticatedRoutes = new Set([
+    "/health",
+    "/pairing/exchange",
+    "/pairing/manual-bootstrap",
+    "/pairing/requests",
+    "/pairing/requests/{requestId}/reveal",
+    "/pairing/requests/{requestId}",
+  ]);
   for (const [route, pathValue] of Object.entries(paths)) {
-    if (route !== "/health" && route !== "/pairing/exchange" && route !== "/pairing/manual-bootstrap") {
+    const operations = Object.entries(record(pathValue, route)).filter(([method]) => methods.has(method));
+    const publicOperations = operations.filter(
+      ([, operationValue]) => JSON.stringify(record(operationValue, route).security) === "[]",
+    );
+    assert.equal(
+      publicOperations.length,
+      unauthenticatedRoutes.has(route) ? operations.length : 0,
+      `${route} must be either entirely public pairing/readiness or entirely authenticated`,
+    );
+    if (!unauthenticatedRoutes.has(route)) {
       const inherited = (record(pathValue, route).parameters as Array<Record<string, unknown>> | undefined) ?? [];
       assert(inherited.some((parameter) => parameter.$ref === "#/components/parameters/ProtocolVersion"), `${route} must require the exact protocol-version header`);
     }
-    for (const [method, operationValue] of Object.entries(record(pathValue, route))) {
-      if (!methods.has(method)) continue;
+    for (const [method, operationValue] of operations) {
       const operationRecord = record(operationValue, `${method} ${route}`);
-      if (route === "/health" || route === "/pairing/exchange" || route === "/pairing/manual-bootstrap") continue;
+      if (unauthenticatedRoutes.has(route)) continue;
       assert(
         AIDEN_REMOTE_CAPABILITIES.includes(
           operationRecord["x-aiden-capability"] as (typeof AIDEN_REMOTE_CAPABILITIES)[number],
@@ -1798,6 +1889,31 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
   assert.equal(request({ decision: "allow", scope: "always" }), true);
   assert.equal(request({ decision: "deny", scope: "chat" }), false);
   assert.equal(request({ decision: "allow", scope: "workspace" }), false);
+});
+
+test("pairing request OpenAPI schemas accept the shared fixture and keep phones and stray envelopes out", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
+  const section = fixture.pairingRequests!;
+  const ajv = new Ajv2020({ strict: false });
+  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const create = schema("PairingRequestCreate");
+  const created = schema("PairingRequestCreated");
+  const status = schema("PairingRequestStatus");
+  assert.equal(create(section.create.request), true);
+  assert.equal(created(section.create.response), true);
+  assert.equal(schema("PairingRequestReveal")(section.reveal.request), true);
+  assert.equal(schema("PairingRequestRevealed")(section.reveal.response), true);
+  for (const entry of section.status) assert.equal(status(entry), true, entry.state);
+  assert.equal(schema("ErrorEnvelope")(section.error), true);
+
+  assert.equal(create({ ...section.create.request, deviceType: "iphone" }), false);
+  assert.equal(create({ ...section.create.request, credential: "x" }), false);
+  const approved = section.status.find((entry) => entry.state === "approved")!;
+  const { envelope, ...withoutEnvelope } = approved;
+  assert.equal(status(withoutEnvelope), false, "approved always carries its envelope");
+  assert.equal(status({ ...withoutEnvelope, state: "denied", envelope }), false, "a denial never carries a credential");
 });
 
 test("stream input contracts reject unknown modes, oversized text, and unknown reasons", () => {

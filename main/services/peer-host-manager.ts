@@ -253,13 +253,23 @@ export class PeerHostManager {
   }
 
   /**
-   * The user asked to reconnect one host now. Only a host waiting out a
-   * backoff restarts, with a fresh schedule. A blocked host stays blocked:
-   * that clears only by re-pairing or disabling and re-enabling it.
+   * The person asked to reconnect one host now. A host waiting out a
+   * backoff restarts with a fresh schedule, and so does one blocked by a
+   * protocol mismatch (they may have updated Aiden since). A connected or
+   * connecting host is left alone. An auth or identity block clears only
+   * through a re-pair (`repaired: true`) or by disabling and re-enabling it.
+   * Unknown or disabled hosts are ignored.
    */
-  reconnect(hostId: unknown): void {
+  async reconnect(hostId: unknown, options: { repaired?: boolean } = {}): Promise<void> {
+    await this.ready;
+    await this.sync();
     const sup = this.supervisors.get(hostIdentifier(hostId));
-    if (this.closed || !sup || sup.state.kind !== "backoff") return;
+    if (this.closed || !sup) return;
+    const state = sup.state;
+    const restart =
+      state.kind === "backoff" ||
+      (state.kind === "blocked" && (options.repaired === true || state.reason === "protocol"));
+    if (!restart) return;
     sup.failures = 0;
     this.start(sup);
   }

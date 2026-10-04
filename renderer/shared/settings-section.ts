@@ -76,9 +76,9 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "remoteAccess",
-    title: "Aiden On The Go",
+    title: "Connections",
     group: "Agent",
-    keywords: ["remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+    keywords: ["aiden on the go", "control other computers", "other devices", "multiple computers", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
   },
   {
     id: "scheduledTasks",

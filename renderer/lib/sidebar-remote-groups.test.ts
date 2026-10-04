@@ -398,3 +398,104 @@ test("malformed feed rows fall back to safe titles and drop unusable dates", () 
   assert.equal(rows.chats[0].lastActivityAt, undefined);
   assert.equal(rows.chats[0].rowState, "idle");
 });
+
+/**
+ * The sidebar re-organizes on every applied feed frame, so its cost must stay
+ * near-linear in the rows it shows. Work is counted, not timed: each read of a
+ * chat row's fields is one unit, which a comparison sort spends O(n log n) of
+ * and an accidental scan-per-row would spend O(n²) of.
+ */
+function crowdedFeed(hostId: string, chats: number, projects: number): PeerHostFeedSnapshot {
+  return {
+    hostId,
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    workspaces: Array.from({ length: projects }, (_, index) =>
+      workspaceRow(`w${index}`, `Project ${index}`, {
+        repository: { canonicalKey: `github.com/acme/repo-${index}`, relativePath: "" },
+      }),
+    ),
+    summaries: Array.from({ length: chats }, (_, index) =>
+      summaryRow(`c${index}`, `w${index % projects}`, {
+        // Interleave hosts and projects so no input is already in display order.
+        updatedAt: new Date(T0 + ((index * 7_919) % chats) * 60_000 + hostId.length).toISOString(),
+      }),
+    ),
+    bots: [],
+    runs: [],
+  };
+}
+
+function countingReads(rows: RemoteSidebarRows, counter: { reads: number }): RemoteSidebarRows {
+  return {
+    projects: rows.projects,
+    chats: rows.chats.map(
+      (chat) =>
+        new Proxy(chat, {
+          get(target, property, receiver) {
+            counter.reads += 1;
+            return Reflect.get(target, property, receiver);
+          },
+        }),
+    ),
+  };
+}
+
+for (const hostCount of [1, 5, 10]) {
+  test(`organizing ${hostCount} host(s) of 2,000 chats stays near-linear and shows every chat once`, () => {
+    const chatsPerHost = 2_000;
+    const views = Array.from({ length: hostCount }, (_, index) => view(`host_${index}`, `Mac ${index}`));
+    const hosts = sidebarHosts(views, views.map((entry) => status(entry.id, connected)));
+    const counter = { reads: 0 };
+    const remote = hosts.map((host) =>
+      countingReads(remoteSidebarRows(host, crowdedFeed(host.id, chatsPerHost, 40)), counter),
+    );
+    const total = hostCount * chatsPerHost;
+    // Measured at about 7 reads per n·log2(n) for the attention view (two
+    // sorts); 12 leaves headroom while a quadratic pass overshoots many times.
+    // A merged group copies its other machines' rows, which stop counting, so
+    // the separate grouping is the one that counts every row.
+    const budget = 12 * total * Math.log2(total);
+
+    for (const sidebarView of ["projects", "recent", "attention"] as const) {
+      for (const grouping of ["separate", "repository"] as const) {
+        counter.reads = 0;
+        const combined = combineSidebarRows({
+          local: { projects: [], chats: [] },
+          remote,
+          hosts,
+          filter: "all",
+          grouping,
+        });
+        const organized = organizeSidebar({
+          projects: combined.projects,
+          chats: combined.chats,
+          search: "",
+          view: sidebarView,
+          chatSort: "last_activity",
+          projectSort: "last_activity",
+          projectOrder: [],
+          now: T0 + chatsPerHost * 60_000,
+        });
+        assert.ok(
+          counter.reads <= budget,
+          `${sidebarView}/${grouping}: ${counter.reads} row reads for ${total} chats exceeds ${Math.round(budget)}`,
+        );
+
+        // Same-repository projects merge across machines; separate keeps one per host.
+        assert.equal(organized.projectGroups.length, grouping === "repository" ? 40 : 40 * hostCount);
+        const shown =
+          sidebarView === "projects"
+            ? organized.projectGroups.flatMap((group) => group.chats)
+            : organized.chatSections.flatMap((section) => section.chats);
+        assert.equal(shown.length, total);
+        assert.equal(new Set(shown.map((chat) => chat.key)).size, total);
+        if (sidebarView === "recent") {
+          const times = shown.map((chat) => chat.lastActivityAt ?? 0);
+          assert.ok(times.every((at, index) => index === 0 || times[index - 1]! >= at), "newest first");
+        }
+      }
+    }
+  });
+}

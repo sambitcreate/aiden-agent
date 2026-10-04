@@ -162,6 +162,10 @@ export function openCursorSse(
       "x-content-type-options": "nosniff",
       ...options.headers,
     });
+    // Node holds the headers until the first body write. A resumed stream
+    // with nothing new to replay must still tell the client it is open, not
+    // leave it waiting for the next change or heartbeat.
+    response.flushHeaders?.();
     wake();
     if (!closed && !ending) {
       heartbeat = setInterval(() => {

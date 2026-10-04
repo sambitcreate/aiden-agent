@@ -24,6 +24,7 @@ import {
 import { peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
 import type { ChatSessionControl, ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
+import { animationFrame } from "../lib/hosts/frame-scheduler";
 import { hostResultValue, isOutcomeUnknown } from "../lib/hosts/host-chat-adapter";
 import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
@@ -696,6 +697,7 @@ function useRemoteChatSession(host: PeerHostView | undefined, chatId: string): R
     const session = new RemoteChatSession({
       adapter,
       chatId,
+      frame: animationFrame,
       cache: {
         read: () => qc.getQueryData<RemoteTranscript>(key),
         write: (transcript) => qc.setQueryData(key, transcript),

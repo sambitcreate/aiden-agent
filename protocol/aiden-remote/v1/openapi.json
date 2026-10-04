@@ -4638,6 +4638,154 @@
           }
         }
       }
+    },
+    "/pairing/requests": {
+      "post": {
+        "operationId": "createPairingRequest",
+        "security": [],
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. A mac or linux desktop asks this host to pair. Accepted only while the host's Accept connection requests setting is on (403 pairing_closed otherwise); iphone and ipad requesters receive 403 capability_denied. At most 5 requests per source and 20 overall per minute, 8 open requests overall and 2 per source (429 rate_limited with details.retryAfterSeconds). The request expires 120 s after creation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRequestCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created connection request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRequestCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/pairing/requests/{requestId}/reveal": {
+      "post": {
+        "operationId": "revealPairingRequest",
+        "security": [],
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. One-shot commit/reveal step: the requester sends its nonce and receives the host nonce committed to by hostCommitment. The host shows its approval prompt only after this call. A second reveal is 409 pairing_already_used; an unknown request or a wrong or missing secret is 404 not_found.",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/PairingRequestSecret"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRequestReveal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Host nonce",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRequestRevealed"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/pairing/requests/{requestId}": {
+      "get": {
+        "operationId": "pollPairingRequest",
+        "security": [],
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Long-poll for at most 25 s; answers early on any state change. Only approved carries the sealed grant envelope. Terminal records are kept for 60 s, then 404 not_found. An unknown request or a wrong or missing secret is 404 not_found.",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/PairingRequestSecret"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current request state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRequestStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelPairingRequest",
+        "security": [],
+        "description": "Contract revision 20 (pairing-requests-v1). Unauthenticated; no bearer credential or Aiden-Protocol-Version header. Requests carrying an Origin header are refused. Requester cancel. A denied, expired or cancelled request reports its state unchanged. Cancelling an approved request revokes its device and reports cancelled, even after the envelope was fetched. The cancel is acknowledged only once the revocation is recorded; otherwise it fails with internal_error and can be retried.",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/PairingRequestSecret"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State after cancellation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRequestCancelled"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4667,6 +4815,16 @@
       }
     },
     "parameters": {
+      "PairingRequestSecret": {
+        "name": "Aiden-Pairing-Secret",
+        "in": "header",
+        "required": true,
+        "description": "The pollSecret returned at creation. Compared in constant time; a mismatch is indistinguishable from an unknown request.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
       "IdempotencyKey": {
         "name": "Idempotency-Key",
         "in": "header",
@@ -10483,6 +10641,225 @@
         ],
         "additionalProperties": false
       },
+"PairingRequestCreate": {
+        "type": "object",
+        "description": "Contract revision 20 (pairing-requests-v1). deviceName is the requester's unauthenticated claim and is shown to the host user as such.",
+        "required": [
+          "deviceName",
+          "deviceType",
+          "publicKey"
+        ],
+        "properties": {
+          "deviceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "Trimmed; control and bidirectional-override characters are rejected."
+          },
+          "deviceType": {
+            "enum": [
+              "mac",
+              "linux"
+            ]
+          },
+          "publicKey": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "Requester's X25519 public key, 32 raw bytes as unpadded base64url."
+          },
+          "clientVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingRequestCreated": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "pollSecret",
+          "expiresAt",
+          "hostCommitment"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+          },
+          "pollSecret": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "Sent back only in the Aiden-Pairing-Secret header, never in a URL."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hostCommitment": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "SHA-256(\"aiden-pairing-commit-v1\" || 0x00 || requestId || hostNonce)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingRequestReveal": {
+        "type": "object",
+        "required": [
+          "requesterNonce"
+        ],
+        "properties": {
+          "requesterNonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "32 random bytes chosen by the requester."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingRequestRevealed": {
+        "type": "object",
+        "required": [
+          "hostNonce"
+        ],
+        "properties": {
+          "hostNonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "Must match hostCommitment; the requester aborts otherwise."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingRequestStatus": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "state",
+          "expiresAt"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "cancelled"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "envelope": {
+            "$ref": "#/components/schemas/PairingRequestEnvelope"
+          }
+        },
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "state": {
+              "const": "approved"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "envelope"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "envelope"
+            ]
+          }
+        }
+      },
+      "PairingRequestCancelled": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "state"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "cancelled"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingRequestEnvelope": {
+        "type": "object",
+        "description": "The approved grant sealed to the requester's X25519 key with a fresh host ephemeral key. key = HKDF-SHA256(X25519(hostEphemeral, requesterPublicKey), salt, \"aiden-pairing-request-v1\\n\" + requestId + \"\\n\" + requesterPublicKey + \"\\n\" + hostPublicKey, 32); AES-256-GCM with AAD \"aiden-pairing-request-v1\\n\" + requestId + \"\\n\" + expiresAt. The plaintext is {kind: \"aiden-pairing-grant-v1\", requestId, trust, exchange} where trust is a PairingTrust and exchange is a PairingExchangeResponse.",
+        "required": [
+          "kind",
+          "protocolVersion",
+          "requestId",
+          "expiresAt",
+          "hostPublicKey",
+          "salt",
+          "nonce",
+          "ciphertext",
+          "tag"
+        ],
+        "properties": {
+          "kind": {
+            "const": "aiden-pairing-request-v1"
+          },
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "type": "string",
+            "pattern": "^pairreq_[A-Za-z0-9_-]{32}$"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hostPublicKey": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "salt": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{22}$"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{16}$"
+          },
+          "ciphertext": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 10923,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "tag": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{22}$"
+          }
+        },
+        "additionalProperties": false
+      },
       "HostHealth": {
         "type": "object",
         "description": "Contract revision 19 opt-in host descriptor from GET /health?detail=host. Every field is non-secret and grants nothing.",
@@ -10524,7 +10901,7 @@
           },
           "pairingRequests": {
             "type": "boolean",
-            "description": "Whether this host accepts desktop pairing requests."
+            "description": "Whether this host accepts desktop pairing requests right now. Only a host at contract revision 20 or newer serves /pairing/requests, so requesters also check contractRevision."
           }
         },
         "additionalProperties": false
