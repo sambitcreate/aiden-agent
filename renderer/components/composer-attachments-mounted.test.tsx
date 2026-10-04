@@ -341,12 +341,13 @@ test("mounted established Composer blocks attachment intake until failed send re
 test("mounted Composer for a remote chat offers no local attachment or workspace surface and sends plain text", async () => {
   const mounted = installDom();
   const calls = { picker: 0, drop: 0, clipboard: 0 };
+  let picked: Attachment[] = [];
   Object.assign(globalThis, {
     __composerAttachmentFixture: {
       api: {
         async pickAndRead() {
           calls.picker++;
-          return { attachments: [], skipped: 0 };
+          return { attachments: picked, skipped: 0 };
         },
         async readDroppedFiles() {
           calls.drop++;
@@ -364,11 +365,16 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
   const root = createRoot(mounted.container);
   const labels = () =>
     Array.from(mounted.container.getElementsByTagName("button")).map((element) => element.getAttribute("aria-label"));
-  const render = (surfaces: React.ComponentProps<typeof Composer>["surfaces"], onSend: React.ComponentProps<typeof Composer>["onSend"]) =>
+  const render = (
+    surfaces: React.ComponentProps<typeof Composer>["surfaces"],
+    onSend: React.ComponentProps<typeof Composer>["onSend"],
+    chatId = "host-b/chat-1",
+  ) =>
     React.act(async () =>
       root.render(
         <loaded.Composer
-          chatId="host-b/chat-1"
+          key={chatId}
+          chatId={chatId}
           ready
           hasMessages
           initialText="Ship it"
@@ -430,6 +436,30 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
     });
     assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
     assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
+
+    // A host that stages uploads gets the attach button, still without this Mac's workspace access control.
+    picked = [text("notes")];
+    const attaching = new Set<HostChatCapability>(["send", "attach", "createChat"]);
+    const uploaded: Attachment[][] = [];
+    await render(
+      composerSurfacesFor(attaching),
+      async (_value, attachments) => {
+        uploaded.push(attachments);
+      },
+      "host-b/draft:new-chat",
+    );
+    assert.ok(labels().includes("Attach files or images"));
+    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Attach files or images")).onClick();
+    });
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(
+      uploaded.map((attachments) => attachments.map((attachment) => attachment.name)),
+      [["notes.txt"]],
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();

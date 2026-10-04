@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in review. PR 2 (contract revision 19: host feed, run streams, control and paging) is in review. PR 3 (controller supervisor and stream IPC) is in progress.
+Status: Active. The outbound connection foundation (PR #104) is merged. The v1 design was re-scoped and approved on 2026-10-02. PR 1 (run observer bus and persistence) is in review. PR 2 (contract revision 19: host feed, run streams, control and paging) is in review. PR 3 (controller supervisor and stream IPC) is in progress. PRs 5a through 7 are in review as a stack. PR 8 ([new chat on a remote machine and remote Bots](desktop-multi-host-pr8-remote-new-chat.md)) is in review, stacked on PR 7.
 Date: 2026-09-09; revised 2026-10-02.
 Source baseline: `d724ff76d` (origin/main, 2026-10-02). Remote contract revision 18.
 
