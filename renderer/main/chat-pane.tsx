@@ -35,7 +35,10 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { AskUserQuestionExpiryNotice } from "../components/ask-user-question-expiry-notice";
+import {
+  AskUserQuestionCountdown,
+  AskUserQuestionExpiryNotice,
+} from "../components/ask-user-question-expiry-notice";
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
@@ -2702,6 +2705,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {questionnaireExpired ? <AskUserQuestionExpiryNotice state="expired" /> : null}
+            {questionnaire?.expiresAt && !questionnaireExpired ? (
+              <AskUserQuestionCountdown
+                key={questionnaire.promptId}
+                expiresAt={questionnaire.expiresAt}
+              />
+            ) : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}
