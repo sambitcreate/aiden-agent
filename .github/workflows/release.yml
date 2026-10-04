@@ -8,6 +8,8 @@ on:
       - "**/*.md"
       - "docs/**"
       - ".github/workflows/release.yml"
+      # models.dev refresh bot commits change only the bundled catalog.
+      - "resources/model-capabilities.json"
   workflow_dispatch:
 
 permissions:

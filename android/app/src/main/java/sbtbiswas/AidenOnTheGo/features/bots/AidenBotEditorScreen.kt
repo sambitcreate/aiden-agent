@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.util.UUID
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 enum class AidenBotEditorDefaultAccess {
     RECOMMENDED,
@@ -338,7 +340,7 @@ fun AidenBotEditorScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val client by coordinator.client.collectAsState()
+    val client by coordinator.client.collectAsStateWithLifecycle()
 
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var baselineBot by remember { mutableStateOf<AidenBotDetail?>(null) }
@@ -360,6 +362,8 @@ fun AidenBotEditorScreen(
         isCreating = isCreating,
         hasAvatarCandidate = avatarModel?.hasCandidate == true
     )
+    // System back must not silently discard edits the Close button would confirm.
+    BackHandler(enabled = isDirty && !isConfirmingDiscard) { isConfirmingDiscard = true }
 
     LaunchedEffect(botId, client) {
         val cl = client ?: return@LaunchedEffect

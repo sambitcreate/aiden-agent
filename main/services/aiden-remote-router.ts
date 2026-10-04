@@ -1,7 +1,8 @@
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createGzip } from "node:zlib";
 import {
   parseToolApprovalScope,
   type ToolApprovalScope,
@@ -533,22 +534,89 @@ function responseHeaders(contentType = "application/json; charset=utf-8") {
   };
 }
 
+/**
+ * The request behind each in-flight response, so successful JSON reads can
+ * negotiate compression and conditional revalidation without threading the
+ * request through every route.
+ */
+const negotiatedRequests = new WeakMap<ServerResponse, IncomingMessage>();
+/** Smaller bodies gain little from gzip and pay its fixed framing cost. */
+const GZIP_MIN_RESPONSE_BYTES = 1024;
+
+/** Members of a comma-separated header list such as `Accept-Encoding` or `If-None-Match`. */
+function listMembers(header: string | string[] | undefined): string[] {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  return value ? value.split(",").map((member) => member.trim()).filter(Boolean) : [];
+}
+
+/** True only when the client explicitly accepts gzip (or `*`) with a non-zero weight. */
+function acceptsGzipEncoding(header: string | string[] | undefined): boolean {
+  let gzip: number | undefined;
+  let wildcard: number | undefined;
+  for (const member of listMembers(header)) {
+    const [coding = "", ...params] = member.split(";").map((part) => part.trim());
+    const qParam = params.find((param) => /^q=/iu.test(param));
+    const q = qParam === undefined ? 1 : Number(qParam.slice(2));
+    const weight = Number.isFinite(q) ? q : 0;
+    const name = coding.toLowerCase();
+    if (name === "gzip" || name === "x-gzip") gzip = weight;
+    else if (name === "*") wildcard = weight;
+  }
+  return (gzip ?? wildcard ?? 0) > 0;
+}
+
+/** Weak comparison (RFC 9110 §13.1.2) of `If-None-Match` against the response ETag. */
+function ifNoneMatchSatisfied(header: string | string[] | undefined, etag: string): boolean {
+  const opaque = etag.replace(/^W\//u, "");
+  return listMembers(header).some(
+    (member) => member === "*" || member.replace(/^W\//u, "") === opaque,
+  );
+}
+
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   const body = JSON.stringify(value);
-  if (
-    body === undefined ||
-    Buffer.byteLength(body, "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES
-  ) {
+  const length = body === undefined ? 0 : Buffer.byteLength(body, "utf8");
+  if (body === undefined || length > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
     throw new AidenRemoteServiceError(
       "payload_too_large",
       "This response exceeds the Aiden Remote JSON limit.",
       413,
     );
   }
-  response.writeHead(status, {
-    ...responseHeaders(),
-    "content-length": String(Buffer.byteLength(body, "utf8")),
-  });
+  const request = status === 200 ? negotiatedRequests.get(response) : undefined;
+  if (request?.method !== "GET") {
+    response.writeHead(status, {
+      ...responseHeaders(),
+      "content-length": String(length),
+    });
+    response.end(body);
+    return;
+  }
+  // Successful reads are revalidatable and compressible. Both are opt-in:
+  // a client that sends neither `If-None-Match` nor a gzip-accepting
+  // `Accept-Encoding` receives the same identity body as before.
+  const etag = `W/"${createHash("sha256").update(body).digest("base64url")}"`;
+  if (ifNoneMatchSatisfied(request.headers["if-none-match"], etag)) {
+    const { "content-type": _contentType, ...headers } = responseHeaders();
+    response.writeHead(304, { ...headers, etag, vary: "accept-encoding" });
+    response.end();
+    return;
+  }
+  const headers = { ...responseHeaders(), etag, vary: "accept-encoding" };
+  if (
+    length >= GZIP_MIN_RESPONSE_BYTES &&
+    acceptsGzipEncoding(request.headers["accept-encoding"])
+  ) {
+    // Stream through zlib's thread pool rather than blocking main on a
+    // multi-megabyte transcript; the body is chunked without a length.
+    response.writeHead(200, { ...headers, "content-encoding": "gzip" });
+    const gzip = createGzip();
+    gzip.on("error", () => response.destroy());
+    gzip.pipe(response);
+    gzip.end(body);
+    return;
+  }
+  response.writeHead(200, { ...headers, "content-length": String(length) });
   response.end(body);
 }
 
@@ -1393,6 +1461,7 @@ export function createAidenRemoteRequestHandler(
     dependencies.devices.acquireDeviceAuthorization(deviceId, false)();
   };
   return (request, response) => {
+    negotiatedRequests.set(response, request);
     const id = requestId();
     const startedAt = dependencies.now();
     let route: Parameters<AidenRemoteRouterDependencies["log"]>[0]["route"] = "unknown";

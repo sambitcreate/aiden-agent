@@ -35,6 +35,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,8 +46,8 @@ fun AidenPairingScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
-    val installations by installationStore.installations.collectAsState()
-    val activeId by installationStore.activeInstallationId.collectAsState()
+    val installations by installationStore.installations.collectAsStateWithLifecycle()
+    val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
 
     var manualCode by remember { mutableStateOf("") }
     var endpointUrl by remember { mutableStateOf("https://127.0.0.1:8765/api/aiden/v1") }
