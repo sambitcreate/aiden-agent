@@ -1,14 +1,19 @@
 // Markdown renderer for assistant messages. Streaming-safe (re-renders on each
 // delta) and styled with semantic tokens so it respects light/dark.
-// Supports GFM tables, LaTeX (KaTeX), and rich code blocks (syntax highlighting,
-// syntax highlighting and per-block copy) via the CodeBlock component.
+// Supports GFM tables, LaTeX (KaTeX, loaded on demand), and rich code blocks
+// (syntax highlighting and per-block copy) via the CodeBlock component.
 
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { cn } from "../lib/ui-utils";
+import {
+  contentMayContainMath,
+  loadMarkdownMath,
+  markdownMathPlugins,
+  markdownMathVersion,
+  subscribeMarkdownMath,
+} from "../lib/markdown-math";
 import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE } from "../lib/rich-link";
 import { CodeBlock } from "./code-block";
 import { RichLink } from "./rich-link";
@@ -70,6 +75,27 @@ function remarkRichLinkLimit() {
   };
 }
 
+/**
+ * Plugin lists for one message. Math plugins join only when the content has a
+ * `$` and KaTeX has loaded; the first such message starts the load.
+ */
+function useMarkdownPlugins(content: string, richLinks: boolean) {
+  const needsMath = contentMayContainMath(content);
+  React.useSyncExternalStore(subscribeMarkdownMath, markdownMathVersion, markdownMathVersion);
+  React.useEffect(() => {
+    if (needsMath) void loadMarkdownMath();
+  }, [needsMath]);
+  const math = needsMath ? markdownMathPlugins() : null;
+  return {
+    remarkPlugins: [
+      remarkGfm,
+      ...(math ? [math.remark] : []),
+      ...(richLinks ? [remarkRichLinkLimit] : []),
+    ],
+    rehypePlugins: math ? [math.rehype] : [],
+  };
+}
+
 const components: Components = {
   // Unwrap <pre> — CodeBlock renders its own container/scroller.
   pre: ({ children }) => <>{children}</>,
@@ -109,12 +135,9 @@ export const MarkdownContent = React.memo(function MarkdownContent({
   content,
   richLinks = false,
 }: MarkdownProps) {
+  const plugins = useMarkdownPlugins(content, richLinks);
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
-      rehypePlugins={[rehypeKatex]}
-      components={components}
-    >
+    <ReactMarkdown {...plugins} components={components}>
       {content}
     </ReactMarkdown>
   );
@@ -137,12 +160,9 @@ export const MarkdownInline = React.memo(function MarkdownInline({
   content,
   richLinks = false,
 }: MarkdownProps) {
+  const plugins = useMarkdownPlugins(content, richLinks);
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
-      rehypePlugins={[rehypeKatex]}
-      components={inlineComponents}
-    >
+    <ReactMarkdown {...plugins} components={inlineComponents}>
       {content}
     </ReactMarkdown>
   );

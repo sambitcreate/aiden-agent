@@ -121,6 +121,23 @@ export function parseModel(name: string): { label: string; format: string | null
   };
 }
 
+/** Flattens per-provider catalog answers into the `provider::model` lookup the picker uses. */
+export function modelInfoByValue(
+  providers: readonly Provider[],
+  infoByProvider: Readonly<
+    Record<string, Readonly<Record<string, ModelInfo | undefined>> | undefined>
+  >,
+): Record<string, ModelInfo | undefined> {
+  const infoByValue: Record<string, ModelInfo | undefined> = {};
+  for (const provider of providers) {
+    const data = infoByProvider[provider.id];
+    for (const modelId of provider.models) {
+      infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
+    }
+  }
+  return infoByValue;
+}
+
 export function createModelEntries(
   providers: Provider[],
   infoByValue: Readonly<Record<string, ModelInfo | undefined>> = {},
@@ -178,14 +195,8 @@ export function createChatModelProviders(
     Record<string, Readonly<Record<string, ModelInfo | undefined>> | undefined>
   > = {},
 ): ChatModelProvider[] {
-  const infoByValue: Record<string, ModelInfo | undefined> = {};
-  for (const provider of providers) {
-    for (const [model, info] of Object.entries(infoByProvider[provider.id] ?? {})) {
-      infoByValue[encodeSelection(provider.id, model)] = info;
-    }
-  }
   const modelsByProvider = new Map<string, string[]>();
-  for (const entry of createModelEntries(providers, infoByValue)) {
+  for (const entry of createModelEntries(providers, modelInfoByValue(providers, infoByProvider))) {
     const models = modelsByProvider.get(entry.providerId) ?? [];
     models.push(entry.model);
     modelsByProvider.set(entry.providerId, models);
