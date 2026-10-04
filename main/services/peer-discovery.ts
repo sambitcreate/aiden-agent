@@ -1,3 +1,4 @@
+import { isIPv4 } from "node:net";
 import {
   hostIdentifier,
   type PeerDiscoveredDevice,
@@ -45,6 +46,12 @@ export interface PeerDiscoveryOptions {
   localInstanceId(): Promise<string>;
   pairedIds(): Promise<string[]>;
   publish(state: PeerDiscoveryState): void;
+  /**
+   * An installation answered at the IPv4 address Bonjour reported, under the
+   * key `spki`. Paired connections may use the address for its `.local`
+   * name when that key is the one they pinned.
+   */
+  lanAddress?(instanceId: string, address: string, spki: string | undefined): void;
   /** Defaults to `PEER_BROWSE_SETTLE_MS`. */
   browseSettleMs?: number;
 }
@@ -286,16 +293,20 @@ export class PeerDiscovery {
   /** True when the endpoint answered as an Aiden desktop. */
   private async probe(session: Session, endpoint: string, route: Found["route"]): Promise<boolean> {
     let health: Record<string, unknown>;
+    let spki: string | undefined;
     try {
+      const client = this.options.bootstrap({
+        endpoint,
+        mode: route === "tailscale" ? "webpki" : "unverified",
+      });
       health = peerRecord(
-        await this.options
-          .bootstrap({ endpoint, mode: route === "tailscale" ? "webpki" : "unverified" })
-          .json({
-            path: "/health?detail=host",
-            timeoutMs: PEER_PROBE_TIMEOUT_MS,
-            signal: session.controller.signal,
-          }),
+        await client.json({
+          path: "/health?detail=host",
+          timeoutMs: PEER_PROBE_TIMEOUT_MS,
+          signal: session.controller.signal,
+        }),
       );
+      spki = client.observedSpki;
     } catch {
       return false;
     }
@@ -307,6 +318,8 @@ export class PeerDiscovery {
       return false;
     }
     if (id === (await session.self) || this.session !== session) return true;
+    const address = route === "lan" ? new URL(endpoint).hostname : undefined;
+    if (address && isIPv4(address)) this.options.lanAddress?.(id, address, spki);
     const existing = session.found.get(id);
     if (existing && (existing.route === "tailscale" || route === "lan")) return true;
     // Bounded by Unicode characters, as the host counts them, so a cut never

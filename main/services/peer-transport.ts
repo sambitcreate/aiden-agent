@@ -1,4 +1,5 @@
 import https from "node:https";
+import type { LookupFunction } from "node:net";
 import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { createHash, X509Certificate } from "node:crypto";
 import { TextDecoder } from "node:util";
@@ -369,9 +370,21 @@ function headers(input: PeerRequest, mode: ReadMode): Record<string, string> {
 export class PeerTransport {
   readonly trust: PeerTrust;
   private readonly agent: https.Agent | undefined;
-  constructor(trust: PeerTrust, options: { agent?: https.Agent } = {}) {
+  private readonly lookup: LookupFunction | undefined;
+  constructor(
+    trust: PeerTrust,
+    options: {
+      agent?: https.Agent;
+      /**
+       * Resolves the endpoint's host for new connections. TLS still verifies
+       * the endpoint's own name, so this changes only where a socket goes.
+       */
+      lookup?: LookupFunction;
+    } = {},
+  ) {
     this.trust = validatePeerTrust(trust);
     this.agent = options.agent;
+    this.lookup = options.lookup;
   }
 
   private async read(
@@ -416,6 +429,7 @@ export class PeerTransport {
           method: input.method ?? "GET",
           headers: requestHeaders,
           ...(this.agent ? { agent: this.agent } : { agent: false }),
+          ...(this.lookup ? { lookup: this.lookup } : {}),
           ...peerTlsOptions(this.trust),
         },
         (response) => {

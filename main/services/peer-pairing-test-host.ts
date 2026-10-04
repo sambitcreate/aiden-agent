@@ -3,7 +3,9 @@
  * pairing services in-process. It is imported by tests only.
  *
  * - The LAN listener serves `/api/aiden/v1` with a private CA, as a desktop
- *   host does on its LAN port.
+ *   host does on its LAN port. With `lanHostname`, the host seals that
+ *   `.local` name into grants and setup codes, as a desktop seals its own,
+ *   while it stays reachable only at `lanAddressEndpoint`.
  * - The "Tailscale" listener accepts the stripped base path and announces
  *   system trust for `https://localhost:<port>/api/aiden/v1`. Tests trust the
  *   fixture CA in place of the system roots.
@@ -33,7 +35,10 @@ export interface PeerTestHost {
   caPem: string;
   caDerBase64: string;
   serverSpkiSha256(): string;
+  /** The LAN endpoint the host seals into grants and setup codes. */
   lanEndpoint: string;
+  /** The LAN listener at its IPv4 address, as Bonjour reports it. */
+  lanAddressEndpoint: string;
   tailscaleEndpoint: string;
   requests: AidenRemotePairingRequestService;
   pairing: AidenRemotePairingService;
@@ -54,6 +59,7 @@ export interface PeerTestHost {
 
 async function identityIn(
   directory: string,
+  hostnames: string[],
   from?: string,
 ): Promise<AidenRemoteTlsIdentity> {
   if (from) {
@@ -61,15 +67,21 @@ async function identityIn(
     for (const name of ["ca-key.pem", "ca-certificate.pem"])
       await copyFile(path.join(from, name), path.join(directory, name));
   }
-  return loadOrCreateAidenRemoteTlsIdentity({ directory });
+  return loadOrCreateAidenRemoteTlsIdentity({ directory, hostnames });
 }
 
 export async function startPeerTestHost(
-  options: { displayName?: string; pollTimeoutMs?: number } = {},
+  options: {
+    displayName?: string;
+    pollTimeoutMs?: number;
+    /** A `.local` name the certificate covers and grants carry. */
+    lanHostname?: string;
+  } = {},
 ): Promise<PeerTestHost> {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-host-"));
   const firstDirectory = path.join(root, "a");
-  let identity = await identityIn(firstDirectory);
+  const hostnames = options.lanHostname ? [options.lanHostname] : [];
+  let identity = await identityIn(firstDirectory, hostnames);
   const caDerBase64 = new X509Certificate(identity.caCertificate).raw.toString(
     "base64",
   );
@@ -160,7 +172,11 @@ export async function startPeerTestHost(
   });
   const lan = https.createServer(tlsOptions(), handler(false));
   const tailscale = https.createServer(tlsOptions(), handler(true));
-  lanEndpoint = `https://127.0.0.1:${await listen(lan)}/api/aiden/v1`;
+  const lanPort = await listen(lan);
+  const lanAddressEndpoint = `https://127.0.0.1:${lanPort}/api/aiden/v1`;
+  lanEndpoint = options.lanHostname
+    ? `https://${options.lanHostname}:${lanPort}/api/aiden/v1`
+    : lanAddressEndpoint;
   tailscaleEndpoint = `https://localhost:${await listen(tailscale)}/api/aiden/v1`;
   let rotations = 0;
   const serve = (next: AidenRemoteTlsIdentity) => {
@@ -176,6 +192,7 @@ export async function startPeerTestHost(
     caDerBase64,
     serverSpkiSha256: () => identity.serverSpkiSha256,
     lanEndpoint,
+    lanAddressEndpoint,
     tailscaleEndpoint,
     requests,
     pairing,
@@ -202,10 +219,10 @@ export async function startPeerTestHost(
       return window.manualCode;
     },
     rotateLeaf: async () => {
-      serve(await identityIn(path.join(root, `leaf-${++rotations}`), firstDirectory));
+      serve(await identityIn(path.join(root, `leaf-${++rotations}`), hostnames, firstDirectory));
     },
     impersonate: async () => {
-      serve(await identityIn(path.join(root, `other-${++rotations}`)));
+      serve(await identityIn(path.join(root, `other-${++rotations}`), hostnames));
     },
     close: async () => {
       await requests.close();

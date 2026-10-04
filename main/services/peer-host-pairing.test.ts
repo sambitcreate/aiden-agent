@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import dns from "node:dns";
+import type { LookupFunction } from "node:net";
 import test from "node:test";
 import { PeerBootstrapTransport } from "./peer-bootstrap-transport.js";
 import { PeerHostRegistry, type StoredPeerHost } from "./peer-host-registry.js";
+import { PeerLanAddresses } from "./peer-lan-addresses.js";
 import { PeerPairingOutcomeError, type PeerPairingFailure } from "./peer-pairing-client.js";
 import { startPeerTestHost, type PeerTestHost } from "./peer-pairing-test-host.js";
 import { PeerTransport, PeerTransportError } from "./peer-transport.js";
@@ -284,5 +287,105 @@ test("names are bounded by Unicode characters, as the host counts them", async (
   assert.deepEqual(
     (await registry.list()).map((entry) => entry.name),
     [`${coder} desk`],
+  );
+});
+
+/** A system resolver without mDNS: every `.local` name is unknown. */
+const withoutMdns: LookupFunction = (hostname, options, callback) => {
+  if (/\.local\.?$/iu.test(hostname)) {
+    callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }), "", 0);
+    return;
+  }
+  dns.lookup(hostname, options, callback);
+};
+
+/** A registry on a controller whose system resolver cannot reach `.local` names. */
+function registryWithoutMdns(saved: { hosts: StoredPeerHost[] }) {
+  return new PeerHostRegistry({
+    storage: {
+      load: async () => structuredClone(saved.hosts),
+      save: async (next) => {
+        saved.hosts = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "install_self",
+    deviceName: "Travel MacBook",
+    clientVersion: "0.60.0",
+    platform: "mac",
+    lanAddresses: new PeerLanAddresses(withoutMdns),
+  });
+}
+
+test("a LAN host found at its Bonjour address stays reachable under its unresolvable .local name", async (t) => {
+  const host = await startPeerTestHost({ lanHostname: "studio-mac.local" });
+  t.after(() => host.close());
+  assert.notEqual(host.lanEndpoint, host.lanAddressEndpoint);
+  const saved = { hosts: [] as StoredPeerHost[] };
+  const registry = registryWithoutMdns(saved);
+
+  // A connection request to the address discovery fell back to.
+  const view = await registry.pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanAddressEndpoint, route: "lan" },
+    answer(host, "allow"),
+  );
+  assert.equal(view.state, "connected");
+  assert.equal(saved.hosts[0]?.endpoint, host.lanEndpoint, "the host's canonical endpoint is saved");
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(server.instanceId, host.instanceId);
+});
+
+test("a setup code for a discovered device pairs through the address it was found at", async (t) => {
+  const host = await startPeerTestHost({ lanHostname: "studio-mac.local" });
+  t.after(() => host.close());
+  const saved = { hosts: [] as StoredPeerHost[] };
+  const registry = registryWithoutMdns(saved);
+  const view = await registry.pairWithSetupCode({
+    endpoint: host.lanAddressEndpoint,
+    code: host.openSetupCode("lan"),
+    instanceId: host.instanceId,
+  });
+  assert.equal(view.id, host.instanceId);
+  assert.equal(saved.hosts[0]?.endpoint, host.lanEndpoint);
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(server.instanceId, host.instanceId);
+});
+
+test("after a restart, a paired LAN host is reachable again once discovery reports its address with the pinned key", async (t) => {
+  const host = await startPeerTestHost({ lanHostname: "studio-mac.local" });
+  t.after(() => host.close());
+  const saved = { hosts: [] as StoredPeerHost[] };
+  await registryWithoutMdns(saved).pairWithRequest(
+    { instanceId: host.instanceId, endpoint: host.lanAddressEndpoint, route: "lan" },
+    answer(host, "allow"),
+  );
+
+  // A new process remembers no address.
+  const restarted = registryWithoutMdns(saved);
+  const unreachable = () =>
+    assert.rejects(
+      restarted.request(host.instanceId, { path: "/server" }),
+      (error: unknown) => error instanceof PeerTransportError && error.code === "unavailable",
+    );
+  await unreachable();
+
+  // An answer under another key, or for another installation, is not kept.
+  const address = new URL(host.lanAddressEndpoint).hostname;
+  await restarted.rememberLanAddress(host.instanceId, address, `sha256/${"A".repeat(43)}=`);
+  await restarted.rememberLanAddress("someone-else", address, host.serverSpkiSha256());
+  await unreachable();
+
+  const pinned = host.serverSpkiSha256();
+  await restarted.rememberLanAddress(host.instanceId, address, pinned);
+  const server = (await restarted.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(server.instanceId, host.instanceId);
+
+  // The address only changes where a connection goes: TLS still checks the
+  // name, the private CA and the pinned key.
+  await host.impersonate();
+  const impersonated = registryWithoutMdns(saved);
+  await impersonated.rememberLanAddress(host.instanceId, address, pinned);
+  await assert.rejects(
+    impersonated.request(host.instanceId, { path: "/server" }),
+    (error: unknown) => error instanceof PeerTransportError && error.code === "identity_changed",
   );
 });

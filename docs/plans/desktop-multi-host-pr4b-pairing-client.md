@@ -86,6 +86,14 @@ Credentials, endpoints and pins stay in main and never reach a renderer.
 3. Re-pin retries a request only after a TLS identity failure, which happens before any request
    byte is sent. That makes the retry safe for mutations.
 4. No onboarding tile or illustration (user decision). Connections settings is the entry point.
+5. A controller without system mDNS can still reach a LAN host that discovery found at its
+   Bonjour IPv4 address (`main/services/peer-lan-addresses.ts`). Pairing at that address, a
+   connection request or a discovered setup code, remembers it for the installation. Discovery
+   also reports it, and the registry keeps it only for a paired host pinned to the key seen there.
+   Connections resolve the `.local` name through the system first and use the address only when
+   that fails. TLS still verifies the `.local` name, the private CA and the SPKI pin, so a wrong
+   address can only fail. Addresses live in memory, so after a restart one is learned again when
+   discovery next runs.
 
 ## Verification
 

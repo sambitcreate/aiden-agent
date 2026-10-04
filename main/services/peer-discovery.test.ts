@@ -387,6 +387,7 @@ test("a LAN service whose .local name fails is probed at its IPv4 address", asyn
   t.after(() => host.close());
   const port = Number(new URL(host.lanEndpoint).port);
   const seen = publications();
+  const reported: [string, string, string | undefined][] = [];
   const subject = discovery({
     browse: (onService) => {
       onService({ host: "unresolvable.invalid", port, addresses: ["::1", "127.0.0.1"] });
@@ -394,10 +395,14 @@ test("a LAN service whose .local name fails is probed at its IPv4 address", asyn
     },
     bootstrap: (options) => new PeerBootstrapTransport(options),
     publish: seen.publish,
+    lanAddress: (id, address, spki) => reported.push([id, address, spki]),
   });
   subject.start();
   const state = await seen.until((next) => settled(next) && next.devices.length === 1);
   assert.equal(state.devices[0]?.id, host.instanceId);
   assert.equal(subject.target(host.instanceId)?.endpoint, host.lanEndpoint);
+  // Paired connections may use the address under the host's `.local` name,
+  // once the key seen here matches the one they pinned.
+  assert.deepEqual(reported, [[host.instanceId, "127.0.0.1", host.serverSpkiSha256()]]);
   subject.stop();
 });

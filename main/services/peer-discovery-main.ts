@@ -34,6 +34,10 @@ export function getPeerDiscovery(): PeerDiscovery {
       (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId,
     pairedIds: async () => (await registry.list()).map((host) => host.id),
     publish: (state) => ipcMain.broadcast("remote:peer-discovery", state),
+    // Kept only for a paired host pinned to the key seen at the address.
+    // Unreadable storage only means no address is kept.
+    lanAddress: (id, address, spki) =>
+      void registry.rememberLanAddress(id, address, spki).catch(() => undefined),
   });
   discovery = current;
   app.once("before-quit", () => current.stop(false));

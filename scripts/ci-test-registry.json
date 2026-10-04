@@ -362,6 +362,7 @@
         "main/services/peer-host-manager.test.ts",
         "main/services/peer-host-pairing.test.ts",
         "main/services/peer-host-registry.test.ts",
+        "main/services/peer-lan-addresses.test.ts",
         "main/services/peer-operation.test.ts",
         "main/services/peer-pairing-client.test.ts",
         "main/services/peer-run-subscriptions.test.ts",

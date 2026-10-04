@@ -14,6 +14,7 @@ import {
   type PeerPairing,
 } from "./peer-pairing.js";
 import type https from "node:https";
+import { isIPv4 } from "node:net";
 import {
   createPeerBootstrapTransport,
   type PeerBootstrapFactory,
@@ -23,6 +24,7 @@ import {
   PeerPairingOutcomeError,
   requestPeerPairing,
 } from "./peer-pairing-client.js";
+import { PeerLanAddresses, peerLanAddresses } from "./peer-lan-addresses.js";
 import {
   createPeerAgent,
   PeerTransport,
@@ -43,6 +45,16 @@ import {
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
 } from "./aiden-remote-protocol.js";
 
+/** The IPv4 literal an endpoint names, if it names one. */
+function endpointIPv4(endpoint: string): string | undefined {
+  const { hostname } = new URL(endpoint);
+  return isIPv4(hostname) ? hostname : undefined;
+}
+
+/** True for a host's canonical LAN endpoint, a `.local` name. */
+function isLocalEndpoint(endpoint: string): boolean {
+  return /\.local\.?$/iu.test(new URL(endpoint).hostname);
+}
 
 /**
  * A saved name: the host's own name or one chosen locally. Both are bounded
@@ -210,6 +222,8 @@ export class PeerHostRegistry {
       client?(trust: PeerTrust): PeerClient;
       /** Unauthenticated sessions for pairing routes and Tailscale re-pins. */
       bootstrap?: PeerBootstrapFactory;
+      /** Bonjour addresses for `.local` endpoints. Defaults to the process-wide book. */
+      lanAddresses?: PeerLanAddresses;
       changed?(): void;
       /** A Tailscale host's renewed key was confirmed and saved. */
       repinned?(): void;
@@ -244,21 +258,45 @@ export class PeerHostRegistry {
       this.hosts = parseStoredPeerHosts(await this.options.storage.load());
     return this.hosts;
   }
-  private client(trust: PeerTrust, hostId?: string): PeerClient {
+  private get lanAddresses(): PeerLanAddresses {
+    return this.options.lanAddresses ?? peerLanAddresses;
+  }
+  /**
+   * `instanceId` names the installation behind `trust`; it defaults to
+   * `hostId`. A `.local` endpoint can then fall back to the address Bonjour
+   * gave for that installation.
+   */
+  private client(trust: PeerTrust, hostId?: string, instanceId = hostId): PeerClient {
     const injected = this.options.client?.(trust);
     if (injected) return injected;
+    const lookup =
+      instanceId !== undefined && isLocalEndpoint(trust.endpoint)
+        ? { lookup: this.lanAddresses.lookupFor(instanceId) }
+        : {};
     // Pairing runs before a host exists and keeps a single-use connection.
-    if (hostId === undefined) return new PeerTransport(trust);
+    if (hostId === undefined) return new PeerTransport(trust, lookup);
     // A request admitted before a re-pin must not pool a socket on the old key.
     const stored = this.hosts?.find((host) => host.id === hostId);
     if (stored && stored.serverSpkiSha256 !== trust.serverSpkiSha256)
-      return new PeerTransport(trust);
+      return new PeerTransport(trust, lookup);
     let agent = this.agents.get(hostId);
     if (!agent) {
       agent = createPeerAgent(trust);
       this.agents.set(hostId, agent);
     }
-    return new PeerTransport(trust, { agent });
+    return new PeerTransport(trust, { agent, ...lookup });
+  }
+
+  /**
+   * Discovery reached a paired LAN host at an IPv4 address and saw `spki`
+   * there. Keep the address for its `.local` endpoint only when that is the
+   * key this host is pinned to, so an impostor cannot redirect it.
+   */
+  async rememberLanAddress(id: string, address: string, spki: string | undefined): Promise<void> {
+    if (spki === undefined || !isIPv4(address)) return;
+    const host = (await this.load()).find((entry) => entry.id === id);
+    if (!host || host.serverSpkiSha256 !== spki || !isLocalEndpoint(host.endpoint)) return;
+    this.lanAddresses.remember(id, address);
   }
   private invalidate(id: string): void {
     this.verified.delete(id);
@@ -468,7 +506,7 @@ export class PeerHostRegistry {
     options: PeerPairingOptions,
   ): Promise<PeerHostView> {
     const server = peerRecord(
-      await this.client(input.trust).json({
+      await this.client(input.trust, undefined, input.instanceId).json({
         path: "/server",
         credential: input.credential,
         signal: attempt.controller.signal,
@@ -531,7 +569,7 @@ export class PeerHostRegistry {
       await this.reserve(pairing.instanceId, attempt, options, pairing.expiresAt);
       reserved = true;
       const exchange = peerRecord(
-        await this.client(pairing).json({
+        await this.client(pairing, undefined, pairing.instanceId).json({
           method: "POST",
           path: "/pairing/exchange",
           signal: attempt.controller.signal,
@@ -605,6 +643,11 @@ export class PeerHostRegistry {
         onMatchCode,
       });
       attempt.assertCurrent();
+      // The match code covered the key seen at this address, and TLS checks
+      // the sealed `.local` name against it, so the address may stand in for
+      // a name this device cannot resolve.
+      const address = target.route === "lan" ? endpointIPv4(target.endpoint) : undefined;
+      if (address) this.lanAddresses.remember(instanceId, address);
       return await this.finish(
         {
           trust: {
@@ -678,6 +721,10 @@ export class PeerHostRegistry {
       } catch {
         throw new PeerPairingOutcomeError({ status: "invalid_code" });
       }
+      // A discovered device may be reachable only at the address it was
+      // found at. The exchange still verifies the sealed name, CA and key.
+      const address = input.instanceId === undefined ? undefined : endpointIPv4(input.endpoint);
+      if (address) this.lanAddresses.remember(pairing.instanceId, address);
       return await this.pair(pairing, signal, options);
     } catch (error) {
       if (signal?.aborted || this.closed)
