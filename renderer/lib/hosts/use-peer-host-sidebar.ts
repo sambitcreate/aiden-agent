@@ -5,15 +5,13 @@ import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type {
   PeerHostFeedMessage,
   PeerHostFeedSnapshot,
-  PeerHostStatus,
   PeerRepositoryIdentity,
 } from "../../shared/peer-host";
 import { hostQueryKeys } from "./host-query-keys";
 import {
   applyPeerHostFeedMessage,
+  createPeerHostStatusSync,
   FEED_RESYNC,
-  mergePeerHostStatuses,
-  readPeerHostStatuses,
   replayPeerHostFeedMessages,
 } from "./peer-host-feed-state";
 
@@ -78,17 +76,17 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     }
   }, [enabledIds, list.data, queryClient]);
 
+  const statusSync = useMemo(
+    () => createPeerHostStatusSync(queryClient, peerHostsApi.statuses),
+    [queryClient],
+  );
   // Messages that arrive while a snapshot read is in flight, per host.
   const pending = useRef(new Map<string, PeerHostFeedMessage[]>());
   // Status and feed reads wait for the broadcast listeners so no change can slip between them.
   const [listening, setListening] = useState(false);
   useEffect(() => {
     if (!supervised) return;
-    const unsubscribeState = peerHostsApi.onHostState((status) => {
-      queryClient.setQueryData<PeerHostStatus[]>(hostQueryKeys.statuses(), (current) =>
-        mergePeerHostStatuses(current, [status]),
-      );
-    });
+    const unsubscribeState = peerHostsApi.onHostState(statusSync.receive);
     const unsubscribeFeed = peerHostsApi.onHostFeed((message) => {
       pending.current.get(message.hostId)?.push(message);
       const key = hostQueryKeys.feed(message.hostId);
@@ -104,14 +102,11 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
       unsubscribeFeed();
       setListening(false);
     };
-  }, [queryClient, supervised]);
+  }, [queryClient, statusSync, supervised]);
 
   const statuses = useQuery({
     queryKey: hostQueryKeys.statuses(),
-    queryFn: () =>
-      readPeerHostStatuses(peerHostsApi.statuses, () =>
-        queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()),
-      ),
+    queryFn: statusSync.read,
     enabled: supervised && listening,
     staleTime: Infinity,
   });
