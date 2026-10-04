@@ -216,7 +216,6 @@ export function AboutSettings() {
           </div>
         </Field>
         <Field
-          className="border-t border-separator"
           label="Software update"
           description={
             showUpdateControls
@@ -277,16 +276,20 @@ export function AboutSettings() {
           </div>
           )}
         </Field>
+      </FieldSet>
+
+      <DiagnosticsSettings />
+
+      <FieldSet title="Reset">
         <Field
-          className="border-t border-separator"
-          label="Reset onboarding"
-          description="Clear this profile’s setup and preferences, restart Aiden, and return to the first onboarding step."
+          label="Reset profile, providers and preferences"
+          description="Remove this profile’s setup, saved API keys and sign-ins, then restart Aiden into onboarding. Chats and projects stay."
         >
           <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
             <Button
               ref={resetButtonRef}
               size="small"
-              variant="filled"
+              variant="destructive"
               disabled={resetting}
               onClick={() => {
                 setResetError(null);
@@ -294,13 +297,12 @@ export function AboutSettings() {
               }}
             >
               {resetting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-              {resetting ? "Resetting…" : "Reset onboarding…"}
+              {resetting ? "Resetting…" : "Reset and restart…"}
             </Button>
           </div>
         </Field>
       </FieldSet>
 
-      <DiagnosticsSettings />
 
       <AlertDialog
         open={confirmReset}
@@ -308,7 +310,7 @@ export function AboutSettings() {
           setConfirmReset(open);
           if (!open) setResetError(null);
         }}
-        title="Reset onboarding and restart Aiden?"
+        title="Reset profile, providers and preferences?"
         description={
           <div className="space-y-2">
             <p>

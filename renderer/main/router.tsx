@@ -4,34 +4,54 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
 } from "@tanstack/react-router";
 import * as React from "react";
 import { RootView } from "./root-view";
 import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
-import { SettingsView } from "./settings-view";
-import { ProfileView } from "./profile-view";
-import { ScheduledTasksView } from "../components/scheduled-tasks-view";
-import { BotsView } from "./bots-view";
-import { QueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
-import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { RemoteChatView } from "./remote-chat-view";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+
+// Chat is the startup surface, so only its shell and pane are in the entry
+// chunk. Every other route loads its own chunk; the router awaits the chunk
+// before committing the navigation, so the previous view stays on screen
+// instead of flashing a placeholder.
+const SettingsView = lazyRouteComponent(() => import("./settings-view"), "SettingsView");
+const ProfileView = lazyRouteComponent(() => import("./profile-view"), "ProfileView");
+const ScheduledTasksView = lazyRouteComponent(
+  () => import("../components/scheduled-tasks-view"),
+  "ScheduledTasksView",
+);
+const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
+const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
+
+/** Let the router preload the lazy view a wrapper route component renders. */
+function preloadsWith<P>(
+  component: (props: P) => React.ReactNode,
+  ...lazy: Array<{ preload?: () => Promise<void> }>
+) {
+  return Object.assign(component, {
+    preload: () => Promise.all(lazy.map((view) => view.preload?.())).then(() => undefined),
+  });
+}
 
 function BotsCapabilityRoute({ children }: React.PropsWithChildren) {
   const capabilities = useAppCapabilities();
   return capabilities.bots ? children : <Navigate to="/" replace />;
 }
 
-function BotsRoute() {
+const BotsRoute = preloadsWith(function BotsRoute() {
   return (
     <BotsCapabilityRoute>
       <BotsView />
     </BotsCapabilityRoute>
   );
-}
+}, BotsView);
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -106,14 +126,14 @@ const botRoute = createRoute({
 const botChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/bots/$botId/chat/$chatId",
-  component: function BotChatRoute() {
+  component: preloadsWith(function BotChatRoute() {
     const { botId, chatId } = botChatRoute.useParams();
     return (
       <BotsCapabilityRoute>
         <BotChatRouteView botId={botId} chatId={chatId} />
       </BotsCapabilityRoute>
     );
-  },
+  }, BotChatRouteView),
   staticData: { title: "Bot conversation" },
 });
 
@@ -134,10 +154,10 @@ const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   validateSearch: parseSettingsSearch,
-  component: function SettingsRoute() {
+  component: preloadsWith(function SettingsRoute() {
     const { section } = settingsRoute.useSearch();
     return <SettingsView initialSection={section} />;
-  },
+  }, SettingsView),
   staticData: { title: "Settings" },
 });
 
@@ -155,7 +175,7 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
 ]);
 
-const queryClient = new QueryClient();
+const queryClient = createAppQueryClient();
 
 const router = createRouter({
   routeTree,

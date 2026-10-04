@@ -31,6 +31,105 @@ type DispatchResult =
   | { kind: "skipped"; reason: "already-running" }
   | { kind: "dispatched"; completion: Promise<ScheduledRun> };
 
+export interface CatchUpQueueOptions {
+  /** Missed runs allowed to execute at once. */
+  concurrency?: number;
+  /** Minimum spacing between catch-up starts. */
+  staggerMs?: number;
+  /** True while catch-up should wait, for example while the screen is locked. */
+  shouldDefer?: () => boolean;
+}
+
+export const CATCH_UP_CONCURRENCY = 2;
+export const CATCH_UP_STAGGER_MS = 3_000;
+
+/**
+ * Bounded, staggered admission for missed scheduled runs, so a restart after
+ * a long sleep does not start every overdue automation at once. Deferred work
+ * waits for `reevaluate()`; entries that stop being current are dropped.
+ */
+export function createCatchUpQueue(options: CatchUpQueueOptions = {}) {
+  const concurrency = Math.max(1, options.concurrency ?? CATCH_UP_CONCURRENCY);
+  const staggerMs = Math.max(0, options.staggerMs ?? CATCH_UP_STAGGER_MS);
+  let shouldDefer = options.shouldDefer ?? (() => false);
+  const pending: Array<{ run: () => Promise<unknown> | undefined; isCurrent: () => boolean }> = [];
+  let active = 0;
+  let generation = 0;
+  let lastStartAt = Number.NEGATIVE_INFINITY;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deferred = () => {
+    try {
+      return shouldDefer();
+    } catch {
+      return false;
+    }
+  };
+
+  function pump(): void {
+    if (timer !== undefined) return;
+    while (pending.length > 0 && !pending[0].isCurrent()) pending.shift();
+    if (pending.length === 0 || active >= concurrency || deferred()) return;
+    const wait = lastStartAt + staggerMs - Date.now();
+    if (wait > 0) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        pump();
+      }, wait);
+      timer.unref?.();
+      return;
+    }
+    const next = pending.shift()!;
+    lastStartAt = Date.now();
+    active += 1;
+    const startedIn = generation;
+    let completion: Promise<unknown> | undefined;
+    try {
+      completion = next.run();
+    } catch {
+      completion = undefined;
+    }
+    void Promise.resolve(completion)
+      .catch(() => undefined)
+      .finally(() => {
+        if (startedIn !== generation) return;
+        active -= 1;
+        pump();
+      });
+    pump();
+  }
+
+  return {
+    enqueue(run: () => Promise<unknown> | undefined, isCurrent: () => boolean): void {
+      pending.push({ run, isCurrent });
+      pump();
+    },
+    /** Retry deferred or waiting work, for example after resume or unlock. */
+    reevaluate(): void {
+      pump();
+    },
+    setDeferPolicy(policy: () => boolean): void {
+      shouldDefer = policy;
+      pump();
+    },
+    /** Drop queued work; runs already started are being cancelled and stop counting. */
+    clear(): void {
+      generation += 1;
+      active = 0;
+      lastStartAt = Number.NEGATIVE_INFINITY;
+      pending.length = 0;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+    get active(): number {
+      return active;
+    },
+    get pending(): number {
+      return pending.length;
+    },
+  };
+}
+
 export interface ScheduleServiceDependencies {
   store: ScheduleStore;
   execution: ScheduleExecutionLike;
@@ -38,6 +137,7 @@ export interface ScheduleServiceDependencies {
   broadcast(payload: Record<string, unknown>): void;
   warn(message: string): void;
   error(message: string, cause: unknown): void;
+  catchUp?: CatchUpQueueOptions;
 }
 
 export function createScheduleServiceCore(
@@ -51,6 +151,7 @@ export function createScheduleServiceCore(
   let started = false;
   let globallyEnabled = true;
   let startupRevision = 0;
+  const catchUp = createCatchUpQueue(dependencies.catchUp);
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
     if (signal?.aborted)
@@ -348,12 +449,13 @@ export function createScheduleServiceCore(
             const job = jobs.get(latest.id);
             if (!job) continue;
             const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
-            const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
-            if (result.kind === "dispatched") {
-              void result.completion.catch((error) =>
+            catchUp.enqueue(() => {
+              const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
+              if (result.kind !== "dispatched") return undefined;
+              return result.completion.catch((error) =>
                 recordUnexpectedFailure(latest, error, ownsCatchup),
               );
-            }
+            }, ownsCatchup);
           }
         }
       } catch (error) {
@@ -368,6 +470,7 @@ export function createScheduleServiceCore(
     stop(): void {
       startupRevision += 1;
       started = false;
+      catchUp.clear();
       for (const job of jobs.values()) job.stop();
       jobs.clear();
       for (const state of runningTasks.values()) state.cancelRequested = true;
@@ -571,6 +674,15 @@ export function createScheduleServiceCore(
         await rescheduleAll();
       }
       dependencies.broadcast({ globallyEnabled: enabled });
+    },
+
+    /** Re-check deferred catch-up, for example after resume or unlock. */
+    reevaluateCatchUp(): void {
+      catchUp.reevaluate();
+    },
+
+    setCatchUpDeferPolicy(policy: () => boolean): void {
+      catchUp.setDeferPolicy(policy);
     },
 
     isRunning(id: string): boolean {

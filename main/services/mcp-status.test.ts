@@ -91,7 +91,7 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   const barrier = new Promise<void>((resolve) => { release = resolve; });
   const started = new Promise<void>((resolve) => { entered = resolve; });
   let closes = 0;
-  const stale = attempts.run("server", 0, () => ({ version: 1 }), async () => {},
+  const stale = attempts.run("server", attempts.generation("server"), () => ({ version: 1 }), async () => {},
     (_client, isCurrent) => inspectInitializedMcpStatus({
       getServerCapabilities: () => ({ tools: {}, extensions: { "private/stale": {} } }),
       listTools: async () => { entered(); await barrier; return { tools: [] }; },
