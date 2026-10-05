@@ -106,7 +106,7 @@ fun AidenQRCodeScanner(
             ) {
                 Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Enable Camera", fontWeight = FontWeight.Bold)
+                Text("Enable Camera", fontWeight = FontWeight.Bold, color = palette.onAccent)
             }
         }
     } else {
