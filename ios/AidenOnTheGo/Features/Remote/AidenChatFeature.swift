@@ -1147,6 +1147,9 @@ final class AidenChatViewModel {
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
+    /// The fork request whose outcome is still unknown, replayed with the
+    /// same Idempotency-Key so a lost response never yields a second fork.
+    @ObservationIgnored private var forkAttempt: AidenChatForkAttempt?
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -1746,14 +1749,29 @@ final class AidenChatViewModel {
         isForking = true
         defer { isForking = false }
         let source = chat
-        do {
-            let result = try await coordinator.remoteClient(for: context).forkChat(
+        let attempt = AidenChatForkAttempt.retaining(
+            forkAttempt,
+            context: context,
+            request: .init(
                 chatId: source.id,
                 revision: source.revision,
                 messageId: messageId,
                 position: action.position,
                 summaryFocus: action == .forkWithSummary ? summaryFocus : nil
             )
+        )
+        forkAttempt = attempt
+        do {
+            let result = try await coordinator.remoteClient(for: context).forkChat(
+                chatId: attempt.request.chatId,
+                revision: attempt.request.revision,
+                messageId: attempt.request.messageId,
+                position: attempt.request.position,
+                summaryFocus: attempt.request.summaryFocus,
+                idempotencyKey: attempt.idempotencyKey
+            )
+            // The Mac answered: the next fork is a new request.
+            if forkAttempt == attempt { forkAttempt = nil }
             guard !isRemoved, coordinator.isCurrent(context) else { return nil }
             let forked = result.chat
             guard !forked.isBotChat, forked.workspaceId == source.workspaceId else {
@@ -1777,8 +1795,12 @@ final class AidenChatViewModel {
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-fork:\(forked.id)")
             return forked
         } catch let error where aidenIsCancellation(error) {
+            // A cancelled request may already have reached the Mac; keep the key.
             return nil
         } catch {
+            if forkAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
+                forkAttempt = nil
+            }
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
             guard !isRemoved, coordinator.isCurrent(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
@@ -4212,7 +4234,7 @@ struct AidenWorkspaceChatsView: View {
                 } else {
                     ForEach(model.chats) { chat in
                         NavigationLink {
-                            AidenChatDetailView(
+                            AidenForkableChatDetailView(
                                 coordinator: coordinator,
                                 chat: chat,
                                 onChatUpdated: {
@@ -4220,7 +4242,7 @@ struct AidenWorkspaceChatsView: View {
                                     onChatUpdated($0)
                                 },
                                 onChatActivityChanged: onChatActivityChanged,
-                                onOpenChat: openFork
+                                onForkOpened: acceptOpenedFork
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -4257,7 +4279,7 @@ struct AidenWorkspaceChatsView: View {
             set: { if !$0 { createdChat = nil } }
         )) {
             if let createdChat {
-                AidenChatDetailView(
+                AidenForkableChatDetailView(
                     coordinator: coordinator,
                     chat: createdChat,
                     onChatUpdated: {
@@ -4265,7 +4287,7 @@ struct AidenWorkspaceChatsView: View {
                         onChatUpdated($0)
                     },
                     onChatActivityChanged: onChatActivityChanged,
-                    onOpenChat: openFork
+                    onForkOpened: acceptOpenedFork
                 )
                 .id(createdChat.id)
             }
@@ -4323,10 +4345,10 @@ struct AidenWorkspaceChatsView: View {
         renameChat = chat
     }
 
-    private func openFork(_ chat: AidenChat) {
+    /// Lists the fork; the detail pushes it over its source.
+    private func acceptOpenedFork(_ chat: AidenChat) {
         model.accept(chat)
         onChatUpdated(chat)
-        createdChat = chat
     }
 }
 

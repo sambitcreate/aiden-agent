@@ -962,6 +962,158 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testForkReplaysItsKeyAfterALostResponseAndOpensTheOriginalFork() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-lost-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.commitButLoseResponse])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let lost = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(lost)
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "The Mac created the fork before the response was lost.")
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(retried?.id, "chat-fork-1", "The retry opens the fork the lost request created.")
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "Retrying never makes a second copy.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The retry replays the same Idempotency-Key.")
+
+        // Once the Mac has answered, forking again is a new request.
+        let next = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(next?.id, "chat-fork-2")
+        XCTAssertEqual(Set(mac.keys).count, 2)
+    }
+
+    @MainActor
+    func testForkKeepsItsKeyWhileTheMacReportsTheSameRequestInFlight() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-in-flight-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.inFlight])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let pending = await model.fork(messageId: "message-a2", action: .forkWithSummary, summaryFocus: " errors ")
+        XCTAssertNil(pending)
+        let settled = await model.fork(messageId: "message-a2", action: .forkWithSummary, summaryFocus: "errors")
+        XCTAssertEqual(settled?.id, "chat-fork-1")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The same normalized request keeps its key while its outcome is unknown.")
+    }
+
+    @MainActor
+    func testForkMintsAFreshKeyAfterTheMacRejectsItAsBusy() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-busy-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.busy])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let busy = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(busy)
+        XCTAssertEqual(model.presentedError, "Another fork is being created.")
+        XCTAssertTrue(mac.createdForkIDs.isEmpty)
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(retried?.id, "chat-fork-1")
+        XCTAssertEqual(mac.ifMatchRevisions, ["revision-7", "revision-7"], "The source revision is unchanged.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertNotEqual(mac.keys.first, mac.keys.last, "A rejected key is never reused.")
+    }
+
+    func testForkTrailPushesEachForkOverItsSourceAndBackReturnsOneLevel() throws {
+        let source = try forkTrailChat(id: "chat-source")
+        let fork1 = try forkTrailChat(id: "chat-fork-1")
+        let fork2 = try forkTrailChat(id: "chat-fork-2")
+        var trail = AidenChatForkTrail()
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+        XCTAssertFalse(trail.presentsFork(over: 0))
+
+        // Each fork opens from the chat on top and becomes a new level.
+        trail.open(fork1, fromDepth: 0)
+        trail.open(fork2, fromDepth: 1)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), fork2.id)
+        XCTAssertEqual(trail.fork(atDepth: 1)?.id, fork1.id)
+        XCTAssertEqual(trail.fork(atDepth: 2)?.id, fork2.id)
+        XCTAssertTrue(trail.presentsFork(over: 0))
+        XCTAssertTrue(trail.presentsFork(over: 1))
+        XCTAssertFalse(trail.presentsFork(over: 2))
+
+        // Back from fork 2 shows fork 1; Back again shows the source.
+        trail.dismissFork(over: 1)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), fork1.id)
+        trail.dismissFork(over: 0)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+        XCTAssertNil(trail.fork(atDepth: 1))
+
+        // A second fork of the source pushes over the source, not over an
+        // earlier fork, and Back still lands on the source.
+        trail.open(fork1, fromDepth: 0)
+        trail.dismissFork(over: 0)
+        trail.open(fork2, fromDepth: 0)
+        XCTAssertEqual(trail.forks.map(\.id), [fork2.id])
+        trail.dismissFork(over: 0)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+    }
+
+    func testForkTrailReplacesLevelsAboveTheForkingChatAndKeepsForksCurrent() throws {
+        let fork1 = try forkTrailChat(id: "chat-fork-1")
+        let fork2 = try forkTrailChat(id: "chat-fork-2")
+        let fork3 = try forkTrailChat(id: "chat-fork-3")
+        var trail = AidenChatForkTrail()
+        trail.open(fork1, fromDepth: 0)
+        trail.open(fork2, fromDepth: 1)
+
+        // Forking fork 1 again while fork 2 is above it replaces fork 2.
+        trail.open(fork3, fromDepth: 1)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+
+        // A depth the trail never reached changes nothing.
+        trail.open(fork2, fromDepth: 5)
+        trail.dismissFork(over: 7)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+
+        let renamed = try forkTrailChat(id: "chat-fork-1", title: "Renamed fork")
+        trail.accept(renamed)
+        XCTAssertEqual(trail.fork(atDepth: 1)?.title, "Renamed fork")
+        let unrelated = try forkTrailChat(id: "chat-elsewhere")
+        trail.accept(unrelated)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+    }
+
+    private func forkTrailChat(id: String, title: String = "Chat") throws -> AidenChat {
+        let json = #"{"id":"\#(id)","workspaceId":"workspace-1","title":"\#(title)","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"revision-1"}"#
+        return try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(json.utf8))
+    }
+
+    @MainActor
+    private func makeForkLedgerModel(mac: AidenForkLedgerMac, root: URL) async throws -> AidenChatViewModel {
+        let sourceJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"},{"id":"message-u2","role":"user","text":"Now check the error codes.","createdAt":"2026-09-14T12:00:02Z"},{"id":"message-a2","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:03Z"},{"id":"message-u3","role":"user","text":"Thanks.","createdAt":"2026-09-14T12:00:04Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:04Z","revision":"revision-7"}"#
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-fork-v1","chat-fork-summary-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let source = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(sourceJSON.utf8))
+        let fixture = AidenStreamRecoveryFixture(chat: source)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            initialChat: source,
+            responseOverride: { request in
+                switch (request.httpMethod, request.url?.path) {
+                case (_, "/api/aiden/v1/server"):
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/fork"):
+                    return mac.respond(to: request)
+                default:
+                    return fixture.response(request)
+                }
+            }
+        )
+        XCTAssertNotNil(model.forkAvailability)
+        return model
+    }
+
+    @MainActor
     func testWorkspaceChatRestoresLastExplicitModelChoiceAfterRelaunchAndFallsBackWhenGone() async throws {
         let suiteName = "AidenModelPreferenceRelaunch.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -6931,6 +7083,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 
     typealias Override = @Sendable (URLRequest) -> (Int, String, Data)?
+    /// An override status that drops the connection instead of answering,
+    /// as when the Mac commits a write but its response is lost.
+    static let connectionLostStatus = -1
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -7021,6 +7176,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         let result: (HTTPURLResponse, Data)
         var shouldFinish = true
         if let custom = Self.lock.withLock({ Self.responseOverride })?(request) {
+            if custom.0 == Self.connectionLostStatus {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
             result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
         } else {
         switch path {
@@ -8910,4 +9069,82 @@ private final class AidenRenameRequestLog: @unchecked Sendable {
     func record(_ request: URLRequest) { lock.lock(); defer { lock.unlock() }; requests.append(request) }
     func count(_ method: String) -> Int { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.httpMethod == method }.count }
     func lastRevision() -> String? { lock.lock(); defer { lock.unlock() }; return requests.last { $0.httpMethod == "PATCH" }?.value(forHTTPHeaderField: "If-Match") }
+}
+
+/// A Mac with an idempotency ledger for `POST /chats/{id}/fork`: a key it
+/// has already committed replays the fork it created instead of making
+/// another. Unscripted requests create a new fork.
+private final class AidenForkLedgerMac: @unchecked Sendable {
+    enum Reply {
+        /// Creates the fork, then the connection drops before the response.
+        case commitButLoseResponse
+        /// 409 `idempotency_in_flight`: this key's request is still running.
+        case inFlight
+        /// 409 `operation_in_progress`: a different fork holds the source.
+        case busy
+    }
+
+    private let lock = NSLock()
+    private var plan: [Reply]
+    private var ledger: [String: String] = [:]
+    private var created: [String] = []
+    private var receivedKeys: [String] = []
+    private var receivedRevisions: [String] = []
+
+    init(plan: [Reply]) { self.plan = plan }
+
+    var createdForkIDs: [String] { lock.withLock { created } }
+    var keys: [String] { lock.withLock { receivedKeys } }
+    var ifMatchRevisions: [String] { lock.withLock { receivedRevisions } }
+
+    func respond(to request: URLRequest) -> (Int, String, Data) {
+        lock.withLock { () -> (Int, String, Data) in
+            let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+            receivedKeys.append(key)
+            receivedRevisions.append(request.value(forHTTPHeaderField: "If-Match") ?? "")
+            if let replay = ledger[key] {
+                return (201, "application/json", Self.result(forkID: replay, request: request))
+            }
+            let reply = plan.isEmpty ? nil : plan.removeFirst()
+            switch reply {
+            case .busy:
+                return (409, "application/json", Self.error(code: "operation_in_progress", message: "Another fork is being created."))
+            case .inFlight:
+                return (409, "application/json", Self.error(code: "idempotency_in_flight", message: "This request is still running."))
+            case .commitButLoseResponse, nil:
+                let forkID = "chat-fork-\(created.count + 1)"
+                created.append(forkID)
+                ledger[key] = forkID
+                if reply == .commitButLoseResponse {
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                return (201, "application/json", Self.result(forkID: forkID, request: request))
+            }
+        }
+    }
+
+    private static func result(forkID: String, request: URLRequest) -> Data {
+        let body = request.httpBody ?? request.httpBodyStream.map(readStream) ?? Data()
+        let fields = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        let messageID = fields["messageId"] as? String ?? ""
+        let json = #"{"chat":{"id":"\#(forkID)","workspaceId":"workspace-1","title":"Progress lifecycle (fork)","messages":[],"createdAt":"2026-09-14T12:05:00Z","updatedAt":"2026-09-14T12:05:00Z","revision":"revision-fork-1","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"\#(messageID)","position":"after","at":"2026-09-14T12:05:00Z"}}}"#
+        return Data(json.utf8)
+    }
+
+    private static func error(code: String, message: String) -> Data {
+        Data(#"{"error":{"code":"\#(code)","message":"\#(message)","requestId":"request-fork","retryable":true}}"#.utf8)
+    }
+
+    private static func readStream(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }

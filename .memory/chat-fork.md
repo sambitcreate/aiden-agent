@@ -105,6 +105,8 @@ Both halves ship together from `feat/chat-fork-mobile`, which also carries the A
   - `AidenChat.forkedFrom` and `AidenChatSummary.forkedFrom` decode leniently: a damaged lineage becomes nil and a damaged summary is dropped on its own.
   - Rows strip the summary. `CachedChatSummary` persists the row lineage.
   - iOS has no messages-window DTO, so the window's `forkedFrom` is not consumed.
+- **Retry keys.** `AidenChatForkAttempt` keeps the fork's normalized request (chat, revision, message, position, trimmed focus), its request context and its `Idempotency-Key` in the chat view model. The key is reused only for the same request on the same activation after an unknown outcome: no Aiden error response, a cancellation, a 201 that could not be accepted, or `idempotency_in_flight`. Success or any other error drops it, matching Android and the Mac's ledger.
+- **Navigation.** Forks open through `AidenForkableChatDetailView`, which keeps a per-source `AidenChatForkTrail` and pushes each fork as its own `navigationDestination(isPresented:)` level. The compact stack path holds persisted workspace IDs, so fork routes don't go into it. Back walks fork → fork → source in the compact sidebar, the workspace list and the regular-width detail column, where the sidebar keeps the source selected. A size-class change drops the trail.
 - **UI.** `Features/Chat/AidenChatFork.swift` holds the eligibility rules, the lineage row, `AidenForkSummaryCard`, `AidenForkSummarySheet` and the prefill handoff.
   - Context-menu and accessibility actions:
     - settled replies after a prompt: Fork from Here;

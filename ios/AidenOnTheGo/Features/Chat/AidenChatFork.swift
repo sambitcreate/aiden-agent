@@ -104,6 +104,122 @@ enum AidenChatForkEligibility {
     }
 }
 
+/// One fork request and the `Idempotency-Key` it travels with. Forking leaves
+/// the source revision unchanged, so `If-Match` cannot stop a repeated tap
+/// from creating a second fork; only a reused key can. The attempt is kept
+/// while the outcome is unknown and replayed verbatim, and it never crosses
+/// into another pairing or activation.
+struct AidenChatForkAttempt: Equatable {
+    /// The normalized request body and preconditions.
+    struct Request: Equatable {
+        let chatId: String
+        let revision: String
+        let messageId: String
+        let position: AidenChatForkPosition
+        /// Nil for a plain fork; the trimmed focus (possibly empty) for Fork
+        /// with Summary, matching what the client sends.
+        let summaryFocus: String?
+
+        init(
+            chatId: String,
+            revision: String,
+            messageId: String,
+            position: AidenChatForkPosition,
+            summaryFocus: String?
+        ) {
+            self.chatId = chatId
+            self.revision = revision
+            self.messageId = messageId
+            self.position = position
+            self.summaryFocus = summaryFocus?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    let context: AidenRemoteRequestContext
+    let request: Request
+    let idempotencyKey: UUID
+
+    /// Reuses `existing` when it is the same request on the same activation;
+    /// anything else mints a fresh key.
+    static func retaining(
+        _ existing: AidenChatForkAttempt?,
+        context: AidenRemoteRequestContext,
+        request: Request,
+        makeKey: () -> UUID = UUID.init
+    ) -> AidenChatForkAttempt {
+        if let existing, existing.context == context, existing.request == request {
+            return existing
+        }
+        return AidenChatForkAttempt(context: context, request: request, idempotencyKey: makeKey())
+    }
+
+    /// Whether the Mac may have created the fork although the request failed,
+    /// so the key must be kept for the next try. That is the case only when
+    /// no Aiden error response arrived (transport failure, timeout, lost
+    /// connection, or a cancelled request that may already have been sent),
+    /// a 201 arrived but could not be accepted, or the Mac reports the same
+    /// key still in flight. Every other error response is a definitive
+    /// rejection, and the Mac's ledger would replay it for a reused key.
+    static func outcomeIsUnknown(after error: Error) -> Bool {
+        guard let clientError = error as? AidenRemoteClientError else { return true }
+        switch clientError {
+        case .server(_, let body):
+            return body.code.rawValue == "idempotency_in_flight"
+        case .invalidResponse:
+            return true
+        case .unexpectedStatus, .invalidEndpoint, .missingCredential,
+             .missingTrustConfiguration, .installationChanged:
+            return false
+        }
+    }
+}
+
+/// The forks opened on top of one chat, in push order. Each level of the
+/// navigation stack shows the chat at its depth (0 is the source the user
+/// opened) and presents the next level while the trail is deeper than it, so
+/// Back pops one fork at a time down to the source.
+struct AidenChatForkTrail: Equatable {
+    private(set) var forks: [AidenChat] = []
+
+    /// The fork shown at `depth`; depth 0 is the root chat, not a fork.
+    func fork(atDepth depth: Int) -> AidenChat? {
+        guard depth > 0, depth <= forks.count else { return nil }
+        return forks[depth - 1]
+    }
+
+    /// Whether the level at `depth` has a fork pushed over it.
+    func presentsFork(over depth: Int) -> Bool {
+        depth >= 0 && forks.count > depth
+    }
+
+    /// The id of the chat on top: the newest fork, else the root.
+    func visibleChatID(root rootChatID: String) -> String {
+        forks.last?.id ?? rootChatID
+    }
+
+    /// Pushes a fork opened from the chat at `depth`. Anything that was
+    /// above that level is replaced, so the new fork sits directly on top of
+    /// the chat it came from.
+    mutating func open(_ fork: AidenChat, fromDepth depth: Int) {
+        guard depth >= 0, depth <= forks.count else { return }
+        forks.removeSubrange(depth...)
+        forks.append(fork)
+    }
+
+    /// Back from the fork over `depth`: that fork and every one above it
+    /// leave the stack.
+    mutating func dismissFork(over depth: Int) {
+        guard depth >= 0, depth < forks.count else { return }
+        forks.removeSubrange(depth...)
+    }
+
+    /// Keeps a pushed fork current when its detail reports an update.
+    mutating func accept(_ updated: AidenChat) {
+        guard let index = forks.firstIndex(where: { $0.id == updated.id }) else { return }
+        forks[index] = updated
+    }
+}
+
 /// Carries restaged attachments from an Edit in fork to the composer of the
 /// fork it opens. The prefill text travels through the per-chat draft store;
 /// attachments cannot, because the store deliberately holds text only.
@@ -133,6 +249,86 @@ enum AidenChatForkPrefillHandoff {
 
     private static func key(instanceId: String, chatId: String) -> String {
         "\(instanceId)\u{1f}\(chatId)"
+    }
+}
+
+/// A Workspace chat plus the forks opened from it. Each fork is pushed as its
+/// own destination over the chat it came from, so Back walks fork by fork to
+/// the source instead of leaving the source behind. The trail belongs to this
+/// view, so it starts empty every time the source is opened.
+///
+/// The surrounding stacks are bound to persisted workspace-ID paths (compact)
+/// or have none (the split detail, view-based list links), so each level
+/// presents the next one from the trail rather than appending to that path.
+struct AidenForkableChatDetailView: View {
+    let coordinator: AidenRemoteCoordinator
+    let chat: AidenChat
+    var autoStartVoice = false
+    var onChatUpdated: @MainActor (AidenChat) -> Void = { _ in }
+    var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+    /// List bookkeeping for a fork that just opened; navigation happens here.
+    var onForkOpened: @MainActor (AidenChat) -> Void = { _ in }
+    @State private var trail = AidenChatForkTrail()
+
+    var body: some View {
+        AidenChatForkLevel(
+            coordinator: coordinator,
+            depth: 0,
+            chat: chat,
+            autoStartVoice: autoStartVoice,
+            trail: $trail,
+            onChatUpdated: onChatUpdated,
+            onChatActivityChanged: onChatActivityChanged,
+            onForkOpened: onForkOpened
+        )
+    }
+}
+
+/// One level of a fork trail: the chat at `depth`, presenting the fork
+/// pushed over it.
+private struct AidenChatForkLevel: View {
+    let coordinator: AidenRemoteCoordinator
+    let depth: Int
+    let chat: AidenChat
+    let autoStartVoice: Bool
+    @Binding var trail: AidenChatForkTrail
+    let onChatUpdated: @MainActor (AidenChat) -> Void
+    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    let onForkOpened: @MainActor (AidenChat) -> Void
+
+    var body: some View {
+        AidenChatDetailView(
+            coordinator: coordinator,
+            chat: chat,
+            autoStartVoice: autoStartVoice,
+            onChatUpdated: { updated in
+                if trail.forks.contains(where: { $0.id == updated.id }) { trail.accept(updated) }
+                onChatUpdated(updated)
+            },
+            onChatActivityChanged: onChatActivityChanged,
+            onOpenChat: { fork in
+                onForkOpened(fork)
+                trail.open(fork, fromDepth: depth)
+            }
+        )
+        .id(chat.id)
+        .navigationDestination(isPresented: Binding(
+            get: { trail.presentsFork(over: depth) },
+            set: { if !$0 { trail.dismissFork(over: depth) } }
+        )) {
+            if let fork = trail.fork(atDepth: depth + 1) {
+                AidenChatForkLevel(
+                    coordinator: coordinator,
+                    depth: depth + 1,
+                    chat: fork,
+                    autoStartVoice: false,
+                    trail: $trail,
+                    onChatUpdated: onChatUpdated,
+                    onChatActivityChanged: onChatActivityChanged,
+                    onForkOpened: onForkOpened
+                )
+            }
+        }
     }
 }
 

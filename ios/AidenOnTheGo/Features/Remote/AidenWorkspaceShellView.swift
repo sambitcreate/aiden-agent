@@ -858,7 +858,7 @@ struct AidenWorkspaceShellView: View {
                 } detail: {
                     NavigationStack {
                         if let selectedSidebarChat {
-                            AidenChatDetailView(
+                            AidenForkableChatDetailView(
                                 coordinator: coordinator,
                                 chat: selectedSidebarChat,
                                 autoStartVoice: selectedSidebarChatStartsVoice,
@@ -866,7 +866,7 @@ struct AidenWorkspaceShellView: View {
                                 onChatActivityChanged: { chatID, activity in
                                     homeModel.setActivity(activity, forChatID: chatID)
                                 },
-                                onOpenChat: openFork
+                                onForkOpened: acceptOpenedFork
                             )
                             .id(selectedSidebarChat.id)
                         } else {
@@ -888,7 +888,7 @@ struct AidenWorkspaceShellView: View {
                             )
                         ) {
                             if let selectedSidebarChat {
-                                AidenChatDetailView(
+                                AidenForkableChatDetailView(
                                     coordinator: coordinator,
                                     chat: selectedSidebarChat,
                                     autoStartVoice: selectedSidebarChatStartsVoice,
@@ -896,7 +896,7 @@ struct AidenWorkspaceShellView: View {
                                     onChatActivityChanged: { chatID, activity in
                                         homeModel.setActivity(activity, forChatID: chatID)
                                     },
-                                    onOpenChat: openFork
+                                    onForkOpened: acceptOpenedFork
                                 )
                                 .id(selectedSidebarChat.id)
                             }
@@ -1800,9 +1800,13 @@ struct AidenWorkspaceShellView: View {
         commitOpenChat(chat, startsVoice: startsVoice)
     }
 
-    private func openFork(_ chat: AidenChat) {
+    /// Lists a fork opened from the selected chat. The detail pushes it over
+    /// its source in either layout (the compact stack or the split detail
+    /// column), so Back returns to the source and the sidebar keeps the
+    /// source selected.
+    private func acceptOpenedFork(_ chat: AidenChat) {
         homeModel.accept(chat)
-        openChat(chat)
+        homeModel.markViewed(chatID: chat.id)
     }
 
     private func acceptSelectedChatUpdate(_ updated: AidenChat) {
