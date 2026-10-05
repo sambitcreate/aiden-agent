@@ -205,7 +205,7 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
   const tile = (name: string) => themes().getByRole("radio", { name, exact: true });
 
   await openAppearance();
-  await expect(themes().getByRole("radio")).toHaveCount(9);
+  await expect(themes().getByRole("radio")).toHaveCount(10);
   await expect(page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio")).toHaveCount(3);
 
   await tile("Dusk").click();
@@ -244,7 +244,7 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
       .getByRole("radio", { name: "System", exact: true })
       .locator("svg");
   await resizeWindow(1280);
-  await expect.poll(tileColumns).toBe(3);
+  await expect.poll(tileColumns).toBe(5);
   await expect(modeIcon()).toBeVisible();
   await resizeWindow(390);
   await expect.poll(tileColumns).toBe(2);
@@ -377,6 +377,33 @@ test("chat width setting resizes the transcript and composer together and persis
   await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
   await page.getByText("Chat width geometry probe").first().click();
   await expect.poll(async () => (await widths())?.transcript).toBe(measured.Wide);
+});
+
+test("text fields rest on a fill and deepen it on focus without an accent edge", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice", exact: true }).click();
+  const field = page.getByRole("textbox", { name: "Heard as" });
+  await expect(field).toBeVisible();
+  const look = () => field.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      border: `${style.borderTopWidth} ${style.borderTopColor}`,
+      outline: style.outlineStyle,
+      shadow: style.boxShadow,
+    };
+  });
+  const rest = await look();
+  expect(rest.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(rest.border.startsWith("1px")).toBe(true);
+  await field.focus();
+  await expect.poll(async () => (await look()).background).not.toBe(rest.background);
+  const focused = await look();
+  expect(focused.border).toBe(rest.border);
+  expect(focused.outline).toBe("none");
+  expect(focused.shadow).toBe(rest.shadow);
 });
 
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({

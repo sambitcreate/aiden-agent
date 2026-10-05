@@ -304,7 +304,7 @@ private fun AidenWorkspaceHome(
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
                     },
                     containerColor = palette.accent,
-                    contentColor = Color.White,
+                    contentColor = palette.onAccent,
                     shape = CircleShape,
                     modifier = Modifier.semantics { contentDescription = "New Workspace Chat" }
                 ) {

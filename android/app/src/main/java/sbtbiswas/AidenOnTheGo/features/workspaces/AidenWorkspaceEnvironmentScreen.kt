@@ -302,9 +302,9 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                                 enabled = !isSaving && availability().canEditDocument
                             ) {
                                 if (isSaving) {
-                                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
+                                    CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(16.dp))
                                 } else {
-                                    Text("Save", color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("Save", color = palette.onAccent, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -637,7 +637,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Reload from desktop", color = Color.White)
+                    Text("Reload from desktop", color = palette.onAccent)
                 }
             },
             dismissButton = {

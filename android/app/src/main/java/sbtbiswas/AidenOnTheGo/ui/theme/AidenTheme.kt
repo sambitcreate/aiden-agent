@@ -81,7 +81,7 @@ fun AidenTheme(
     val colorScheme = if (isDark) {
         darkColorScheme(
             primary = palette.accent,
-            onPrimary = Color.White,
+            onPrimary = palette.onAccent,
             primaryContainer = palette.accent.copy(alpha = 0.22f),
             onPrimaryContainer = palette.accent,
             secondary = palette.secondary,
@@ -109,7 +109,7 @@ fun AidenTheme(
     } else {
         lightColorScheme(
             primary = palette.accent,
-            onPrimary = Color.White,
+            onPrimary = palette.onAccent,
             primaryContainer = palette.accent.copy(alpha = 0.14f),
             onPrimaryContainer = palette.accent,
             secondary = palette.secondary,

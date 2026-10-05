@@ -147,7 +147,7 @@ export function McpSettings() {
         </Button>
       </div>
 
-      <div className="flex items-center justify-between gap-4 settings-card rounded-card border border-separator px-3.5 py-3">
+      <div className="flex items-center justify-between gap-4 settings-card rounded-card px-3.5 py-3">
         <div className="min-w-0 flex-1">
           <Text variant="small-strong">Manual MCP server setup</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
@@ -166,7 +166,7 @@ export function McpSettings() {
           <Text variant="small-strong" color="secondary">
             Configured MCP servers · {list.length}
           </Text>
-          <div className="settings-card rounded-card border border-separator">
+          <div className="settings-card rounded-card">
             {list.map((s, i) => (
               <React.Fragment key={s.id}>
                 {i > 0 ? <Separator /> : null}
@@ -174,7 +174,7 @@ export function McpSettings() {
                   {s.presetId ? (
                     <div
                       aria-hidden
-                      className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-separator bg-well text-strong"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-well text-strong"
                     >
                       <McpPresetIcon presetId={s.presetId} name={s.name} className="size-4" />
                     </div>
@@ -408,10 +408,10 @@ function PluginCard({
   const connectable = isConnectablePlugin(plugin);
   const badge = state ? mcpPresetConnectionBadge(state) : null;
   return (
-    <div className="flex flex-col gap-2 settings-card rounded-card border border-separator p-4">
+    <div className="flex flex-col gap-2 settings-card rounded-card p-4">
       <div
         aria-hidden
-        className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong"
+        className="flex size-9 items-center justify-center rounded-lg bg-well text-strong"
       >
         <McpPresetIcon presetId={plugin.id} name={plugin.name} className="size-5" />
       </div>

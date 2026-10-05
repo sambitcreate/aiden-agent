@@ -563,7 +563,7 @@ fun AidenChatDetailScreen(
                                                 colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                                                 shape = RoundedCornerShape(10.dp)
                                             ) {
-                                                Text(if (isAutomation) "Approve task" else "Allow once", color = Color.White, fontWeight = FontWeight.Bold)
+                                                Text(if (isAutomation) "Approve task" else "Allow once", color = palette.onAccent, fontWeight = FontWeight.Bold)
                                             }
                                         }
                                     }
@@ -999,7 +999,7 @@ private fun UserMessageRow(
                                 Text(
                                     text = message.text,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White
+                                    color = palette.onAccent
                                 )
                             }
                             fallbackAttachments.forEach { att ->
@@ -1008,14 +1008,14 @@ private fun UserMessageRow(
                                     Icon(
                                         Icons.Default.Attachment,
                                         contentDescription = null,
-                                        tint = Color.White,
+                                        tint = palette.onAccent,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = att.name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White,
+                                        color = palette.onAccent,
                                         maxLines = 1
                                     )
                                 }

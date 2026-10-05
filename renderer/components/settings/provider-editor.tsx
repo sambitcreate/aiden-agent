@@ -597,7 +597,7 @@ export function ProviderEditor({
             Detected capabilities with your custom overrides. Check provider
             documentation for exact support.
           </Text>
-          <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-card bg-well">
             {models.map((m, i) => {
               const info = {
                 ...modelInfo.data?.[m],

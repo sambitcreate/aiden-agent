@@ -1268,7 +1268,7 @@ function EnvironmentPanelSurface({
         "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
         inline
           ? "inset-y-0 right-0 border-l border-separator"
-          : "bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog",
+          : "bottom-3 right-3 top-3 rounded-sheet shadow-dialog",
         resizing
           ? "transition-none"
           : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
@@ -1566,7 +1566,7 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet border border-separator bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{

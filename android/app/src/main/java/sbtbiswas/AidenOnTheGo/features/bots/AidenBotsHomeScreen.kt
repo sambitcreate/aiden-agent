@@ -744,7 +744,7 @@ fun AidenBotsHomeScreen(
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "Open Bot Chat",
-                            tint = if (chatReadyBots.isNotEmpty()) Color.White else palette.secondary.copy(alpha = 0.4f),
+                            tint = if (chatReadyBots.isNotEmpty()) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                             modifier = Modifier.size(22.dp)
                         )
                     }

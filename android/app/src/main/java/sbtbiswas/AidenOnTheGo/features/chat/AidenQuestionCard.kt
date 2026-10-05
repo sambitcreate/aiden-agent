@@ -276,7 +276,7 @@ fun AidenQuestionCard(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Submit", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Submit", color = palette.onAccent, fontWeight = FontWeight.Bold)
                     }
                 }
             }

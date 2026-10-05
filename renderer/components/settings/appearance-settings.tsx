@@ -174,6 +174,7 @@ const TILE_SIGNATURE_SCHEME: Record<ThemePresetId, AppearanceScheme> = {
   graphite: "dark",
   dusk: "dark",
   midnight: "dark",
+  monochrome: "light",
 };
 
 function ThemeTile({

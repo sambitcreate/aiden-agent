@@ -121,7 +121,7 @@ fun AidenWorkspaceDirectoryScreen(
                         }
                     },
                     containerColor = palette.accent,
-                    contentColor = Color.White,
+                    contentColor = palette.onAccent,
                     shape = CircleShape
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "New Chat")
@@ -224,7 +224,7 @@ fun AidenWorkspaceDirectoryScreen(
                                         Text(
                                             text = if (uncommitted > 99) "99+" else uncommitted.toString(),
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White,
+                                            color = palette.onAccent,
                                             fontSize = 9.sp
                                         )
                                     }
@@ -277,7 +277,7 @@ fun AidenWorkspaceDirectoryScreen(
                                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Start a Chat", color = Color.White)
+                                        Text("Start a Chat", color = palette.onAccent)
                                     }
                                 }
                             }
@@ -419,7 +419,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 onClick = { showCreateMenu = true },
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = "Add Workspace", tint = Color.White, modifier = Modifier.size(22.dp))
+                                Icon(Icons.Default.Add, contentDescription = "Add Workspace", tint = palette.onAccent, modifier = Modifier.size(22.dp))
                             }
                         }
                         DropdownMenu(
@@ -738,7 +738,7 @@ fun AidenWorkspaceDirectoryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Create", color = Color.White)
+                    Text("Create", color = palette.onAccent)
                 }
             },
             dismissButton = {
@@ -769,7 +769,7 @@ fun AidenWorkspaceDirectoryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Create Scratch", color = Color.White)
+                    Text("Create Scratch", color = palette.onAccent)
                 }
             },
             dismissButton = {
@@ -813,7 +813,7 @@ fun AidenWorkspaceDirectoryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Save", color = Color.White)
+                    Text("Save", color = palette.onAccent)
                 }
             },
             dismissButton = {
@@ -842,7 +842,7 @@ fun AidenWorkspaceDirectoryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Got it, Archive", color = Color.White)
+                    Text("Got it, Archive", color = palette.onAccent)
                 }
             },
             dismissButton = {
@@ -1187,9 +1187,9 @@ fun AidenFolderBrowserSheet(
                     enabled = !isAdding
                 ) {
                     if (isAdding) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
+                        CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(18.dp))
                     } else {
-                        Text("Add This Folder as Workspace", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Add This Folder as Workspace", color = palette.onAccent, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1335,7 +1335,7 @@ fun AidenWorkspaceSettingsSheet(
             modifier = Modifier.fillMaxWidth(),
             enabled = !isSaving
         ) {
-            Text("Save Changes", color = Color.White, fontWeight = FontWeight.Bold)
+            Text("Save Changes", color = palette.onAccent, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

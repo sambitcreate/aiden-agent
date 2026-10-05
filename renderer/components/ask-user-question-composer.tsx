@@ -200,7 +200,7 @@ export function AskUserQuestionComposer({
                   else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
                 }}
               >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45 text-regular text-secondary">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular text-secondary">
                   {selected ? <Check className="size-4" /> : optionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -266,7 +266,7 @@ export function AskUserQuestionComposer({
                 disabled={submitting}
                 onClick={() => setCustomOpen(true)}
               >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45">
                   <Pencil className="size-4" />
                 </span>
                 <span className="truncate text-regular">Type your own answer</span>

@@ -23,7 +23,8 @@ enum class AidenThemePresetID(val title: String) {
     CALM("Calm"),
     GRAPHITE("Graphite"),
     DUSK("Dusk"),
-    MIDNIGHT("Midnight")
+    MIDNIGHT("Midnight"),
+    MONOCHROME("Monochrome")
 }
 
 @Serializable
@@ -67,6 +68,14 @@ data class AidenPalette(
     val success: Color get() = hexToColor(successHex)
     val warning: Color get() = hexToColor(warningHex)
     val danger: Color get() = hexToColor(dangerHex)
+
+    /**
+     * Content color for text and icons drawn on an accent fill. Matches iOS
+     * (`onAccent = canvas`): light schemes keep light labels on their deep
+     * accents, dark schemes use the dark canvas on their bright accents, so
+     * Monochrome's white dark-mode accent never carries white text.
+     */
+    val onAccent: Color get() = canvas
 
     fun applyingContrast(contrast: Int, baseline: Int = 50): AidenPalette {
         if (contrast == baseline) return this
@@ -122,12 +131,12 @@ object AidenThemeCatalog {
             AidenPalette(canvasHex = "#18201C", sidebarHex = "#202A25", raisedHex = "#29342E", foregroundHex = "#D1D6D3", secondaryHex = "#95A39B", accentHex = "#42B596", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.PAPER to listOf(
-            AidenPalette(canvasHex = "#F5F3EE", sidebarHex = "#ECE8E0", raisedHex = "#FFFFFF", foregroundHex = "#3E3C38", secondaryHex = "#6F6A60", accentHex = "#7E5E2A", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
-            AidenPalette(canvasHex = "#1E1C19", sidebarHex = "#262320", raisedHex = "#2E2A26", foregroundHex = "#D6D2CA", secondaryHex = "#A39E93", accentHex = "#C9A97C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+            AidenPalette(canvasHex = "#FBFBFA", sidebarHex = "#F5F4F1", raisedHex = "#FFFFFF", foregroundHex = "#373329", secondaryHex = "#5A554A", accentHex = "#7E5E2A", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#242016", sidebarHex = "#2F2B21", raisedHex = "#413D33", foregroundHex = "#F5F4F1", secondaryHex = "#B0AB9F", accentHex = "#C9A97C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.CALM to listOf(
-            AidenPalette(canvasHex = "#F7F3EA", sidebarHex = "#EFE9DD", raisedHex = "#FFFDF8", foregroundHex = "#44403A", secondaryHex = "#6E685C", accentHex = "#7E5B2C", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
-            AidenPalette(canvasHex = "#201D18", sidebarHex = "#28241E", raisedHex = "#322C25", foregroundHex = "#D8D3C8", secondaryHex = "#A8A091", accentHex = "#D9A86C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+            AidenPalette(canvasHex = "#F5F4F1", sidebarHex = "#EAE7E1", raisedHex = "#FBFBFA", foregroundHex = "#373329", secondaryHex = "#5A554A", accentHex = "#7E5B2C", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#2F2B21", sidebarHex = "#242016", raisedHex = "#413D33", foregroundHex = "#F5F4F1", secondaryHex = "#B0AB9F", accentHex = "#D9A86C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.GRAPHITE to listOf(
             AidenPalette(canvasHex = "#F4F4F5", sidebarHex = "#E9E9EB", raisedHex = "#FFFFFF", foregroundHex = "#38383B", secondaryHex = "#64646A", accentHex = "#52525B", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
@@ -140,6 +149,10 @@ object AidenThemeCatalog {
         AidenThemePresetID.MIDNIGHT to listOf(
             AidenPalette(canvasHex = "#EFF2F8", sidebarHex = "#E3E8F2", raisedHex = "#FFFFFF", foregroundHex = "#38405A", secondaryHex = "#5F6880", accentHex = "#3B5BA9", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
             AidenPalette(canvasHex = "#141826", sidebarHex = "#1B2133", raisedHex = "#262D42", foregroundHex = "#D2D8E6", secondaryHex = "#94A0BC", accentHex = "#7FA0F0", successHex = "#32D17A", warningHex = "#FFB020", dangerHex = "#FF5E57")
+        ),
+        AidenThemePresetID.MONOCHROME to listOf(
+            AidenPalette(canvasHex = "#FFFFFF", sidebarHex = "#F5F5F5", raisedHex = "#FFFFFF", foregroundHex = "#000000", secondaryHex = "#525252", accentHex = "#000000", successHex = "#00906C", warningHex = "#B58A00", dangerHex = "#D70022"),
+            AidenPalette(canvasHex = "#0A0A0A", sidebarHex = "#141414", raisedHex = "#1F1F1F", foregroundHex = "#FFFFFF", secondaryHex = "#A3A3A3", accentHex = "#FFFFFF", successHex = "#2FBF8F", warningHex = "#FFD60A", dangerHex = "#FF4D5E")
         )
     )
 

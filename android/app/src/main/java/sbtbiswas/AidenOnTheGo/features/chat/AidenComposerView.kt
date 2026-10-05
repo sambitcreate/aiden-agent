@@ -501,7 +501,7 @@ fun AidenComposerView(
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
                                     contentDescription = "Run input options",
-                                    tint = if (canSubmitRunInput) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                    tint = if (canSubmitRunInput) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -600,7 +600,7 @@ fun AidenComposerView(
                                     Icon(
                                         imageVector = Icons.Default.ArrowUpward,
                                         contentDescription = "Send message",
-                                        tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                        tint = if (canSend) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }

@@ -249,7 +249,7 @@ export function BotFaceStudio({
 
   return (
     <section
-      className="overflow-hidden rounded-card border border-field bg-well"
+      className="overflow-hidden rounded-card bg-well"
       aria-labelledby="bot-face-studio-title"
       aria-busy={state.generating || undefined}
     >
@@ -459,7 +459,7 @@ export function BotFaceStudio({
               </div>
               {state.rationale ? (
                 <div
-                  className="rounded-card border border-separator bg-control px-3 py-2 text-small text-secondary"
+                  className="rounded-card bg-control px-3 py-2 text-small text-secondary"
                   role="status"
                 >
                   {state.rationale}

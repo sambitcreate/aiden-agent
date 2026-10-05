@@ -1061,7 +1061,7 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
                 <button
                   key={bot.id}
                   type="button"
-                  className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover"
+                  className="flex min-h-28 items-start gap-3 rounded-card bg-well p-4 text-left outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover"
                   onClick={() => navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
                 >
                   <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="visible" size="large" />
@@ -1266,7 +1266,7 @@ export function BotsView() {
                 </div>
               </header>
               {selected.archivedAt ? (
-                <div className="mt-6 rounded-card border border-field bg-well px-4 py-3 text-regular text-secondary">
+                <div className="mt-6 rounded-card bg-well px-4 py-3 text-regular text-secondary">
                   This bot is archived. Its conversations remain available, but it cannot start or
                   continue work until restored.
                 </div>
@@ -1290,7 +1290,7 @@ export function BotsView() {
                     <MessageSquarePlus /> {starting ? "Starting…" : "New conversation"}
                   </Button>
                 </div>
-                <div className="mt-4 overflow-hidden rounded-card border border-field bg-well">
+                <div className="mt-4 overflow-hidden rounded-card bg-well">
                   {chats.isLoading ? (
                     <Text as="p" color="secondary" className="p-5">
                       Loading conversations…
@@ -1344,7 +1344,7 @@ export function BotsView() {
                 </p>
               </section>
               <section
-                className="mt-10 rounded-card border border-field bg-well p-4"
+                className="mt-10 rounded-card bg-well p-4"
                 aria-labelledby="bot-telegram-title"
               >
                 <div className="flex items-center justify-between gap-4 max-[620px]:items-start max-[620px]:flex-col">

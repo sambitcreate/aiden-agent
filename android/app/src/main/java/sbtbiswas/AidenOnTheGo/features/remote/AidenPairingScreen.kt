@@ -157,7 +157,7 @@ fun AidenPairingScreen(
                                                 text = "ACTIVE",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontSize = 9.sp,
-                                                color = Color.White,
+                                                color = palette.onAccent,
                                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                             )
                                         }
@@ -232,7 +232,7 @@ fun AidenPairingScreen(
                                 text = "Scan QR",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 0) Color.White else palette.secondary
+                                color = if (selectedTab == 0) palette.onAccent else palette.secondary
                             )
                         }
                     }
@@ -257,7 +257,7 @@ fun AidenPairingScreen(
                                 text = "Setup Code",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 1) Color.White else palette.secondary
+                                color = if (selectedTab == 1) palette.onAccent else palette.secondary
                             )
                         }
                     }
@@ -375,9 +375,9 @@ fun AidenPairingScreen(
                             }
                     ) {
                         if (isPairing) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                            CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(20.dp))
                         } else {
-                            Text("Connect & Pair", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Connect & Pair", color = palette.onAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -408,9 +408,9 @@ fun AidenPairingScreen(
                             .tactilePress { handleScannedQRCode(qrJsonInput) }
                     ) {
                         if (isPairing) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                            CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(20.dp))
                         } else {
-                            Text("Import & Pair", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Import & Pair", color = palette.onAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

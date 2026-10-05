@@ -638,7 +638,7 @@ private fun AidenScheduledTaskRow(
             checked = task.enabled,
             onCheckedChange = { onToggleEnabled() },
             enabled = enabled,
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = palette.accent),
+            colors = SwitchDefaults.colors(checkedThumbColor = palette.onAccent, checkedTrackColor = palette.accent),
             modifier = Modifier.semantics { contentDescription = if (task.enabled) "Pause ${task.name}" else "Resume ${task.name}" }
         )
     }

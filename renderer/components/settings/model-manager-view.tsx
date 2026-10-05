@@ -57,7 +57,7 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
   return (
     <div
       className={cn(
-        "flex flex-col gap-2.5 rounded-card border border-field bg-popover p-3 transition-colors",
+        "flex flex-col gap-2.5 rounded-card bg-popover p-3 transition-colors",
         active && "bg-list-selection",
       )}
     >

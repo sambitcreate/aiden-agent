@@ -472,7 +472,7 @@ fun AidenBotChatAccessSheet(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text(if (model.isSaving) "Saving…" else "Save", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(if (model.isSaving) "Saving…" else "Save", color = palette.onAccent, fontWeight = FontWeight.Bold)
                     }
                 }
             }

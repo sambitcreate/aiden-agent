@@ -11,7 +11,7 @@ Settings adapts the Appearance page and the desktop UI references in `chatgpt-de
 
 ## Tokens and adaptation
 
-The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, neutral borders, inset separators, and restrained elevation. Status appears in semantic labels, icons, and fills, never decorative colored borders.
+The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, inset separators, and restrained elevation, with no outline (Untitled borderless surfaces). Status appears in semantic labels, icons, and fills, never decorative colored borders.
 
 Rows respond to their allocated content width, not the whole window. Below 540px complex controls stack under descriptions, while switches remain on the right. Grid groups must use `minmax(0, 1fr)` / `grid-cols-1` so long provider names or endpoints cannot force horizontal overflow. Controls and text must stay reachable without horizontal page scrolling.
 

@@ -131,7 +131,7 @@ fun AidenProductShellScreen(
                                 Icon(
                                     imageVector = Icons.Outlined.Add,
                                     contentDescription = "New Bot",
-                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    tint = palette.onAccent,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }

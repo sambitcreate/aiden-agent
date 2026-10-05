@@ -297,9 +297,9 @@ fun AidenBotProfileScreen(
                         modifier = Modifier.weight(1f)
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Chat, contentDescription = null, tint = palette.onAccent, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text("Chat", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                            Text("Chat", color = palette.onAccent, style = MaterialTheme.typography.labelSmall)
                         }
                     }
 

@@ -408,9 +408,9 @@ fun AidenGitScreen(
                                     .fillMaxWidth()
                                     .padding(16.dp)
                             ) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White)
+                                Icon(Icons.Default.Check, contentDescription = null, tint = palette.onAccent)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Commit Changes (${review.files.size} files)", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Commit Changes (${review.files.size} files)", color = palette.onAccent, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -490,7 +490,7 @@ fun AidenGitScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = commitMessage.trim().isNotEmpty() && !isOperating
                 ) {
-                    Text("Review & Commit", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Review & Commit", color = palette.onAccent, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -537,7 +537,7 @@ fun AidenGitScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                         ) {
-                            Text("Commit", color = Color.White)
+                            Text("Commit", color = palette.onAccent)
                         }
                     },
                     dismissButton = {
@@ -673,7 +673,7 @@ fun AidenGitScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                         ) {
-                            Text("Checkout", color = Color.White)
+                            Text("Checkout", color = palette.onAccent)
                         }
                     },
                     dismissButton = {
@@ -735,7 +735,7 @@ fun AidenGitScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                         ) {
-                            Text("Create", color = Color.White)
+                            Text("Create", color = palette.onAccent)
                         }
                     },
                     dismissButton = {
@@ -791,7 +791,7 @@ fun AidenGitScreen(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                     ) {
-                        Text("Push", color = Color.White)
+                        Text("Push", color = palette.onAccent)
                     }
                 }
             },
@@ -853,7 +853,7 @@ fun AidenGitScreen(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         if (isComparing) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
+                            CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(16.dp))
                         } else {
                             Text("Compare")
                         }
@@ -1046,7 +1046,7 @@ fun AidenGitScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                         ) {
-                            Text("Create", color = Color.White)
+                            Text("Create", color = palette.onAccent)
                         }
                     },
                     dismissButton = {

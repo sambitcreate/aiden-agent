@@ -262,7 +262,7 @@ fun AidenBotImagePlaygroundSheet(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Done", color = Color.White, fontWeight = FontWeight.Bold)
+            Text("Done", color = palette.onAccent, fontWeight = FontWeight.Bold)
         }
     }
 }
