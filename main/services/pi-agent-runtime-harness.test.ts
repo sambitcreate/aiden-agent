@@ -2592,6 +2592,37 @@ test("queueAdmissionBlocked mirrors receipt rejection without consuming capacity
   );
 });
 
+test("a provider output cap below the configured maximum stays terminal and Continue skips compaction", async () => {
+  const limited = fauxAssistantMessage("Partial answer", { stopReason: "length" });
+  limited.usage = { ...limited.usage, input: 30_411, output: 8_192, totalTokens: 38_603 };
+  const { core, harness, session } = await managedTestHarness(
+    [limited, fauxAssistantMessage("Finished after Continue")],
+    { contextWindow: 250_000, summaryResponses: [fauxAssistantMessage("unnecessary summary")] },
+  );
+
+  const failed = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "Start", timestamp: 1 },
+  });
+  assert.equal(failed.kind, "provider_failed");
+  assert.equal(failed.kind === "provider_failed" ? failed.reason : undefined, "output-limit");
+  assert.equal(failed.attempts, 1);
+  assert.equal(core.state.callCount, 1);
+  assert.equal(failed.finalMessage?.stopReason, "length");
+
+  const resumed = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "Continue", timestamp: 2 },
+  });
+  assert.equal(resumed.kind, "completed");
+  assert.equal(core.state.callCount, 2);
+  assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 0);
+  const context = await session.buildContext();
+  assert.ok(context.messages.some(
+    (message) => message.role === "assistant" && message.stopReason === "length",
+  ), "the partial response remains available after Continue");
+});
+
 test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {
   let continuationChecks = 0;
   let terminalChecks = 0;

@@ -478,12 +478,10 @@ export class PiCompactionCoordinator {
     if (assistantMessage.stopReason !== "error") {
       this.providerRetryAttempted = false;
     }
-    const recoverableLength =
-      assistantMessage.stopReason === "length" &&
-      this.options.model.maxTokens > 0 &&
-      assistantMessage.usage.output < this.options.model.maxTokens;
-
-    if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
+    // Output below the current cap does not prove context overflow: the cap
+    // may have changed since this response, or the provider may enforce less.
+    // Let detected overflow or measured context pressure drive compaction.
+    if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
       const willRetry = assistantMessage.stopReason !== "stop";
       if (!willRetry) return this.run("overflow", false);
       if (this.overflowRecoveryAttempted) {

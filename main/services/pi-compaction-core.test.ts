@@ -320,15 +320,15 @@ test("overflow retries once per recovery streak and resets after success", async
   );
 });
 
-test("length-stop overflow remains durable but is removed from retry context", async () => {
+test("length-stop with a full input window remains durable but is removed from retry context", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([fauxAssistantMessage(structuredSummary("length checkpoint"))]);
   const session = await memorySession();
   await appendCompressibleHistory(session, model);
   await session.appendMessage(user("current overflow request", Date.now() + 1));
   const overflow = assistant(model, {
-    input: 200,
-    output: 20,
+    input: 1_000,
+    output: 0,
     stopReason: "length",
   });
   await session.appendMessage(overflow);
@@ -352,6 +352,63 @@ test("length-stop overflow remains durable but is removed from retry context", a
     ),
     true,
   );
+});
+
+test("raising the output limit does not compact a prior output-limited turn on Continue", async () => {
+  const { faux, models, model: fixtureModel } = compactionFixture();
+  const originalModel = { ...fixtureModel, contextWindow: 250_000, maxTokens: 8_192 };
+  const session = await memorySession();
+  await appendCompressibleHistory(session, originalModel);
+  const failed = assistant(originalModel, {
+    input: 30_411,
+    output: 8_192,
+    stopReason: "length",
+    text: "Preserved partial response.",
+  });
+  await session.appendMessage(failed);
+  const entriesBefore = await session.getEntries();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("unnecessary summary"))]);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model: { ...originalModel, maxTokens: 131_072 },
+    thinkingLevel: "off",
+  });
+
+  const repaired = await coordinator.prepareForPrompt();
+  assert.equal(repaired.compacted, false);
+  assert.equal(repaired.shouldRetry, false);
+  assert.equal(repaired.errorMessage, undefined);
+  assert.ok(repaired.messages?.some(
+    (message) => message.role === "assistant" && message.stopReason === "length",
+  ));
+  await session.appendMessage(user("Continue"));
+  assert.equal((await coordinator.checkContextPressure()).compacted, false);
+  assert.equal(faux.state.callCount, 0, "no summary request is needed at low context usage");
+  assert.deepEqual((await session.getEntries()).slice(0, entriesBefore.length), entriesBefore);
+});
+
+test("an output-limited turn near the context threshold compacts without an overflow retry", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("threshold checkpoint"))]);
+  const session = await memorySession();
+  await appendCompressibleHistory(session, model);
+  const limited = assistant(model, { input: 900, output: 20, stopReason: "length" });
+  await session.appendMessage(limited);
+  const events: PiCompactionEvent[] = [];
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    onEvent: (event) => events.push(event),
+  }).check(limited);
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.shouldRetry, false);
+  assert.equal(events.find((event) => event.type === "start")?.reason, "threshold");
+  assert.equal(faux.state.callCount, 1);
 });
 
 test("transient provider failures remain durable but are retried without the failed tail", async () => {
