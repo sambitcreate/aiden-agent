@@ -3,6 +3,12 @@
 Status: Active — read-only task progress and agent inspection merged in [PR #123](https://github.com/sambitcreate/aiden-agent/pull/123) on 2026-09-15; physical UI acceptance remains. Optional mutation controls remain separate; the first one, a confirmed single-agent Stop from the iOS and Android agent sheets, merged in [PR #275](https://github.com/sambitcreate/aiden-agent/pull/275) on 2026-09-30 (Aiden Remote contract revision 16).
 Date: 2026-09-14
 
+Follow-up (2026-10-05): [peer/mobile reliability item 3](peer-mobile-reliability-plan.md)
+adds ancestry-aware detail navigation. The serializable Swift/Kotlin navigation
+foundation and behavioral tests are implemented; 235 iOS chat tests and 25 Android
+progress tests, Android lint and instrumentation-test compilation pass. Sheet wiring
+and UI restoration tests remain pending. No new child transcript surface or server contract is introduced.
+
 ## Outcome and scope
 
 Bring desktop's durable task-step progress and delegated-agent visibility to the existing iOS/iPadOS and Android conversations. A user should be able to follow a multi-step task, inspect which agents are working, and understand completion or failure without leaving the parent conversation.

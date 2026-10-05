@@ -3,6 +3,12 @@ package sbtbiswas.AidenOnTheGo
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigation
+import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigationScope
+import sbtbiswas.AidenOnTheGo.models.AidenChatAgent
+import sbtbiswas.AidenOnTheGo.models.AidenChatAgentState
+import java.time.Instant
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -24,6 +30,87 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 
 class AidenChatProgressTest {
     private val json = Json { ignoreUnknownKeys = false }
+
+    private val navigationScope = AidenAgentNavigationScope("mac-a", "device-a", "chat-a", "epoch-a", "turn-a")
+
+    private fun navigationAgent(id: String, parent: String? = null) = AidenChatAgent(
+        agentId = id, parentAgentId = parent, depth = if (parent == null) 1 else 2,
+        revision = 1, role = AidenChatAgentRole.SCOUT, label = id, taskPreview = "Inspect workspace",
+        state = AidenChatAgentState.RUNNING, startedAt = Instant.parse("2026-10-05T12:00:00Z"),
+        updatedAt = Instant.parse("2026-10-05T12:00:00Z"), modelId = "model-a", turns = 1, tools = 0, tokens = 10
+    )
+
+    @Test
+    fun agentNavigationDirectChildEntryBackAndParentLink() {
+        val agents = listOf(navigationAgent("root"), navigationAgent("child", "root"),
+            navigationAgent("leaf", "child"), navigationAgent("sibling", "root"))
+        var navigation = AidenAgentNavigation(navigationScope).open("leaf", agents)
+        assertEquals(listOf("root", "child", "leaf"), navigation.path)
+        navigation = requireNotNull(navigation.back())
+        assertEquals(listOf("root", "child"), navigation.path)
+        navigation = navigation.open("root", agents)
+        assertEquals(listOf("root"), navigation.path)
+        navigation = requireNotNull(navigation.back())
+        assertEquals(emptyList<String>(), navigation.path)
+        assertNull(navigation.back())
+        assertEquals(listOf("child", "sibling"), AidenAgentNavigation.children("root", agents).map { it.agentId })
+        assertEquals(emptyList<AidenChatAgent>(), AidenAgentNavigation.children("missing", agents))
+    }
+
+    @Test
+    fun agentNavigationHandlesMissingParentsCyclesAndExcessiveDepth() {
+        val orphan = navigationAgent("orphan", "missing")
+        assertEquals(listOf("orphan"), AidenAgentNavigation.ancestorPath("orphan", listOf(orphan)))
+        assertEquals(emptyList<String>(), AidenAgentNavigation.ancestorPath("missing", listOf(orphan)))
+        val cycle = listOf(navigationAgent("a", "b"), navigationAgent("b", "a"))
+        assertEquals(listOf("a"), AidenAgentNavigation.ancestorPath("a", cycle))
+        val chain = (0 until 20).map { navigationAgent("node-$it", if (it == 0) null else "node-${it - 1}") }
+        val path = AidenAgentNavigation.ancestorPath("node-19", chain)
+        assertEquals(16, path.size)
+        assertEquals("node-4", path.first())
+        assertEquals("node-19", path.last())
+    }
+
+    @Test
+    fun agentNavigationPopsToSurvivingAncestorAndIgnoresStaleClick() {
+        val root = navigationAgent("root")
+        val child = navigationAgent("child", "root")
+        val leaf = navigationAgent("leaf", "child")
+        var navigation = AidenAgentNavigation(navigationScope).open("leaf", listOf(root, child, leaf))
+        navigation = navigation.open("gone", listOf(root, child, leaf))
+        assertEquals(listOf("root", "child", "leaf"), navigation.path)
+        navigation = navigation.reconcile(navigationScope, listOf(root, leaf))
+        assertEquals(listOf("root"), navigation.path)
+        assertEquals(emptyList<String>(), navigation.reconcile(navigationScope, emptyList()).path)
+    }
+
+    @Test
+    fun agentNavigationRestorationIsFencedByEveryScopeComponent() {
+        val agents = listOf(navigationAgent("root"), navigationAgent("child", "root"))
+        val navigation = AidenAgentNavigation(navigationScope).open("child", agents)
+        val restored = json.decodeFromString<AidenAgentNavigation>(json.encodeToString(navigation))
+            .reconcile(navigationScope, agents)
+        assertEquals(listOf("root", "child"), restored.path)
+        val differentScopes = listOf(
+            navigationScope.copy(instanceId = "mac-b"), navigationScope.copy(deviceId = "device-b"),
+            navigationScope.copy(chatId = "chat-b"), navigationScope.copy(epoch = "epoch-b"),
+            navigationScope.copy(turnId = "turn-b"), navigationScope.copy(turnId = null)
+        )
+        for (scope in differentScopes) {
+            val candidate = restored.reconcile(scope, agents)
+            assertEquals(emptyList<String>(), candidate.path)
+            assertEquals(scope, candidate.scope)
+        }
+    }
+
+    @Test
+    fun agentNavigationReparentingRebuildsAncestryWithoutStaleDetails() {
+        val roots = listOf(navigationAgent("old-root"), navigationAgent("new-root"))
+        val navigation = AidenAgentNavigation(navigationScope).open("child", roots + navigationAgent("child", "old-root"))
+        assertEquals(listOf("new-root", "child"), navigation.reconcile(
+            navigationScope, roots + navigationAgent("child", "new-root")
+        ).path)
+    }
 
     private fun textEventFrame(sequence: Int, lineEnding: String = "\n"): String = listOf(
         "id: $sequence",

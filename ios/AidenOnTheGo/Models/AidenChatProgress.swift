@@ -83,6 +83,81 @@ enum AidenProgressPresentation {
     }
 }
 
+/// Public roster navigation only: never resolves a private child transcript.
+/// Scope is persisted alongside the path so restored IDs cannot cross turns,
+/// installations, or a replacement pairing of the same installation.
+struct AidenAgentNavigationScope: Equatable, Codable {
+    let instanceId: String
+    let deviceId: String
+    let chatId: String
+    let epoch: String
+    let turnId: String?
+}
+
+struct AidenAgentNavigation: Equatable, Codable {
+    private(set) var scope: AidenAgentNavigationScope
+    private(set) var path: [String] = []
+
+    init(scope: AidenAgentNavigationScope) {
+        self.scope = scope
+    }
+
+    /// Rebuild the canonical ancestor chain for every entry point, including
+    /// a child selected directly from the flat roster. A malformed cycle is
+    /// inspectable as a single detail rather than an invented parent stack.
+    static func ancestorPath(for agentId: String, in agents: [AidenRemoteChatAgent]) -> [String] {
+        let byId = Dictionary(agents.map { ($0.agentId, $0) }, uniquingKeysWith: { first, _ in first })
+        guard byId[agentId] != nil else { return [] }
+        var result: [String] = []
+        var visited = Set<String>()
+        var cursor: String? = agentId
+        while let id = cursor, let agent = byId[id] {
+            guard visited.insert(id).inserted else { return [agentId] }
+            result.append(id)
+            cursor = agent.parentAgentId
+        }
+        // Keep the requested detail and its nearest ancestors; bound the
+        // native stack independently of any server depth claim.
+        return Array(result.prefix(16).reversed())
+    }
+
+    static func children(of agentId: String, in agents: [AidenRemoteChatAgent]) -> [AidenRemoteChatAgent] {
+        guard agents.contains(where: { $0.agentId == agentId }) else { return [] }
+        return agents.filter { $0.parentAgentId == agentId && $0.agentId != agentId }
+    }
+
+    mutating func open(_ agentId: String, in agents: [AidenRemoteChatAgent]) {
+        let next = Self.ancestorPath(for: agentId, in: agents)
+        guard !next.isEmpty else { return }
+        path = next
+    }
+
+    /// Returns false at the roster, where the sheet owner should dismiss.
+    @discardableResult
+    mutating func back() -> Bool {
+        guard !path.isEmpty else { return false }
+        path.removeLast()
+        return true
+    }
+
+    mutating func reconcile(scope nextScope: AidenAgentNavigationScope, agents: [AidenRemoteChatAgent]) {
+        guard scope == nextScope else {
+            scope = nextScope
+            path = []
+            return
+        }
+        // A vanished intermediate detail removes its descendants from this
+        // stack even when they still appear elsewhere in the latest roster.
+        let ids = Set(agents.map(\.agentId))
+        let survivingPrefix = path.prefix { ids.contains($0) }
+        guard let target = survivingPrefix.last else {
+            path = []
+            return
+        }
+        path = Self.ancestorPath(for: target, in: agents)
+    }
+}
+
 struct AidenChatProgressControls: View {
     @Environment(\.aidenPalette) private var palette
 

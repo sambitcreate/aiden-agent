@@ -21,6 +21,23 @@ in a separate commit from this plan. Items 4a/4b retain their Pi merge dependenc
 item 2 waits for #346. Recheck #350 (peer chat forks) alongside #349 and #312.
 Do not mark existing physical-device acceptance gates complete based on simulator tests.
 
+### Implementation progress
+
+- 2026-10-05: plan committed as `1c992a82` on `feature/peer-mobile-reliability-plan`.
+- Item 3 navigation foundation: Swift and Kotlin public-roster navigation state,
+  serializable scope/path, full ancestor entry, Back, direct children, bounded/cycle-safe
+  ancestry and live-roster reconciliation implemented. Behavioral cases added to the
+  existing native progress/chat suites. iOS build and all 235 AidenChatTests pass on
+  iPhone 17 Pro / iOS 27 simulator `9F4FDF41-3FE3-477D-B92B-127C43FE927E`
+  (Xcode-beta, `CODE_SIGNING_ALLOWED=NO`). All 25 Android AidenChatProgressTest
+  cases pass; Android `lintDebug` and `compileDebugAndroidTestKotlin` also pass.
+  No physical-device or UI-restoration acceptance is claimed.
+- Item 3 UI wiring remains pending: iOS NavigationStack binding; Android single-sheet
+  saved state and system Back; parent/children actions; actual UI restoration tests.
+  The new navigation model is preparatory and not yet invoked by either sheet.
+- Items 1, 2 and 4 are not implemented by this initial work. No background activation,
+  Remote revision change, new network call, or onboarding capability is introduced.
+
 ### Required design corrections and gates
 
 - **Route trust bootstrap:** system-trust/Tailscale pairing does not supply the LAN
@@ -526,7 +543,7 @@ Follow `AGENTS.md` test guidance:
 
 ### Commands
 ```bash
-# Node 22.22.3 (see .nvmrc / CI)
+# Node 22.22.3 (see .github/workflows/ci.yml; this checkout has no .nvmrc)
 npm run type-check
 npm run lint
 npm run test:ci-policy
