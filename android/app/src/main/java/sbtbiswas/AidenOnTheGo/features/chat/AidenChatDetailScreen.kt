@@ -1233,7 +1233,7 @@ private fun AssistantMessageRow(
 }
 
 @Composable
-private fun ActiveStreamingCard(
+internal fun ActiveStreamingCard(
     liveText: String,
     reasoning: String,
     tools: List<AidenLiveTool>,
@@ -1366,8 +1366,23 @@ private fun ActiveStreamingCard(
                     AidenStreamingCursor(palette = palette)
                 }
             }
+            if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Aiden is working...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.secondary
+                    )
+                }
+            }
+            }
+            // Chronological and fallback transcripts both show the pause,
+            // after whatever content the run already produced.
             if (isWaitingForNetwork) {
-                if (liveText.isNotEmpty() || reasoning.isNotEmpty() || tools.isNotEmpty()) {
+                if (!chronologicalRows.isNullOrEmpty() || liveText.isNotEmpty() || reasoning.isNotEmpty() || tools.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 // A paused run, not an error: neutral copy and icon, no banner.
@@ -1391,18 +1406,6 @@ private fun ActiveStreamingCard(
                         color = palette.secondary
                     )
                 }
-            } else if (liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Aiden is working...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = palette.secondary
-                    )
-                }
-            }
             }
         }
     }

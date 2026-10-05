@@ -123,9 +123,9 @@ class AidenChatNetworkWaitTest {
                 withTimeout(2_000) { model.liveText.first { it == "prefix " } }
                 assertTrue(model.hasActiveStream.value)
                 assertNull("losing the network is not an error", model.presentedError.value)
-                val statusReadsWhenParked = statusReads.get()
+                assertEquals("the stream ending offline parks before any status probe", 0, statusReads.get())
                 delay(300)
-                assertEquals("no status probe is spent while offline", statusReadsWhenParked, statusReads.get())
+                assertEquals("no status probe is spent while offline", 0, statusReads.get())
                 assertEquals("no reconnect is attempted while offline", 1, eventPaths.size)
                 assertNull(model.presentedError.value)
 

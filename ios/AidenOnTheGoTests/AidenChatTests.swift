@@ -2604,8 +2604,8 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite()
         )
 
-        // The first stream delivers sequence 1 and ends; the reopened stream
-        // then fails while the device is offline.
+        // The first stream delivers sequence 1 and ends without a terminal
+        // frame while the device is offline.
         await model.load(observeProgress: false)
         for _ in 0..<400 {
             if model.isWaitingForNetwork { break }
@@ -2615,10 +2615,11 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(model.isStreaming)
         XCTAssertEqual(model.liveText, "prefix ")
         XCTAssertNil(model.presentedError, "losing the network is not an error")
-        let statusReadsWhenParked = fixture.statusReads
+        let restorationProbes = try XCTUnwrap(fixture.statusReadsBeforeFirstEvents)
+        XCTAssertEqual(fixture.statusReads, restorationProbes, "the stream ending offline parks before any status probe")
         try await Task.sleep(for: .milliseconds(300))
-        XCTAssertEqual(fixture.statusReads, statusReadsWhenParked, "no status probe is spent while offline")
-        XCTAssertEqual(fixture.eventCursors, [0, 1])
+        XCTAssertEqual(fixture.statusReads, restorationProbes, "no status probe is spent while offline")
+        XCTAssertEqual(fixture.eventCursors, [0], "no reconnect is attempted while offline")
         XCTAssertNil(model.presentedError)
 
         // A flapping return wakes the one parked consumer exactly once.
@@ -2633,7 +2634,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(model.isStreaming)
         XCTAssertFalse(model.isWaitingForNetwork)
         XCTAssertNil(model.presentedError)
-        XCTAssertEqual(fixture.eventCursors, [0, 1, 1], "one reconnect, resumed after the last applied sequence")
+        XCTAssertEqual(fixture.eventCursors, [0, 1], "one reconnect, resumed after the last applied sequence")
     }
 
     @MainActor
@@ -8815,7 +8816,7 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 }
 
 /// Stream `stream-network`: the first events read delivers sequence 1 and
-/// ends, the second fails with a 503, and the third finishes the turn.
+/// ends without a terminal frame; the next one finishes the turn.
 private final class AidenNetworkWaitFixture: @unchecked Sendable {
     private let lock = NSLock()
     private let chat: AidenChat
@@ -8823,7 +8824,10 @@ private final class AidenNetworkWaitFixture: @unchecked Sendable {
     private var chatReads = 0
     private var statuses = 0
     private var cursors: [Int] = []
+    private var statusesBeforeEvents: Int?
     var statusReads: Int { lock.withLock { statuses } }
+    /// Status reads made before the first events request (the restoration probe).
+    var statusReadsBeforeFirstEvents: Int? { lock.withLock { statusesBeforeEvents } }
     var eventCursors: [Int] { lock.withLock { cursors } }
     init(chat: AidenChat, finalChat: AidenChat) { self.chat = chat; self.finalChat = finalChat }
 
@@ -8848,11 +8852,10 @@ private final class AidenNetworkWaitFixture: @unchecked Sendable {
             if path.hasSuffix("/streams/stream-network/events") {
                 let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "after" }?.value
                 cursors.append(Int(after ?? "0") ?? -1)
+                if statusesBeforeEvents == nil { statusesBeforeEvents = statuses }
                 switch cursors.count {
                 case 1:
                     return (200, "text/event-stream", Data(event(1, "text_delta", #"{"text":"prefix "}"#).utf8))
-                case 2:
-                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Offline","requestId":"r","retryable":true}}"#.utf8))
                 default:
                     let body = event(2, "text_delta", #"{"text":"suffix"}"#) + event(3, "done", #"{"messageId":"final-reply"}"#, terminal: true)
                     return (200, "text/event-stream", Data(body.utf8))

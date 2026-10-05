@@ -1213,6 +1213,10 @@ class AidenChatViewModel(
                     }
                     if (terminal != null || activeStreamId != stream.streamId) return@launch
 
+                    // A stream that ended without a terminal frame is a lost
+                    // stream too: offline, park before any status probe.
+                    if (!recovery.shouldProbeAfterStreamFailure(onWaiting)) continue
+                    if (activeStreamId != stream.streamId) return@launch
                     val status = client.streamStatus(chatId, stream.streamId)
                     if (activeStreamId != stream.streamId) return@launch
                     recovery.recordHealthy()

@@ -70,14 +70,16 @@ final class AidenNetworkPathMonitor {
 
     let availability = AidenNetworkAvailability()
     private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "sbtbiswas.AidenOnTheGo.network-path")
 
     private init() {
+        // Deliver on the main queue and apply synchronously: hopping through
+        // unstructured Tasks would not keep rapid path changes in order, so a
+        // stale "unsatisfied" could land after a newer "satisfied".
         monitor.pathUpdateHandler = { [weak self] path in
             let available = path.status != .unsatisfied
-            Task { @MainActor [weak self] in self?.availability.setAvailable(available) }
+            MainActor.assumeIsolated { self?.availability.setAvailable(available) }
         }
-        monitor.start(queue: queue)
+        monitor.start(queue: .main)
     }
 }
 

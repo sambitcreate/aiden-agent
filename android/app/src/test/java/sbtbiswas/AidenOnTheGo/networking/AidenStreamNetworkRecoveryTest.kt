@@ -20,6 +20,18 @@ class AidenStreamNetworkRecoveryTest {
     }
 
     @Test
+    fun defaultNetworkHandoffStaysOnlineWhenTheReplacedNetworkIsLostLate() {
+        val tracker = AidenDefaultNetworkTracker<String>()
+        assertTrue(tracker.onAvailable("wifi"))
+        // Make-before-break: cellular becomes the default before Wi-Fi's onLost.
+        assertTrue(tracker.onAvailable("cellular"))
+        assertEquals("a superseded network's loss leaves availability unchanged", null, tracker.onLost("wifi"))
+        assertEquals("losing the current default network is offline", false, tracker.onLost("cellular"))
+        assertTrue(tracker.onAvailable("wifi"))
+        assertEquals(false, tracker.onLost("wifi"))
+    }
+
+    @Test
     fun decisionTableParksOfflineAndSpendsBackoffOnlyOnline() {
         val policy = AidenStreamRecoveryPolicy()
         assertEquals(AidenStreamRecoveryDecision.WaitForNetwork, policy.afterStreamFailure(networkAvailable = false))

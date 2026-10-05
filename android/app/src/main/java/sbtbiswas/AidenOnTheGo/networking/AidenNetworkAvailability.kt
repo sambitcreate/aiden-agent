@@ -33,15 +33,15 @@ class AidenConnectivityNetworkAvailability(context: Context) : AidenNetworkAvail
     private val state = MutableStateFlow(manager?.let { runCatching { it.activeNetwork != null }.getOrDefault(true) } ?: true)
     override val isAvailable: StateFlow<Boolean> = state.asStateFlow()
 
+    private val tracker = AidenDefaultNetworkTracker<Network>()
+
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            state.value = true
+            state.value = tracker.onAvailable(network)
         }
 
         override fun onLost(network: Network) {
-            // The default-network callback reports a replacement network
-            // through onAvailable, so a Wi-Fi to cellular handoff recovers.
-            state.value = false
+            tracker.onLost(network)?.let { state.value = it }
         }
     }
 
@@ -52,6 +52,35 @@ class AidenConnectivityNetworkAvailability(context: Context) : AidenNetworkAvail
             // Without a callback the state stays at its last known value.
             state.value = true
         }
+    }
+}
+
+/**
+ * Follows which network is the default so a late [onLost] for a network that
+ * was already replaced cannot mark the device offline. During a
+ * make-before-break handoff (Wi-Fi to cellular) the platform can report the
+ * replacement through onAvailable before the previous network's onLost.
+ */
+internal class AidenDefaultNetworkTracker<N : Any> {
+    private var current: N? = null
+
+    /** The availability to publish: a new default network is always online. */
+    @Synchronized
+    fun onAvailable(network: N): Boolean {
+        current = network
+        return true
+    }
+
+    /**
+     * Returns false when the current default network was lost, or null when
+     * [network] was already superseded and the published state must not change.
+     */
+    @Synchronized
+    fun onLost(network: N): Boolean? {
+        val active = current
+        if (active != null && active != network) return null
+        current = null
+        return false
     }
 }
 

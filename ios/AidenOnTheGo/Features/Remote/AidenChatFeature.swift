@@ -3300,6 +3300,10 @@ final class AidenChatViewModel {
                     // alone loses their prefix after relaunch and writes on every token.
                 }
 
+                // A stream that ended without a terminal frame is a lost stream
+                // too: offline, park before any status probe or reconnect.
+                guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
+                guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                 guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 recovery.recordHealthy()
