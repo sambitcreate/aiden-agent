@@ -166,3 +166,28 @@ test("uses provider-owned metadata when a newly published model is absent from b
     matched: true,
   });
 });
+
+test("private connection image and reasoning switches follow request capabilities, not a public model name", async () => {
+  const { resolveProviderRuntimeLimits } = await import("./models-catalog-core.js");
+  const provider = { id: "custom:private", baseUrl: "https://private.example.test/v1", kind: "openai" as const,
+    modelMetadata: { "glm-5.3-flash": { source: "provider" as const, overrides: { maxImages: 6, contextLength: 249972 } } } };
+  const publicInfo: ModelInfo = { id: "glm-5.3-flash", name: "GLM-5.3-Flash", vision: true, reasoning: true, matched: true, metadataSource: "models-dev", inputModalities: ["text", "image"] };
+  const service = createProviderModelInfo({
+    legacyProvider: async () => provider,
+    modelsCatalog: { info: async () => publicInfo, infoMany: async () => ({ "glm-5.3-flash": publicInfo }) },
+    codexModelInfo: () => undefined,
+  });
+  const first = await service.info(provider.id, publicInfo.id);
+  assert.equal(first.name, "GLM-5.3-Flash");
+  assert.equal(first.vision, false);
+  assert.equal(first.reasoning, false);
+  assert.deepEqual(first.inputModalities, ["text"]);
+  assert.equal(resolveProviderRuntimeLimits({}, provider, publicInfo.id).input.includes("image"), false);
+  Object.assign(provider.modelMetadata["glm-5.3-flash"].overrides, { vision: true, reasoning: true });
+  const enabled = (await service.infoMany(provider.id, [publicInfo.id]))[publicInfo.id]!;
+  assert.equal(enabled.vision, true);
+  assert.equal(enabled.reasoning, true);
+  assert.equal(resolveProviderRuntimeLimits({}, provider, publicInfo.id).input.includes("image"), true);
+  Object.assign(provider.modelMetadata["glm-5.3-flash"].overrides, { maxImages: 0 });
+  assert.equal((await service.info(provider.id, publicInfo.id)).vision, false);
+});

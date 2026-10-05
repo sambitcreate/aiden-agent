@@ -3256,6 +3256,12 @@ private struct AidenAppSettingsView: View {
                 }
 
                 Section {
+                    NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
+                        Label("Providers", systemImage: "server.rack")
+                    }
+                } footer: { Text("Manage model connections on your paired Mac.") }
+
+                Section {
                     Toggle(
                         "Use memory",
                         isOn: Binding(

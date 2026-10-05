@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10520260000000000000001 /* AidenProvidersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10520260000000000000002 /* AidenProvidersView.swift */; };
 		A0D000000000000000000001 /* AidenRemoteContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000011 /* AidenRemoteContract.swift */; };
 		A0D000000000000000000002 /* AidenServerTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000012 /* AidenServerTrust.swift */; };
 		A0D000000000000000000003 /* AidenRemotePhase0Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */; };
@@ -132,6 +133,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A10520260000000000000002 /* AidenProvidersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProvidersView.swift; sourceTree = "<group>"; };
 		A0D000000000000000000011 /* AidenRemoteContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteContract.swift; sourceTree = "<group>"; };
 		A0D000000000000000000012 /* AidenServerTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenServerTrust.swift; sourceTree = "<group>"; };
 		A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemotePhase0Tests.swift; sourceTree = "<group>"; };
@@ -411,6 +413,7 @@
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
 				A0D600000000000000000014 /* AidenRemoteCoordinator.swift */,
 				A0D600000000000000000015 /* AidenPairingView.swift */,
+				A10520260000000000000002 /* AidenProvidersView.swift */,
 				A0D600000000000000000016 /* AidenWorkspaceShellView.swift */,
 				A0D700000000000000000014 /* AidenChatFeature.swift */,
 				A0F100000000000000000040 /* AidenSceneRefreshGate.swift */,
@@ -762,6 +765,7 @@
 				A0D600000000000000000002 /* AidenInstallation.swift in Sources */,
 				A0D600000000000000000004 /* AidenRemoteCoordinator.swift in Sources */,
 				A0D600000000000000000005 /* AidenPairingView.swift in Sources */,
+				A10520260000000000000001 /* AidenProvidersView.swift in Sources */,
 				A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */,
 				A0D700000000000000000001 /* AidenChat.swift in Sources */,
 				A0DC00000000000000000001 /* AidenChatProgress.swift in Sources */,

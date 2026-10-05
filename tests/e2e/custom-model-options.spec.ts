@@ -18,14 +18,14 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     .click();
   const configure = page
     .getByText("LM Studio (local)", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
-    .getByRole("button", { name: "Configure", exact: true });
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]")
+    .getByRole("button", { name: "Manage", exact: true });
   const dialog = page.getByRole("dialog", {
     name: "Configure LM Studio (local)",
   });
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .locator("summary")
@@ -35,6 +35,15 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     name: `${E2E_MODEL_ID}: Vision`,
     exact: true,
   });
+  await expect(vision).toHaveAttribute("data-state", "checked");
+  const imageLimit = dialog.getByRole("spinbutton", {
+    name: `${E2E_MODEL_ID}: Maximum images per message`, exact: true,
+  });
+  await imageLimit.fill("0");
+  await expect(vision).toHaveAttribute("data-state", "unchecked");
+  await expect(dialog.getByText("Text only for this connection", { exact: false })).toBeVisible();
+  await vision.click();
+  await expect(imageLimit).toHaveValue("");
   await expect(vision).toHaveAttribute("data-state", "checked");
   await vision.click();
   await dialog
@@ -56,7 +65,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .locator("summary")
@@ -110,7 +119,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .getByRole("button", { name: "Discover models", exact: true })
@@ -133,7 +142,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .getByRole("group", { name: "Base URL", exact: true })
@@ -147,7 +156,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await expect(
     dialog.locator("summary").filter({ hasText: "manual-without-discovery" }),
@@ -170,23 +179,41 @@ test("local classifier capability is off by default and survives provider save",
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Providers", exact: true }).click();
   const configure = page.getByText("LM Studio (local)", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
-    .getByRole("button", { name: "Configure", exact: true });
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]")
+    .getByRole("button", { name: "Manage", exact: true });
   const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
   await configure.click();
-  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   const capability = dialog.getByRole("switch", { name: "Enable llama.cpp classification", exact: true });
   await expect(capability).toHaveAttribute("data-state", "unchecked");
   await capability.click();
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
-  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   await expect(capability).toHaveAttribute("data-state", "checked");
+  await dialog.locator("summary").filter({ hasText: "Connection options" }).click();
+  await dialog.getByRole("combobox").filter({ hasText: "Local" }).click();
+  await page.getByRole("option", { name: "Hosted", exact: true }).click();
+  await expect(capability).toBeDisabled();
+  await expect(capability).toHaveAttribute("data-state", "unchecked");
+  await dialog.getByRole("combobox").filter({ hasText: "Hosted" }).click();
+  await page.getByRole("option", { name: "Local", exact: true }).click();
+  await expect(capability).toBeEnabled();
   await capability.click();
+  await dialog.getByRole("combobox").filter({ hasText: "OpenAI-compatible" }).click();
+  await page.getByRole("option", { name: "Anthropic-compatible", exact: true }).click();
+  await expect(capability).toBeDisabled();
+  await expect(capability).toHaveAttribute("data-state", "unchecked");
+  await dialog.getByRole("combobox").filter({ hasText: "Anthropic-compatible" }).click();
+  await page.getByRole("option", { name: "OpenAI-compatible", exact: true }).click();
+  await expect(capability).toBeEnabled();
+  // API changes make discovery stale, so verify against the same mock endpoint before saving.
+  await dialog.getByRole("button", { name: "Discover models", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Discover models", exact: true })).toBeEnabled();
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
-  await dialog.getByRole("button", { name: "More options", exact: true }).click();
+  await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   await expect(capability).toHaveAttribute("data-state", "unchecked");
 });

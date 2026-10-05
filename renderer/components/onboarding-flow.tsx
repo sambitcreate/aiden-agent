@@ -159,12 +159,12 @@ const providerChoices: Array<{
   {
     id: "custom",
     title: "Other Custom Provider",
-    description: "Connect your endpoint, choose models, and customize their capabilities.",
+    description: "Connect your endpoint, then enable the capabilities your server supports.",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect a private server and choose models and capabilities in More options.",
+    description: "Connect a private server. Choose its capabilities in Model options.",
     iconProviderId: "tailscale",
   },
 ];
@@ -416,7 +416,7 @@ const featureBentos: FeatureBento[] = [
     id: "aidenOnTheGo",
     group: "control",
     title: "Aiden On The Go",
-    description: "Connect your phone or tablet with a guided setup and one-time code.",
+    description: "Connect your phone or tablet with a guided setup and one-time code. Add custom providers from the paired client; connections and keys stay on your Mac.",
     icon: Smartphone,
     imageUrl: FEATURE_ILLUSTRATIONS.aidenOnTheGo,
     size: "standard",

@@ -6,7 +6,7 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Active and partial
 
-- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); integrated replacement preserves #299–#307 ancestry on `feature/pi-1.0.3-upgrade`. Exact 1.0.3 pins, Azure state migration and sampling support implemented; full local acceptance complete (6,991 unit cases plus preserved modes and 79 CLI tests); [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357) tracks exact-head CI and authorized auto-merge. Frozen 0.87.1 journal adapter remains. Release/rollout gates are separate.
+- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); integrated replacement preserves #299–#307 ancestry on `feature/pi-1.0.3-upgrade`. Main 5c094875c integrated with focused native/desktop acceptance. Exact 1.0.3 pins, Azure state migration and sampling support implemented; full local acceptance complete (6,991 unit cases plus preserved modes and 79 CLI tests); [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357) tracks exact-head CI and authorized auto-merge. Frozen 0.87.1 journal adapter remains. Release/rollout gates are separate.
 
 - [Pi 1.0.3 parity upgrade](pi-1-parity-plan.md) — Active; historical 1.0.0 stack implementation evidence retained. Current target, reconciliation and remaining acceptance are tracked in the [1.0.3 execution plan](pi-1.0.3-upgrade-plan.md).
 

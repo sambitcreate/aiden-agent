@@ -111,6 +111,7 @@ require explicit Full workspace access. Schedules also retain their own read-onl
 selection and exact MCP connection bindings.
 
 - `/search`, `/name`, `/attach`, `/export-aiden`, `aiden import`, and `aiden export` manage conversations. Imports copy into new journals; never point desktop and CLI at the same writable journal.
+- pi's built-in `/fork` starts a new session from an earlier prompt, and `/tree` switches between branches of the current session. For daemon chats, paired phones fork with the Remote `chat-fork-v1` feature: the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The daemon does not offer Fork with summary (`chat-fork-summary-v1`).
 - `aiden git`, `aiden files`, and `aiden worktree` use the shared workspace and Git services. Managed removal uses the bundled native helper.
 - `aiden provider import <models.json>` configures custom compatible providers. `aiden catalog refresh` refreshes inference catalogs. `catalog models-dev fetch` and `insights aa|openrouter fetch` are explicit display-only network actions.
 - `aiden mcp presets`, `mcp add <file>`, and `mcp login <id>` configure MCP. Tool schemas are paginated, bounded, and rechecked before execution; failed servers do not silently gain tools.

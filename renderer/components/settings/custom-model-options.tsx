@@ -22,7 +22,7 @@ export function CustomModelOptionsEditor({
 }) {
   const [modelId, setModelId] = React.useState("");
   return (
-    <div className="grid min-w-0 gap-3">
+    <div className="grid min-w-0 gap-4">
       <Field
         label="Add model ID"
         description="Enter the exact model ID if it is missing from discovery."
@@ -52,9 +52,9 @@ export function CustomModelOptionsEditor({
         </div>
       </Field>
       <Text variant="small" color="tertiary" as="p">
-        Set the capabilities your server supports. Changes apply when you save.
-        Video records server support; Aiden chat currently accepts images and
-        text only.
+        Enable only the capabilities your server supports. Image and reasoning
+        controls apply to this connection, not a similarly named public model.
+        Changes apply when you save.
       </Text>
       {models.map((id) => {
         const overrides = metadata[id]?.overrides ?? {};
@@ -64,11 +64,16 @@ export function CustomModelOptionsEditor({
           ...overrides,
         };
         return (
-          <details key={id} className="settings-card min-w-0 p-3">
-            <summary className="cursor-pointer break-words text-small font-medium">
-              {metadata[id]?.name ?? id}
+          <details key={id} className="settings-card min-w-0 rounded-card bg-well">
+            <summary className="cursor-pointer break-words px-4 py-3 text-small-strong text-primary">
+              {metadata[id]?.name ?? info?.[id]?.name ?? id}
+              <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">
+                {effective.vision === true && overrides.maxImages !== 0 ? "Images enabled" : "Text only"}
+                {effective.reasoning === true ? " · Reasoning" : ""}
+                {overrides.contextLength ? ` · ${new Intl.NumberFormat().format(overrides.contextLength)} tokens` : ""}
+              </Text>
             </summary>
-            <FieldSet>
+            <FieldSet className="mb-0">
               {(
                 [
                   ["vision", "Vision"],
@@ -81,11 +86,13 @@ export function CustomModelOptionsEditor({
                 <Field key={key} label={label}>
                   <Switch
                     aria-label={`${id}: ${label}`}
-                    checked={effective[key] === true}
+                    checked={effective[key] === true && (key !== "vision" || overrides.maxImages !== 0)}
                     disabled={disabled}
-                    onCheckedChange={(checked) =>
-                      onChange(id, { ...overrides, [key]: checked })
-                    }
+                    onCheckedChange={(checked) => {
+                      const next = { ...overrides, [key]: checked };
+                      if (key === "vision" && checked && next.maxImages === 0) delete next.maxImages;
+                      onChange(id, next);
+                    }}
                   />
                 </Field>
               ))}
