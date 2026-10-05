@@ -29,8 +29,11 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'automation/models-dev-catalog-'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # Job permissions replace the workflow's, so contents: read is restated for
+    # the compare API.
     permissions:
       actions: write
+      contents: read
       pull-requests: read
     steps:
       - name: Run CI on main after the latest catalog merge
@@ -65,9 +68,13 @@ jobs:
             exit 0
           fi
           # Covered only if a recent main CI run tested a commit that contains the
-          # merge; run creation order alone proves nothing.
+          # merge; run creation order alone proves nothing. A compare failure fails
+          # this job rather than dispatching, so it can never start CI every run.
           for run_sha in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --limit 10 --json headSha --jq '.[].headSha'); do
-            status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$merge_sha...$run_sha" --jq .status 2>/dev/null || true)"
+            if ! status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$merge_sha...$run_sha" --jq .status)"; then
+              echo "Could not compare $merge_sha with $run_sha; not dispatching." >&2
+              exit 1
+            fi
             if [[ "$status" == "identical" || "$status" == "ahead" ]]; then
               echo "Main CI already ran on $run_sha, which contains catalog merge $merge_sha."
               exit 0

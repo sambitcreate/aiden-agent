@@ -286,7 +286,8 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.deepEqual(baseline.on.workflow_run, { workflows: ["CI"], types: ["completed"] });
   assert.ok(Array.isArray(baseline.on.schedule) && baseline.on.schedule.length === 1);
   assert.deepEqual(baseline.permissions, { contents: "read" });
-  assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", "pull-requests": "read" });
+  // Job permissions replace the workflow's, so the compare API needs contents: read here.
+  assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", contents: "read", "pull-requests": "read" });
   assert.match(baseline.jobs.dispatch.if, /github\.event_name == 'schedule'/u);
   assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
   // Coverage means a main CI run tested a commit containing the catalog merge
@@ -297,6 +298,8 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.match(dispatchScript, /"identical" \|\| "\$status" == "ahead"/u);
   assert.match(dispatchScript, /in:title "chore: refresh models\.dev catalog" sort:updated-desc/u);
   assert.doesNotMatch(dispatchScript, /createdAt/u);
+  // A failed comparison stops the job instead of dispatching CI on every run.
+  assert.match(dispatchScript, /if ! status="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/compare\/[^\n]*\n[^\n]*\n\s*exit 1/u);
   assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
   assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
