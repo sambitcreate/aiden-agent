@@ -89,7 +89,7 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - Forks are disabled while a run has started or a send is in flight.
   - After a fork the pane opens the new chat. A `before` fork seeds the composer draft with only `prefill.text`. The composer can't show uploads staged on the host, so those are released and the user is told to attach them again.
   - The lineage row and `ForkSummaryCard` come from `useRemoteForkLineage`. It runs one full-chat read (best-effort, under the 1 MiB GET cap) and caches `{lineage, feedRevision}`, where `feedRevision` is the feed row revision when the read started. While the summary is pending or failed it reads again whenever the row revision differs from that cached one; it never compares the feed token with the content-hash revision. A retry, skip or ready result from another device therefore replaces a stale failed card and releases the composer hold.
-  - Summary actions write the returned lineage into that query.
+  - Summary actions call `beginUpdate()` as they start, which records the row revision. If the row hasn't moved when the answer arrives, the answer is written into the query under that revision. If it has moved, the answer may be older than a feed-driven read, so the query is invalidated and re-read instead.
   - A pending or failed summary holds the composer with `FORK_SUMMARY_HOLD_MESSAGE`.
 - **Tests.**
   - `main/services/peer-remote-chat-fork.test.ts` (in `test:remote-chat`) runs end to end over the real IPC, peer-operation and host chat service. It covers:

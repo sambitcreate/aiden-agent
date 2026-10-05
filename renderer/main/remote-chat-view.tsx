@@ -298,8 +298,8 @@ export interface RemoteChatPaneProps {
   lineage?: RemoteChatLineage;
   /** Opens another chat on the same host: a new fork, or a fork's source. */
   onOpenChat?(chatId: string): void;
-  /** A summary action answered with the fork's new lineage. */
-  onLineageChange?(lineage: HostChatLineage): void;
+  /** Called as a summary action starts; the returned function takes the action's answer. */
+  beginLineageChange?(): (lineage: HostChatLineage) => void;
 }
 
 export interface RemoteChatLineage {
@@ -322,7 +322,7 @@ export function RemoteChatPane({
   forkable = false,
   lineage,
   onOpenChat,
-  onLineageChange,
+  beginLineageChange,
 }: RemoteChatPaneProps) {
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
@@ -490,13 +490,15 @@ export function RemoteChatPane({
   const runForkSummaryAction = async (action: "retry" | "cancel" | "skip") => {
     if (!control) return;
     setForkSummaryBusy(true);
+    const applyLineage = beginLineageChange?.();
     try {
       if (action === "cancel") {
         // The host settles the summary as failed once the attempt stops.
         if (!(await control.cancelForkSummary())) toast.info("The summary already finished.");
         return;
       }
-      onLineageChange?.(await control.forkSummary(action));
+      const answered = await control.forkSummary(action);
+      applyLineage?.(answered);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't update the fork's summary.");
     } finally {
@@ -948,7 +950,7 @@ export function useRemoteForkLineage(
   chatId: string,
   listed: ChatForkLineageV1 | undefined,
   rowRevision: string | undefined,
-): { forkedFrom?: ChatForkLineageV1; update(lineage: HostChatLineage): void } {
+): { forkedFrom?: ChatForkLineageV1; beginUpdate(): (lineage: HostChatLineage) => void } {
   const qc = useQueryClient();
   const key = hostQueryKeys.forkLineage(adapter.hostId, chatId);
   const enabled = Boolean(listed) && adapter.capabilities().has("messagesWindow");
@@ -973,16 +975,22 @@ export function useRemoteForkLineage(
     if (movedElsewhere) void qc.invalidateQueries({ queryKey: key, exact: true });
     // `key` is rebuilt every render, so its parts are the dependencies.
   }, [qc, movedElsewhere, adapter.hostId, chatId, rowRevision]);
-  const update = React.useCallback(
-    (lineage: HostChatLineage) =>
-      qc.setQueryData<ForkLineageRead>(hostQueryKeys.forkLineage(adapter.hostId, chatId), {
-        lineage,
-        feedRevision: currentRevision.current,
-      }),
-    [qc, adapter.hostId, chatId],
-  );
+  // An action's answer describes the host as of the row the action started from.
+  const beginUpdate = React.useCallback(() => {
+    const startRevision = currentRevision.current;
+    return (lineage: HostChatLineage) => {
+      const queryKey = hostQueryKeys.forkLineage(adapter.hostId, chatId);
+      if (currentRevision.current === startRevision) {
+        qc.setQueryData<ForkLineageRead>(queryKey, { lineage, feedRevision: startRevision });
+      } else {
+        // The row moved while the action ran, so the answer may be older than
+        // what the pane already shows. Read the chat again instead.
+        void qc.invalidateQueries({ queryKey, exact: true });
+      }
+    };
+  }, [qc, adapter.hostId, chatId]);
   const forkedFrom = enabled && read?.forkedFrom ? read.forkedFrom : listed;
-  return forkedFrom ? { forkedFrom, update } : { update };
+  return forkedFrom ? { forkedFrom, beginUpdate } : { beginUpdate };
 }
 
 /** Binds the pane's session control to this host's adapter and this chat. */
@@ -1012,7 +1020,7 @@ function ControlledRemoteChatPane({
       chat={chat}
       {...(hostSkills ? { hostSkills } : {})}
       {...(lineage ? { lineage } : {})}
-      onLineageChange={fork.update}
+      beginLineageChange={fork.beginUpdate}
     />
   );
 }

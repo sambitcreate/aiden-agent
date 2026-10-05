@@ -23,7 +23,7 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
-import type { ChatForkLineageV1, ChatForkSummaryV1 } from "../shared/chat-copy-contract";
+import { forkSummaryHoldsSend, type ChatForkLineageV1, type ChatForkSummaryV1 } from "../shared/chat-copy-contract";
 import {
   RemoteChatPane,
   RemoteChatRoute,
@@ -704,6 +704,38 @@ async function settle(): Promise<void> {
   }
 }
 
+/** Mounts the fork-lineage hook for one chat; `show` renders it at a feed row revision. */
+async function mountForkLineage(host: Parameters<typeof useRemoteForkLineage>[0], listed: ChatForkLineageV1) {
+  let latest: ReturnType<typeof useRemoteForkLineage> = { beginUpdate: () => noop };
+  function Harness({ rowRevision }: { rowRevision: string }) {
+    latest = useRemoteForkLineage(host, "chat-1", listed, rowRevision);
+    return null;
+  }
+  const dom = installDocument();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(dom.container);
+  return {
+    async show(rowRevision: string) {
+      root.render(
+        <QueryClientProvider client={client}>
+          <Harness rowRevision={rowRevision} />
+        </QueryClientProvider>,
+      );
+      await settle();
+      return latest.forkedFrom;
+    },
+    latest: () => latest,
+    async dispose() {
+      flushSync(() => root.unmount());
+      client.clear();
+      await settle();
+      dom.restore();
+    },
+  };
+}
+
 test("a fork's summary changed on another device reaches the open pane when its feed row moves", async () => {
   const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
   const failed: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
@@ -718,26 +750,8 @@ test("a fork's summary changed on another device reaches the open pane when its 
       return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, ...(summary ? { summary } : {}) } } };
     },
   };
-  let latest: ReturnType<typeof useRemoteForkLineage> = { update: noop };
-  function Harness({ rowRevision }: { rowRevision: string }) {
-    latest = useRemoteForkLineage(host, "chat-1", listed, rowRevision);
-    return null;
-  }
-
-  const dom = installDocument();
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const { createRoot } = await import("react-dom/client");
-  const { flushSync } = await import("react-dom");
-  const root = createRoot(dom.container);
-  const show = async (rowRevision: string) => {
-    root.render(
-      <QueryClientProvider client={client}>
-        <Harness rowRevision={rowRevision} />
-      </QueryClientProvider>,
-    );
-    await settle();
-    return latest.forkedFrom;
-  };
+  const mounted = await mountForkLineage(host, listed);
+  const show = mounted.show;
   const seen: Array<ChatForkLineageV1 | undefined> = [];
   try {
     seen.push(await show("rev_1"));
@@ -765,10 +779,7 @@ test("a fork's summary changed on another device reaches the open pane when its 
     await show("rev_5");
     assert.equal(reads, 4);
   } finally {
-    flushSync(() => root.unmount());
-    client.clear();
-    await settle();
-    dom.restore();
+    await mounted.dispose();
   }
 
   const pane = (forkedFrom: ChatForkLineageV1 | undefined) =>
@@ -786,4 +797,45 @@ test("a fork's summary changed on another device reaches the open pane when its 
   assert.match(retried!.text, /This fork is waiting for its summary\./);
   assert.doesNotMatch(skipped!.markup, /data-fork-summary/);
   assert.doesNotMatch(skipped!.text, /waiting for its summary/, "the composer is no longer held");
+});
+
+test("a summary action's late answer does not replace a newer summary the pane already read", async () => {
+  const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
+  let summary: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  let reads = 0;
+  const host = {
+    hostId: "host-b",
+    capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
+    async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
+      reads += 1;
+      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, summary } } };
+    },
+  };
+  const mounted = await mountForkLineage(host, listed);
+  try {
+    assert.equal((await mounted.show("rev_1"))?.summary?.state, "failed");
+
+    // Retry starts; the host answers "pending", but the answer is delayed.
+    const applyRetry = mounted.latest().beginUpdate();
+    const retryAnswer: HostChatLineage = {
+      revision: "content-retry",
+      forkedFrom: { ...listed, summary: { state: "pending", afterMessageId: "m2" } },
+    };
+    // Meanwhile the summary finishes and the feed brings the pane up to date.
+    summary = { state: "ready", afterMessageId: "m2", text: "Earlier, the user asked about the release." };
+    assert.equal((await mounted.show("rev_3"))?.summary?.state, "ready");
+
+    applyRetry(retryAnswer);
+    const shown = await mounted.show("rev_3");
+    assert.equal(shown?.summary?.state, "ready", "the late pending answer does not bring the summary back");
+    assert.equal(forkSummaryHoldsSend(shown), false, "the composer stays released");
+
+    // An answer whose row has not moved since the action started applies as-is.
+    summary = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+    const applySkip = mounted.latest().beginUpdate();
+    applySkip({ revision: "content-skip", forkedFrom: listed });
+    assert.equal((await mounted.show("rev_3"))?.summary, undefined);
+  } finally {
+    await mounted.dispose();
+  }
 });
