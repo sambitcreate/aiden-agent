@@ -1,50 +1,65 @@
 name: Model catalog main baseline
 
 # A catalog pull request is merged by auto-merge that the job token turned on,
-# and GitHub starts no workflows for pushes made that way. Once CI passes on a
-# catalog branch, wait for its pull request to merge and run full CI on main,
-# so main keeps a CI run of its own after every catalog refresh.
+# and GitHub starts no workflows for pushes made that way. This workflow makes
+# sure main still gets a CI run of its own after every catalog merge: when CI
+# passes on a catalog branch it waits briefly for the merge, and a schedule
+# catches merges that land later. Either way it starts full CI on main only if
+# no main CI run began after the latest catalog merge.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  schedule:
+    - cron: "17,47 * * * *"
 
 permissions:
   contents: read
 
+concurrency:
+  group: model-catalog-main-baseline
+  cancel-in-progress: false
+
 jobs:
   dispatch:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
+      github.event_name == 'schedule' ||
+      (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'automation/models-dev-catalog-')
+      startsWith(github.event.workflow_run.head_branch, 'automation/models-dev-catalog-'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       actions: write
       pull-requests: read
     steps:
-      - name: Run CI on main once the catalog pull request merges
+      - name: Run CI on main after the latest catalog merge
         shell: bash
         env:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Auto-merge lands shortly after the required checks pass.
-          for _ in $(seq 1 60); do
-            state="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 1 --json state --jq '.[0].state // ""')"
-            case "$state" in
-              MERGED)
-                gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
-                echo "Started CI on main after merging $BRANCH."
-                exit 0
-                ;;
-              CLOSED)
-                echo "$BRANCH was closed without merging; main is unchanged."
-                exit 0
-                ;;
-            esac
-            sleep 15
-          done
-          echo "$BRANCH did not merge within 15 minutes; the next push to main runs CI." >&2
+          # Fast path: auto-merge usually lands shortly after the checks pass.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            for _ in $(seq 1 60); do
+              state="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 1 --json state --jq '.[0].state // ""')"
+              [[ "$state" == "OPEN" ]] || break
+              sleep 15
+            done
+          fi
+          merged_at="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 30 --json headRefName,mergedAt \
+            --jq '[.[] | select(.headRefName | startswith("automation/models-dev-catalog-")) | .mergedAt] | max // ""')"
+          if [[ -z "$merged_at" ]]; then
+            echo "No merged catalog pull request yet."
+            exit 0
+          fi
+          # ISO-8601 UTC timestamps compare correctly as strings.
+          latest_main_ci="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --limit 20 --json createdAt \
+            --jq 'map(.createdAt) | max // ""')"
+          if [[ -n "$latest_main_ci" && ! "$latest_main_ci" < "$merged_at" ]]; then
+            echo "Main already has a CI run from $latest_main_ci, after the catalog merge at $merged_at."
+            exit 0
+          fi
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Started CI on main for the catalog merge at $merged_at."

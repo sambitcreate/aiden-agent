@@ -282,10 +282,15 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   // its own CI after each catalog merge.
   assert.ok("workflow_dispatch" in ci.on);
   const baseline = parse(await readFile(new URL("../.github/workflows/model-catalog-main-baseline.yml", import.meta.url), "utf8"));
-  assert.deepEqual(baseline.on, { workflow_run: { workflows: ["CI"], types: ["completed"] } });
+  // The schedule catches a catalog merge that lands after the fast path stops waiting.
+  assert.deepEqual(baseline.on.workflow_run, { workflows: ["CI"], types: ["completed"] });
+  assert.ok(Array.isArray(baseline.on.schedule) && baseline.on.schedule.length === 1);
   assert.deepEqual(baseline.permissions, { contents: "read" });
   assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", "pull-requests": "read" });
+  assert.match(baseline.jobs.dispatch.if, /github\.event_name == 'schedule'/u);
   assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
+  // It dispatches only when no main CI run began after the latest catalog merge.
+  assert.match(baseline.jobs.dispatch.steps[0].run, /latest_main_ci[\s\S]*< "\$merged_at"/u);
   assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
   assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
