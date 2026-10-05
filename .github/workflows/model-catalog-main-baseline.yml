@@ -4,8 +4,8 @@ name: Model catalog main baseline
 # and GitHub starts no workflows for pushes made that way. This workflow makes
 # sure main still gets a CI run of its own after every catalog merge: when CI
 # passes on a catalog branch it waits briefly for the merge, and a schedule
-# catches merges that land later. Either way it starts full CI on main only if
-# no main CI run began after the latest catalog merge.
+# catches merges that land later. Either way it starts full CI on main unless a
+# recent main CI run already tested a commit that contains the catalog merge.
 on:
   workflow_run:
     workflows: [CI]
@@ -40,26 +40,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Fast path: auto-merge usually lands shortly after the checks pass.
+          merge_sha=""
           if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            # Fast path: auto-merge usually lands shortly after the checks pass.
             for _ in $(seq 1 60); do
-              state="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 1 --json state --jq '.[0].state // ""')"
+              pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 1 --json state,mergeCommit \
+                --jq '.[0] // {} | "\(.state // "") \(.mergeCommit.oid // "")"')"
+              state="${pr%% *}"
+              if [[ "$state" == "MERGED" ]]; then merge_sha="${pr#* }"; break; fi
               [[ "$state" == "OPEN" ]] || break
               sleep 15
             done
           fi
-          merged_at="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 30 --json headRefName,mergedAt \
-            --jq '[.[] | select(.headRefName | startswith("automation/models-dev-catalog-")) | .mergedAt] | max // ""')"
-          if [[ -z "$merged_at" ]]; then
-            echo "No merged catalog pull request yet."
+          if [[ -z "$merge_sha" ]]; then
+            # Catalog PRs share one title; a merge updates the PR, so the latest
+            # catalog merge is among the most recently updated ones.
+            merge_sha="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 20 \
+              --search 'in:title "chore: refresh models.dev catalog" sort:updated-desc' \
+              --json headRefName,mergedAt,mergeCommit \
+              --jq '[.[] | select(.headRefName | startswith("automation/models-dev-catalog-"))] | max_by(.mergedAt) | .mergeCommit.oid // ""')"
+          fi
+          if [[ -z "$merge_sha" ]]; then
+            echo "No merged catalog pull request to cover."
             exit 0
           fi
-          # ISO-8601 UTC timestamps compare correctly as strings.
-          latest_main_ci="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --limit 20 --json createdAt \
-            --jq 'map(.createdAt) | max // ""')"
-          if [[ -n "$latest_main_ci" && ! "$latest_main_ci" < "$merged_at" ]]; then
-            echo "Main already has a CI run from $latest_main_ci, after the catalog merge at $merged_at."
-            exit 0
-          fi
+          # Covered only if a recent main CI run tested a commit that contains the
+          # merge; run creation order alone proves nothing.
+          for run_sha in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --limit 10 --json headSha --jq '.[].headSha'); do
+            status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$merge_sha...$run_sha" --jq .status 2>/dev/null || true)"
+            if [[ "$status" == "identical" || "$status" == "ahead" ]]; then
+              echo "Main CI already ran on $run_sha, which contains catalog merge $merge_sha."
+              exit 0
+            fi
+          done
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
-          echo "Started CI on main for the catalog merge at $merged_at."
+          echo "Started CI on main to cover catalog merge $merge_sha."

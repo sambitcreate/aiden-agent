@@ -289,8 +289,14 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", "pull-requests": "read" });
   assert.match(baseline.jobs.dispatch.if, /github\.event_name == 'schedule'/u);
   assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
-  // It dispatches only when no main CI run began after the latest catalog merge.
-  assert.match(baseline.jobs.dispatch.steps[0].run, /latest_main_ci[\s\S]*< "\$merged_at"/u);
+  // Coverage means a main CI run tested a commit containing the catalog merge
+  // (commit ancestry, not run timestamps), and catalog merges are found by title
+  // and branch prefix rather than among the newest-created PRs.
+  const dispatchScript = baseline.jobs.dispatch.steps[0].run;
+  assert.match(dispatchScript, /compare\/\$merge_sha\.\.\.\$run_sha/u);
+  assert.match(dispatchScript, /"identical" \|\| "\$status" == "ahead"/u);
+  assert.match(dispatchScript, /in:title "chore: refresh models\.dev catalog" sort:updated-desc/u);
+  assert.doesNotMatch(dispatchScript, /createdAt/u);
   assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
   assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
