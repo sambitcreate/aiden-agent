@@ -2032,10 +2032,22 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
     { at: "yesterday" },
     { summary: { state: "pending" } },
     { extra: true },
+    // The desktop keeps the files a summary saw, and calls the focus instructions; neither crosses the wire.
+    { summary: { state: "pending", afterMessageId: "m1", files: { read: [], modified: [] } } },
+    { summary: { state: "pending", afterMessageId: "m1", instructions: "the parser" } },
+    { summary: { state: "ready", afterMessageId: "m1" } },
+    { summary: { state: "pending", afterMessageId: "m1", error: "Summary cancelled." } },
   ]) {
     const chat = forkChat();
     chat.forkedFrom = { ...lineage(), ...change };
     assert.throws(() => parseAidenRemoteChatForkResult({ chat }), Error, JSON.stringify(change));
+  }
+
+  // A Chat read carries every settled summary state.
+  for (const summary of chatFork.summaryStates as unknown[]) {
+    const chat = forkChat();
+    chat.forkedFrom = { ...lineage(), summary };
+    assert.deepEqual(parseAidenRemoteChatForkResult({ chat }).chat.forkedFrom?.summary, summary);
   }
 
   // Rows show lineage for the sidebar glyph but never carry the summary.

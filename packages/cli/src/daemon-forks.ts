@@ -35,6 +35,8 @@ export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>,
     // Holding the deletion gate closes turn admission while the source is copied.
     beginChatCopy: (chatId) => daemon.deletion.isDeleting(chatId) || daemon.llmClient.isChatBusy(chatId) ? null : daemon.deletion.begin(chatId),
     workspaceExists: async (workspaceId) => Boolean(await workspace.configStore.getWorkspace(workspaceId)),
+    // Daemon turns read earlier messages only from the journal.
+    journalRequired: true,
     journal: {
       async forkChat(input) {
         const file = daemon.sessionPath(input.targetChatId);

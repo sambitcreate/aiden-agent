@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { Chat, ChatMessage } from "./types.js";
 import {
@@ -24,8 +27,9 @@ import { BotMutationGate } from "./bot-mutation-gate.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/shared/slash-commands.js";
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
-import { ChatForkError } from "./chat-fork-error.js";
-import type { ChatForkRequest } from "./chat-fork-service.js";
+import { ChatForkError, ForkSummaryStateError } from "./chat-fork-error.js";
+import { createChatForkService, type ChatForkRequest } from "./chat-fork-service.js";
+import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 
 const ONE_PIXEL_PNG =
@@ -2050,7 +2054,7 @@ function forkFixture(
           const kept = chat.messages
             .slice(0, position === "after" ? cut + 1 : cut)
             .map((message) => ({ ...message, id: `f-${message.id}` }));
-          return {
+          const forked: Chat = {
             ...chat,
             id: `fork-${requests.length}`,
             messages: kept,
@@ -2070,6 +2074,8 @@ function forkFixture(
                 : {}),
             },
           };
+          caller.assertInstallable?.(forked);
+          return forked;
         },
       },
       admitWorkspace: (workspaceId) => {
@@ -2106,7 +2112,7 @@ test("a Remote fork after a reply checks the revision, records lineage and repla
   const forked = await app.service.fork("device-1", "chat-1", revision, key, {
     messageId: "a1",
     position: "after",
-    summary: { instructions: "  the parser  " },
+    summary: { focus: "  the parser  " },
   });
   // The response is exactly what a paired client parses.
   assert.deepEqual(parseAidenRemoteChatForkResult(JSON.parse(JSON.stringify(forked))), forked);
@@ -2116,7 +2122,7 @@ test("a Remote fork after a reply checks the revision, records lineage and repla
     messageId: "a1",
     position: "after",
     at: new Date(5_000).toISOString(),
-    summary: { state: "pending", afterMessageId: "f-a1", instructions: "the parser" },
+    summary: { state: "pending", afterMessageId: "f-a1", focus: "the parser" },
   });
   assert.equal(forked.prefill, undefined);
   assert.deepEqual(app.admitted, ["workspace-1"]);
@@ -2127,7 +2133,7 @@ test("a Remote fork after a reply checks the revision, records lineage and repla
     await app.service.fork("device-1", "chat-1", revision, key, {
       messageId: "a1",
       position: "after",
-      summary: { instructions: "  the parser  " },
+      summary: { focus: "  the parser  " },
     }),
     forked,
   );
@@ -2211,9 +2217,10 @@ test("Remote fork failures carry the status and code a client acts on", async ()
     { messageId: "a1", position: "middle" },
     { messageId: "a1/../x", position: "after" },
     { messageId: "a1", position: "after", extra: true },
-    { messageId: "a1", position: "after", summary: { instructions: "   " } },
-    { messageId: "a1", position: "after", summary: { instructions: "x".repeat(1_001) } },
-    { messageId: "a1", position: "after", summary: { focus: "parser" } },
+    { messageId: "a1", position: "after", summary: { focus: "   " } },
+    { messageId: "a1", position: "after", summary: { focus: "x".repeat(1_001) } },
+    // The desktop's internal name for the focus is not part of the wire.
+    { messageId: "a1", position: "after", summary: { instructions: "parser" } },
   ]) {
     await assert.rejects(run(undefined, malformed), hasCode("invalid_request", 400), JSON.stringify(malformed));
   }
@@ -2253,12 +2260,15 @@ test("fork summary actions reach only forks with a summary and report a moved-on
     },
   };
   const calls: string[] = [];
+  const storageFailure = new Error("EACCES: /Users/private/Library/Aiden/chats/chat-1.json");
   const app = forkFixture({
     initial: pending,
     summaries: {
       retry: async (chatId) => {
         calls.push(`retry:${chatId}`);
-        throw new Error("Only a failed summary can be retried.");
+        throw calls.length === 1
+          ? new ForkSummaryStateError("Only a failed summary can be retried.")
+          : storageFailure;
       },
       skip: async (chatId) => {
         calls.push(`skip:${chatId}`);
@@ -2276,13 +2286,86 @@ test("fork summary actions reach only forks with a summary and report a moved-on
   await assert.rejects(app.service.retryForkSummary("chat-1"), (error: unknown) =>
     hasCode("revision_conflict", 409)(error) &&
     (error as Error).message === "Only a failed summary can be retried.");
+  // Anything else is not a conflict, and its text is not handed to the device as one.
+  await assert.rejects(app.service.retryForkSummary("chat-1"), (error: unknown) => error === storageFailure);
   const skipped = await app.service.skipForkSummary("chat-1");
   assert.equal(skipped.forkedFrom?.summary, undefined);
   assert.equal(skipped.forkedFrom?.chatId, "source-1");
   assert.deepEqual(await app.service.cancelForkSummary("chat-1"), { cancelled: false });
-  assert.deepEqual(calls, ["retry:chat-1", "skip:chat-1", "cancel:chat-1"]);
+  assert.deepEqual(calls, ["retry:chat-1", "retry:chat-1", "skip:chat-1", "cancel:chat-1"]);
 
   // A chat that is not a fork with a summary has no summary to act on.
   const plain = forkFixture({ summaries: { retry: async () => pending, skip: async () => pending, cancel: () => true } });
   await assert.rejects(plain.service.cancelForkSummary("chat-1"), hasCode("not_found", 404));
+});
+
+test("a fork summary reaches a paired device without host files or provider errors", async () => {
+  const lineage = (summary: NonNullable<NonNullable<Chat["forkedFrom"]>["summary"]>): Chat => ({
+    ...forkSource(),
+    forkedFrom: { chatId: "source-1", messageId: "a1", position: "after", at: 5_000, summary },
+  });
+  const files = { read: ["/Users/private/project/secret.ts"], modified: ["/Users/private/project/parser.ts"] };
+  const read = async (chat: Chat) => {
+    const projected = await forkFixture({ initial: chat }).service.get("chat-1");
+    // Every summary state parses the way a paired client parses it.
+    assert.deepEqual(parseAidenRemoteChatProjection(JSON.parse(JSON.stringify(projected))), projected);
+    return projected.forkedFrom?.summary;
+  };
+
+  assert.deepEqual(
+    await read(lineage({
+      state: "failed",
+      afterMessageId: "a2",
+      instructions: "the parser",
+      files,
+      error: "401 Unauthorized from https://api.provider.example/v1 (key sk-live-123)",
+    })),
+    { state: "failed", afterMessageId: "a2", focus: "the parser", error: "The summary could not be generated." },
+  );
+  // Aiden's own failure text is safe to show as it is.
+  assert.deepEqual(
+    await read(lineage({ state: "failed", afterMessageId: "a2", error: "Summary cancelled." })),
+    { state: "failed", afterMessageId: "a2", error: "Summary cancelled." },
+  );
+  assert.deepEqual(
+    await read(lineage({ state: "ready", afterMessageId: "a2", text: "Settled on revision 21.", files })),
+    { state: "ready", afterMessageId: "a2", text: "Settled on revision 21." },
+  );
+});
+
+test("a fork too large to send from a paired device is refused without creating it", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-remote-fork-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  let source = await store.create({ title: "Long", workspaceId: "workspace-1" });
+  for (let index = 0; index < 6; index += 1) {
+    source = await store.appendMessage(source.id, {
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: String(index).repeat(190_000),
+    });
+  }
+  const app = fixture(source, {
+    forks: {
+      service: createChatForkService({
+        chatStore: store,
+        beginChatCopy: () => () => undefined,
+        workspaceExists: async () => true,
+      }),
+      admitWorkspace: () => ({ isAborted: () => false, release: () => undefined }),
+    },
+  });
+  // The whole chat is too large to read at once, so a client pages it.
+  const { revision } = await app.service.messagesWindow(source.id, { limit: 1 });
+  const lastReply = source.messages[source.messages.length - 1]!.id;
+  const fork = () =>
+    app.service.fork("device-1", source.id, revision, "fork-key-000000000099", {
+      messageId: lastReply,
+      position: "after",
+    });
+
+  await assert.rejects(fork(), hasCode("payload_too_large", 413));
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  // A retry with the same key is refused like any replayed rejection, and still creates nothing.
+  await assert.rejects(fork(), hasCode("internal_error", 409));
+  assert.equal((await store.list()).length, 1);
 });

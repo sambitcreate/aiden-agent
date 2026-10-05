@@ -7674,48 +7674,22 @@
             "pattern": "^[A-Za-z0-9_-]+$",
             "description": "The fork's last copied message; the summary follows it."
           },
-          "instructions": {
+          "focus": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 1000
+            "maxLength": 1000,
+            "description": "The focus the summary was asked for."
           },
           "text": {
             "type": "string",
             "minLength": 1,
             "maxLength": 32000
           },
-          "files": {
-            "type": "object",
-            "required": [
-              "read",
-              "modified"
-            ],
-            "properties": {
-              "read": {
-                "type": "array",
-                "maxItems": 200,
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 1024
-                }
-              },
-              "modified": {
-                "type": "array",
-                "maxItems": 200,
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 1024
-                }
-              }
-            },
-            "additionalProperties": false
-          },
           "error": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 1000
+            "maxLength": 1000,
+            "description": "Why the summary failed, in Aiden's own words. Provider errors stay on the Mac."
           }
         },
         "additionalProperties": false
@@ -7816,7 +7790,7 @@
             "type": "object",
             "description": "Fork with summary (chat-fork-summary-v1).",
             "properties": {
-              "instructions": {
+              "focus": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 1000,

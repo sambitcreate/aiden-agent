@@ -15,10 +15,11 @@ import {
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
-  parseChatForkSummaryV1,
+  MAX_FORK_SUMMARY_TEXT_CHARS,
 } from "../../renderer/shared/chat-copy-contract.js";
 import type {
   AidenRemoteChatForkLineageProjection,
+  AidenRemoteChatForkSummaryProjection,
   AidenRemoteChatForkResult,
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
@@ -1060,7 +1061,7 @@ export interface AidenRemoteContractFixture {
 }
 
 export interface AidenRemoteChatForkFixtureExchange {
-  request: { messageId: string; position: "after" | "before"; summary?: { instructions?: string } };
+  request: { messageId: string; position: "after" | "before"; summary?: { focus?: string } };
   response: AidenRemoteChatForkResult;
 }
 
@@ -1070,6 +1071,8 @@ export interface AidenRemoteChatForkFixture {
   fork: AidenRemoteChatForkFixtureExchange;
   /** A fork before a prompt, whose response returns the prompt to edit. */
   editFork: AidenRemoteChatForkFixtureExchange;
+  /** Settled summaries a Chat read can carry. */
+  summaryStates: AidenRemoteChatForkSummaryProjection[];
   summaryCancel: { cancelled: boolean };
 }
 
@@ -2308,17 +2311,36 @@ function parseChatForkLineageProjection(
   if (!REMOTE_SAFE_ID.test(chatId) || !REMOTE_SAFE_ID.test(messageId)) {
     throw new Error(`${label} forkedFrom identifiers are invalid.`);
   }
-  let summary: AidenRemoteChatForkLineageProjection["summary"];
-  if (hasOwn(value, "summary")) {
-    summary = parseChatForkSummaryV1(value.summary);
-    if (!summary) throw new Error(`${label} forkedFrom summary is invalid.`);
-  }
+  const summary = hasOwn(value, "summary")
+    ? parseChatForkSummaryProjection(value.summary, `${label} forkedFrom summary`)
+    : undefined;
   return {
     chatId,
     messageId,
     position: enumMember(value.position, ["after", "before"] as const, `${label} forkedFrom position`),
     at: dateTimeValue(value.at, `${label} forkedFrom at`),
     ...(summary ? { summary } : {}),
+  };
+}
+
+function parseChatForkSummaryProjection(value: unknown, label: string): AidenRemoteChatForkSummaryProjection {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["state", "afterMessageId", "focus", "text", "error"], label);
+  const afterMessageId = boundedText(value.afterMessageId, `${label} afterMessageId`, 160);
+  if (!/^[A-Za-z0-9_-]+$/u.test(afterMessageId)) throw new Error(`${label} afterMessageId is invalid.`);
+  const state = enumMember(value.state, ["pending", "ready", "failed"] as const, `${label} state`);
+  if (state === "ready" && !hasOwn(value, "text")) throw new Error(`${label} must carry text when ready.`);
+  if (state !== "failed" && hasOwn(value, "error")) throw new Error(`${label} error belongs to a failed summary.`);
+  return {
+    state,
+    afterMessageId,
+    ...(hasOwn(value, "focus")
+      ? { focus: boundedText(value.focus, `${label} focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
+    ...(hasOwn(value, "text") ? { text: boundedText(value.text, `${label} text`, MAX_FORK_SUMMARY_TEXT_CHARS) } : {}),
+    ...(hasOwn(value, "error")
+      ? { error: boundedText(value.error, `${label} error`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
   };
 }
 
@@ -5547,24 +5569,18 @@ function fixtureTimestamp(value: unknown, label: string): string {
   return value;
 }
 
-/**
- * Validates the `pairing-requests-v1` section: unauthenticated request,
- * reveal and poll shapes, the sealed grant envelope and the match-code
- * vectors. The cryptographic vectors themselves are checked by the
- * sealed-envelope tests; this keeps the shapes fail-closed for every client.
- */
 function parseChatForkFixtureExchange(value: unknown, label: string): AidenRemoteChatForkFixtureExchange {
   const exchange = requiredFixtureRecord(value, label, ["request", "response"]);
   const request = requiredFixtureRecord(exchange.request, `${label} request`, ["messageId", "position"], ["summary"]);
   const messageId = boundedText(request.messageId, `${label} request messageId`, 128);
   if (!REMOTE_SAFE_ID.test(messageId)) throw new Error(`${label} request messageId is invalid.`);
   const position = enumMember(request.position, ["after", "before"] as const, `${label} request position`);
-  let summary: { instructions?: string } | undefined;
+  let summary: { focus?: string } | undefined;
   if (request.summary !== undefined) {
-    const body = requiredFixtureRecord(request.summary, `${label} request summary`, [], ["instructions"]);
-    summary = body.instructions === undefined
+    const body = requiredFixtureRecord(request.summary, `${label} request summary`, [], ["focus"]);
+    summary = body.focus === undefined
       ? {}
-      : { instructions: boundedText(body.instructions, `${label} request summary instructions`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) };
+      : { focus: boundedText(body.focus, `${label} request summary focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) };
   }
   const response = parseAidenRemoteChatForkResult(exchange.response, `${label} response`);
   const lineage = response.chat.forkedFrom!;
@@ -5578,7 +5594,13 @@ function parseChatForkFixtureExchange(value: unknown, label: string): AidenRemot
 }
 
 function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
-  const section = requiredFixtureRecord(value, "Chat fork fixture", ["features", "fork", "editFork", "summaryCancel"]);
+  const section = requiredFixtureRecord(value, "Chat fork fixture", [
+    "features",
+    "fork",
+    "editFork",
+    "summaryStates",
+    "summaryCancel",
+  ]);
   const features = section.features;
   if (
     !Array.isArray(features) ||
@@ -5594,11 +5616,25 @@ function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
   }
   const editFork = parseChatForkFixtureExchange(section.editFork, "Chat fork fixture editFork");
   if (!editFork.response.prefill) throw new Error("Chat fork fixture editFork must return the prompt to edit.");
+  if (!Array.isArray(section.summaryStates)) throw new Error("Chat fork fixture summaryStates must be an array.");
+  const summaryStates = section.summaryStates.map((summary, index) =>
+    parseChatForkSummaryProjection(summary, `Chat fork fixture summaryStates[${index}]`),
+  );
+  const states = summaryStates.map(({ state }) => state);
+  if (!states.includes("ready") || !states.includes("failed")) {
+    throw new Error("Chat fork fixture summaryStates must include ready and failed summaries.");
+  }
   const cancel = requiredFixtureRecord(section.summaryCancel, "Chat fork fixture summaryCancel", ["cancelled"]);
   if (typeof cancel.cancelled !== "boolean") throw new Error("Chat fork fixture summaryCancel cancelled must be boolean.");
-  return { features: [...features], fork, editFork, summaryCancel: { cancelled: cancel.cancelled } };
+  return { features: [...features], fork, editFork, summaryStates, summaryCancel: { cancelled: cancel.cancelled } };
 }
 
+/**
+ * Validates the `pairing-requests-v1` section: unauthenticated request,
+ * reveal and poll shapes, the sealed grant envelope and the match-code
+ * vectors. The cryptographic vectors themselves are checked by the
+ * sealed-envelope tests; this keeps the shapes fail-closed for every client.
+ */
 function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequestsFixture {
   const section = requiredFixtureRecord(
     value,
