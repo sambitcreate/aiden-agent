@@ -1734,7 +1734,7 @@ final class AidenChatViewModel {
     func fork(
         messageId: String,
         action: AidenChatForkMenuAction,
-        summaryInstructions: String = ""
+        summaryFocus: String = ""
     ) async -> AidenChat? {
         guard let availability = forkAvailability,
               AidenChatForkEligibility.actions(
@@ -1752,7 +1752,7 @@ final class AidenChatViewModel {
                 revision: source.revision,
                 messageId: messageId,
                 position: action.position,
-                summaryInstructions: action == .forkWithSummary ? summaryInstructions : nil
+                summaryFocus: action == .forkWithSummary ? summaryFocus : nil
             )
             guard !isRemoved, coordinator.isCurrent(context) else { return nil }
             let forked = result.chat
@@ -4492,8 +4492,8 @@ struct AidenChatDetailView: View {
             AidenChatProgressSheet(kind: progressSheet, model: model)
         }
         .sheet(item: $forkSummaryRequest) { request in
-            AidenForkSummarySheet { instructions in
-                performFork(messageID: request.id, action: .forkWithSummary, instructions: instructions)
+            AidenForkSummarySheet { focus in
+                performFork(messageID: request.id, action: .forkWithSummary, focus: focus)
             }
         }
         .task(id: model.chat.forkedFrom?.chatId) {
@@ -4700,13 +4700,13 @@ struct AidenChatDetailView: View {
         .padding(.top, 20)
     }
 
-    private func performFork(messageID: String, action: AidenChatForkMenuAction, instructions: String = "") {
+    private func performFork(messageID: String, action: AidenChatForkMenuAction, focus: String = "") {
         guard let onOpenChat else { return }
         Task { @MainActor in
             guard let forked = await model.fork(
                 messageId: messageID,
                 action: action,
-                summaryInstructions: instructions
+                summaryFocus: focus
             ) else { return }
             onOpenChat(forked)
         }

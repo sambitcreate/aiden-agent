@@ -816,7 +816,7 @@ class AidenRemoteClient(
 
     /**
      * Forks [id] at [messageId] (contract revision 21, `chat-fork-v1`).
-     * [summaryInstructions] is only sent with [withSummary], which needs
+     * [summaryFocus] is only sent with [withSummary], which needs
      * `chat-fork-summary-v1`; a blank focus asks for an unfocused summary.
      * A replay with the same [idempotencyKey] and body returns the first fork.
      */
@@ -826,7 +826,7 @@ class AidenRemoteClient(
         messageId: String,
         position: AidenChatForkPosition,
         withSummary: Boolean = false,
-        summaryInstructions: String? = null,
+        summaryFocus: String? = null,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenChatForkResult = executeRequest(
         "/chats/$id/fork",
@@ -838,7 +838,7 @@ class AidenRemoteClient(
                 messageId = messageId,
                 position = position,
                 summary = if (withSummary) {
-                    ChatForkSummaryRequest(summaryInstructions?.trim()?.takeIf { it.isNotEmpty() })
+                    ChatForkSummaryRequest(summaryFocus?.trim()?.takeIf { it.isNotEmpty() })
                 } else null
             )
         ),
@@ -2006,7 +2006,7 @@ class AidenRemoteClient(
 
     /** Encodes to `{}` for an unfocused summary. */
     @Serializable
-    private data class ChatForkSummaryRequest(val instructions: String? = null)
+    private data class ChatForkSummaryRequest(val focus: String? = null)
 
     @Serializable
     private data class ChatMoveRequest(

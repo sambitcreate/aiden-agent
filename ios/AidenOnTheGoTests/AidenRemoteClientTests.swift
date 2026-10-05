@@ -4453,7 +4453,7 @@ final class AidenRemoteClientTests: XCTestCase {
             revision: "chat_revision_source_7",
             messageId: "message_fixture_source_assistant_01",
             position: .after,
-            summaryInstructions: "  the protocol decisions\n",
+            summaryFocus: "  the protocol decisions\n",
             idempotencyKey: key
         )
 
@@ -4464,7 +4464,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(lineage.position, .after)
         XCTAssertEqual(lineage.summary?.state, .pending)
         XCTAssertEqual(lineage.summary?.afterMessageId, "message_fixture_fork_assistant_01")
-        XCTAssertEqual(lineage.summary?.instructions, "the protocol decisions")
+        XCTAssertEqual(lineage.summary?.focus, "the protocol decisions")
     }
 
     func testEditInForkOmitsSummaryAndReturnsPrefill() async throws {
@@ -4501,13 +4501,13 @@ final class AidenRemoteClientTests: XCTestCase {
             return Self.response(for: request, status: 201, data: responseData)
         }
         let client = makeClient()
-        for instructions in [nil, " \n", "the protocol decisions"] as [String?] {
+        for focus in [nil, " \n", "the protocol decisions"] as [String?] {
             _ = try await client.forkChat(
                 chatId: "chat_fixture_source_01",
                 revision: "chat_revision_source_7",
                 messageId: "message_fixture_source_assistant_01",
                 position: .after,
-                summaryInstructions: instructions
+                summaryFocus: focus
             )
         }
 
@@ -4516,7 +4516,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(bodies[1]["summary"] as? NSDictionary, [:] as NSDictionary)
         XCTAssertEqual(
             bodies[2]["summary"] as? NSDictionary,
-            ["instructions": "the protocol decisions"] as NSDictionary
+            ["focus": "the protocol decisions"] as NSDictionary
         )
 
         await assertInvalidResponse {
@@ -4525,10 +4525,10 @@ final class AidenRemoteClientTests: XCTestCase {
                 revision: "chat_revision_source_7",
                 messageId: "message_fixture_source_assistant_01",
                 position: .after,
-                summaryInstructions: String(repeating: "é", count: 1_001)
+                summaryFocus: String(repeating: "é", count: 1_001)
             )
         }
-        XCTAssertEqual(bodies.count, 3, "Over-long instructions never leave the phone.")
+        XCTAssertEqual(bodies.count, 3, "An over-long focus never leaves the phone.")
     }
 
     func testForkRejectsResultsThatDoNotRecordTheRequestedCut() async throws {
@@ -4611,8 +4611,8 @@ final class AidenRemoteClientTests: XCTestCase {
                 from: JSONSerialization.data(withJSONObject: value)
             )
         }
-        // A chat read keeps the summary's focus text, and only there.
-        XCTAssertEqual(try decode(chat).forkedFrom?.summary?.instructions, "the protocol decisions")
+        // A chat read keeps the summary's focus text.
+        XCTAssertEqual(try decode(chat).forkedFrom?.summary?.focus, "the protocol decisions")
         var leaked = chat
         leaked["instructions"] = "the protocol decisions"
         XCTAssertThrowsError(try decode(leaked))
@@ -4635,6 +4635,79 @@ final class AidenRemoteClientTests: XCTestCase {
 
         chat.removeValue(forKey: "forkedFrom")
         XCTAssertNil(try decode(chat).forkedFrom)
+    }
+
+    func testForkSummaryStatesDecodeInChatReadsAndChatLists() throws {
+        let chat = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat"])
+            ) as? [String: Any]
+        )
+        let lineage = try XCTUnwrap(chat["forkedFrom"] as? [String: Any])
+        let pending = try XCTUnwrap(lineage["summary"] as? [String: Any])
+        let settled = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "summaryStates"])
+            ) as? [[String: Any]]
+        )
+        func withSummary(_ summary: [String: Any]) -> [String: Any] {
+            var forkedFrom = lineage
+            forkedFrom["summary"] = summary
+            var value = chat
+            value["forkedFrom"] = forkedFrom
+            return value
+        }
+        func decodedSummaries(_ summary: [String: Any]) throws -> [AidenChatForkSummary?] {
+            let value = withSummary(summary)
+            let read = try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+            let list = try AidenRemoteJSONDecoder.decode(
+                AidenChatListResponse.self,
+                from: JSONSerialization.data(withJSONObject: ["chats": [value]])
+            )
+            XCTAssertEqual(list.chats.map(\.id), ["chat_fixture_fork_01"])
+            return [read.forkedFrom?.summary, list.chats.first?.forkedFrom?.summary]
+        }
+
+        let expected: [AidenChatForkSummary] = [
+            AidenChatForkSummary(
+                state: .pending,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions"
+            ),
+            AidenChatForkSummary(
+                state: .ready,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                text: "The review settled on revision 21 and kept every route additive."
+            ),
+            AidenChatForkSummary(
+                state: .failed,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                error: "The summary could not be generated."
+            ),
+        ]
+        let fixtures = [pending] + settled
+        XCTAssertEqual(fixtures.count, expected.count)
+        for (fixture, summary) in zip(fixtures, expected) {
+            XCTAssertEqual(try decodedSummaries(fixture), [summary, summary])
+        }
+
+        // The pre-rename `instructions` key is private text again everywhere,
+        // so a chat carrying it is refused outright rather than half-shown.
+        var renamed = pending
+        renamed.removeValue(forKey: "focus")
+        renamed["instructions"] = "the protocol decisions"
+        XCTAssertThrowsError(try decodedSummaries(renamed))
+
+        // File paths stay on the Mac: a summary that still lists them is
+        // dropped on its own and the chat stays a readable fork.
+        var withFiles = settled[0]
+        withFiles["files"] = ["read": ["Sources/App.swift"], "modified": []]
+        XCTAssertEqual(try decodedSummaries(withFiles), [nil, nil])
     }
 
     func testChatSummaryRowsCarryLineageWithoutTheSummary() throws {

@@ -346,7 +346,7 @@ class AidenChatViewModel(
         messageId: String,
         position: AidenChatForkPosition,
         withSummary: Boolean = false,
-        summaryInstructions: String? = null
+        summaryFocus: String? = null
     ) {
         if (_isForking.value || !canFork || (withSummary && !canForkWithSummary)) return
         val client = activeClient() ?: return
@@ -361,10 +361,10 @@ class AidenChatViewModel(
                 !withSummary && AidenChatForkEligibility.canEditInFork(source.messages, messageId)
         }
         if (!eligible) return
-        val instructions = summaryInstructions?.trim()
+        val focus = summaryFocus?.trim()
             ?.takeIf { withSummary && it.isNotEmpty() }
-            ?.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH)
-        val attempt = AidenChatForkAttempt(source.revision, messageId, position, withSummary, instructions)
+            ?.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH)
+        val attempt = AidenChatForkAttempt(source.revision, messageId, position, withSummary, focus)
         val idempotencyKey = forkAttempt?.takeIf { it.first == attempt }?.second ?: UUID.randomUUID()
         forkAttempt = attempt to idempotencyKey
         _isForking.value = true
@@ -374,7 +374,7 @@ class AidenChatViewModel(
                 val result = client.forkChat(
                     chatId, source.revision, messageId, position,
                     withSummary = withSummary,
-                    summaryInstructions = instructions,
+                    summaryFocus = focus,
                     idempotencyKey = idempotencyKey
                 )
                 if (activeClient() !== client) return@launch

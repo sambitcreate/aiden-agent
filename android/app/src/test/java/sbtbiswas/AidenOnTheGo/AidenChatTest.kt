@@ -2088,7 +2088,7 @@ class AidenChatTest {
         val pending = forkChat(lineage = AidenChatForkLineage(
             chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH,
             summary = AidenChatForkSummary(
-                state = AidenChatForkSummaryState.PENDING, afterMessageId = "fork-assistant-1", instructions = "the parser"
+                state = AidenChatForkSummaryState.PENDING, afterMessageId = "fork-assistant-1", focus = "the parser"
             )
         ))
         val remoteFork = java.util.concurrent.atomic.AtomicReference(pending)
@@ -2111,10 +2111,13 @@ class AidenChatTest {
         }) { harness ->
             val model = harness.open(forkSource.id, forkSource)
             assertTrue(model.canForkWithSummary)
-            model.fork("assistant-1", AidenChatForkPosition.AFTER, withSummary = true, summaryInstructions = "  the parser  ")
+            model.fork("assistant-1", AidenChatForkPosition.AFTER, withSummary = true, summaryFocus = "  the parser  ")
             assertEquals(pending.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
             val body = json.parseToJsonElement(withContext(Dispatchers.IO) { forkBodies.poll(5, TimeUnit.SECONDS) }!!).jsonObject
-            assertEquals("the parser", body.getValue("summary").jsonObject.getValue("instructions").jsonPrimitive.content)
+            assertEquals(
+                Json.parseToJsonElement("""{"focus":"the parser"}"""),
+                body.getValue("summary")
+            )
 
             val forkModel = harness.open(pending.id)
             forkModel.updateDraft("Carry on")

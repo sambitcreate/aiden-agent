@@ -1000,13 +1000,13 @@ fun AidenChatDetailScreen(
             palette = palette,
             busy = isForking,
             onDismiss = { forkWithSummaryMessageId = null },
-            onConfirm = { instructions ->
+            onConfirm = { focus ->
                 forkWithSummaryMessageId = null
                 viewModel.fork(
                     messageId = messageId,
                     position = AidenChatForkPosition.AFTER,
                     withSummary = true,
-                    summaryInstructions = instructions
+                    summaryFocus = focus
                 )
             }
         )

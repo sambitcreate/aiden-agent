@@ -825,34 +825,20 @@ enum class AidenChatForkSummaryState {
     @SerialName("failed") FAILED
 }
 
-@Serializable
-data class AidenChatForkSummaryFiles(
-    val read: List<String>,
-    val modified: List<String>
-) {
-    init {
-        if (!isBounded(read) || !isBounded(modified)) {
-            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork summary files")
-        }
-    }
-
-    private fun isBounded(paths: List<String>): Boolean =
-        paths.size <= 200 && paths.all { it.length in 1..1_024 }
-}
-
 /** What happened in the source after the fork point, summarized for the fork. */
 @Serializable
 data class AidenChatForkSummary(
     val state: AidenChatForkSummaryState,
     val afterMessageId: String,
-    val instructions: String? = null,
+    /** The focus the summary was asked for. */
+    val focus: String? = null,
     val text: String? = null,
-    val files: AidenChatForkSummaryFiles? = null,
+    /** A short, safe phrase; provider errors stay on the Mac. */
     val error: String? = null
 ) {
     init {
         if (afterMessageId.length !in 1..160 || !AFTER_MESSAGE_ID.matches(afterMessageId) ||
-            (instructions != null && instructions.length !in 1..AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH) ||
+            (focus != null && focus.length !in 1..AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH) ||
             (text != null && text.length !in 1..32_000) ||
             (error != null && error.length !in 1..1_000)
         ) {

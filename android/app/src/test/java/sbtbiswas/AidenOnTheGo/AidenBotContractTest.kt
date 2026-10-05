@@ -97,18 +97,22 @@ class AidenBotContractTest {
     }
 
     @Test
-    fun testForkSummaryFocusIsTheOnlyChatInstructionsField() {
-        val summary = """{"state":"ready","afterMessageId":"m1","instructions":"the parser","text":"Summary"}"""
-        val lineage = """{"chatId":"c0","messageId":"m0","position":"after","at":"2026-10-05T12:00:00Z","summary":$summary}"""
-        // A chat, a fork result's chat, and a chat list may each carry the focus.
-        for (payload in listOf(
+    fun testForkSummaryCarriesFocusAndNeverInstructions() {
+        fun lineage(summary: String) =
+            """{"chatId":"c0","messageId":"m0","position":"after","at":"2026-10-05T12:00:00Z","summary":$summary}"""
+        // A chat, a fork result's chat, and a chat list.
+        fun chatShapes(lineage: String) = listOf(
             """{"id":"c1","messages":[],"forkedFrom":$lineage}""",
             """{"chat":{"id":"c1","messages":[],"forkedFrom":$lineage}}""",
             """{"chats":[{"id":"c1","messages":[],"forkedFrom":$lineage}]}"""
-        )) {
+        )
+        val focused = lineage("""{"state":"ready","afterMessageId":"m1","focus":"the parser","text":"Summary"}""")
+        for (payload in chatShapes(focused)) {
             AidenBotPrivateResponseValidator.validate(payload, AidenBotPrivateResponseScope.ChatProjection)
         }
-        for (payload in listOf(
+        // The pre-release `instructions` name for the focus is private like any other.
+        val renamed = lineage("""{"state":"ready","afterMessageId":"m1","instructions":"the parser","text":"Summary"}""")
+        for (payload in chatShapes(renamed) + listOf(
             """{"id":"c1","instructions":"leaked","messages":[]}""",
             """{"id":"c1","messages":[{"id":"m1","instructions":"leaked"}]}""",
             """{"id":"c1","messages":[],"forkedFrom":{"chatId":"c0","instructions":"leaked"}}"""
@@ -119,7 +123,7 @@ class AidenBotContractTest {
         }
         assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
             AidenBotPrivateResponseValidator.validate(
-                """{"summaries":[{"id":"c1","forkedFrom":$lineage}]}""",
+                """{"summaries":[{"id":"c1","forkedFrom":$renamed}]}""",
                 AidenBotPrivateResponseScope.ChatSummaryProjection
             )
         }

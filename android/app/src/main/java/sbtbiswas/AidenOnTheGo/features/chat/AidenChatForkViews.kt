@@ -23,7 +23,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -131,7 +130,7 @@ fun AidenForkSummaryCard(
                             }
                         }
                     }
-                    FocusLine(summary.instructions, palette)
+                    FocusLine(summary.focus, palette)
                 }
                 AidenChatForkSummaryState.FAILED -> {
                     SummaryTitle(palette)
@@ -142,7 +141,7 @@ fun AidenForkSummaryCard(
                         color = palette.secondary,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }
                     )
-                    FocusLine(summary.instructions, palette)
+                    FocusLine(summary.focus, palette)
                     if (canManage) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
@@ -204,10 +203,8 @@ private fun ReadySummary(
         exit = shrinkVertically() + fadeOut()
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
-            FocusLine(summary.instructions, palette)
+            FocusLine(summary.focus, palette)
             summary.text?.let { body(it) }
-            FileList("Read", summary.files?.read.orEmpty(), palette)
-            FileList("Modified", summary.files?.modified.orEmpty(), palette)
         }
     }
 }
@@ -223,36 +220,13 @@ private fun SummaryTitle(palette: AidenPalette) {
 }
 
 @Composable
-private fun FocusLine(instructions: String?, palette: AidenPalette) {
-    if (instructions.isNullOrEmpty()) return
+private fun FocusLine(focus: String?, palette: AidenPalette) {
+    if (focus.isNullOrEmpty()) return
     Text(
-        text = "Focus: $instructions",
+        text = "Focus: $focus",
         style = MaterialTheme.typography.bodySmall,
         color = palette.secondary
     )
-}
-
-@Composable
-private fun FileList(label: String, paths: List<String>, palette: AidenPalette) {
-    if (paths.isEmpty()) return
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.secondary
-        )
-        paths.forEach { path ->
-            Text(
-                text = path,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = palette.secondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
 }
 
 /** Confirms "Fork with summary…" with an optional focus for the summary. */
@@ -263,7 +237,7 @@ fun AidenForkSummaryDialog(
     onDismiss: () -> Unit,
     onConfirm: (String?) -> Unit
 ) {
-    var instructions by rememberSaveable { mutableStateOf("") }
+    var focus by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Fork with summary", fontWeight = FontWeight.Bold) },
@@ -276,14 +250,14 @@ fun AidenForkSummaryDialog(
                     color = palette.secondary
                 )
                 TextField(
-                    value = instructions,
+                    value = focus,
                     onValueChange = {
-                        instructions = it.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH)
+                        focus = it.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH)
                     },
                     label = { Text("Focus the summary on…") },
                     placeholder = { Text("For example: the decisions about the parser") },
                     supportingText = {
-                        Text("${instructions.length} / ${AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH}")
+                        Text("${focus.length} / ${AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH}")
                     },
                     colors = aidenTextFieldColors(),
                     minLines = 2,
@@ -293,7 +267,7 @@ fun AidenForkSummaryDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(instructions.trim().ifEmpty { null }) }, enabled = !busy) {
+            TextButton(onClick = { onConfirm(focus.trim().ifEmpty { null }) }, enabled = !busy) {
                 Text("Fork", fontWeight = FontWeight.SemiBold, color = palette.accent)
             }
         },

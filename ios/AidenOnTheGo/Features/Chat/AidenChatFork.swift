@@ -286,8 +286,8 @@ struct AidenForkSummaryCard: View {
             Text("The model sees this summary. None of it happened in this chat.")
                 .font(.caption)
                 .foregroundStyle(palette.secondary)
-            if let instructions = summary.instructions {
-                Text("Focus: \(instructions)")
+            if let focus = summary.focus {
+                Text("Focus: \(focus)")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
             }
@@ -298,29 +298,6 @@ struct AidenForkSummaryCard: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let files = summary.files {
-                fileList(String(localized: "Read"), paths: files.read)
-                fileList(String(localized: "Modified"), paths: files.modified)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func fileList(_ title: String, paths: [String]) -> some View {
-        if !paths.isEmpty {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(palette.secondary)
-                ForEach(Array(paths.enumerated()), id: \.offset) { _, path in
-                    Text(path)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .accessibilityElement(children: .combine)
         }
     }
 
@@ -348,7 +325,7 @@ struct AidenForkSummarySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     let onFork: (String) -> Void
-    @State private var instructions = ""
+    @State private var focus = ""
 
     var body: some View {
         NavigationStack {
@@ -357,14 +334,14 @@ struct AidenForkSummarySheet: View {
                     TextField(
                         "For example: the decisions about the parser",
                         text: Binding(
-                            get: { instructions },
-                            set: { instructions = Self.bounded($0) }
+                            get: { focus },
+                            set: { focus = Self.bounded($0) }
                         ),
                         axis: .vertical
                     )
                     .lineLimit(2...5)
                     .accessibilityLabel("Focus the summary on (optional)")
-                    .accessibilityIdentifier("aiden.chat.forkSummary.instructions")
+                    .accessibilityIdentifier("aiden.chat.forkSummary.focus")
                 } header: {
                     Text("Focus the summary on (optional)")
                 } footer: {
@@ -381,7 +358,7 @@ struct AidenForkSummarySheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fork") {
-                        onFork(instructions)
+                        onFork(focus)
                         dismiss()
                     }
                     .accessibilityIdentifier("aiden.chat.forkSummary.confirm")
@@ -393,12 +370,12 @@ struct AidenForkSummarySheet: View {
 
     /// The Mac accepts at most 1,000 UTF-16 code units of focus text.
     static func bounded(_ value: String) -> String {
-        guard value.utf16.count > AidenChatForkSummary.maximumInstructionsLength else { return value }
+        guard value.utf16.count > AidenChatForkSummary.maximumFocusLength else { return value }
         var result = ""
         var used = 0
         for character in value {
             let width = character.utf16.count
-            guard used + width <= AidenChatForkSummary.maximumInstructionsLength else { break }
+            guard used + width <= AidenChatForkSummary.maximumFocusLength else { break }
             result.append(character)
             used += width
         }

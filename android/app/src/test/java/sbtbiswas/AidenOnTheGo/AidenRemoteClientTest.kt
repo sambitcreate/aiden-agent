@@ -1038,7 +1038,7 @@ class AidenRemoteClientTest {
             messageId = "message_fixture_source_assistant_01",
             position = AidenChatForkPosition.AFTER,
             withSummary = true,
-            summaryInstructions = "  the protocol decisions \n",
+            summaryFocus = "  the protocol decisions \n",
             idempotencyKey = key
         )
         val request = server.takeRequest()
@@ -1057,7 +1057,7 @@ class AidenRemoteClientTest {
         val summary = lineage.summary!!
         assertEquals(AidenChatForkSummaryState.PENDING, summary.state)
         assertEquals("message_fixture_fork_assistant_01", summary.afterMessageId)
-        assertEquals("the protocol decisions", summary.instructions)
+        assertEquals("the protocol decisions", summary.focus)
         assertTrue(summary.holdsTurns)
     }
 
@@ -1071,7 +1071,7 @@ class AidenRemoteClientTest {
             revision = "chat_revision_source_7",
             messageId = "message_fixture_source_user_02",
             position = AidenChatForkPosition.BEFORE,
-            summaryInstructions = "ignored without a summary"
+            summaryFocus = "ignored without a summary"
         )
         val request = server.takeRequest()
 
@@ -1091,7 +1091,7 @@ class AidenRemoteClientTest {
 
         client.forkChat(
             "chat_fixture_source_01", "chat_revision_source_7", "message_fixture_source_assistant_01",
-            AidenChatForkPosition.AFTER, withSummary = true, summaryInstructions = "   "
+            AidenChatForkPosition.AFTER, withSummary = true, summaryFocus = "   "
         )
         val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
 
@@ -1132,6 +1132,39 @@ class AidenRemoteClientTest {
             ),
             requests.map { it.path }
         )
+    }
+
+    @Test
+    fun testFetchedForkDecodesEverySummaryState() = runBlocking {
+        val chatFork = contractFixture().getValue("chatFork").jsonObject
+        val forkChat = chatFork.getValue("fork").jsonObject.getValue("response").jsonObject.getValue("chat").jsonObject
+        val lineage = forkChat.getValue("forkedFrom").jsonObject
+        val pending = lineage.getValue("summary")
+        val summaries = listOf(pending) + chatFork.getValue("summaryStates").jsonArray
+        for (summary in summaries) {
+            val chat = kotlinx.serialization.json.JsonObject(
+                forkChat + ("forkedFrom" to kotlinx.serialization.json.JsonObject(lineage + ("summary" to summary)))
+            )
+            server.enqueue(MockResponse().setResponseCode(200).setBody(chat.toString()))
+        }
+
+        val decoded = summaries.map { client.chat("chat_fixture_fork_01").forkedFrom!!.summary!! }
+
+        assertEquals(
+            listOf(AidenChatForkSummaryState.PENDING, AidenChatForkSummaryState.READY, AidenChatForkSummaryState.FAILED),
+            decoded.map { it.state }
+        )
+        assertTrue(decoded.all { it.afterMessageId == "message_fixture_fork_assistant_01" })
+        assertTrue(decoded.all { it.focus == "the protocol decisions" })
+        val (pendingSummary, ready, failed) = decoded
+        assertNull(pendingSummary.text)
+        assertNull(pendingSummary.error)
+        assertEquals("The review settled on revision 21 and kept every route additive.", ready.text)
+        assertNull(ready.error)
+        assertFalse("A ready summary lets turns through", ready.holdsTurns)
+        assertEquals("The summary could not be generated.", failed.error)
+        assertNull(failed.text)
+        assertTrue("A failed summary holds turns until retried or skipped", failed.holdsTurns)
     }
 
     @Test

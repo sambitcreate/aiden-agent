@@ -46,7 +46,7 @@ internal data class AidenChatForkAttempt(
     val messageId: String,
     val position: AidenChatForkPosition,
     val withSummary: Boolean,
-    val instructions: String?
+    val focus: String?
 )
 
 /** How the lineage row names the chat this one was forked from. */

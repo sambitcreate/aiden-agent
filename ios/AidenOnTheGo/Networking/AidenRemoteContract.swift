@@ -3369,11 +3369,6 @@ private enum AidenBotPrivateResponseValidator {
         if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
             return true
         }
-        // A fork summary keeps the user's own "Focus the summary on…" text so
-        // Retry asks the same thing. Only workspace chats carry fork lineage.
-        if key == "instructions", root == "regularChat", parentPath == ["forkedFrom", "summary"] {
-            return true
-        }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if ["botDetail", "botArchive", "botRestore"].contains(root) {
             return parentPath.isEmpty

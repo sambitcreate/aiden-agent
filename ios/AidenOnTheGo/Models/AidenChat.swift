@@ -978,41 +978,35 @@ enum AidenChatForkSummaryState: String, Codable, Equatable, Sendable {
     case failed
 }
 
-struct AidenChatForkSummaryFiles: Codable, Equatable, Sendable {
-    let read: [String]
-    let modified: [String]
-}
-
 /// "Fork with summary": what happened in the source chat after the cut,
 /// summarized for the fork's model context. Decoding is exact-shape and
 /// throws on any violation so the lineage can drop a damaged summary alone.
+/// File paths the summary touched stay on the Mac, and `error` is a short
+/// phrase in Aiden's own words rather than a provider error.
 struct AidenChatForkSummary: Codable, Equatable, Sendable {
-    static let maximumInstructionsLength = 1_000
+    static let maximumFocusLength = 1_000
     static let maximumTextLength = 32_000
     static let maximumErrorLength = 1_000
-    static let maximumFiles = 200
-    static let maximumPathLength = 1_024
 
     let state: AidenChatForkSummaryState
     let afterMessageId: String
-    let instructions: String?
+    /// The user's own "Focus the summary on…" text, kept so Retry asks the
+    /// same thing.
+    let focus: String?
     let text: String?
-    let files: AidenChatForkSummaryFiles?
     let error: String?
 
     init(
         state: AidenChatForkSummaryState,
         afterMessageId: String,
-        instructions: String? = nil,
+        focus: String? = nil,
         text: String? = nil,
-        files: AidenChatForkSummaryFiles? = nil,
         error: String? = nil
     ) {
         self.state = state
         self.afterMessageId = afterMessageId
-        self.instructions = instructions
+        self.focus = focus
         self.text = text
-        self.files = files
         self.error = error
     }
 
@@ -1028,19 +1022,17 @@ struct AidenChatForkSummary: Codable, Equatable, Sendable {
         }
         state = try values.decode(AidenChatForkSummaryState.self, forKey: .state)
         afterMessageId = try values.decode(String.self, forKey: .afterMessageId)
-        instructions = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .instructions)
+        focus = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .focus)
         text = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .text)
-        files = try aidenDecodeOptionalNonNull(AidenChatForkSummaryFiles.self, from: values, forKey: .files)
         error = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .error)
 
         let afterIdScalars = afterMessageId.unicodeScalars
         guard !afterIdScalars.isEmpty,
               afterIdScalars.count <= 160,
               afterIdScalars.allSatisfy(Self.isSummaryIdentifierScalar),
-              Self.isBounded(instructions, maximum: Self.maximumInstructionsLength),
+              Self.isBounded(focus, maximum: Self.maximumFocusLength),
               Self.isBounded(text, maximum: Self.maximumTextLength),
-              Self.isBounded(error, maximum: Self.maximumErrorLength),
-              files.map(Self.areValidFiles) ?? true else {
+              Self.isBounded(error, maximum: Self.maximumErrorLength) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .afterMessageId,
                 in: values,
@@ -1054,13 +1046,6 @@ struct AidenChatForkSummary: Codable, Equatable, Sendable {
         return !value.isEmpty && value.unicodeScalars.count <= maximum
     }
 
-    private static func areValidFiles(_ files: AidenChatForkSummaryFiles) -> Bool {
-        [files.read, files.modified].allSatisfy { paths in
-            paths.count <= maximumFiles
-                && paths.allSatisfy { !$0.isEmpty && $0.unicodeScalars.count <= maximumPathLength }
-        }
-    }
-
     private static func isSummaryIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
         switch scalar.value {
         case 45, 48...57, 65...90, 95, 97...122:
@@ -1071,7 +1056,7 @@ struct AidenChatForkSummary: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, afterMessageId, instructions, text, files, error
+        case state, afterMessageId, focus, text, error
     }
 }
 

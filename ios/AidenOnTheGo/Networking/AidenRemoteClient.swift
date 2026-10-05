@@ -537,7 +537,7 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ChatForkRequest: Encodable {
         struct Summary: Encodable {
-            let instructions: String?
+            let focus: String?
         }
 
         let messageId: String
@@ -1128,27 +1128,27 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     /// Fork a chat at a settled message (contract revision 21). `after` keeps
     /// the chosen reply; `before` cuts just before the chosen prompt and
-    /// returns it as `prefill` to edit and resend. Summary instructions are
-    /// sent only for Fork with summary; pass an empty string for an unfocused
+    /// returns it as `prefill` to edit and resend. A summary focus is sent
+    /// only for Fork with summary; pass an empty string for an unfocused
     /// summary and nil for a plain fork.
     func forkChat(
         chatId: String,
         revision: String,
         messageId: String,
         position: AidenChatForkPosition,
-        summaryInstructions: String? = nil,
+        summaryFocus: String? = nil,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenChatForkResult {
         try validateRemoteIdentifier(chatId)
         try validateRemoteIdentifier(messageId)
         try validateRevision(revision)
-        let summary = summaryInstructions.map { raw -> ChatForkRequest.Summary in
+        let summary = summaryFocus.map { raw -> ChatForkRequest.Summary in
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            return ChatForkRequest.Summary(instructions: trimmed.isEmpty ? nil : trimmed)
+            return ChatForkRequest.Summary(focus: trimmed.isEmpty ? nil : trimmed)
         }
         // The Mac measures in UTF-16 code units, so match it exactly.
-        if let instructions = summary?.instructions,
-           instructions.utf16.count > AidenChatForkSummary.maximumInstructionsLength {
+        if let focus = summary?.focus,
+           focus.utf16.count > AidenChatForkSummary.maximumFocusLength {
             throw AidenRemoteClientError.invalidResponse
         }
         let result: AidenChatForkResult = try await send(
