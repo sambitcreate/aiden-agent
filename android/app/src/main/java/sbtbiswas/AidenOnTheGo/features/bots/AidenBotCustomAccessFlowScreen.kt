@@ -24,6 +24,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -161,6 +162,7 @@ fun AidenBotCustomAccessFlowScreen(
                 },
                 actions = {
                     TextButton(
+                        contentPadding = AidenButtonDefaults.TextContentPadding,
                         onClick = {
                             val curDraft = draft ?: return@TextButton
                             val cat = catalog ?: return@TextButton
@@ -543,6 +545,7 @@ fun AidenBotCustomAccessFlowScreen(
             text = { Text("Your unsaved Custom Access changes will be lost.") },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         isConfirmingDiscard = false
                         val nextId = pendingBotSwitchId
@@ -558,7 +561,7 @@ fun AidenBotCustomAccessFlowScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingDiscard = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isConfirmingDiscard = false }) {
                     Text("Keep Editing", color = palette.secondary)
                 }
             },

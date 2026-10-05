@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
 import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -156,7 +157,7 @@ fun AidenAppearanceSettingsScreen(
                 Text(if (readAloudStatus?.ready == true) "Ready on your Mac" else "Set up on your Mac", color = palette.foreground)
                 Text(READ_ALOUD_SETUP_GUIDANCE, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                 readAloudError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.secondary) }
-                TextButton(onClick = { scope.launch { refreshReadAloud() } }) { Text("Refresh status") }
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { scope.launch { refreshReadAloud() } }) { Text("Refresh status") }
             }
         }
         Spacer(Modifier.height(22.dp))
@@ -242,7 +243,7 @@ fun AidenAppearanceSettingsScreen(
                 color = if (available) palette.success else palette.warning
             )
             if (!available && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                TextButton(onClick = {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = {
                     runCatching {
                         val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
                         recognizer.triggerModelDownload(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -273,14 +274,14 @@ fun AidenAppearanceSettingsScreen(
                                     Text("${model.sizeLabel} · ${model.languagesLabel}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                                 }
                                 when {
-                                    model.download?.status == "downloading" -> TextButton(onClick = {
+                                    model.download?.status == "downloading" -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = {
                                         runSpeechAction { remoteClient.cancelSpeechModelDownload(model.id) }
                                     }) { Text("Cancel") }
                                     model.installed && status.selectedModelId == model.id -> Text("Selected", style = MaterialTheme.typography.labelMedium, color = palette.accent)
-                                    model.installed -> TextButton(onClick = {
+                                    model.installed -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = {
                                         runSpeechAction { remoteClient.selectSpeechModel(model.id) }
                                     }) { Text("Use") }
-                                    else -> TextButton(onClick = {
+                                    else -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = {
                                         runSpeechAction { remoteClient.downloadSpeechModel(model.id) }
                                     }) { Text("Download") }
                                 }

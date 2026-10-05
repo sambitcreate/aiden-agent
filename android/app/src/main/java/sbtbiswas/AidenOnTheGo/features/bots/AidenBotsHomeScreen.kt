@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -796,7 +797,7 @@ fun AidenBotsHomeScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { isChoosingBotDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isChoosingBotDialog = false }) {
                     Text("Cancel", color = palette.secondary)
                 }
             },

@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -268,7 +269,7 @@ fun AidenPairingScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            TextButton(onClick = { selectedTab = if (selectedTab == 2) 0 else 2 }) {
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { selectedTab = if (selectedTab == 2) 0 else 2 }) {
                 Text(if (selectedTab == 2) "Back to scanning" else "Advanced: paste connection details")
             }
 
@@ -427,6 +428,7 @@ fun AidenPairingScreen(
             },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         coordinator.removeInstallation(installation.id)
                         installationPendingRemoval = null
@@ -436,7 +438,7 @@ fun AidenPairingScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { installationPendingRemoval = null }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { installationPendingRemoval = null }) {
                     Text("Cancel", color = palette.foreground)
                 }
             },

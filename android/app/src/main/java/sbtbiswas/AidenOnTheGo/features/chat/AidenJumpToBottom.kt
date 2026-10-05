@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenReduceMotion
 
 /**
  * Compact jump-to-latest affordance that stays visually subordinate to the composer.
@@ -30,17 +31,18 @@ fun AidenJumpToBottom(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = rememberAidenReduceMotion()
 
     AnimatedVisibility(
         visible = visible,
         enter = slideInVertically(
             initialOffsetY = { it },
             animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-        ) + fadeIn(animationSpec = AidenMotion.nonSpatialExpressiveSpring<Float>()),
+        ) + fadeIn(animationSpec = AidenMotion.short<Float>(reduceMotion)),
         exit = slideOutVertically(
             targetOffsetY = { it },
             animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-        ) + fadeOut(animationSpec = AidenMotion.nonSpatialExpressiveSpring<Float>()),
+        ) + fadeOut(animationSpec = AidenMotion.short<Float>(reduceMotion)),
         modifier = modifier
     ) {
         IconButton(

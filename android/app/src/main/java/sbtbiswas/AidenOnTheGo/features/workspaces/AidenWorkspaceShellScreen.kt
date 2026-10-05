@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
@@ -742,7 +743,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showNewWorkspaceDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewWorkspaceDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -773,7 +774,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showScratchConfirmDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showScratchConfirmDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -817,7 +818,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showRenameDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -846,7 +847,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showArchiveDisclosureDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showArchiveDisclosureDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -878,7 +879,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRemoveDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showRemoveDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -910,7 +911,7 @@ fun AidenWorkspaceDirectoryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteWorktreeDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showDeleteWorktreeDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -1142,6 +1143,7 @@ fun AidenFolderBrowserSheet(
                             contentAlignment = Alignment.Center
                         ) {
                             TextButton(
+                                contentPadding = AidenButtonDefaults.TextContentPadding,
                                 onClick = {
                                     val loc = currentLocation
                                     if (loc != null && page.nextCursor != null) {
@@ -1344,6 +1346,7 @@ fun AidenWorkspaceSettingsSheet(
 
         // Destructive Actions
         TextButton(
+            contentPadding = AidenButtonDefaults.TextContentPadding,
             onClick = { showDeleteConfirm = true },
             colors = ButtonDefaults.textButtonColors(contentColor = palette.danger),
             modifier = Modifier.fillMaxWidth()
@@ -1388,7 +1391,7 @@ fun AidenWorkspaceSettingsSheet(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showDeleteConfirm = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }

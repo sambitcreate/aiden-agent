@@ -27,6 +27,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -406,6 +407,7 @@ fun AidenBotEditorScreen(
                 },
                 actions = {
                     TextButton(
+                        contentPadding = AidenButtonDefaults.TextContentPadding,
                         onClick = {
                             val curDraft = draft ?: return@TextButton
                             val curCat = catalog ?: return@TextButton
@@ -820,6 +822,7 @@ fun AidenBotEditorScreen(
             text = { Text("You have unsaved changes to this Bot. If you leave now, your changes will be discarded.") },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         isConfirmingDiscard = false
                         onNavigateBack()
@@ -829,7 +832,7 @@ fun AidenBotEditorScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingDiscard = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isConfirmingDiscard = false }) {
                     Text("Cancel", color = palette.secondary)
                 }
             },

@@ -80,6 +80,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
@@ -916,6 +917,7 @@ fun AidenChatDetailScreen(
             },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         showRedirectConfirm = false
                         viewModel.redirectRun()
@@ -925,7 +927,7 @@ fun AidenChatDetailScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRedirectConfirm = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showRedirectConfirm = false }) {
                     Text("Cancel")
                 }
             }

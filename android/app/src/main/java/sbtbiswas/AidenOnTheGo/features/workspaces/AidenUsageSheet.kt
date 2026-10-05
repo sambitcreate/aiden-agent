@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.text.NumberFormat
 import java.time.LocalDate
@@ -92,7 +93,7 @@ fun AidenUsageSheet(
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Done", color = palette.accent)
                 }
             }

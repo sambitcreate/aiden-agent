@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.ui.theme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,11 +43,27 @@ object AidenUi {
     const val ScrollableSheetGesturesEnabled = false
 }
 
-/** Tonal, borderless text-field colors used across forms and dialogs. */
+/**
+ * Shared button content padding, matching the desktop Untitled button scale
+ * (medium: 16dp horizontal). Heights stay on Material's 40dp minimum.
+ * Filled, tonal, and outlined buttons keep Material's roomier 24dp default.
+ */
+object AidenButtonDefaults {
+    val TextContentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+}
+
+/**
+ * Filled (tonal) text-field colors used across forms and dialogs.
+ *
+ * Fields rest on a low tonal container and step up one container tone when focused.
+ * No indicator line or accent label/border change on focus; the caret keeps the accent.
+ */
 @Composable
 fun aidenTextFieldColors(): TextFieldColors = TextFieldDefaults.colors(
     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    focusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
     disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     errorContainerColor = MaterialTheme.colorScheme.errorContainer,
     focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,

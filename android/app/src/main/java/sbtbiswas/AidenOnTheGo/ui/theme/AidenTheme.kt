@@ -28,6 +28,12 @@ val LocalAidenAppearanceConfig = staticCompositionLocalOf {
     AidenAppearanceConfig()
 }
 
+/**
+ * Surfaces are borderless (tonal fill + elevation), so `outline` stays transparent.
+ * `outlineVariant` is Material's divider role and keeps list/menu separators visible.
+ */
+private const val SeparatorAlpha = 0.18f
+
 val AidenShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
@@ -100,7 +106,7 @@ fun AidenTheme(
             surfaceContainerHigh = palette.raised.withElevationLuminosity(4.dp, isDark),
             surfaceContainerHighest = palette.raised.withElevationLuminosity(8.dp, isDark),
             outline = Color.Transparent,
-            outlineVariant = Color.Transparent,
+            outlineVariant = palette.secondary.copy(alpha = SeparatorAlpha),
             error = palette.danger,
             onError = Color.White,
             errorContainer = palette.danger.copy(alpha = 0.2f),
@@ -128,7 +134,7 @@ fun AidenTheme(
             surfaceContainerHigh = palette.raised,
             surfaceContainerHighest = palette.raised,
             outline = Color.Transparent,
-            outlineVariant = Color.Transparent,
+            outlineVariant = palette.secondary.copy(alpha = SeparatorAlpha),
             error = palette.danger,
             onError = Color.White,
             errorContainer = palette.danger.copy(alpha = 0.12f),
@@ -137,6 +143,8 @@ fun AidenTheme(
     }
 
     val scale = config.fontSize.scaleFactor
+    // Untitled type-step ratios (shared with desktop): body 14/20, small 12/16.
+    // Material has no caption role; labelSmall is the smallest step.
     val typography = Typography(
         headlineLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (28 * scale).sp, lineHeight = (34 * scale).sp, letterSpacing = (-0.45).sp, color = palette.foreground),
         headlineMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (24 * scale).sp, lineHeight = (30 * scale).sp, letterSpacing = (-0.25).sp, color = palette.foreground),
@@ -149,7 +157,7 @@ fun AidenTheme(
         bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.3.sp, color = palette.secondary),
         labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
         labelMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.4.sp, color = palette.foreground),
-        labelSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (11 * scale).sp, lineHeight = (14 * scale).sp, letterSpacing = 0.5.sp, color = palette.secondary)
+        labelSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.5.sp, color = palette.secondary)
     )
 
     CompositionLocalProvider(

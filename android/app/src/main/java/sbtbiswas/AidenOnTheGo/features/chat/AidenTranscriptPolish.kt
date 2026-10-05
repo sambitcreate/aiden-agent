@@ -50,6 +50,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
 import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 /**
  * Elapsed-time presentation for assistant turns. Durations come from the
@@ -276,11 +277,11 @@ fun AidenSelectTextDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDismiss) { Text("Done") }
         },
         dismissButton = if (onAskAbout != null) {
             {
-                TextButton(onClick = {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = {
                     onAskAbout(text)
                     onDismiss()
                 }) { Text("Ask about all") }

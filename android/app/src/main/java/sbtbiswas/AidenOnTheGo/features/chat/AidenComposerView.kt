@@ -36,6 +36,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenReduceMotion
 
 /**
  * 1:1 Parity iOS Glass Composer for Aiden On-The-Go.
@@ -581,11 +582,12 @@ fun AidenComposerView(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier.fillMaxSize()
                         ) {
+                            val reduceMotion = rememberAidenReduceMotion()
                             AnimatedContent(
                                 targetState = isStreaming,
                                 transitionSpec = {
-                                    (scaleIn(AidenMotion.spatialExpressiveSpring<Float>()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring<Float>()))
-                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring<Float>()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring<Float>()))
+                                    (scaleIn(AidenMotion.spatialExpressiveSpring<Float>()) + fadeIn(AidenMotion.short<Float>(reduceMotion)))
+                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring<Float>()) + fadeOut(AidenMotion.short<Float>(reduceMotion)))
                                 },
                                 label = "send_stop_morph"
                             ) { streaming ->

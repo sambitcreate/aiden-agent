@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
@@ -197,6 +198,7 @@ fun AidenGitScreen(
                             )
                             if (lastFailedOperation != null) {
                                 TextButton(
+                                    contentPadding = AidenButtonDefaults.TextContentPadding,
                                     onClick = {
                                         lastFailedOperation?.invoke()
                                     }
@@ -541,7 +543,7 @@ fun AidenGitScreen(
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showConfirmDialog = false }) {
+                        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showConfirmDialog = false }) {
                             Text("Cancel", color = palette.foreground)
                         }
                     }
@@ -587,7 +589,7 @@ fun AidenGitScreen(
                         color = palette.foreground,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { showNewBranchDialog = true }) {
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewBranchDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("New Branch", color = palette.accent, fontWeight = FontWeight.Bold)
@@ -677,7 +679,7 @@ fun AidenGitScreen(
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { branchToCheckout = null }) {
+                        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { branchToCheckout = null }) {
                             Text("Cancel", color = palette.foreground)
                         }
                     }
@@ -739,7 +741,7 @@ fun AidenGitScreen(
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showNewBranchDialog = false }) {
+                        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewBranchDialog = false }) {
                             Text("Cancel", color = palette.foreground)
                         }
                     }
@@ -796,7 +798,7 @@ fun AidenGitScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showPushDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showPushDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }
@@ -940,7 +942,7 @@ fun AidenGitScreen(
                         color = palette.foreground,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { showNewWorktreeDialog = true }) {
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewWorktreeDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("New Worktree", color = palette.accent, fontWeight = FontWeight.Bold)
@@ -1050,7 +1052,7 @@ fun AidenGitScreen(
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showNewWorktreeDialog = false }) {
+                        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewWorktreeDialog = false }) {
                             Text("Cancel", color = palette.foreground)
                         }
                     }

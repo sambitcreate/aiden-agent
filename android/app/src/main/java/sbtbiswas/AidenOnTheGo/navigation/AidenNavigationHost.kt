@@ -99,21 +99,21 @@ fun AidenNavigationHost(
                 (slideInVertically(
                     initialOffsetY = { -it / 10 },
                     animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-                ) + fadeIn(AidenMotion.nonSpatialExpressiveSpring<Float>())).togetherWith(
+                ) + fadeIn(AidenMotion.short<Float>(reduceMotion))).togetherWith(
                     slideOutVertically(
                         targetOffsetY = { it / 10 },
                         animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-                    ) + fadeOut(AidenMotion.nonSpatialExpressiveSpring<Float>())
+                    ) + fadeOut(AidenMotion.short<Float>(reduceMotion))
                 )
             } else {
                 (slideInVertically(
                     initialOffsetY = { it / 8 },
                     animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-                ) + fadeIn(AidenMotion.nonSpatialExpressiveSpring<Float>())).togetherWith(
+                ) + fadeIn(AidenMotion.short<Float>(reduceMotion))).togetherWith(
                     slideOutVertically(
                         targetOffsetY = { -it / 8 },
                         animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
-                    ) + fadeOut(AidenMotion.nonSpatialExpressiveSpring<Float>())
+                    ) + fadeOut(AidenMotion.short<Float>(reduceMotion))
                 )
             }
         }

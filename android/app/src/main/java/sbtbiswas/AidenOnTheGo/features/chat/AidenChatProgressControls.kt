@@ -72,6 +72,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatTask
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskProgress
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskUnavailableReason
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
@@ -579,6 +580,7 @@ fun AidenAgentDetailSheet(
             if (stopControl != AidenAgentStopControl.HIDDEN) {
                 Spacer(modifier = Modifier.height(20.dp))
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = { confirmsStop = true },
                     enabled = stopControl == AidenAgentStopControl.AVAILABLE
                 ) {
@@ -609,6 +611,7 @@ fun AidenAgentDetailSheet(
             },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         confirmsStop = false
                         onStop()
@@ -618,7 +621,7 @@ fun AidenAgentDetailSheet(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmsStop = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { confirmsStop = false }) {
                     Text("Keep running")
                 }
             }

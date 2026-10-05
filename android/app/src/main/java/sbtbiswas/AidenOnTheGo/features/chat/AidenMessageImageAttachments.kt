@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.provider.MediaStore
-import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -69,6 +68,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenReduceMotion
 import java.security.MessageDigest
 import kotlin.math.abs
 import kotlin.math.max
@@ -201,12 +201,7 @@ private fun AidenInlineImageCardDeck(
 ) {
     var rawDrag by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val reduceMotion = remember {
-        runCatching {
-            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-        }.getOrDefault(false)
-    }
+    val reduceMotion = rememberAidenReduceMotion()
     val settledDrag by animateFloatAsState(
         targetValue = if (dragging && !reduceMotion) rawDrag else 0f,
         animationSpec = AidenMotion.spatialExpressiveSpring(),

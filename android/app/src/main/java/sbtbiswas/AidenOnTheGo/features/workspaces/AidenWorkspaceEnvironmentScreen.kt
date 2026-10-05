@@ -31,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -246,10 +247,11 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     val doc = selectedFile
                     if (doc != null) {
                         if (!isEditing) {
-                            TextButton(onClick = { isEditing = true }, enabled = availability().canEditDocument && client != null) { Text("Edit") }
+                            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isEditing = true }, enabled = availability().canEditDocument && client != null) { Text("Edit") }
                         }
                         if (isDirty) {
                             TextButton(
+                                contentPadding = AidenButtonDefaults.TextContentPadding,
                                 onClick = { showDiscardConfirmDialog = true },
                                 colors = ButtonDefaults.textButtonColors(contentColor = palette.secondary)
                             ) {
@@ -430,13 +432,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(12.dp)),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = palette.raised,
-                        unfocusedContainerColor = palette.raised,
-                        disabledContainerColor = palette.raised,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    ),
+                    colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                     singleLine = true
                 )
 
@@ -464,7 +460,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     cursors.forEach { (path, _) ->
                         if (path.isEmpty() || path in expanded) {
                             item(key = "page:$path") {
-                                TextButton(onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
                                     enabled = path !in loadingFolders && availability().canLoadPage && !isLoading) {
                                     Text(if (path.isEmpty()) "Load more files" else "Load more in $path")
                                 }
@@ -603,7 +599,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDiscardConfirmDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showDiscardConfirmDialog = false }) {
                     Text("Keep Editing", color = palette.foreground)
                 }
             }
@@ -641,7 +637,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showConflictDialog = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showConflictDialog = false }) {
                     Text("Cancel", color = palette.foreground)
                 }
             }

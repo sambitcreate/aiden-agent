@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +37,8 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenToolbarAction
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenReduceMotion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -164,15 +165,15 @@ fun AidenProductShellScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val duration = if (AidenTheme.config.reduceMotion) 0 else 180
+            val reduceMotion = rememberAidenReduceMotion()
             val botsAlpha by animateFloatAsState(
                 targetValue = if (activeArea == AidenProductArea.BOTS) 1f else 0f,
-                animationSpec = tween(duration),
+                animationSpec = AidenMotion.short(reduceMotion),
                 label = "BotsAreaAlpha"
             )
             val workspacesAlpha by animateFloatAsState(
                 targetValue = if (activeArea == AidenProductArea.WORKSPACES) 1f else 0f,
-                animationSpec = tween(duration),
+                animationSpec = AidenMotion.short(reduceMotion),
                 label = "WorkspacesAreaAlpha"
             )
 

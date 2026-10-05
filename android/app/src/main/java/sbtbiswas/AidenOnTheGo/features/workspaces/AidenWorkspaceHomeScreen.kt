@@ -90,6 +90,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
@@ -354,7 +355,7 @@ private fun AidenWorkspaceHome(
                                     color = palette.secondary,
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(onClick = coordinator::refreshClient) { Text("Retry") }
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = coordinator::refreshClient) { Text("Retry") }
                             }
                         }
                     }
@@ -560,6 +561,7 @@ private fun AidenWorkspaceHome(
                                     )
                                 }
                                 TextButton(
+                                    contentPadding = AidenButtonDefaults.TextContentPadding,
                                     onClick = viewModel::loadMoreChats,
                                     enabled = !isLoadingMoreChats
                                 ) {
@@ -694,7 +696,7 @@ private fun AidenWorkspaceHome(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { showExistingWorkspacePicker = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showExistingWorkspacePicker = false }) { Text("Cancel") } },
             containerColor = palette.canvas
         )
     }
@@ -759,7 +761,7 @@ private fun AidenWorkspaceHome(
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) { Text("Create") }
             },
-            dismissButton = { TextButton(onClick = { showScratchConfirmation = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showScratchConfirmation = false }) { Text("Cancel") } },
             containerColor = palette.canvas
         )
     }
@@ -1094,8 +1096,8 @@ private fun AidenWorkspaceNameDialog(
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onCreate, enabled = name.trim().isNotEmpty()) { Text("Create") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onCreate, enabled = name.trim().isNotEmpty()) { Text("Create") } },
+        dismissButton = { TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDismiss) { Text("Cancel") } },
         containerColor = palette.canvas
     )
 }

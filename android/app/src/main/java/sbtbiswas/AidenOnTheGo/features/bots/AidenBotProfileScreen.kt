@@ -24,6 +24,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -552,6 +553,7 @@ fun AidenBotProfileScreen(
             text = { Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.") },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         isConfirmingArchive = false
                         val cl = client ?: return@TextButton
@@ -578,7 +580,7 @@ fun AidenBotProfileScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingArchive = false }) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isConfirmingArchive = false }) {
                     Text("Cancel", color = palette.secondary)
                 }
             },

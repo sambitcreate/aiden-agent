@@ -46,6 +46,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -369,12 +370,14 @@ fun AidenScheduledTasksScreen(
             text = { Text("This removes the automation and its saved run history from Aiden.") },
             dismissButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = { showDeleteConfirmation = false },
                     enabled = operationTaskId == null
                 ) { Text("Cancel") }
             },
             confirmButton = {
                 TextButton(
+                    contentPadding = AidenButtonDefaults.TextContentPadding,
                     onClick = {
                         val activeClient = client ?: return@TextButton
                         if (operationTaskId != null || !hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return@TextButton
@@ -500,7 +503,7 @@ private fun AidenScheduledTaskList(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(errorMessage, style = MaterialTheme.typography.bodySmall, color = palette.danger, modifier = Modifier.weight(1f))
-                        if (isConnected) TextButton(onClick = onRetry) { Text("Retry") }
+                        if (isConnected) TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onRetry) { Text("Retry") }
                     }
                 }
             }
