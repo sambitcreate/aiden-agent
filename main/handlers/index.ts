@@ -36,6 +36,7 @@ import { registerBtwHandlers } from "./btw.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
+import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -49,6 +50,7 @@ export function registerHandlers(): void {
 
   registerDiagnosticHandlers();
   initializeAdvisorRuntime();
+  initializeForkSummaries();
 
   // AI chat client handlers
   registerProviderHandlers();

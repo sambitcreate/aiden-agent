@@ -201,6 +201,7 @@ import {
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
   projectVisibleHistoryWithoutSkills,
+  ensurePiForkSummary,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
@@ -2468,12 +2469,18 @@ export const llmClient = {
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      // A forked chat's summary of where its source went after the fork
+      // point sits right after the last copied message.
+      const forkSummary = generationChat.forkedFrom?.summary;
       if (!skillsEnabledForTurn) {
         piSession = await projectVisibleHistoryWithoutSkills(
           piSession,
           priorVisibleMessages,
           model,
+          forkSummary,
         );
+      } else {
+        await ensurePiForkSummary(piSession, priorVisibleMessages, forkSummary, model, supportsImages);
       }
       const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();

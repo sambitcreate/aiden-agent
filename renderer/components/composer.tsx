@@ -100,6 +100,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
@@ -109,8 +110,8 @@ import {
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
 import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
-import { filterForkTurnChoices, forkTurnEligibility } from "../lib/chat-copy-view";
-import { MAX_FORK_QUERY_CODE_UNITS } from "../shared/chat-copy-contract";
+import { filterForkTurnChoices, forkSummaryRows, forkTurnEligibility } from "../lib/chat-copy-view";
+import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
   attachmentInlineBytesRemaining,
   attachmentSlotsRemaining,
@@ -156,6 +157,8 @@ interface ComposerProps {
   hasQueuedMessages?: boolean;
   /** Queue-owned compaction hold, retained across Composer remounts. */
   compactionHeld?: boolean;
+  /** This fork's summary is pending or failed; sends queue until it settles. */
+  forkSummaryHold?: "pending" | "failed";
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -215,7 +218,10 @@ interface ComposerProps {
   sessionChat?: Chat;
   authenticatedProviders?: Array<{ id: string; label: string; detail: string }>;
   onCloneChat?: () => Promise<void>;
-  onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
+  /** `after` keeps the reply; `before` cuts ahead of a prompt and pre-fills it for editing. */
+  onForkChat?: (messageId: string, position: ChatForkPosition) => Promise<void>;
+  /** Open the pane's "Fork with summary" confirmation for a turn. */
+  onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   onExportChat?: () => Promise<"saved" | "cancelled">;
   onCompactChat?: (engine?: CompactionEngine) => Promise<
     | {
@@ -338,6 +344,7 @@ export function Composer({
   queuedMessages,
   hasQueuedMessages = false,
   compactionHeld = false,
+  forkSummaryHold,
   isGenerating,
   canStopGeneration = isGenerating,
   stoppingGeneration = false,
@@ -380,6 +387,7 @@ export function Composer({
   authenticatedProviders = [],
   onCloneChat,
   onForkChat,
+  onForkWithSummary,
   onExportChat,
   onCompactChat,
   onCancelCompact,
@@ -449,6 +457,10 @@ export function Composer({
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  React.useEffect(() => {
+    const seed = takeComposerAttachmentSeed(chatId);
+    if (seed) updateAttachments(seed);
+  }, [chatId, updateAttachments]);
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {
@@ -543,6 +555,8 @@ export function Composer({
   // Manual compaction keeps the draft editable when the chat can queue:
   // submissions wait behind compaction instead of locking the composer.
   const queueDuringCompaction = compactionActive && Boolean(onQueue);
+  // A fork's sends wait for its summary the same way, in the queue.
+  const queueForForkSummary = Boolean(forkSummaryHold) && Boolean(onQueue);
   const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
@@ -636,9 +650,14 @@ export function Composer({
 
   const forkEligibility = React.useMemo(() => {
     if (!sessionChat) return { turns: [], cloneBlocked: false };
-    return forkTurnEligibility(sessionChat.messages);
+    // A Bot has one canonical chat, so its forks may only keep a reply.
+    return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  const forkSummaryTurnIds = React.useMemo(
+    () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
+    [onForkWithSummary, sessionChat],
+  );
   const visibleForkTurns = React.useMemo(() => {
     return filterForkTurnChoices(completedForkTurns, forkQuery);
   }, [completedForkTurns, forkQuery]);
@@ -908,14 +927,14 @@ export function Composer({
   );
 
   const forkFromTurn = React.useCallback(
-    async (messageId: string) => {
+    async (messageId: string, position: ChatForkPosition = "after") => {
       if (!onForkChat || sessionCommandBusy) return;
       sessionCommandBusyRef.current = true;
       setSessionCommandStatus("Forking chat…");
       try {
-        await onForkChat(messageId);
+        await onForkChat(messageId, position);
         setForkDialogOpen(false);
-        toast.success("Chat forked");
+        toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
       } finally {
@@ -962,6 +981,7 @@ export function Composer({
       btw?: boolean;
       mode?: BusySendMode;
       afterCompaction?: boolean;
+      afterForkSummary?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -1015,7 +1035,9 @@ export function Composer({
           toast.info(
             payload.afterCompaction
               ? "Follow-up queued. It will send after compaction finishes."
-              : "Follow-up queued. It will run after the current response.",
+              : payload.afterForkSummary
+                ? "Message queued. It will send once the fork's summary is ready."
+                : "Follow-up queued. It will run after the current response.",
           );
         }
         settleComposerSubmission(chatId, true, draftRef.current.text);
@@ -1599,7 +1621,7 @@ export function Composer({
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
     const mode = isGenerating
       ? (busyModeOverride ?? busyMode)
-      : hasQueuedMessages || queueDuringCompaction
+      : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
     if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
@@ -1626,6 +1648,7 @@ export function Composer({
         skillRevision: skillSelection.revision,
         mode,
         afterCompaction: !isGenerating && queueDuringCompaction,
+        afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -2116,6 +2139,20 @@ export function Composer({
                   </Button>
                 ) : null}
               </div>
+            ) : forkSummaryHold ? (
+              <Text
+                as="p"
+                role="status"
+                aria-live="polite"
+                variant="small"
+                color="tertiary"
+                className="px-1.5 pb-1"
+              >
+                {forkSummaryHold === "pending"
+                  ? "Summarizing the original chat…"
+                  : "The fork's summary didn't finish. Retry it or continue without it."}
+                {queueForForkSummary ? " Messages you send now wait until it's settled." : null}
+              </Text>
             ) : null}
             <Text
               as="p"
@@ -2403,9 +2440,17 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label={hasQueuedMessages || queueDuringCompaction ? "Queue message" : "Send message"}
+                    aria-label={
+                      hasQueuedMessages || queueDuringCompaction || queueForForkSummary
+                        ? "Queue message"
+                        : "Send message"
+                    }
                   >
-                    {hasQueuedMessages || queueDuringCompaction ? <ListPlus /> : <ArrowUp />}
+                    {hasQueuedMessages || queueDuringCompaction || queueForForkSummary ? (
+                      <ListPlus />
+                    ) : (
+                      <ArrowUp />
+                    )}
                   </Button>
                 )}
               </div>
@@ -2470,7 +2515,11 @@ export function Composer({
           if (!open) setForkQuery("");
         }}
         title="Fork from a completed turn"
-        description="The new chat copies visible messages and attachments through the selected response. Private reasoning, tool state, and subagent runtime records are omitted."
+        description={`Fork keeps visible messages and attachments through the selected response.${
+          sessionChat?.botId
+            ? ""
+            : " Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer."
+        } Private reasoning, tool state, and subagent runtime records are omitted.`}
         confirmHidden
         busy={sessionCommandBusy}
         returnFocus={() => inputRef?.current ?? null}
@@ -2497,10 +2546,10 @@ export function Composer({
         <ul className="flex flex-col gap-1" aria-label="Completed turns">
           {visibleForkTurns.length > 0 ? (
             visibleForkTurns.map((turn) => (
-              <li key={turn.id}>
+              <li key={turn.id} className="flex items-center gap-1">
                 <Button
                   variant="transparent"
-                  className="h-auto min-h-11 w-full justify-start px-3 py-2 text-left"
+                  className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-2 text-left"
                   disabled={sessionCommandBusy}
                   onClick={() => void forkFromTurn(turn.id)}
                 >
@@ -2513,6 +2562,34 @@ export function Composer({
                     </span>
                   </span>
                 </Button>
+                {turn.userMessageId ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
+                    onClick={() => void forkFromTurn(turn.userMessageId!, "before")}
+                  >
+                    Edit in fork
+                  </Button>
+                ) : null}
+                {forkSummaryTurnIds?.has(turn.id) ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Fork from turn ${turn.turnNumber} with a summary of what followed`}
+                    onClick={() => {
+                      setForkDialogOpen(false);
+                      setForkQuery("");
+                      onForkWithSummary?.(turn.id, "after");
+                    }}
+                  >
+                    With summary…
+                  </Button>
+                ) : null}
               </li>
             ))
           ) : (
