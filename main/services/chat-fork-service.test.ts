@@ -220,3 +220,58 @@ test("Bot chats fork only through a caller that can copy them", async (t) => {
   assert.equal(copied, copy);
   assert.deepEqual(published, ["bot-copy"]);
 });
+
+test("a host whose turns read only the journal refuses a fork it cannot journal", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const degraded: unknown[] = [];
+  const deleted: string[] = [];
+  let forkChat: () => Promise<boolean> = async () => {
+    throw new Error("rename failed");
+  };
+  const forks = service(store, {
+    newChatId: () => "fork-target",
+    journalRequired: true,
+    journal: {
+      forkChat: () => forkChat(),
+      deleteChat: async (chatId) => {
+        deleted.push(chatId);
+      },
+    },
+    reportDegraded: (error) => degraded.push(error),
+  });
+  const fork = () =>
+    forks.fork({ chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } }, caller);
+
+  await rejectsWith(fork(), "unavailable");
+  // A partly written journal is discarded with the fork it was for.
+  assert.deepEqual(deleted, ["fork-target"]);
+  forkChat = async () => false;
+  await rejectsWith(fork(), "unavailable");
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  assert.deepEqual(degraded, []);
+
+  forkChat = async () => true;
+  const forked = await fork();
+  assert.deepEqual(forked.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+});
+
+test("a caller can refuse the copy before it is installed", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const refused = new Error("too large to send");
+  const summaries: string[] = [];
+  await assert.rejects(
+    service(store, { startSummary: (chatId) => summaries.push(chatId) }).fork(
+      { chatId: source.id, forkAt: { messageId: ids.firstReply, position: "after" }, summary: {} },
+      {
+        ...caller,
+        assertInstallable: (chat) => {
+          assert.deepEqual(chat.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+          throw refused;
+        },
+      },
+    ),
+    (error) => error === refused,
+  );
+  assert.equal((await store.list()).length, 1);
+  assert.deepEqual(summaries, []);
+});

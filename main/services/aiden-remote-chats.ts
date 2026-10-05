@@ -17,9 +17,16 @@ import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   parseChatForkLineageV1,
   type ChatForkPosition,
+  type ChatForkSummaryState,
   type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
-import { isChatForkError, type ChatForkError } from "./chat-fork-error.js";
+import {
+  FORK_SUMMARY_AIDEN_ERRORS,
+  FORK_SUMMARY_FAILURES,
+  ForkSummaryStateError,
+  isChatForkError,
+  type ChatForkError,
+} from "./chat-fork-error.js";
 import type { ChatForkService, ChatForkWorkspaceAdmission } from "./chat-fork-service.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
@@ -41,6 +48,7 @@ import {
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
   AidenOperationUnknownOutcomeError,
+  assertDurableOperationResult,
   assertRevision,
 } from "./aiden-remote-operation-contract.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
@@ -58,7 +66,7 @@ import {
   imageBytesMatchMime,
   MAX_IMAGE_BYTES,
 } from "./attachments.js";
-import type { Chat, ChatMessage, ChatStartParams } from "./types.js";
+import type { Attachment, Chat, ChatMessage, ChatStartParams } from "./types.js";
 import type { ChatMeta } from "./types.js";
 import type { BotStore } from "./bot-store-core.js";
 import type { BotMutationGate } from "./bot-mutation-gate.js";
@@ -149,6 +157,20 @@ export interface AidenRemoteAttachmentContent {
   mimeType: string;
 }
 
+/**
+ * Additive (protocol revision 21): a fork summary as a paired device sees it.
+ * File paths and provider failure text stay on the Mac.
+ */
+export interface AidenRemoteChatForkSummaryProjection {
+  state: ChatForkSummaryState;
+  afterMessageId: string;
+  /** The "Focus the summary on…" text the fork was created with. */
+  focus?: string;
+  text?: string;
+  /** Why the last attempt failed, in Aiden's words. */
+  error?: string;
+}
+
 /** Additive (protocol revision 21): the chat this one was forked from. */
 export interface AidenRemoteChatForkLineageProjection {
   chatId: string;
@@ -156,7 +178,7 @@ export interface AidenRemoteChatForkLineageProjection {
   position: ChatForkPosition;
   at: string;
   /** Fork with summary only; list rows never carry it. */
-  summary?: ChatForkSummaryV1;
+  summary?: AidenRemoteChatForkSummaryProjection;
 }
 
 export interface AidenRemoteChatProjection {
@@ -369,7 +391,23 @@ function projectForkLineage(
     messageId: lineage.messageId,
     position: lineage.position,
     at: at.toISOString(),
-    ...(includeSummary && lineage.summary ? { summary: lineage.summary } : {}),
+    ...(includeSummary && lineage.summary ? { summary: projectForkSummary(lineage.summary) } : {}),
+  };
+}
+
+function projectForkSummary(summary: ChatForkSummaryV1): AidenRemoteChatForkSummaryProjection {
+  return {
+    state: summary.state,
+    afterMessageId: summary.afterMessageId,
+    ...(summary.instructions ? { focus: summary.instructions } : {}),
+    ...(summary.text ? { text: summary.text } : {}),
+    ...(summary.state === "failed"
+      ? {
+          error: summary.error && FORK_SUMMARY_AIDEN_ERRORS.has(summary.error)
+            ? summary.error
+            : FORK_SUMMARY_FAILURES.generic,
+        }
+      : {}),
   };
 }
 
@@ -696,18 +734,18 @@ interface ParsedFork {
 function parseFork(input: unknown): ParsedFork {
   const record = ownRecord(input);
   const summary = record?.summary === undefined ? undefined : ownRecord(record.summary);
-  const instructions = summary?.instructions;
+  const focus = summary?.focus;
   if (
     !record ||
     !exactKeys(record, ["messageId", "position"], ["summary"]) ||
     !boundedString(record.messageId, 128) ||
     !SAFE_ID.test(record.messageId) ||
     (record.position !== "after" && record.position !== "before") ||
-    (record.summary !== undefined && (!summary || !exactKeys(summary, [], ["instructions"]))) ||
-    (instructions !== undefined &&
-      (typeof instructions !== "string" ||
-        !instructions.trim() ||
-        instructions.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
+    (record.summary !== undefined && (!summary || !exactKeys(summary, [], ["focus"]))) ||
+    (focus !== undefined &&
+      (typeof focus !== "string" ||
+        !focus.trim() ||
+        focus.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The chat fork request is invalid.", 400);
   }
@@ -715,8 +753,20 @@ function parseFork(input: unknown): ParsedFork {
     messageId: record.messageId,
     position: record.position,
     ...(summary
-      ? { summary: typeof instructions === "string" ? { instructions: instructions.trim() } : {} }
+      ? { summary: typeof focus === "string" ? { instructions: focus.trim() } : {} }
       : {}),
+  };
+}
+
+/** The largest projection staging can return for a stored attachment. */
+function largestStagedAttachment(attachment: Attachment): AidenRemoteAttachmentProjection {
+  return {
+    id: `att_${"x".repeat(43)}`,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    kind: attachment.kind,
+    size: Number.MAX_SAFE_INTEGER,
+    expiresAt: new Date(8.64e15).toISOString(),
   };
 }
 
@@ -1617,6 +1667,14 @@ export class AidenRemoteChatService {
         { revision, ...parsed },
         async () => {
           let cut: ChatMessage | undefined;
+          // A fork before a prompt hands that prompt back to edit and resend.
+          const prefillSource = () =>
+            parsed.position === "before" && cut?.role === "user"
+              ? {
+                  text: boundedUnicodeScalarPrefix(cut.content, 200_000),
+                  stored: safeStoredAttachments(cut.attachments) ?? [],
+                }
+              : undefined;
           let forked: Chat;
           try {
             forked = await forks.service.fork(
@@ -1631,6 +1689,14 @@ export class AidenRemoteChatService {
                   requireRevision(revision, source);
                   cut = source.messages.find((message) => message.id === parsed.messageId);
                 },
+                // A response that cannot be sent or replayed must not leave a new chat behind.
+                assertInstallable: (chat) => {
+                  const prefill = prefillSource();
+                  this.forkResult(chat, prefill && {
+                    text: prefill.text,
+                    attachments: prefill.stored.slice(0, MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN).map(largestStagedAttachment),
+                  });
+                },
               },
             );
           } catch (error) {
@@ -1641,23 +1707,50 @@ export class AidenRemoteChatService {
             throw error;
           }
           this.options.notifyChanged?.(forked.id);
-          const result: AidenRemoteChatForkResult = { chat: this.project(forked) };
-          if (parsed.position === "before" && cut?.role === "user") {
-            const stored = safeStoredAttachments(cut.attachments) ?? [];
-            const { staged } = stored.length > 0
-              ? this.attachments.stage(deviceId, forked.id, stored)
-              : { staged: [] };
-            result.prefill = {
-              text: boundedUnicodeScalarPrefix(cut.content, 200_000),
-              ...(staged.length > 0 ? { attachments: staged } : {}),
-            };
-          }
-          return result;
+          const prefill = prefillSource();
+          const staged = prefill && prefill.stored.length > 0
+            ? this.attachments.stage(deviceId, forked.id, prefill.stored).staged
+            : [];
+          return this.forkResult(forked, prefill && { text: prefill.text, attachments: staged });
         },
       );
     } catch (error) {
       return this.mapOperationError(error);
     }
+  }
+
+  /** The fork response, refused when it is too large to send or to replay. */
+  private forkResult(
+    chat: Chat,
+    prefill: { text: string; attachments: AidenRemoteAttachmentProjection[] } | undefined,
+  ): AidenRemoteChatForkResult {
+    const result: AidenRemoteChatForkResult = {
+      chat: this.project(chat),
+      ...(prefill
+        ? {
+            prefill: {
+              text: prefill.text,
+              ...(prefill.attachments.length > 0 ? { attachments: prefill.attachments } : {}),
+            },
+          }
+        : {}),
+    };
+    const tooLarge = () =>
+      new AidenRemoteServiceError(
+        "payload_too_large",
+        "This chat is too large to fork from a paired device. Fork it on the Mac.",
+        413,
+      );
+    if (Buffer.byteLength(JSON.stringify(result), "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
+      throw tooLarge();
+    }
+    try {
+      assertDurableOperationResult(result);
+    } catch (error) {
+      if (error instanceof AidenOperationContractError) throw tooLarge();
+      throw error;
+    }
+    return result;
   }
 
   /** Try a failed fork summary again with the same focus. */
@@ -1695,13 +1788,11 @@ export class AidenRemoteChatService {
     try {
       chat = await action();
     } catch (error) {
-      if (error instanceof AidenRemoteServiceError) throw error;
       // The summary moved on (finished, retried or cancelled elsewhere).
-      throw new AidenRemoteServiceError(
-        "revision_conflict",
-        error instanceof Error ? error.message : "The fork summary changed. Refresh it before trying again.",
-        409,
-      );
+      if (error instanceof ForkSummaryStateError) {
+        throw new AidenRemoteServiceError("revision_conflict", error.message, 409);
+      }
+      throw error;
     }
     this.options.notifyChanged?.(chatId);
     return chat;
