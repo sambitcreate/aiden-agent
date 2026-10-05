@@ -1280,7 +1280,7 @@
         "prefill": {
           "text": "Now check the error codes.",
           "attachments": [
-            { "id": "attachment_fixture_fork_01", "name": "codes.txt", "mimeType": "text/plain", "kind": "text", "size": 42, "expiresAt": "2026-08-18T19:16:00.000Z" }
+            { "id": "att_fixture_fork_codes_000000000000000000000000", "name": "codes.txt", "mimeType": "text/plain", "kind": "text", "size": 42, "expiresAt": "2026-08-18T19:16:00.000Z" }
           ]
         }
       }
