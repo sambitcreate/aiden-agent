@@ -194,3 +194,5 @@ Both now pass, for available and absent auth profiles. An offline control proves
 that supplying a custom context does not introduce ambient-auth resolution.
 No private SDK introspection or user-facing configuration was added.
 Final focused validation: 169/169 tests; typecheck, lint, diff checks pass.
+
+October 5, 2026 (`feature/catalog-refresh-pr`): the post-merge refresh no longer pushes to `main`. The publish job pushes the verified snapshot to `automation/models-dev-catalog-<run id>-<attempt>` with `CATALOG_DEPLOY_KEY` (deploy-key pushes start CI; job-token pushes and job-token-opened PRs do not), then the job token (now `contents: write` + `pull-requests: write`, publish job only) opens a PR, enables auto-merge (merge commit) and closes superseded catalog PRs. `ci.yml` also runs on pushes to those branches; `ci-changes.mjs` classifies a branch-creating push by its merge base with `origin/main`, and catalog-only changes now also run and require the desktop unit lanes (`REQUIRED_JOB_RULES.unit` areas: desktop + catalog). The deploy key's bypass of `main`'s required checks is no longer needed and can be removed in the ruleset.
