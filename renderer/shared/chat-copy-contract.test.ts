@@ -23,6 +23,19 @@ test("fork titles stay within the title limit without splitting a character", ()
   assert.match(title.replace(" (fork)", ""), /^(?:😀)+$/u);
 });
 
+test("long titles keep numbering forks after the base is truncated", () => {
+  const source = "x".repeat(MAX_CHAT_TITLE_CHARS);
+  const titles: string[] = [];
+  for (let index = 0; index < 11; index += 1) titles.push(nextForkTitle(source, titles));
+  assert.deepEqual(
+    titles.map((title) => / \((fork(?: \d+)?)\)$/u.exec(title)?.[1]),
+    ["fork", ...Array.from({ length: 10 }, (_, index) => `fork ${index + 2}`)],
+  );
+  assert.ok(titles.every((title) => Array.from(title).length <= MAX_CHAT_TITLE_CHARS));
+  // Forking one of those forks continues the same sequence.
+  assert.match(nextForkTitle(titles[0]!, titles), / \(fork 12\)$/u);
+});
+
 test("fork lineage parsing accepts only the exact recorded shape", () => {
   const lineage = { chatId: "chat_1", messageId: "msg-2", position: "before", at: 1_700_000_000_000 };
   assert.deepEqual(parseChatForkLineageV1(lineage), lineage);

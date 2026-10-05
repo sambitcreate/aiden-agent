@@ -647,7 +647,8 @@ export function Composer({
 
   const forkEligibility = React.useMemo(() => {
     if (!sessionChat) return { turns: [], cloneBlocked: false };
-    return forkTurnEligibility(sessionChat.messages);
+    // A Bot has one canonical chat, so its forks may only keep a reply.
+    return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
   const visibleForkTurns = React.useMemo(() => {
@@ -2528,7 +2529,11 @@ export function Composer({
           if (!open) setForkQuery("");
         }}
         title="Fork from a completed turn"
-        description="Fork keeps visible messages and attachments through the selected response. Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer. Private reasoning, tool state, and subagent runtime records are omitted."
+        description={`Fork keeps visible messages and attachments through the selected response.${
+          sessionChat?.botId
+            ? ""
+            : " Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer."
+        } Private reasoning, tool state, and subagent runtime records are omitted.`}
         confirmHidden
         busy={sessionCommandBusy}
         returnFocus={() => inputRef?.current ?? null}
@@ -2571,16 +2576,18 @@ export function Composer({
                     </span>
                   </span>
                 </Button>
-                <Button
-                  variant="transparent"
-                  size="small"
-                  className="shrink-0"
-                  disabled={sessionCommandBusy}
-                  aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
-                  onClick={() => void forkFromTurn(turn.userMessageId, "before")}
-                >
-                  Edit in fork
-                </Button>
+                {turn.userMessageId ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
+                    onClick={() => void forkFromTurn(turn.userMessageId!, "before")}
+                  >
+                    Edit in fork
+                  </Button>
+                ) : null}
               </li>
             ))
           ) : (

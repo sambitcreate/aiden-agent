@@ -948,6 +948,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         await copyChat({ messageId, position });
         return;
       }
+      if (chat.data?.botId) throw new Error("Bot chats can only fork after a reply.");
       const index = messages.findIndex((message) => message.id === messageId);
       const message = messages[index];
       if (!message || message.role !== "user") {
@@ -971,7 +972,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Aiden could not open the new chat.");
       }
     },
-    [chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
+    [chat.data?.botId, chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
   );
 
   const forkFromTranscript = React.useCallback(

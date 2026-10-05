@@ -49,3 +49,15 @@ test("each fork choice points Edit in fork at the prompt that opened its turn", 
     [["a1", "u1"], ["a1b", "u1"], ["a2", "u2"]],
   );
 });
+
+test("Bot chats offer no Edit in fork, including on their first prompt", () => {
+  const messages: ChatMessage[] = [
+    { id: "u1", role: "user", content: "first", createdAt: 1 },
+    { id: "a1", role: "assistant", content: "one", createdAt: 2 },
+    { id: "u2", role: "user", content: "second", createdAt: 3 },
+    { id: "a2", role: "assistant", content: "two", createdAt: 4 },
+  ];
+  const result = forkTurnEligibility(messages, { editInFork: false });
+  assert.deepEqual(result.turns.map(({ id }) => id), ["a1", "a2"]);
+  assert.ok(result.turns.every((turn) => turn.userMessageId === undefined));
+});

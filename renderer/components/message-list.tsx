@@ -8,6 +8,7 @@ import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { MessageForkAction } from "./fork-message-button";
+import { MessageActions } from "./message-actions";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
@@ -141,7 +142,7 @@ function AssistantResponse({
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {!content && footer ? footer : null}
+        {!content ? proselessActions(footer, fork) : null}
       </>
     );
   }
@@ -204,8 +205,19 @@ function AssistantResponse({
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
-      {lastTextIndex < 0 && footer ? footer : null}
+      {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
     </>
+  );
+}
+
+/** A reply with only attachments or activity still needs its fork action. */
+function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
+  if (!fork) return footer ?? null;
+  // The reply's media sits above, so hovering this row reveals the action.
+  return (
+    <div className="group">
+      <MessageActions copyText="" footer={footer} fork={fork} />
+    </div>
   );
 }
 
