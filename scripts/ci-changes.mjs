@@ -128,6 +128,11 @@ function classifyPath(path) {
   if (isSafeDocumentationPath(path)) {
     return { areas: noAreas(), kind: "documentation" };
   }
+  // Marketing assets (the Rive character rig, its render tools and exported
+  // media) are not built, packaged, or read by any test.
+  if (path.startsWith("marketing/")) {
+    return { areas: noAreas(), kind: "marketing" };
+  }
   if (DESKTOP_CONSUMED_DOCUMENTS.has(path)) {
     return scoped("desktop", ["desktop"], path);
   }
@@ -257,7 +262,9 @@ export function analyzeChangedPaths(paths, options = {}) {
       ? "unknown-path"
       : classifications.every(({ kind }) => kind === "catalog")
         ? "catalog-only"
-        : "changed-paths";
+        : classifications.every(({ kind }) => kind === "documentation" || kind === "marketing")
+          ? "marketing-only"
+          : "changed-paths";
   return decision(areas, changedCount, safeDocsOnly, reason);
 }
 
@@ -376,8 +383,8 @@ export const runChangedAreaDetection = detectChangedAreas;
 
 function outputLines(result) {
   const summary =
-    result.reason === "documentation-only"
-      ? `CI changed-area decision: documentation-only (${result.changedCount} changed paths).`
+    result.reason === "documentation-only" || result.reason === "marketing-only"
+      ? `CI changed-area decision: ${result.reason} (${result.changedCount} changed paths).`
       : `CI changed-area decision: ${AREA_NAMES.every((area) => result[area]) ? "full checks" : result.reason === "catalog-only" ? "model catalog only" : "selected checks"} (${result.changedCount} changed paths).`;
   return [
     ...AREA_NAMES.map((area) => `${area}=${result[area] ? "true" : "false"}`),

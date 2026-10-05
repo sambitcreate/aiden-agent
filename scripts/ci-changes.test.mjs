@@ -81,6 +81,11 @@ test("changed-area classification is conservative and table-driven", () => {
     ["package-lock.json", allTrue],
     ["vite.config.ts", allTrue],
     ["unknown/new-file.bin", allTrue],
+    ["marketing/rive/aiden/scene.rml", allFalse],
+    ["marketing/rive/tools/render.py", allFalse],
+    ["marketing/rive/exports/aiden.riv", allFalse],
+    ["marketing/rive/README.md", allFalse],
+    ["marketing/../main/services/chat.ts", allTrue],
   ];
 
   for (const [path, expected] of cases) {
@@ -141,6 +146,35 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
     safeDocsOnly: false,
     reason: "changed-paths",
   });
+});
+
+test("marketing assets skip every check only when nothing else changed", () => {
+  assert.deepEqual(analyzeChangedPaths(["marketing/rive/exports/aiden.riv", "marketing/rive/README.md", "docs/guide.md"]), {
+    ...allFalse,
+    areas: allFalse,
+    changedCount: 3,
+    safeDocsOnly: false,
+    reason: "marketing-only",
+  });
+  assert.deepEqual(analyzeChangedPaths(["marketing/rive/aiden/scene.rml", "renderer/components/chat.tsx"]), {
+    ...desktopOnly,
+    areas: desktopOnly,
+    changedCount: 2,
+    safeDocsOnly: false,
+    reason: "changed-paths",
+  });
+  assert.deepEqual(decideChangedAreas(["marketing/rive/tools/render.py", "scripts/ci-changes.mjs"]), allTrue);
+
+  const directory = mkdtempSync(join(tmpdir(), "ci-changes-"));
+  try {
+    const outputPath = join(directory, "output");
+    writeChangedAreaOutputs(analyzeChangedPaths(["marketing/rive/exports/aiden.riv"]), outputPath);
+    const output = readFileSync(outputPath, "utf8");
+    assert.match(output, /^decision_reason=marketing-only$/mu);
+    assert.match(output, /^summary=CI changed-area decision: marketing-only \(1 changed paths\)\.$/mu);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("NUL-delimited changed paths preserve rename, deletion, and newline names", () => {
