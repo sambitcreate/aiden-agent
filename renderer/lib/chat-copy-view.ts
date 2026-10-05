@@ -10,14 +10,20 @@ import { boundedUnicodePrefix } from "../shared/unicode-prefix.js";
 export interface ForkTurnChoice {
   /** The settled assistant reply a plain fork keeps. */
   id: string;
-  /** The prompt that opened this turn; Edit in fork cuts just before it. */
-  userMessageId: string;
+  /**
+   * The prompt that opened this turn; Edit in fork cuts just before it.
+   * Absent when the chat can't fork before a prompt (Bot chats).
+   */
+  userMessageId?: string;
   label: string;
   createdAt: number;
   turnNumber: number;
 }
 
-export function forkTurnEligibility(messages: readonly ChatMessage[]): {
+export function forkTurnEligibility(
+  messages: readonly ChatMessage[],
+  options: { editInFork?: boolean } = {},
+): {
   turns: ForkTurnChoice[];
   cloneBlocked: boolean;
 } {
@@ -42,7 +48,7 @@ export function forkTurnEligibility(messages: readonly ChatMessage[]): {
     } else if (latestUserLabel && latestUserId) {
       turns.push({
         id: message.id,
-        userMessageId: latestUserId,
+        ...(options.editInFork === false ? {} : { userMessageId: latestUserId }),
         label: latestUserLabel,
         createdAt: message.createdAt,
         turnNumber: turns.length + 1,

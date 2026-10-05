@@ -922,3 +922,39 @@ test("settled turns offer fork actions only when the chat can fork", () => {
 
   assert.doesNotMatch(render({}), /data-fork-action/u);
 });
+
+test("settled replies without prose still offer Fork from here", () => {
+  const toolOnly: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-tool-only",
+    status: "completed",
+    startedAt: 1,
+    steps: [{
+      id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+      label: "Read file", status: "completed", startedAt: 1, updatedAt: 2, finishedAt: 2,
+    }],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[
+        { id: "user-1", role: "user", content: "Draw it", createdAt: 1 },
+        { id: "assistant-image", role: "assistant", content: "", createdAt: 2, attachments: [imageAttachment()] },
+        { id: "user-2", role: "user", content: "Check the file", createdAt: 3 },
+        { id: "assistant-tool", role: "assistant", content: "", createdAt: 4, timeline: toolOnly },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+      onFork={() => undefined}
+    />,
+  );
+  assert.equal((markup.match(/aria-label="Fork from here"/gu) ?? []).length, 2);
+  // With no prose there is nothing to copy; only the two prompts keep Copy.
+  assert.equal((markup.match(/aria-label="Copy message"/gu) ?? []).length, 2);
+});
