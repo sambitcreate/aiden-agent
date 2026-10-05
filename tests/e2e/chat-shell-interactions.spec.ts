@@ -778,6 +778,29 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   await expect(composer).toHaveValue("hi there");
 });
 
+test("sent user prompts can be selected with the pointer", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  const prompt = page.getByText(/^Opened palette-chat-/u);
+  await expect(prompt).toBeVisible();
+  const expected = (await prompt.textContent()) ?? "";
+
+  const box = await prompt.boundingBox();
+  expect(box).toBeTruthy();
+  const y = box!.y + box!.height / 2;
+  await page.mouse.move(box!.x + 1, y);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width - 1, y, { steps: 8 });
+  await page.mouse.up();
+
+  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+  expect(selected.length).toBeGreaterThan(expected.length / 2);
+  expect(expected).toContain(selected.trim());
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {

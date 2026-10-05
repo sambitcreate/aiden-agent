@@ -84,7 +84,7 @@ export function MessageBubble({
             <MessageAttachments attachments={attachments} role="user" />
           ) : null}
           {content ? (
-            <div className="rounded-2xl bg-control px-4 py-2.5">
+            <div className="select-text rounded-2xl bg-control px-4 py-2.5">
               <UserMessageContent content={content} />
             </div>
           ) : null}
@@ -182,7 +182,7 @@ function UnrenderableMessage({ content }: { content: string }) {
       <Text variant="small-strong" color="red">
         This message could not be formatted
       </Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
+      <Text variant="small" color="secondary" className="mt-0.5 block select-text whitespace-pre-wrap">
         {content}
       </Text>
     </Callout>
