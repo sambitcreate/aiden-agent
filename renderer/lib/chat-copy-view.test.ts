@@ -34,3 +34,18 @@ test("copy eligibility stops at the shared limit and keeps only searchable eligi
   assert.equal(filterForkTurnChoices(result.turns, "1")[0]?.turnNumber, 1);
   assert.deepEqual(filterForkTurnChoices(result.turns, "x".repeat(257)), []);
 });
+
+test("each fork choice points Edit in fork at the prompt that opened its turn", () => {
+  const result = forkTurnEligibility([
+    { id: "system", role: "system", content: "hidden", createdAt: 0 },
+    { id: "u1", role: "user", content: "first", createdAt: 1 },
+    { id: "a1", role: "assistant", content: "one", createdAt: 2 },
+    { id: "a1b", role: "assistant", content: "one more", createdAt: 3 },
+    { id: "u2", role: "user", content: "second", createdAt: 4 },
+    { id: "a2", role: "assistant", content: "two", createdAt: 5 },
+  ]);
+  assert.deepEqual(
+    result.turns.map(({ id, userMessageId }) => [id, userMessageId]),
+    [["a1", "u1"], ["a1b", "u1"], ["a2", "u2"]],
+  );
+});

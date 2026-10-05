@@ -1,4 +1,5 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import { forkedFromLabel } from "../lib/chat-copy-view";
 // Unified workspace/chat sidebar with workspace-grouped, recent, and
 // needs-attention views, route-driven selection, and workspace/chat actions.
 
@@ -47,6 +48,7 @@ import {
   Folder,
   FolderPlus,
   FolderGit2,
+  GitFork,
   GitPullRequest,
   Loader2,
   MoreHorizontal,
@@ -702,6 +704,10 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
   const readMarkers = useChatReadMarkers();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useAllRegularChats(workspaces.length > 0);
+  const chatTitlesById = React.useMemo(
+    () => new Map((chats.data ?? []).map((chat) => [chat.id, chat.title])),
+    [chats.data],
+  );
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
   const initialPreferences = React.useMemo(
@@ -1310,6 +1316,19 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     const showsState = rowState !== "idle";
     // The open chat is being viewed, so its own output never reads as unread.
     const unread = chat.id !== activeChatId && isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
+    const forkedFrom = chat.forkedFrom
+      ? forkedFromLabel(chatTitlesById.get(chat.forkedFrom.chatId))
+      : undefined;
+    const titleContent =
+      titleReveal?.chatId === chat.id ? (
+        <GeneratedTitleReveal
+          key={`${chat.id}-${titleReveal.version}`}
+          previousTitle={titleReveal.previousTitle}
+          title={chat.title}
+        />
+      ) : (
+        chat.title
+      );
     return (
       <ContextMenu key={chat.id}>
         <ContextMenuTrigger asChild>
@@ -1321,15 +1340,16 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
               ) : undefined
             }
             aria-busy={renamingWithAppleId === chat.id || rowState === "working"}
+            aria-description={forkedFrom}
+            data-forked={forkedFrom ? "true" : undefined}
             title={
-              titleReveal?.chatId === chat.id ? (
-                <GeneratedTitleReveal
-                  key={`${chat.id}-${titleReveal.version}`}
-                  previousTitle={titleReveal.previousTitle}
-                  title={chat.title}
-                />
+              forkedFrom ? (
+                <span className="flex min-w-0 items-center gap-1.5" title={forkedFrom}>
+                  <GitFork aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+                  <span className="min-w-0 truncate">{titleContent}</span>
+                </span>
               ) : (
-                chat.title
+                titleContent
               )
             }
             trailing={

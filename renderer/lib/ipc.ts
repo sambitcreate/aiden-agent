@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
   TtsJobSnapshot,
   TtsSafeError,
@@ -1080,10 +1081,14 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
-  copyVisibleHistory: (chatId: string, throughMessageId?: string) =>
+  /** Clone the whole visible chat, or fork it at `forkAt`. */
+  copyVisibleHistory: (
+    chatId: string,
+    forkAt?: { messageId: string; position: ChatForkPosition },
+  ) =>
     invokeChatMutation<Chat>("chats:copyVisibleHistory", {
       chatId,
-      ...(throughMessageId ? { throughMessageId } : {}),
+      ...(forkAt ? { messageId: forkAt.messageId, position: forkAt.position } : {}),
     }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>

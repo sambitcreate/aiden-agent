@@ -9,14 +9,18 @@ import {
 } from "./chat-session-params.js";
 
 test("session command parsers accept only exact bounded chat selectors", () => {
-  assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1" }), {
-    chatId: "chat-1",
-    throughMessageId: undefined,
-  });
+  assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
+  // The legacy selector still means "fork after this reply".
   assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1", throughMessageId: "message-1" }), {
     chatId: "chat-1",
-    throughMessageId: "message-1",
+    forkAt: { messageId: "message-1", position: "after" },
   });
+  for (const position of ["after", "before"] as const) {
+    assert.deepEqual(
+      parseChatCopyRequest({ chatId: "chat-1", messageId: "message-1", position }),
+      { chatId: "chat-1", forkAt: { messageId: "message-1", position } },
+    );
+  }
   assert.deepEqual(parseChatOnlyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
   for (const invalid of [
     null,
@@ -25,6 +29,12 @@ test("session command parsers accept only exact bounded chat selectors", () => {
     { chatId: "chat", path: "/tmp/private" },
     { chatId: "x".repeat(CHAT_SESSION_ID_LIMITS.chatCharacters + 1) },
     { chatId: "chat", throughMessageId: "" },
+    { chatId: "chat", messageId: "message-1" },
+    { chatId: "chat", position: "after" },
+    { chatId: "chat", messageId: "message-1", position: "at" },
+    { chatId: "chat", messageId: "", position: "before" },
+    { chatId: "chat", throughMessageId: "message-1", messageId: "message-1", position: "after" },
+    { chatId: "chat", throughMessageId: "message-1", position: "before" },
   ]) {
     assert.throws(() => parseChatCopyRequest(invalid));
   }

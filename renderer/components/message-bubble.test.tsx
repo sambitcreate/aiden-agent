@@ -884,3 +884,41 @@ test("a live generation error is announced as an alert with its reason", () => {
   assert.ok(alert, "the failure reason sits inside the alert region");
   assert.match(alert[0], /Generation failed/u);
 });
+
+test("settled turns offer fork actions only when the chat can fork", () => {
+  const render = (props: { onFork?: () => void; forkDisabledReason?: string | null }) =>
+    renderToStaticMarkup(
+      <MessageList
+        chatId="chat-1"
+        messages={[
+          { id: "user-1", role: "user", content: "First question", createdAt: 1 },
+          { id: "assistant-1", role: "assistant", content: "First answer", createdAt: 2 },
+          { id: "user-2", role: "user", content: "Second question", createdAt: 3 },
+        ]}
+        streamingText="Still writing"
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+        {...props}
+      />,
+    );
+
+  const enabled = render({ onFork: () => undefined });
+  // Each sent prompt can be edited in a fork; only the settled reply forks after itself.
+  assert.equal((enabled.match(/aria-label="Edit in fork"/gu) ?? []).length, 2);
+  assert.equal((enabled.match(/aria-label="Fork from here"/gu) ?? []).length, 1);
+  const forkAt = enabled.indexOf('aria-label="Fork from here"');
+  assert.ok(forkAt > enabled.indexOf("First answer"));
+  assert.ok(forkAt < enabled.indexOf("Second question"));
+  assert.doesNotMatch(enabled, /aria-disabled="true"[^>]*data-fork-action/u);
+
+  const busy = render({ onFork: () => undefined, forkDisabledReason: "Finish the current response" });
+  assert.equal((busy.match(/aria-disabled="true"/gu) ?? []).length, 3);
+  assert.equal((busy.match(/title="Finish the current response"/gu) ?? []).length, 3);
+
+  assert.doesNotMatch(render({}), /data-fork-action/u);
+});

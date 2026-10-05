@@ -10,6 +10,11 @@ import {
 } from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
 import {
+  saveComposerDraftText,
+  seedComposerAttachments,
+} from "../lib/composer-draft-store";
+import type { ChatForkPosition } from "../shared/chat-copy-contract";
+import {
   chatMessageQueue,
   steerQueuedMessage,
   steerRejectionMessage,
@@ -32,7 +37,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
 import { BotAvatar } from "../components/bot-avatar";
-import { TerminalSquare } from "lucide-react";
+import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
@@ -81,6 +86,7 @@ import {
   installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
+  useAllRegularChats,
   useChat,
   useBot,
   useComputerUseStatus,
@@ -89,6 +95,7 @@ import {
   useProviders,
   useSettings,
 } from "../lib/queries";
+import { forkedFromLabel } from "../lib/chat-copy-view";
 import {
   isModelSelectionReadyForNewWork,
   resolveVisibleModelSelection,
@@ -841,7 +848,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const copyChat = React.useCallback(
-    async (throughAssistantMessageId?: string) => {
+    async (
+      forkAt?: { messageId: string; position: ChatForkPosition },
+      prefill?: { text: string; attachments: readonly Attachment[] },
+    ) => {
       if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
@@ -860,7 +870,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Finish the current response or approval before copying this chat.");
       }
       const sourceChatId = chatId;
-      const copied = await chatsApi.copyVisibleHistory(sourceChatId, throughAssistantMessageId);
+      const copied = await chatsApi.copyVisibleHistory(sourceChatId, forkAt);
+      if (prefill) {
+        saveComposerDraftText(copied.id, prefill.text);
+        seedComposerAttachments(copied.id, prefill.attachments);
+      }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
       qc.setQueryData(queryKeys.chat(copied.id), copied);
       qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(copiedWorkspaceId), (current) => [
@@ -870,6 +884,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           workspaceId: copiedWorkspaceId,
           providerId: copied.providerId,
           model: copied.model,
+          ...(copied.forkedFrom ? { forkedFrom: copied.forkedFrom } : {}),
           createdAt: copied.createdAt,
           updatedAt: copied.updatedAt,
         },
@@ -899,6 +914,75 @@ export function ChatPane({ chatId }: { chatId: string }) {
       qc,
       selectWorkspace,
     ],
+  );
+
+  const forkLineage = chat.data?.botId ? undefined : chat.data?.forkedFrom;
+  const allChats = useAllRegularChats(Boolean(forkLineage));
+  const forkSource = forkLineage
+    ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
+    : undefined;
+  const forkSourceLabel = forkLineage
+    ? allChats.isPending
+      ? "Forked chat"
+      : forkedFromLabel(forkSource?.title)
+    : undefined;
+
+  const forkDisabledReason =
+    isGenerating || isStartingGeneration || approvals.length > 0
+      ? "Finish the current response or approval before forking"
+      : documentAppendReconciliationRequired
+        ? "Reload Aiden before forking this chat"
+        : imageArtifactRecoveryPending || imageArtifactRecoveryUnavailable
+          ? "Recover this chat's visual artifacts before forking"
+          : null;
+
+  /**
+   * Fork from a transcript message. `after` keeps the chosen reply; `before`
+   * keeps everything earlier and pre-fills the chosen prompt for editing. The
+   * first prompt has nothing before it, so editing it opens a fresh chat in
+   * the same workspace instead.
+   */
+  const forkFromMessage = React.useCallback(
+    async (messageId: string, position: ChatForkPosition) => {
+      if (position === "after") {
+        await copyChat({ messageId, position });
+        return;
+      }
+      const index = messages.findIndex((message) => message.id === messageId);
+      const message = messages[index];
+      if (!message || message.role !== "user") {
+        throw new Error("That message is no longer in this chat.");
+      }
+      const prefill = { text: message.content, attachments: message.attachments ?? [] };
+      if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
+        await copyChat({ messageId, position }, prefill);
+        return;
+      }
+      if (forkDisabledReason) throw new Error(`${forkDisabledReason}.`);
+      const workspaceId = persistedChatWorkspaceId(chat.data?.workspaceId);
+      const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
+      seedComposerAttachments(created.id, prefill.attachments);
+      selectWorkspace(workspaceId);
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+      } catch {
+        discardChatDraft(created.id);
+        toast.info("Aiden could not open the new chat.");
+      }
+    },
+    [chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
+  );
+
+  const forkFromTranscript = React.useCallback(
+    (messageId: string, position: ChatForkPosition) => {
+      void forkFromMessage(messageId, position).then(
+        () => toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked"),
+        (error: unknown) =>
+          toast.error(error instanceof Error ? error.message : "Couldn't fork this chat."),
+      );
+    },
+    [forkFromMessage],
   );
 
   const exportChat = React.useCallback(async () => {
@@ -2370,6 +2454,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 </span>
               </span>
             </span>
+          ) : forkSourceLabel ? (
+            <span className="block min-w-0" data-chat-fork-lineage>
+              <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
+              <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
+                <GitFork aria-hidden="true" className="size-3 shrink-0" />
+                {forkSource ? (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onClick={() =>
+                      void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
+                    }
+                  >
+                    {forkSourceLabel}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate">{forkSourceLabel}</span>
+                )}
+              </span>
+            </span>
           ) : (
             (chat.data?.title ?? "New agent")
           )
@@ -2608,7 +2712,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 sessionChat={draft ? undefined : (chat.data ?? undefined)}
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
-                onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
+                onForkChat={(messageId, position) => forkFromMessage(messageId, position)}
                 onExportChat={exportChat}
                 onCompactChat={
                   draft
@@ -2798,6 +2902,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
             readAloud={readAloudProps}
+            onFork={chat.data?.botId ? undefined : forkFromTranscript}
+            forkDisabledReason={forkDisabledReason}
             error={
               error ??
               (imageArtifactRecoveryUnavailable

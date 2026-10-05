@@ -151,6 +151,119 @@ test("clone and fork copy visible linear history with fresh identities", async (
   }
 });
 
+test("forks record lineage, number titles, and can cut before a prompt", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Plan trip", workspaceId: "workspace-fork" });
+  const first = await store.appendMessage(chat.id, { role: "user", content: "Where to go?" });
+  const firstReply = await store.appendMessage(chat.id, { role: "assistant", content: "Lisbon." });
+  const second = await store.appendMessage(chat.id, {
+    role: "user",
+    content: "And for food?",
+    attachments: [{
+      id: "attachment-menu",
+      name: "menu.txt",
+      mimeType: "text/plain",
+      kind: "text",
+      size: 4,
+      text: "menu",
+    }],
+  });
+  await store.appendMessage(chat.id, { role: "assistant", content: "Pastéis." });
+  const firstUserId = first.messages[first.messages.length - 1]!.id;
+  const firstReplyId = firstReply.messages[firstReply.messages.length - 1]!.id;
+  const secondUserId = second.messages[second.messages.length - 1]!.id;
+
+  const after = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    forkAt: { messageId: firstReplyId, position: "after" },
+  });
+  assert.equal(after.title, "Plan trip (fork)");
+  assert.deepEqual(after.messages.map(({ content }) => content), ["Where to go?", "Lisbon."]);
+  assert.deepEqual(
+    { ...after.forkedFrom, at: undefined },
+    { chatId: chat.id, messageId: firstReplyId, position: "after", at: undefined },
+  );
+
+  // Editing the second prompt keeps everything strictly before it.
+  const before = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    forkAt: { messageId: secondUserId, position: "before" },
+  });
+  assert.equal(before.title, "Plan trip (fork 2)");
+  assert.deepEqual(before.messages.map(({ content }) => content), ["Where to go?", "Lisbon."]);
+  assert.equal(before.forkedFrom?.position, "before");
+
+  // Forking a fork numbers against the shared base title instead of stacking suffixes.
+  const nested = await store.copyVisibleHistory({
+    sourceChatId: after.id,
+    forkAt: { messageId: after.messages[1]!.id, position: "after" },
+  });
+  assert.equal(nested.title, "Plan trip (fork 3)");
+  assert.equal(nested.forkedFrom?.chatId, after.id);
+
+  // A plain clone stays a copy with no lineage.
+  const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
+  assert.equal(clone.forkedFrom, undefined);
+
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: chat.id,
+      forkAt: { messageId: firstUserId, position: "before" },
+    }),
+    /nothing comes before/iu,
+  );
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: chat.id,
+      forkAt: { messageId: firstReplyId, position: "before" },
+    }),
+    /your messages/iu,
+  );
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: chat.id,
+      forkAt: { messageId: secondUserId, position: "after" },
+    }),
+    /completed assistant turn/iu,
+  );
+
+  // Lineage survives a restart and stays visible after the source is deleted.
+  await store.remove(chat.id);
+  const restarted = createChatStore(async () => directory);
+  const listed = await restarted.list("workspace-fork");
+  assert.equal(listed.find((meta) => meta.id === after.id)?.forkedFrom?.chatId, chat.id);
+  assert.equal(listed.find((meta) => meta.id === clone.id)?.forkedFrom, undefined);
+  assert.equal((await restarted.get(before.id))?.forkedFrom?.messageId, secondUserId);
+});
+
+test("a corrupt fork lineage is dropped without hiding the chat", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-lineage-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Source", workspaceId: "workspace-lineage" });
+  await store.appendMessage(chat.id, { role: "user", content: "Hello" });
+  const reply = await store.appendMessage(chat.id, { role: "assistant", content: "Hi" });
+  const fork = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    forkAt: { messageId: reply.messages[reply.messages.length - 1]!.id, position: "after" },
+  });
+
+  const file = path.join(directory, `${fork.id}.json`);
+  const payload = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+  payload.forkedFrom = { chatId: "../escape", messageId: "m", position: "sideways", at: -1 };
+  await fs.writeFile(file, JSON.stringify(payload));
+  await fs.rm(path.join(directory, "index.json"), { force: true });
+
+  const restarted = createChatStore(async () => directory);
+  const reopened = await restarted.get(fork.id);
+  assert.equal(reopened?.title, "Source (fork)");
+  assert.equal(reopened?.forkedFrom, undefined);
+  const listed = await restarted.list("workspace-lineage");
+  assert.ok(listed.some((meta) => meta.id === fork.id && meta.forkedFrom === undefined));
+});
+
 test("bulk copies use collision-resistant identities even when Math.random repeats", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-ids-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

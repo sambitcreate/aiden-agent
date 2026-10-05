@@ -1,3 +1,5 @@
+import type { Attachment } from "./types";
+
 /** Device-local text drafts. Attachment bytes stay in the attachment picker. */
 interface StoredComposerDraft {
   version: 1;
@@ -55,7 +57,26 @@ export function settleComposerSubmission(chatId: string, accepted: boolean, curr
 }
 
 export function discardComposerDraft(chatId: string): void {
+  attachmentSeeds.delete(chatId);
   try { localStorage.removeItem(key(chatId)); } catch { /* Deletion still proceeds. */ }
+}
+
+// One-shot, in-memory attachment seeds for a composer that is about to open
+// (Edit in fork). Never persisted: attachment bytes stay out of storage.
+const attachmentSeeds = new Map<string, Attachment[]>();
+
+export function seedComposerAttachments(chatId: string, attachments: readonly Attachment[]): void {
+  const usable = attachments.filter((attachment) =>
+    attachment.kind === "image" ? Boolean(attachment.data) : attachment.text !== undefined,
+  );
+  if (usable.length > 0) attachmentSeeds.set(chatId, usable.map((attachment) => ({ ...attachment })));
+  else attachmentSeeds.delete(chatId);
+}
+
+export function takeComposerAttachmentSeed(chatId: string): Attachment[] | undefined {
+  const seed = attachmentSeeds.get(chatId);
+  attachmentSeeds.delete(chatId);
+  return seed;
 }
 
 type GuidanceRestoreListener = (guidance: readonly string[]) => void;

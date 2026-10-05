@@ -1,7 +1,9 @@
+import type { ChatForkPosition } from "../../renderer/shared/chat-copy-contract.js";
+
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
 const MAX_DRAFT_TEXT_CHARS = 65_536;
-const COPY_KEYS = new Set(["chatId", "throughMessageId"]);
+const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position"]);
 const CHAT_ONLY_KEYS = new Set(["chatId"]);
 const CONTEXT_PRESSURE_KEYS = new Set([
   "chatId",
@@ -55,17 +57,33 @@ function boundedId(value: unknown, label: string): string {
 
 export interface ParsedChatCopyRequest {
   chatId: string;
-  throughMessageId?: string;
+  /** Absent for a whole-chat clone. */
+  forkAt?: { messageId: string; position: ChatForkPosition };
 }
 
+/**
+ * `{ chatId }` clones; `{ chatId, messageId, position }` forks. The older
+ * `{ chatId, throughMessageId }` shape remains a fork after that reply.
+ */
 export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
   const record = exactRecord(value, COPY_KEYS, "chat copy request");
+  const chatId = boundedId(record.chatId, "chat id");
+  if (record.throughMessageId !== undefined) {
+    if (record.messageId !== undefined || record.position !== undefined) {
+      throw new Error("Invalid chat copy request.");
+    }
+    return {
+      chatId,
+      forkAt: { messageId: boundedId(record.throughMessageId, "turn id"), position: "after" },
+    };
+  }
+  if (record.messageId === undefined && record.position === undefined) return { chatId };
+  if (record.position !== "after" && record.position !== "before") {
+    throw new Error("Invalid fork position.");
+  }
   return {
-    chatId: boundedId(record.chatId, "chat id"),
-    throughMessageId:
-      record.throughMessageId === undefined
-        ? undefined
-        : boundedId(record.throughMessageId, "turn id"),
+    chatId,
+    forkAt: { messageId: boundedId(record.messageId, "message id"), position: record.position },
   };
 }
 
