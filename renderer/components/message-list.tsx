@@ -7,6 +7,9 @@ import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import type { ReadAloudActionProps } from "./read-aloud-button";
+import type { MessageForkAction } from "./fork-message-button";
+import { MessageActions } from "./message-actions";
+import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
@@ -64,6 +67,10 @@ interface MessageListProps {
   /** Message id whose whole response may host the read-aloud action. */
   readAloudMessageId?: string;
   readAloud?: ReadAloudActionProps;
+  /** Fork the chat at a settled message; absent where forking is unsupported. */
+  onFork?: (messageId: string, position: ChatForkPosition) => void;
+  /** Shown on the fork actions while the chat is busy. */
+  forkDisabledReason?: string | null;
 }
 
 interface AssistantResponseProps {
@@ -80,6 +87,7 @@ interface AssistantResponseProps {
   richLinks?: boolean;
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
+  fork?: MessageForkAction;
 }
 
 function AssistantResponse({
@@ -94,6 +102,7 @@ function AssistantResponse({
   readAloud,
   richLinks = true,
   footer,
+  fork,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
@@ -127,12 +136,13 @@ function AssistantResponse({
             readAloud={readAloud}
             richLinks={richLinks}
             footer={footer}
+            fork={fork}
           />
         ) : null}
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {!content && footer ? footer : null}
+        {!content ? proselessActions(footer, fork) : null}
       </>
     );
   }
@@ -188,14 +198,26 @@ function AssistantResponse({
             readAloud={isLastText ? readAloud : undefined}
             richLinks={richLinks}
             footer={isLastText ? footer : undefined}
+            fork={isLastText ? fork : undefined}
           />
         );
       })}
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
-      {lastTextIndex < 0 && footer ? footer : null}
+      {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
     </>
+  );
+}
+
+/** A reply with only attachments or activity still needs its fork action. */
+function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
+  if (!fork) return footer ?? null;
+  // The reply's media sits above, so hovering this row reveals the action.
+  return (
+    <div className="group">
+      <MessageActions copyText="" footer={footer} fork={fork} />
+    </div>
   );
 }
 
@@ -210,6 +232,10 @@ interface SettledMessageRowProps {
   richLinks: boolean;
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
+  /** Stable across renders so settled rows stay memoized. */
+  onFork?: (messageId: string, position: ChatForkPosition) => void;
+  /** Settled user prompts with an earlier prompt can be edited in a fork. */
+  forkDisabledReason?: string | null;
 }
 
 /**
@@ -222,7 +248,17 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   richLinks,
   subagentsEnabled,
   onOpenSubagent,
+  onFork,
+  forkDisabledReason,
 }: SettledMessageRowProps) {
+  const fork = React.useMemo<MessageForkAction | undefined>(() => {
+    if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
+    const position: ChatForkPosition = message.role === "user" ? "before" : "after";
+    return {
+      onFork: () => onFork(message.id, position),
+      disabledReason: forkDisabledReason,
+    };
+  }, [forkDisabledReason, message.id, message.role, onFork]);
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {message.role === "assistant" ? (
@@ -235,6 +271,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             readAloud={readAloud}
             richLinks={richLinks}
             footer={settledTurnFooter(message)}
+            fork={fork}
             subagentChips={
               subagentsEnabled && message.subagents ? (
                 <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
@@ -251,6 +288,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           content={message.content}
           attachments={message.attachments}
           skill={message.skill}
+          fork={fork}
         />
       )}
     </div>
@@ -299,7 +337,18 @@ export function MessageList({
   error,
   readAloudMessageId,
   readAloud,
+  onFork,
+  forkDisabledReason = null,
 }: MessageListProps) {
+  const onForkRef = React.useRef(onFork);
+  React.useLayoutEffect(() => {
+    onForkRef.current = onFork;
+  }, [onFork]);
+  const forkEnabled = Boolean(onFork);
+  const stableOnFork = React.useCallback(
+    (messageId: string, position: ChatForkPosition) => onForkRef.current?.(messageId, position),
+    [],
+  );
   const transcriptRef = React.useRef<HTMLDivElement | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
@@ -431,6 +480,8 @@ export function MessageList({
         richLinks={message.id !== richLinkHandoffDuplicateId}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
+        onFork={forkEnabled ? stableOnFork : undefined}
+        forkDisabledReason={forkDisabledReason}
       />,
     );
     transcriptRows.push(...artifactFrames(`message:${message.id}`));

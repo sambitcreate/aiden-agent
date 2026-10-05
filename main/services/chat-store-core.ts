@@ -20,6 +20,11 @@ import {
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import {
+  nextForkTitle,
+  parseChatForkLineageV1,
+  type ChatForkPosition,
+} from "../../renderer/shared/chat-copy-contract.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
@@ -379,7 +384,8 @@ export function createChatStore(
       (meta.lastAssistantAt === undefined ||
         (typeof meta.lastAssistantAt === "number" &&
           Number.isSafeInteger(meta.lastAssistantAt) &&
-          meta.lastAssistantAt >= 0))
+          meta.lastAssistantAt >= 0)) &&
+      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined)
     );
   }
 
@@ -751,6 +757,19 @@ export function createChatStore(
       if (policy !== "pure") await quarantinePayload(id, policy);
       return null;
     }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "forkedFrom")
+    ) {
+      // Lineage is display-only provenance: a damaged value is dropped rather
+      // than hiding the whole transcript.
+      const record = parsed as Record<string, unknown>;
+      const lineage = parseChatForkLineageV1(record.forkedFrom);
+      if (lineage) record.forkedFrom = lineage;
+      else delete record.forkedFrom;
+    }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
     if (
       policy !== "pure" &&
@@ -912,6 +931,7 @@ export function createChatStore(
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
+      ...(chat.forkedFrom ? { forkedFrom: chat.forkedFrom } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -1192,7 +1212,10 @@ export function createChatStore(
       /** Main-owned destination for copies that move legacy Bot history into its hidden home. */
       targetWorkspaceId?: string;
       expectedWorkspaceId?: string;
+      /** Legacy cut used by Bot copies: through a settled assistant reply, without lineage. */
       throughAssistantMessageId?: string;
+      /** Fork cut that records `forkedFrom` lineage on the new chat. */
+      forkAt?: { messageId: string; position: ChatForkPosition };
       assertCurrent?: () => void;
       /** Prepare dependent durable records before this chat becomes visible. */
       beforeInstall?: (chat: Chat) => void | Promise<void>;
@@ -1212,16 +1235,30 @@ export function createChatStore(
           );
         }
 
+        const cut =
+          input.forkAt ??
+          (input.throughAssistantMessageId !== undefined
+            ? { messageId: input.throughAssistantMessageId, position: "after" as const }
+            : undefined);
+        // Inclusive index of the last copied message.
         let throughIndex = source.messages.length - 1;
-        if (input.throughAssistantMessageId !== undefined) {
+        if (cut?.position === "after") {
           throughIndex = source.messages.findIndex(
-            (message) =>
-              message.id === input.throughAssistantMessageId &&
-              message.role === "assistant",
+            (message) => message.id === cut.messageId && message.role === "assistant",
           );
           if (throughIndex < 0) {
             throw new Error("Choose a completed assistant turn to fork from.");
           }
+        } else if (cut?.position === "before") {
+          const userIndex = source.messages.findIndex(
+            (message) => message.id === cut.messageId && message.role === "user",
+          );
+          if (userIndex < 0) {
+            throw new Error("Choose one of your messages to edit in a fork.");
+          }
+          throughIndex = userIndex - 1;
+        }
+        if (cut) {
           let hasVisibleUser = false;
           for (let index = 0; index <= throughIndex; index += 1) {
             if (source.messages[index]?.role === "user") {
@@ -1230,7 +1267,11 @@ export function createChatStore(
             }
           }
           if (!hasVisibleUser) {
-            throw new Error("The selected turn has no user message to copy.");
+            throw new Error(
+              cut.position === "before"
+                ? "Nothing comes before the first message to fork."
+                : "The selected turn has no user message to copy.",
+            );
           }
         }
 
@@ -1248,13 +1289,23 @@ export function createChatStore(
           }
         };
         const metadata = projectVisibleChatMetadata(source);
-        const suffix = input.throughAssistantMessageId ? " (fork)" : " (copy)";
-        const maximumBaseLength = Math.max(1, 120 - suffix.length);
-        const title = `${Array.from(
-          metadata.title.slice(0, maximumBaseLength * 2),
-        )
-          .slice(0, maximumBaseLength)
-          .join("")}${suffix}`;
+        let title: string;
+        if (cut) {
+          const destinationWorkspaceId =
+            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID;
+          const siblings = (await withIndexLock(() => loadIndex())).filter(
+            (entry) => (entry.workspaceId ?? DEFAULT_WORKSPACE_ID) === destinationWorkspaceId,
+          );
+          title = nextForkTitle(metadata.title, siblings.map((entry) => entry.title));
+        } else {
+          const suffix = " (copy)";
+          const maximumBaseLength = Math.max(1, 120 - suffix.length);
+          title = `${Array.from(
+            metadata.title.slice(0, maximumBaseLength * 2),
+          )
+            .slice(0, maximumBaseLength)
+            .join("")}${suffix}`;
+        }
         chargedBytes += 1_024;
         charge(title);
         charge(input.targetWorkspaceId ?? metadata.workspaceId);
@@ -1321,6 +1372,16 @@ export function createChatStore(
           botId: source.botId,
           providerId: metadata.providerId,
           model: metadata.model,
+          ...(input.forkAt && !source.botId
+            ? {
+                forkedFrom: {
+                  chatId: source.id,
+                  messageId: input.forkAt.messageId,
+                  position: input.forkAt.position,
+                  at: now,
+                },
+              }
+            : {}),
           createdAt: now,
           updatedAt: now,
           messages: copiedMessages,

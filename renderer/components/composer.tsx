@@ -99,6 +99,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
@@ -109,7 +110,7 @@ import {
 import type { SettingsSection } from "../shared/settings-section";
 import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
 import { filterForkTurnChoices, forkTurnEligibility } from "../lib/chat-copy-view";
-import { MAX_FORK_QUERY_CODE_UNITS } from "../shared/chat-copy-contract";
+import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
   attachmentInlineBytesRemaining,
   attachmentSlotsRemaining,
@@ -215,7 +216,8 @@ interface ComposerProps {
   sessionChat?: Chat;
   authenticatedProviders?: Array<{ id: string; label: string; detail: string }>;
   onCloneChat?: () => Promise<void>;
-  onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
+  /** `after` keeps the reply; `before` cuts ahead of a prompt and pre-fills it for editing. */
+  onForkChat?: (messageId: string, position: ChatForkPosition) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
   onCompactChat?: (engine?: CompactionEngine) => Promise<
     | {
@@ -454,6 +456,10 @@ export function Composer({
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  React.useEffect(() => {
+    const seed = takeComposerAttachmentSeed(chatId);
+    if (seed) updateAttachments(seed);
+  }, [chatId, updateAttachments]);
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {
@@ -641,7 +647,8 @@ export function Composer({
 
   const forkEligibility = React.useMemo(() => {
     if (!sessionChat) return { turns: [], cloneBlocked: false };
-    return forkTurnEligibility(sessionChat.messages);
+    // A Bot has one canonical chat, so its forks may only keep a reply.
+    return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
   const visibleForkTurns = React.useMemo(() => {
@@ -913,14 +920,14 @@ export function Composer({
   );
 
   const forkFromTurn = React.useCallback(
-    async (messageId: string) => {
+    async (messageId: string, position: ChatForkPosition = "after") => {
       if (!onForkChat || sessionCommandBusy) return;
       sessionCommandBusyRef.current = true;
       setSessionCommandStatus("Forking chat…");
       try {
-        await onForkChat(messageId);
+        await onForkChat(messageId, position);
         setForkDialogOpen(false);
-        toast.success("Chat forked");
+        toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
       } finally {
@@ -2522,7 +2529,11 @@ export function Composer({
           if (!open) setForkQuery("");
         }}
         title="Fork from a completed turn"
-        description="The new chat copies visible messages and attachments through the selected response. Private reasoning, tool state, and subagent runtime records are omitted."
+        description={`Fork keeps visible messages and attachments through the selected response.${
+          sessionChat?.botId
+            ? ""
+            : " Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer."
+        } Private reasoning, tool state, and subagent runtime records are omitted.`}
         confirmHidden
         busy={sessionCommandBusy}
         returnFocus={() => inputRef?.current ?? null}
@@ -2549,10 +2560,10 @@ export function Composer({
         <ul className="flex flex-col gap-1" aria-label="Completed turns">
           {visibleForkTurns.length > 0 ? (
             visibleForkTurns.map((turn) => (
-              <li key={turn.id}>
+              <li key={turn.id} className="flex items-center gap-1">
                 <Button
                   variant="transparent"
-                  className="h-auto min-h-11 w-full justify-start px-3 py-2 text-left"
+                  className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-2 text-left"
                   disabled={sessionCommandBusy}
                   onClick={() => void forkFromTurn(turn.id)}
                 >
@@ -2565,6 +2576,18 @@ export function Composer({
                     </span>
                   </span>
                 </Button>
+                {turn.userMessageId ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
+                    onClick={() => void forkFromTurn(turn.userMessageId!, "before")}
+                  >
+                    Edit in fork
+                  </Button>
+                ) : null}
               </li>
             ))
           ) : (

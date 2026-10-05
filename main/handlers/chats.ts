@@ -342,10 +342,13 @@ export function registerChatHistoryHandlers(): void {
               throw new Error(appendReconciliationFailureMessage("blocked"));
             }
           };
+          if (parsed.forkAt?.position === "before") {
+            throw new Error("Bot chats can only be forked after a reply.");
+          }
           const copied = await botApplicationService.copyChat({
             botId: source.botId,
             sourceChatId: parsed.chatId,
-            throughAssistantMessageId: parsed.throughMessageId,
+            throughAssistantMessageId: parsed.forkAt?.messageId,
             assertCurrent,
           });
           ipcMain.broadcast("chats:metadata-updated", {
@@ -385,10 +388,7 @@ export function registerChatHistoryHandlers(): void {
           if (!(await configStore.getWorkspace(workspaceId))) {
             throw new Error("The chat workspace is no longer available.");
           }
-          const htmlMediaIds = selectedHtmlArtifactMediaIds(
-            source.messages,
-            parsed.throughMessageId,
-          );
+          const htmlMediaIds = selectedHtmlArtifactMediaIds(source.messages, parsed.forkAt);
           const targetChatId = randomUUID();
           let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
           const copied = await (async () => {
@@ -397,7 +397,7 @@ export function registerChatHistoryHandlers(): void {
                 sourceChatId: parsed.chatId,
                 targetChatId,
                 expectedWorkspaceId: workspaceId,
-                throughAssistantMessageId: parsed.throughMessageId,
+                forkAt: parsed.forkAt,
                 assertCurrent,
                 beforeInstall: async () => {
                   if (htmlMediaIds.length === 0) return;

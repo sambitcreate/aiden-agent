@@ -14,6 +14,7 @@ import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
@@ -432,6 +433,8 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
+  forkedFrom?: ChatForkLineageV1;
   createdAt: number;
   updatedAt: number;
 }
