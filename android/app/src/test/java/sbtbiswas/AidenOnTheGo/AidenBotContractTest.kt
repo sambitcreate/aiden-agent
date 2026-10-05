@@ -17,6 +17,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import java.io.File
@@ -121,7 +122,13 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(18, fixture.contractRevision)
+        assertEquals(20, fixture.contractRevision)
+        // Revision 19 run-control losers learn the winning decision; phones keep
+        // their mobile-only grants, so the fixture never offers host capabilities.
+        val runControlError = requireNotNull(fixture.runControlError).error
+        assertEquals(AidenRemoteErrorCode.APPROVAL_RESOLVED, runControlError.code)
+        assertEquals("deny", runControlError.details?.decision)
+        assertTrue(fixture.capabilities.none { it.rawValue in setOf("host:events", "runs:observe", "runs:control") })
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)

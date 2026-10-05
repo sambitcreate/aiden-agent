@@ -1,33 +1,46 @@
 // Fenced code block for the chat transcript: syntax highlighting via highlight.js,
 // a language label, and a per-block copy button. Source formatting is preserved
 // so a valid-looking JSON prefix never reformats and jumps while streaming.
+// Grammars load lazily per language; the block renders as plain text until its
+// grammar is ready, and unlabeled fences stay plain text (no auto-detection).
 // Highlighting is memoized so streaming re-renders stay cheap.
 
 import * as React from "react";
-import hljs from "highlight.js";
 import { CopyButton } from "./copy-button";
+import {
+  highlightCode,
+  highlightLanguagesVersion,
+  loadHighlightLanguage,
+  subscribeHighlightLanguages,
+} from "../lib/syntax-highlight";
 
 interface CodeBlockProps {
   /** Raw code text (without the enclosing fence). */
   code: string;
   /** Language hint parsed from the ```lang fence, if any. */
   lang?: string;
+  /** Skip highlighting, e.g. while a streamed fence is still growing. */
+  plain?: boolean;
 }
 
-export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlockProps) {
+export const CodeBlock = React.memo(function CodeBlock({ code, lang, plain = false }: CodeBlockProps) {
   const display = code.replace(/\n$/, "");
   const language = lang;
+  // Changes when any lazily loaded grammar lands, re-running the memo below.
+  const grammarsVersion = React.useSyncExternalStore(
+    subscribeHighlightLanguages,
+    highlightLanguagesVersion,
+    highlightLanguagesVersion,
+  );
 
-  const html = React.useMemo(() => {
-    try {
-      if (language && hljs.getLanguage(language)) {
-        return hljs.highlight(display, { language, ignoreIllegals: true }).value;
-      }
-      return hljs.highlightAuto(display).value;
-    } catch {
-      return null;
-    }
-  }, [display, language]);
+  React.useEffect(() => {
+    void loadHighlightLanguage(language);
+  }, [language]);
+
+  const html = React.useMemo(
+    () => (plain ? null : highlightCode(display, language)),
+    [display, language, plain, grammarsVersion],
+  );
 
   return (
     <div className="group/code my-2 overflow-hidden rounded-lg border border-separator bg-well">

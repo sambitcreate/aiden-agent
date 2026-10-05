@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
+import { build } from "esbuild";
+import { electronBuildOptions } from "./build-electron.mjs";
 import {
   assertByteForByteMatch,
   assertComputerUseBundleExecutable,
@@ -21,6 +23,7 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertSlimPackagedEntries,
   assertPackagedSubagentInferenceWorkerEntries,
   assertPackagedParakeetWorkerEntries,
   assertPackagedNodePtyHelperEntries,
@@ -31,6 +34,7 @@ import {
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
   verifyPackagedParakeetWorker,
   verifyPackagedVccWorker,
@@ -184,6 +188,93 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
   }
 });
 
+test("package verifier rejects source maps, declarations, esbuild, and lockfile dev-only packages", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-slim-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const lockfilePath = path.join(root, "package-lock.json");
+  const lockfile = {
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "fixture" },
+      "node_modules/yaml": { version: "2.0.0" },
+      "node_modules/react": { version: "19.0.0", dev: true },
+      // A dev-only top-level copy and a production nested copy of one name:
+      // electron-builder may hoist the production copy to the top.
+      "node_modules/semver": { version: "7.8.5", dev: true },
+      "node_modules/electron-updater/node_modules/semver": { version: "7.7.4" },
+    },
+  };
+  const manifest = (name, version) => `${JSON.stringify({ name, version })}\n`;
+  const write = async (relative, contents = "{}\n") => {
+    await mkdir(path.dirname(path.join(source, relative)), { recursive: true });
+    await writeFile(path.join(source, relative), contents, "utf8");
+  };
+  try {
+    await writeFile(lockfilePath, JSON.stringify(lockfile), "utf8");
+    await write("build/main/index.js", "export {};\n");
+    await write("node_modules/yaml/package.json", manifest("yaml", "2.0.0"));
+    await write("node_modules/yaml/dist/esm/package.json", '{"type":"module"}\n');
+    await write("node_modules/semver/package.json", manifest("semver", "7.7.4"));
+    const accepted = path.join(root, "accepted.asar");
+    await createPackage(source, accepted);
+    await assert.doesNotReject(verifyPackagedSlimness(accepted, lockfilePath));
+
+    const rejections = [
+      ["build/main/index.js.map", "{}\n", /source map \/build\/main\/index\.js\.map/u],
+      ["node_modules/yaml/dist/index.d.ts", "{}\n", /type declaration/u],
+      ["node_modules/esbuild/package.json", manifest("esbuild", "0.28.2"), /esbuild toolchain/u],
+      ["node_modules/@esbuild/darwin-arm64/bin/esbuild", "{}\n", /esbuild toolchain/u],
+      ["node_modules/react/package.json", manifest("react", "19.0.0"), /development-only package react@19\.0\.0/u],
+    ];
+    for (const [index, [relative, contents, expected]] of rejections.entries()) {
+      await write(relative, contents);
+      const rejected = path.join(root, `rejected-${index}.asar`);
+      await createPackage(source, rejected);
+      await assert.rejects(verifyPackagedSlimness(rejected, lockfilePath), expected, relative);
+      await rm(path.join(source, relative));
+    }
+
+    await write("node_modules/semver/package.json", manifest("semver", "7.8.5"));
+    const devSemver = path.join(root, "dev-semver.asar");
+    await createPackage(source, devSemver);
+    await assert.rejects(verifyPackagedSlimness(devSemver, lockfilePath), /semver@7\.8\.5/u);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+
+  const many = Array.from({ length: 8 }, (_, index) => `/build/renderer/chunk-${index}.js.map`);
+  assert.throws(() => assertSlimPackagedEntries(many), /and 3 more/u);
+});
+
+function lockdownBootstrap({ importRuntimeFirst = false, sync = true, freezePromises = true } = {}) {
+  const runtime = 'await import("./subagent-inference-worker-runtime.js");\n';
+  return [
+    'import childProcess from "node:child_process";',
+    'import { syncBuiltinESMExports } from "node:module";',
+    importRuntimeFirst ? runtime : "",
+    'const disabled = () => { throw new Error("Provider credential subprocesses are disabled."); };',
+    'for (const name of ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"]) {',
+    "  Object.defineProperty(childProcess, name, { value: disabled, configurable: false, writable: false });",
+    "}",
+    `const promises = { exec: disabled, execFile: disabled, fork: disabled, spawn: disabled };`,
+    `Object.defineProperty(childProcess, "promises", { value: ${freezePromises ? "Object.freeze(promises)" : "promises"}, configurable: false, writable: false });`,
+    sync ? "syncBuiltinESMExports();" : "",
+    importRuntimeFirst ? "" : runtime,
+  ].join("\n");
+}
+
+async function buildSubagentBootstrap(production) {
+  const options = electronBuildOptions({ production }).find(
+    (candidate) => candidate.outfile === "build/main/subagent-inference-worker.js",
+  );
+  assert.ok(options, "subagent inference bootstrap bundle options exist");
+  // write: false keeps the real option set (output name, maps) but returns the
+  // bundle in memory instead of touching build/.
+  const result = await build({ ...options, write: false, logLevel: "silent" });
+  return result.outputFiles.find((file) => file.path.endsWith("subagent-inference-worker.js")).text;
+}
+
 test("package verifier requires a bounded packed subagent inference worker", async () => {
   assert.doesNotThrow(() =>
     assertPackagedSubagentInferenceWorkerEntries([
@@ -199,35 +290,53 @@ test("package verifier requires a bounded packed subagent inference worker", asy
   const root = await realpath(temporaryRoot);
   const source = path.join(root, "source");
   const workerDirectory = path.join(source, "build", "main");
+  let fixture = 0;
+  const packBootstrap = async (bootstrap, options) => {
+    await writeFile(path.join(workerDirectory, "subagent-inference-worker.js"), bootstrap);
+    const asar = path.join(root, `fixture-${(fixture += 1)}.asar`);
+    await (options ? createPackageWithOptions(source, asar, options) : createPackage(source, asar));
+    return asar;
+  };
   try {
     await mkdir(workerDirectory, { recursive: true });
-    await writeFile(
-      path.join(workerDirectory, "subagent-inference-worker.js"),
-      'import { syncBuiltinESMExports } from "node:module";\nthrow new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
-    );
     await writeFile(
       path.join(workerDirectory, "subagent-inference-worker-runtime.js"),
       "export {};\n",
     );
-    const packedAsar = path.join(root, "packed.asar");
-    await createPackage(source, packedAsar);
-    await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
-    await writeFile(
-      path.join(workerDirectory, "subagent-inference-worker.js"),
-      'const names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nawait import("./subagent-inference-worker-runtime.js");\nsyncBuiltinESMExports();\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nthrow new Error("Provider credential subprocesses are disabled");\n',
-    );
-    const wrongOrderAsar = path.join(root, "wrong-order.asar");
-    await createPackage(source, wrongOrderAsar);
-    await assert.rejects(
-      verifyPackagedSubagentInferenceWorker(wrongOrderAsar),
-      /disable subprocesses before loading providers/u,
-    );
-    await writeFile(
-      path.join(workerDirectory, "subagent-inference-worker.js"),
-      'throw new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
-    );
-    const unpackedAsar = path.join(root, "unpacked.asar");
-    await createPackageWithOptions(source, unpackedAsar, {
+
+    // The real bootstrap passes whether the build keeps it readable or minifies it.
+    for (const production of [false, true]) {
+      await assert.doesNotReject(
+        verifyPackagedSubagentInferenceWorker(
+          await packBootstrap(await buildSubagentBootstrap(production)),
+        ),
+        `${production ? "production" : "development"} bootstrap`,
+      );
+    }
+
+    const rejections = [
+      [
+        lockdownBootstrap({ importRuntimeFirst: true }),
+        /Reachable from the provider runtime: exec, execFile/u,
+      ],
+      [lockdownBootstrap({ sync: false }), /import \{ spawn \}/u],
+      [lockdownBootstrap({ freezePromises: false }), /promises\.exec/u],
+      [lockdownBootstrap().replace(/await import\(.*\n/u, ""), /never loaded the runtime/u],
+      [
+        `${lockdownBootstrap()}\nimport "@earendil-works/pi-ai/providers/all";\n`,
+        /bundled provider modules/u,
+      ],
+    ];
+    for (const [bootstrap, reason] of rejections) {
+      const asar = await packBootstrap(bootstrap);
+      await assert.rejects(verifyPackagedSubagentInferenceWorker(asar), (error) => {
+        assert.match(error.message, /disable subprocesses before loading providers/u);
+        assert.match(error.message, reason);
+        return true;
+      });
+    }
+
+    const unpackedAsar = await packBootstrap(lockdownBootstrap(), {
       unpack: "**/subagent-inference-worker-runtime.js",
     });
     await assert.rejects(

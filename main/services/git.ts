@@ -3,6 +3,13 @@
 // bounded output/time, and serialize mutations by Git's canonical common dir.
 
 import { pullRequestRepositoryFromPushEndpoint } from "../../renderer/shared/chat-pull-requests.js";
+import {
+  canonicalRepositoryKey,
+  primaryRemoteUrl,
+  repositoryRelativePath,
+  type RepositoryIdentity,
+} from "./repository-identity.js";
+import { redactUrlCredentials } from "../shared/redaction.js";
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, type BigIntStats, type Stats } from "fs";
@@ -11,7 +18,7 @@ import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
-import { resolveGitExecutable } from "./git-executable.js";
+import { resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -79,6 +86,8 @@ export class GitManagedWorktreeDeleteError extends GitServiceError {
     this.name = "GitManagedWorktreeDeleteError";
   }
 }
+
+const MAX_REPOSITORY_IDENTITIES = 1_000;
 
 interface GitRepository {
   cwd: string;
@@ -531,17 +540,11 @@ function replaceAllLiteral(value: string, search: string, replacement: string): 
   return search ? value.split(search).join(replacement) : value;
 }
 
-function redactGitText(value: string): string {
-  return value
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
-    .replace(/([?&](?:access_token|auth|key|password|signature|token)=)[^&\s]+/gi, "$1***");
-}
-
 function publicGitMessage(value: unknown, cwd: string): string {
   const raw = replaceAllLiteral(String(value || "Git command failed."), "\u0000", "").trim();
   const withoutWorkspace = replaceAllLiteral(raw, cwd, "the workspace");
   const withoutHome = replaceAllLiteral(withoutWorkspace, os.homedir(), "~");
-  return (redactGitText(withoutHome) || "Git command failed.").slice(0, 1_200);
+  return (redactUrlCredentials(withoutHome) || "Git command failed.").slice(0, 1_200);
 }
 
 function gitEnvironment(mutation: boolean): NodeJS.ProcessEnv {
@@ -997,6 +1000,11 @@ export class GitService {
     }
   >();
   private readonly infoCache = new Map<string, CacheEntry<GitInfo>>();
+  /**
+   * Credential-free remote identity learned by ordinary status reads, keyed by
+   * repository working directory. Raw remote URLs are never retained.
+   */
+  private readonly repositoryIdentities = new Map<string, { topLevel: string; canonicalKey: string }>();
   private readonly branchCache = new Map<string, CacheEntry<GitBranches>>();
   private readonly mutations = new Map<string, Promise<void>>();
   private readonly mutationEpochs = new Map<string, number>();
@@ -1029,7 +1037,7 @@ export class GitService {
     const env = gitEnvironment(options.mutation === true);
     let binary: string;
     try {
-      binary = await resolveGitExecutable(this.gitBinary, cwd, env, options.signal);
+      binary = await resolveGitExecutableMemoized(this.gitBinary, cwd, env, options.signal);
     } catch (error) {
       if (options.signal?.aborted) {
         throw new GitServiceError("aborted", "Git operation was cancelled.");
@@ -1530,10 +1538,11 @@ export class GitService {
         ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"],
         { signal },
       ),
-      this.run(repo.cwd, ["remote"], { signal }),
+      this.run(repo.cwd, ["remote", "-v"], { signal }),
       this.readRemoteRefs(repo, signal),
     ]);
     const parsed = parseGitStatus(raw.stdout);
+    this.rememberRepositoryIdentity(repo, remotesResult.stdout);
     return {
       isRepo: true,
       branch: parsed.branch,
@@ -1563,6 +1572,31 @@ export class GitService {
     return repo.readIdentity
       ? this.sharedRead(JSON.stringify(["repository-info", repo.cwd, repo.readIdentity.signature]), signal, read)
       : read(signal);
+  }
+
+  private rememberRepositoryIdentity(repo: GitRepository, remoteVerbose: string): void {
+    const remote = primaryRemoteUrl(remoteVerbose);
+    const canonicalKey = remote === undefined ? undefined : canonicalRepositoryKey(remote);
+    this.repositoryIdentities.delete(repo.cwd);
+    if (!canonicalKey) return;
+    this.repositoryIdentities.set(repo.cwd, { topLevel: repo.topLevel, canonicalKey });
+    if (this.repositoryIdentities.size > MAX_REPOSITORY_IDENTITIES) {
+      const oldest = this.repositoryIdentities.keys().next().value;
+      if (oldest !== undefined) this.repositoryIdentities.delete(oldest);
+    }
+  }
+
+  /**
+   * Repository identity for a folder whose status was read earlier. Never runs
+   * Git and never walks the filesystem: an unread folder has no identity yet.
+   */
+  cachedRepositoryIdentity(folderPath: string): RepositoryIdentity | undefined {
+    const entry = this.repositoryIdentities.get(folderPath);
+    if (!entry) return undefined;
+    const relativePath = repositoryRelativePath(entry.topLevel, folderPath);
+    return relativePath === undefined
+      ? undefined
+      : { canonicalKey: entry.canonicalKey, relativePath };
   }
 
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
@@ -6477,6 +6511,8 @@ export class GitService {
 
 const gitService = new GitService();
 
+export const gitCachedRepositoryIdentity = (folderPath: string) =>
+  gitService.cachedRepositoryIdentity(folderPath);
 export const gitInfo = (folderPath: string, signal?: AbortSignal) =>
   gitService.info(folderPath, signal);
 export const gitBranches = (folderPath: string, signal?: AbortSignal) =>
@@ -6558,8 +6594,6 @@ export const gitManagedWorktreeDeletionPending = (
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
 export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyState(folderPath, worktreePath);
-export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
-  gitService.managedWorktreeBranchHead(folderPath, branch);
 export const gitCaptureManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,

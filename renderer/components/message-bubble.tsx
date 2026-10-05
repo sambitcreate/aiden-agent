@@ -8,6 +8,7 @@ import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import { MessageActions } from "./message-actions";
+import { ForkMessageButton, type MessageForkAction } from "./fork-message-button";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
@@ -37,6 +38,8 @@ export interface MessageBubbleProps {
   richLinks?: boolean;
   /** Settled turn facts rendered at the trailing edge of the action row. */
   footer?: React.ReactNode;
+  /** Fork from a settled reply, or edit a sent prompt in a fork. */
+  fork?: MessageForkAction;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -64,6 +67,7 @@ export function MessageBubble({
   readAloud,
   richLinks = true,
   footer,
+  fork,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
@@ -84,16 +88,27 @@ export function MessageBubble({
             <MessageAttachments attachments={attachments} role="user" />
           ) : null}
           {content ? (
-            <div className="rounded-2xl bg-control px-4 py-2.5">
+            <div className="select-text rounded-2xl bg-control px-4 py-2.5">
               <UserMessageContent content={content} />
             </div>
           ) : null}
-          {content ? (
-            <CopyButton
-              text={content}
-              label="Copy message"
-              className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-            />
+          {content || fork ? (
+            <div className="flex items-center gap-0.5">
+              {fork ? (
+                <ForkMessageButton
+                  action={fork}
+                  kind="edit"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                />
+              ) : null}
+              {content ? (
+                <CopyButton
+                  text={content}
+                  label="Copy message"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                />
+              ) : null}
+            </div>
           ) : null}
           </div>
         </div>
@@ -127,6 +142,7 @@ export function MessageBubble({
             readAloud={readAloud}
             hidden={Boolean(streaming && !streamComplete)}
             footer={footer}
+            fork={streaming ? undefined : fork}
           />
         ) : null}
         </div>
@@ -182,7 +198,7 @@ function UnrenderableMessage({ content }: { content: string }) {
       <Text variant="small-strong" color="red">
         This message could not be formatted
       </Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
+      <Text variant="small" color="secondary" className="mt-0.5 block select-text whitespace-pre-wrap">
         {content}
       </Text>
     </Callout>

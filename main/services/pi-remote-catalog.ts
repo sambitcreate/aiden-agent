@@ -1,5 +1,6 @@
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
 import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
 const MAX_CATALOG_BYTES = 5 * 1024 * 1024;
@@ -230,35 +231,13 @@ export function catalogVersionSupported(minimum: string | null): boolean {
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_CATALOG_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error("Model catalog response is too large.");
-  }
-  if (!response.body) throw new Error("Model catalog response is empty.");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_CATALOG_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("Model catalog response is too large.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const bytes = await readBoundedBody(response, {
+    maxBytes: MAX_CATALOG_BYTES,
+    errors: {
+      tooLarge: () => new Error("Model catalog response is too large."),
+      missingBody: () => new Error("Model catalog response is empty."),
+    },
+  });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {

@@ -594,6 +594,10 @@ export function OnboardingFlow() {
   const openAiLoginProvider = providers.data?.find((provider) => provider.id === "openai" && provider.isBuiltin);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
   const chatGptSelection = onboardingChatGptSelection(openAiLoginProvider, codexStatus.data);
+  const nextBlockedReason =
+    stateReady && step === "provider" && choice === "openai-signin" && !chatGptSelection
+      ? "Sign in with ChatGPT to continue, or choose another connection."
+      : undefined;
   const canContinue = !stateReady
     ? false
     : step === "profile"
@@ -652,7 +656,6 @@ export function OnboardingFlow() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Couldn't validate that API key.";
       setProviderError(message);
-      toast.error(message);
     } finally {
       setDiscovering(false);
       savingRef.current = false;
@@ -765,7 +768,6 @@ export function OnboardingFlow() {
           } catch (error) {
             const message = `Couldn't reach ${selected.title}: ${error instanceof Error ? error.message : String(error)}`;
             setProviderError(message);
-            toast.error(message);
             return;
           } finally {
             setDiscovering(false);
@@ -775,7 +777,6 @@ export function OnboardingFlow() {
             const message =
               "Endpoint reached, but no chat models were found. Load one in the server, then try again.";
             setProviderError(message);
-            toast.info(message);
             return;
           }
           providerToSave = {
@@ -801,7 +802,6 @@ export function OnboardingFlow() {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Couldn't add that provider.";
         setProviderError(message);
-        toast.error(message);
       } finally {
         setDiscovering(false);
         savingRef.current = false;
@@ -891,7 +891,7 @@ export function OnboardingFlow() {
             </div>
             {step === "provider" ? (
               <Button
-                className="no-drag h-7 px-2"
+                className="no-drag relative z-10 h-7 px-2"
                 size="small"
                 variant="transparent"
                 disabled={!stateReady || saving}
@@ -899,11 +899,7 @@ export function OnboardingFlow() {
               >
                 Skip provider
               </Button>
-            ) : (
-              <Text variant="small" color="tertiary">
-                Profile and provider setup required
-              </Text>
-            )}
+            ) : null}
           </header>
 
           <main
@@ -1108,7 +1104,6 @@ export function OnboardingFlow() {
                   <div
                     id="onboarding-more-providers"
                     data-onboarding-more-providers
-                    aria-live="polite"
                     className="mt-2 rounded-card bg-well p-2"
                   >
                     <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
@@ -1290,7 +1285,7 @@ export function OnboardingFlow() {
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and tablet access starts off. After setup, choose Connect a device in
-                      Settings → Aiden On The Go; Aiden must stay running, and Tailscale is
+                      Settings → Connections; Aiden must stay running, and Tailscale is
                       optional.
                     </Text>
                   </div>
@@ -1390,23 +1385,36 @@ export function OnboardingFlow() {
             >
               <ChevronLeft /> Back
             </Button>
-            <Button
-              variant="accent"
-              pressFeedback
-              disabled={!stateReady || !canContinue || saving}
-              onClick={() => void next()}
-            >
-              {discovering
-                ? choice === "openai-key" || choice === "anthropic"
-                  ? "Validating key…"
-                  : "Discovering models…"
-                : saving && step === "provider"
-                  ? "Adding provider…"
-                  : step === "tour"
-                    ? "Start using Aiden"
-                    : "Next"}{" "}
-              <ChevronRight />
-            </Button>
+            <div className="flex min-w-0 items-center gap-3">
+              {nextBlockedReason ? (
+                <Text
+                  id="onboarding-next-blocked-reason"
+                  variant="small"
+                  color="secondary"
+                  className="min-w-0 text-right max-[520px]:hidden"
+                >
+                  {nextBlockedReason}
+                </Text>
+              ) : null}
+              <Button
+                variant="accent"
+                pressFeedback
+                disabled={!stateReady || !canContinue || saving}
+                aria-describedby={nextBlockedReason ? "onboarding-next-blocked-reason" : undefined}
+                onClick={() => void next()}
+              >
+                {discovering
+                  ? choice === "openai-key" || choice === "anthropic"
+                    ? "Validating key…"
+                    : "Discovering models…"
+                  : saving && step === "provider"
+                    ? "Adding provider…"
+                    : step === "tour"
+                      ? "Start using Aiden"
+                      : "Next"}{" "}
+                <ChevronRight />
+              </Button>
+            </div>
           </footer>
         </div>
       </section>

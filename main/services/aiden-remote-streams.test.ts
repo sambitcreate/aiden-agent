@@ -548,6 +548,62 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
   assert.match(app.approvals[0] ?? "", /:allow:/u);
 });
 
+test("approval detail fields outside the declared shape never reach the host, a device or the journal", async () => {
+  const app = persistenceFixture(0);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const secret = "classifier-secret-7f3a";
+  const schedule = {
+    kind: "scheduled-task",
+    action: "create",
+    taskId: null,
+    expectedUpdatedAt: null,
+    enabled: true,
+    name: "Inbox monitor",
+    prompt: "Summarize inbox changes.",
+    script: null,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    nextRunAt: 2_000_000_000_000,
+    notify: true,
+    mode: "llm",
+    permission: "full",
+    workspaceId: null,
+    workspaceName: null,
+    mcpServerIds: ["gmail"],
+    mcpServerNames: ["Gmail"],
+    providerId: "local-provider",
+    providerName: "Local Provider",
+    model: "local-model",
+    modelName: "Local Model",
+    legacyGlobalMcp: false,
+    schedulerEnabled: true,
+  };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-known",
+    summary: "Create scheduled task",
+    details: { ...schedule, state: { classifier: secret } },
+  });
+  assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, schedule);
+  assert.equal(app.service.respondApprovalFromHost("chat-1", "approval-known", "deny"), true);
+
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-unknown",
+    summary: "Classify this action",
+    details: { kind: "permission-classifier", state: { classifier: secret } },
+  });
+  assert.equal(app.service.pendingApprovalForChat("chat-1")?.details, undefined);
+  await app.service.settlePersistence();
+
+  const views = [
+    JSON.stringify(app.service.pendingApprovalForChat("chat-1")),
+    JSON.stringify(app.service.pendingApproval("device-1", "stream-1")),
+    JSON.stringify(app.service.snapshot()),
+    ...app.writes.map((write) => JSON.stringify(write)),
+  ];
+  assert.ok(app.writes.length > 0);
+  for (const view of views) assert.equal(view.includes(secret), false);
+});
+
 test("multiple approvals remain queued and cancellation synchronously clears them", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
@@ -921,6 +977,51 @@ test("a blocked subscriber does not buffer live events or stall healthy subscrib
   assert.deepEqual(slow.output, fast.output);
   assert.equal(slow.response.ended, true);
   assert.deepEqual(app.cancelled, []);
+});
+
+test("a reconnecting client replays folded deltas in order with contiguous ids", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const live = blockedResponse();
+  live.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, live.http);
+  owner.owner.send("chat:delta", { delta: "Hel" });
+  owner.owner.send("chat:delta", { delta: "lo" });
+  live.response.emit("close");
+  // Offline: nothing is delivered, so consecutive deltas share one event.
+  for (const delta of [" wor", "ld"]) owner.owner.send("chat:delta", { delta });
+  owner.owner.send("chat:tool", { phase: "call", toolName: "read_file" });
+  owner.owner.send("chat:tool", { phase: "result", toolName: "read_file" });
+  for (const delta of ["!", "!"]) owner.owner.send("chat:delta", { delta });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+
+  const frames = (output: string[]) =>
+    output.filter((frame) => frame.startsWith("id: ")).map((frame) => {
+      const event = JSON.parse(/^data: (.*)$/mu.exec(frame)![1]!);
+      return { id: event.sequence as number, type: event.type as string, text: event.payload.text as string | undefined };
+    });
+  // A live client was sent each delta as it arrived.
+  assert.deepEqual(frames(live.output).map(({ type, text }) => [type, text]), [
+    ["status", undefined],
+    ["text_delta", "Hel"],
+    ["text_delta", "lo"],
+  ]);
+
+  const replay = blockedResponse();
+  replay.response.blocked = false;
+  const liveFrames = frames(live.output);
+  const resumeAfter = liveFrames[liveFrames.length - 1]!.id;
+  app.service.openEvents("device-1", "stream-1", resumeAfter, replay.http);
+  const replayed = frames(replay.output);
+  assert.deepEqual(replayed.map(({ type, text }) => [type, text]), [
+    ["text_delta", " world"],
+    ["tool_started", undefined],
+    ["tool_finished", undefined],
+    ["text_delta", "!!"],
+    ["done", undefined],
+  ]);
+  replayed.forEach(({ id }, index) => assert.equal(id, resumeAfter + 1 + index));
+  assert.equal(replay.response.ended, true);
 });
 
 test("stalled SSE output skips heartbeats and times out without cancelling generation", (t) => {
@@ -1841,10 +1942,12 @@ test("snapshot accounting follows Unicode payloads, state changes, pruning, rest
   const retained = app.service.snapshot().streams[0]!;
   assert.equal(retained.events.filter((event) => event.type === "text_delta")
     .map((event) => event.payload.text).join(""), deltas.join(""));
+  const firstText = retained.events[1]!.payload.text;
+  assert.ok(String(firstText).startsWith(deltas[0]!));
   // A consumer may mutate an exported snapshot without changing the journal.
   retained.events[1]!.payload.text = "external mutation";
   assertExactSnapshotBytes(app.service);
-  assert.equal(app.service.snapshot().streams[0]!.events[1]!.payload.text, deltas[0]);
+  assert.equal(app.service.snapshot().streams[0]!.events[1]!.payload.text, firstText);
   owner.owner.send("chat:approval", { approvalId: "approval-1", summary: "雪😀\nRun?" });
   assert.equal(app.service.status(device, "stream-1").state, "waiting_for_approval");
   assertExactSnapshotBytes(app.service);
@@ -1856,7 +1959,7 @@ test("snapshot accounting follows Unicode payloads, state changes, pruning, rest
   });
   saved.streams[0]!.events[1]!.payload.text = "mutated restore source";
   assertExactSnapshotBytes(restored);
-  assert.equal(restored.snapshot().streams[0]!.events[1]!.payload.text, deltas[0]);
+  assert.equal(restored.snapshot().streams[0]!.events[1]!.payload.text, firstText);
   await restored.revokeDevice(device);
   assertExactSnapshotBytes(restored);
   assert.equal(restored.snapshot().streams.length, 0);
@@ -1888,7 +1991,10 @@ test("snapshot accounting covers escaped identities and bounded turn index evict
 test("event count and byte trimming keep exact accounting and contiguous newest replay", () => {
   const app = fixture();
   const owner = app.service.create("device", "stream", "chat", "turn");
+  let now = 1_000;
+  // Each delta lands after the folding window so every one is its own event.
   for (let index = 0; index < 4_100; index++) {
+    app.setNow((now += 250));
     owner.owner.send("chat:delta", { delta: `chunk-${index}` });
   }
   assertExactSnapshotBytes(app.service);
@@ -1897,6 +2003,7 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
   assert.equal(events[0]!.sequence, 6);
   assert.equal(events[events.length - 1]!.payload.text, "chunk-4099");
   for (let index = 0; index < 50; index++) {
+    app.setNow((now += 250));
     owner.owner.send("chat:delta", { delta: "雪".repeat(100_000) });
   }
   owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
@@ -1925,4 +2032,121 @@ test("classifier approvals remain deny-only remotely even when details are missi
     assert.equal(app.approvals.length, 1);
     assert.match(app.approvals[0]!, /:deny:/u);
   }
+});
+
+function persistenceFixture(persistCoalesceMs: number) {
+  const writes: ReturnType<AidenRemoteStreamService["snapshot"]>[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistCoalesceMs,
+    persist: async (snapshot) => {
+      writes.push(structuredClone(snapshot));
+    },
+  });
+  const lastWrittenEvents = () => writes[writes.length - 1]?.streams[0]?.events ?? [];
+  return { service, writes, lastWrittenEvents };
+}
+
+// Lets an already-started persistence write settle without firing timers.
+const afterPendingWrites = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("streaming deltas are coalesced into a bounded number of journal writes", async () => {
+  const app = persistenceFixture(60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  // Provider deltas arrive on separate turns of the event loop, so the
+  // single-flight writer alone would journal (nearly) every one of them.
+  for (let index = 0; index < 500; index++) {
+    owner.owner.send("chat:delta", { delta: "x" });
+    await afterPendingWrites();
+  }
+  await app.service.settlePersistence();
+
+  assert.ok(app.writes.length <= 3, `expected at most 3 journal writes, saw ${app.writes.length}`);
+  const deltas = app.lastWrittenEvents().filter((event) => event.type === "text_delta");
+  // Nobody was attached, so the whole window's text folded into one event.
+  assert.deepEqual(deltas.map((event) => event.payload.text), ["x".repeat(500)]);
+  assert.equal(app.lastWrittenEvents()[app.lastWrittenEvents().length - 1]?.type, "text_delta");
+});
+
+test("a terminal event is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  for (let index = 0; index < 20; index++) {
+    owner.owner.send("chat:delta", { delta: "x" });
+  }
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  // An hour-long window cannot elapse here, so only an immediate write can
+  // have produced the terminal journal entry.
+  await afterPendingWrites();
+
+  const events = app.lastWrittenEvents();
+  assert.equal(events[events.length - 1]?.type, "done");
+  assert.equal(events[events.length - 1]?.terminal, true);
+  assert.deepEqual(
+    events.filter((event) => event.type === "text_delta").map((event) => event.payload.text),
+    ["x".repeat(20)],
+  );
+  const writesBeforeSettle = app.writes.length;
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, writesBeforeSettle, "the boundary write already covered the pending deltas");
+});
+
+test("an approval prompt is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  owner.owner.send("chat:delta", { delta: "Checking" });
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-1",
+    summary: "Run a command",
+    toolCallId: "tool-call-1",
+    toolName: "run_command",
+  });
+  await afterPendingWrites();
+
+  const events = app.lastWrittenEvents();
+  assert.equal(events[events.length - 1]?.type, "approval_required");
+  assert.equal(events[events.length - 2]?.type, "text_delta");
+  assert.equal(app.writes[app.writes.length - 1]?.streams[0]?.state, "waiting_for_approval");
+});
+
+test("tool progress is journaled without waiting for the coalescing window", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  owner.owner.send("chat:delta", { delta: "Reading" });
+  owner.owner.send("chat:tool", { phase: "call", toolName: "read_file" });
+  await afterPendingWrites();
+  assert.deepEqual(app.lastWrittenEvents().slice(-2).map((event) => event.type), ["text_delta", "tool_started"]);
+
+  owner.owner.send("chat:tool", { phase: "result", toolName: "read_file" });
+  await afterPendingWrites();
+  const written = app.lastWrittenEvents();
+  assert.equal(written[written.length - 1]?.type, "tool_finished");
+});
+
+test("settling persistence flushes a pending coalesced write exactly once", async () => {
+  const app = persistenceFixture(60 * 60 * 1_000);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  app.service.markRunning("device-1", "stream-1");
+  await app.service.settlePersistence();
+  const settledWrites = app.writes.length;
+
+  owner.owner.send("chat:delta", { delta: "first" });
+  owner.owner.send("chat:delta", { delta: "second" });
+  await afterPendingWrites();
+  assert.equal(app.writes.length, settledWrites, "deltas wait for the coalescing window");
+
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, settledWrites + 1);
+  assert.deepEqual(
+    app.lastWrittenEvents().filter((event) => event.type === "text_delta").map((event) => event.payload.text),
+    ["firstsecond"],
+  );
+  await app.service.settlePersistence();
+  assert.equal(app.writes.length, settledWrites + 1, "a settled journal is not rewritten");
 });

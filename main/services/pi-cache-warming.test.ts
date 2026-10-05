@@ -345,6 +345,7 @@ async function cancellationHost() {
     "./chat-deletion-gate.js": { ChatDeletionGate: UnusedService },
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },
+    "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
     "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },

@@ -44,6 +44,7 @@ import {
   useBotTelegramTargets,
 } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { RemoteBots } from "./remote-bots";
 import {
   DEFAULT_BOT_AVATAR,
   resolveBotAvatar,
@@ -1433,6 +1434,7 @@ export function BotsView() {
               ) : (
                 <Roster bots={bots.data ?? []} onCreate={openCreate} />
               )}
+              <RemoteBots />
             </div>
           </>
         )}

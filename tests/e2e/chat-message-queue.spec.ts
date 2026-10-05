@@ -277,6 +277,38 @@ test("queued messages edit, reorder and delete without changing the composer dra
   ).toHaveLength(0);
 });
 
+test("Stop pauses queued messages instead of erasing them, and Resume sends them", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Response that will be stopped");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Keep me after Stop");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("listitem")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect(queue.getByRole("listitem")).toContainText("Keep me after Stop");
+  await expect(queue.getByRole("status")).toContainText("Paused");
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Keep me after Stop"),
+  ).toHaveLength(0);
+
+  lmStudio.releaseCompletions!();
+  await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === "Keep me after Stop",
+  ).length).toBe(1);
+  await expect(queue).toBeHidden();
+});
+
 test("choosing Redirect does not submit, confirmation is required, and Stop keeps a new draft", async ({ aiden }) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
@@ -345,11 +377,15 @@ test("Steer on a queued message adds it to the running response once", async ({ 
   await composer.fill("Response that takes queued guidance");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
-  await composer.fill("Stay queued for later");
-  await composer.press("Enter");
-  await composer.fill("Prefer bullet points");
-  await composer.press("Enter");
+  const queueButton = page.getByRole("button", { name: "Queue message", exact: true });
   const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await composer.fill("Stay queued for later");
+  await expect(queueButton).toBeEnabled();
+  await composer.press("Enter");
+  await expect(queue.getByRole("listitem")).toHaveCount(1);
+  await composer.fill("Prefer bullet points");
+  await expect(queueButton).toBeEnabled();
+  await composer.press("Enter");
   await expect(queue.getByRole("listitem")).toHaveCount(2);
   await expectSquircleButtons(page);
   const steer = queue.getByRole("button", { name: "Steer with queued message 2", exact: true });
@@ -534,7 +570,10 @@ test("revisiting a running chat can queue and stop its exact response", async ({
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
-  await expect(queue).toBeHidden();
+  await expect(queue.getByRole("status")).toContainText("Paused");
+  await expect(queue.getByRole("listitem")).toContainText("Queue after revisiting");
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"))
+    .toHaveLength(0);
 });
 
 test("Stop after revisiting cancels the detached response and permits a new message", async ({ aiden }) => {
@@ -580,7 +619,7 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   ).length).toBe(1);
 });
 
-test("Stop clears queued image and text follow-ups without sending them", async ({
+test("Stop pauses queued image and text follow-ups without sending them", async ({
   aiden,
 }) => {
   const { page, lmStudio } = aiden;
@@ -638,7 +677,8 @@ test("Stop clears queued image and text follow-ups without sending them", async 
   await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
-  await expect(queue).toBeHidden();
+  await expect(queue.getByRole("status")).toContainText("2 queued · Paused");
+  await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
   expect(
     lmStudio.requests.filter((request) => lastUserText(request)?.startsWith("Queued ")),
   ).toHaveLength(0);
@@ -767,4 +807,84 @@ test("messages sent during compaction queue behind it and survive a failed compa
     .poll(sentTexts)
     .toEqual(["During compaction retry", "During compaction first", "During compaction second"]);
   await expect(queue).toBeHidden();
+});
+
+test("dragging files over the composer shows a drop target that clears when the drag leaves", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const shell = page.locator(".composer-shell");
+  const composer = page.locator("textarea");
+  const dropHint = shell.getByText("Drop to attach", { exact: true });
+  const files = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+    return transfer;
+  });
+  const text = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", "just text");
+    return transfer;
+  });
+
+  await composer.dispatchEvent("dragover", { dataTransfer: text });
+  await expect(dropHint).toHaveCount(0);
+  await composer.dispatchEvent("dragover", { dataTransfer: files });
+  await expect(dropHint).toBeVisible();
+  await shell.dispatchEvent("dragleave", { dataTransfer: files });
+  await expect(dropHint).toHaveCount(0);
+});
+
+test("Escape in an empty composer stops the response, but not while a draft or menu owns it", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  const stop = page.getByRole("button", { name: "Stop generating" });
+  await composer.fill("Response to stop from the keyboard");
+  await composer.press("Enter");
+  await expect(stop).toBeEnabled();
+  await expect(stop).toHaveAttribute("aria-keyshortcuts", "Escape");
+
+  // A draft keeps Escape harmless.
+  await composer.fill("Half-written follow-up");
+  await composer.press("Escape");
+  await expect(composer).toHaveValue("Half-written follow-up");
+  await expect(stop).toBeEnabled();
+
+  // An open menu consumes Escape to close itself.
+  await composer.fill("");
+  await page.getByRole("button", { name: "Choose message action" }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(stop).toBeEnabled();
+
+  await composer.focus();
+  await composer.press("Escape");
+  await expect(stop).toBeHidden();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+});
+
+test("a blocked send explains itself beside the composer and clears when the draft changes", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  const reason = "Message text exceeds the 1 MB limit.";
+  await composer.fill("x".repeat(1024 * 1024 + 1));
+  await composer.press("Enter");
+
+  await expect(composer).toHaveAccessibleDescription(new RegExp(reason.replace(/\./gu, "\\.")));
+  await expect(page.getByRole("status").filter({ hasText: reason })).toBeVisible();
+  await expect(page.getByRole("region", { name: /Notifications/u }).getByText(reason)).toHaveCount(0);
+  expect(lmStudio.requests.filter((request) => (lastUserText(request)?.length ?? 0) > 1024 * 1024))
+    .toHaveLength(0);
+
+  await composer.fill("A message that fits");
+  await expect(page.getByText(reason)).toHaveCount(0);
 });

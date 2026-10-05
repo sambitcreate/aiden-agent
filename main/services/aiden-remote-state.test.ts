@@ -881,3 +881,33 @@ test("a persisted phone record can never hold simulator control", async () => {
   assert.ok(authenticated);
   assert.equal(authenticated.capabilities.has("simulators:control"), false);
 });
+
+test("host-wide run grants are negotiable only by paired desktops and never stored for phones", async () => {
+  const state = fixture();
+  const desktop = await state.registry.issueDevice({ name: "Studio", type: "linux", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const writesAfterPairing = state.writes.length;
+
+  for (const accepts of [["host:events"], ["runs:observe", "runs:control"], ["tasks:read", "runs:control"]] as const) {
+    assert.equal(await state.registry.upgradeDeviceCapabilities(phone.device.id, [...accepts]), null);
+  }
+  assert.equal(state.writes.length, writesAfterPairing);
+
+  const upgraded = await state.registry.upgradeDeviceCapabilities(desktop.device.id, ["host:events", "runs:observe"]);
+  assert.equal(upgraded?.capabilities.includes("host:events"), true);
+  assert.equal(upgraded?.capabilities.includes("runs:control"), false);
+  const authenticated = await state.registry.authenticate(desktop.credential);
+  assert.equal(authenticated?.capabilities.has("runs:observe"), true);
+
+  const stored = state.stored();
+  const storedPhone = stored.devices.find((device) => device.id === phone.device.id)!;
+  storedPhone.capabilities = [...(storedPhone.capabilities as string[]), "host:events", "runs:control"] as never;
+  const restored = fixture(stored);
+  await restored.registry.initialize();
+  const restoredPhone = await restored.registry.authenticate(phone.credential);
+  assert.ok(restoredPhone);
+  assert.equal(restoredPhone.capabilities.has("host:events"), false);
+  assert.equal(restoredPhone.capabilities.has("runs:control"), false);
+  const restoredDesktop = await restored.registry.authenticate(desktop.credential);
+  assert.equal(restoredDesktop?.capabilities.has("host:events"), true);
+});

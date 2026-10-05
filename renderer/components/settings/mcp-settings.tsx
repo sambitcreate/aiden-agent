@@ -186,7 +186,7 @@ export function McpSettings() {
                       <Text variant="strong" truncate>
                         {s.name || "Untitled server"}
                       </Text>
-                      <Badge color="secondary">{s.transport}</Badge>
+                      <Badge>{s.transport}</Badge>
                       {mcpServerEditorKind(s, catalogReady, presets.data ?? []) === "preset" ? (
                         <Badge color="blue">built-in</Badge>
                       ) : null}
@@ -339,8 +339,8 @@ export function McpSettings() {
         >
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge color="secondary">{pluginCompatibilityLabel(pluginDetails.compatibility)}</Badge>
-              <Badge color="secondary">{pluginDetails.category}</Badge>
+              <Badge>{pluginCompatibilityLabel(pluginDetails.compatibility)}</Badge>
+              <Badge>{pluginDetails.category}</Badge>
             </div>
             <Text variant="small" color="secondary" className="block">
               {pluginDetails.vendor}
@@ -419,7 +419,7 @@ function PluginCard({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Text variant="strong">{plugin.name}</Text>
-        <Badge color="secondary">{pluginCompatibilityLabel(plugin.compatibility)}</Badge>
+        <Badge>{pluginCompatibilityLabel(plugin.compatibility)}</Badge>
       </div>
       <Text variant="small" color="secondary" className="block">
         {plugin.tagline}

@@ -1206,6 +1206,8 @@ export function createPortableConfigStores(
     localRoot,
     {
       normalize: normalizeProviderModelCacheShape,
+      // Regenerated from provider model listings; a rescue copy would only litter.
+      preserveCorruptFile: false,
       beforeExternalCacheCommit: testHooks.beforeProviderModelExternalCacheCommit,
       beforeWritePublish: testHooks.beforeProviderModelWritePublish,
       afterWritePublish: testHooks.afterProviderModelWritePublish,

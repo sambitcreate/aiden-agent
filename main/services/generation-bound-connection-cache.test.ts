@@ -356,8 +356,62 @@ test("settled Settings attempts revoke their transport predicate before asynchro
   const attempts = new GenerationBoundConnectionAttempts<object>();
   let current!: () => boolean;
   let checkedDuringClose = false;
-  await attempts.run("settings", 0, () => ({}), async (_value, isCurrent) => { current = isCurrent; },
+  await attempts.run("settings", attempts.generation("settings"), () => ({}), async (_value, isCurrent) => { current = isCurrent; },
     async () => "status", async () => { checkedDuringClose = true; assert.equal(current(), false); });
   assert.equal(checkedDuringClose, true);
   assert.equal(current(), false);
+});
+
+test("idle close drops the connection but lets holders of the same generation reconnect", async () => {
+  const cache = new GenerationBoundConnectionCache<{ id: number; closed: boolean }>();
+  let created = 0;
+  const connect = () =>
+    cache.getOrConnect(
+      "server",
+      () => ({ id: ++created, closed: false }),
+      async () => undefined,
+      async (value) => {
+        value.closed = true;
+      },
+      generation,
+    );
+  const generation = cache.generation("server");
+  const first = await connect();
+  assert.equal(await cache.closeIdle("server"), true);
+  assert.equal(first.closed, true);
+  assert.equal(cache.isConnected("server", first), false);
+  assert.equal(cache.generation("server"), generation);
+
+  const reconnected = await connect();
+  assert.equal(reconnected.id, 2);
+  assert.equal(cache.isConnected("server", reconnected), true);
+  assert.equal(await cache.closeIdle("missing"), false);
+});
+
+test("forgetting a removed server prunes its bookkeeping without reviving stale generations", async () => {
+  const cache = new GenerationBoundConnectionCache<{ closed: boolean }>();
+  const attempts = new GenerationBoundConnectionAttempts<{ closed: boolean }>();
+  const stale = cache.generation("removed");
+  const staleAttempt = attempts.generation("removed");
+  await cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async (value) => {
+    value.closed = true;
+  });
+  cache.generation("kept");
+  attempts.generation("kept");
+
+  await cache.forget("removed");
+  await attempts.forget("removed");
+  assert.equal(cache.trackedIdCount(), 1);
+  assert.equal(attempts.trackedIdCount(), 1);
+  assert.deepEqual(cache.ids(), []);
+
+  // A caller admitted before removal must not connect the removed server.
+  await assert.rejects(
+    cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async () => undefined, stale),
+    /superseded/u,
+  );
+  await assert.rejects(
+    attempts.run("removed", staleAttempt, () => ({ closed: false }), async () => undefined, async () => "used", async () => undefined),
+    /superseded/u,
+  );
 });

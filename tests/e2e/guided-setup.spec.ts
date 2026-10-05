@@ -19,6 +19,34 @@ test("onboarding exposes the four primary AI choices and validates custom setup"
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 });
 
+test("skipping provider setup explains the blocked Next and leaves a route to Providers", async ({ aiden }) => {
+  const { page } = aiden;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
+
+  const next = onboarding.getByRole("button", { name: /^Next/u });
+  await expect(next).toBeDisabled();
+  await expect(next).toHaveAccessibleDescription(
+    "Sign in with ChatGPT to continue, or choose another connection.",
+  );
+  await expect(onboarding.getByText(/setup required/u)).toHaveCount(0);
+
+  await onboarding.getByRole("button", { name: "Skip provider" }).click();
+  await expect(onboarding.getByText("Provider setup skipped")).toBeVisible();
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
+  await expect(onboarding).toBeHidden();
+
+  await expect(page.getByText("What would you like to work on?")).toBeVisible();
+  const connect = page.getByRole("button", { name: "Connect a provider", exact: true });
+  await expect(connect.first()).toBeVisible();
+  await connect.first().click();
+  await expect(
+    page.getByText(/Connect with credentials when required; Aiden keeps their model catalogs current/u),
+  ).toBeVisible();
+});
+
 test("computer control respects platform support and explains access before enabling", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

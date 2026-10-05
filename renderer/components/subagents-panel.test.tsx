@@ -55,6 +55,8 @@ import { SubagentDetail, subagentProjectionNotices } from "./subagent-detail.js"
 import { CopyButton } from "./copy-button.js";
 import { SubagentsPanel } from "./subagents-panel.js";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval.js";
+import { ChatApprovalCard } from "./chat-approval-card.js";
+import type { ApprovalPrompt } from "../lib/ipc.js";
 import {
   SubagentMcpMutationApproval,
   subagentMcpMutationAllowLabel,
@@ -435,6 +437,28 @@ function MountedLiveAnnouncerHarness({
       detailRequest={detailRequest}
     />
   );
+}
+
+
+function renderApprovalCard(details: unknown, prompt: Partial<ApprovalPrompt> = {}): { markup: string; buttons: string[] } {
+  const markup = renderToStaticMarkup(
+    <ChatApprovalCard
+      pending={{
+        approvalId: "approval-1",
+        toolCallId: "call-1",
+        toolName: "run_command",
+        summary: "summary",
+        details: details as ApprovalPrompt["details"],
+        ...prompt,
+      }}
+      deciding={false}
+      onDecide={() => {}}
+    />,
+  );
+  const buttons = [...markup.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/gu)].map((match) =>
+    (match[1] ?? "").replace(/<[^>]+>/gu, "").trim(),
+  );
+  return { markup, buttons };
 }
 
 test("subagent chips are accessible buttons with live or frozen ThinkingOrbs", () => {
@@ -1024,29 +1048,21 @@ test("workspace-write approvals render exact bounded safety facts and stay wired
   assert.match(markup, /No command will run\./u);
   assert.match(markup, /refuse this change if the workspace or file has drifted/u);
 
+  const card = renderApprovalCard(details, { toolName: "edit_file" });
+  assert.match(card.markup, /Correct parser wants to /u);
+  assert.match(card.markup, /data-subagent-write-approval="true"/u);
+  assert.deepEqual(card.buttons, ["Deny", "Allow once"], "Deny remains the first and default-focused approval action");
+
+  const malformed = renderApprovalCard({ ...details, extra: true });
+  assert.match(malformed.markup, /Invalid privileged approval blocked/u);
+  assert.match(malformed.markup, /Aiden cannot safely authorize this action from this view/u);
+  assert.doesNotMatch(malformed.markup, /data-subagent-write-approval/u);
+  assert.deepEqual(malformed.buttons, ["Deny"]);
+  assert.deepEqual(renderApprovalCard(details, { canAllow: false }).buttons, ["Deny"]);
+
   const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
-  const approvalCard = chatPaneSource.slice(
-    chatPaneSource.indexOf("present={Boolean(pending)}"),
-    chatPaneSource.indexOf("<Composer", chatPaneSource.indexOf("present={Boolean(pending)}")),
-  );
-  assert.match(chatPaneSource, /isSubagentWorkspaceWriteApprovalDetails\(pending\.details\)/u);
-  assert.match(chatPaneSource, /pendingWorkspaceWriteClaim/u);
-  assert.match(chatPaneSource, /Invalid privileged approval blocked/u);
-  assert.match(
-    chatPaneSource,
-    /pending\?\.canAllow !== false && !invalidPendingPrivilegedApproval/u,
-  );
-  assert.match(chatPaneSource, /Aiden cannot safely authorize this action from this view/u);
-  assert.match(approvalCard, /\{pendingCanAllow \? \(/u);
-  assert.match(approvalCard, /\) : null\}/u);
   assert.match(chatPaneSource, /decidingApprovalRef\.current/u);
   assert.match(chatPaneSource, /if \(decidingApprovalRef\.current\) return/u);
-  assert.match(approvalCard, /SubagentWorkspaceWriteApproval/u);
-  assert.ok(
-    approvalCard.indexOf("ref={approvalDenyRef}") < approvalCard.indexOf("Allow once"),
-    "Deny remains the first and default-focused approval action",
-  );
-  assert.doesNotMatch(approvalCard, /Always allow|Allow all/u);
 });
 
 test("mutation approvals expose fixed risk copy, prior-unknown semantics, and deny-first controls", () => {
@@ -1084,19 +1100,16 @@ test("mutation approvals expose fixed risk copy, prior-unknown semantics, and de
   assert.match(markup, /prior call to this target has an unknown outcome/u);
   assert.equal(subagentMcpMutationAllowLabel(details), "Allow once after unknown outcome");
 
-  const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
-  const approvalCard = chatPaneSource.slice(
-    chatPaneSource.indexOf("present={Boolean(pending)}"),
-    chatPaneSource.indexOf("<Composer", chatPaneSource.indexOf("present={Boolean(pending)}")),
+  const card = renderApprovalCard(details, { scopes: ["chat", "always"] });
+  assert.match(card.markup, /Publisher wants to call docs:publish/u);
+  assert.deepEqual(
+    card.buttons,
+    ["Deny", "Allow once after unknown outcome"],
+    "Deny remains first, and an external mutation is never remembered",
   );
-  assert.match(chatPaneSource, /isSubagentMcpMutationApprovalDetails\(pending\.details\)/u);
-  assert.match(chatPaneSource, /invalidPendingMcpMutation/u);
-  assert.match(approvalCard, /SubagentMcpMutationApproval/u);
-  assert.ok(
-    approvalCard.indexOf("ref={approvalDenyRef}") <
-      approvalCard.indexOf("subagentMcpMutationAllowLabel"),
-    "Deny remains first and receives initial focus for mutation approvals",
-  );
+  const malformed = renderApprovalCard({ ...details, extra: true });
+  assert.match(malformed.markup, /Invalid privileged approval blocked/u);
+  assert.deepEqual(malformed.buttons, ["Deny"]);
 });
 
 test("mounted mutation approval exposes VoiceOver relationships and starts focus on Deny", async () => {

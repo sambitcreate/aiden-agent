@@ -9,7 +9,7 @@ import {
   validateRegistry,
 } from "./ci-test-registry.mjs";
 
-test("CI registry assigns the complete deduplicated pretest/test union", () => {
+test("CI registry assigns the complete deduplicated serial test union", () => {
   const registry = readRegistry();
   const validation = validateRegistry({ registry });
 
@@ -34,7 +34,7 @@ test("CI registry assigns the complete deduplicated pretest/test union", () => {
 
 test("malformed npm multi-script invocations fail closed", () => {
   const packageManifest = structuredClone(readPackageManifest());
-  packageManifest.scripts.test = packageManifest.scripts.test.replace(
+  packageManifest.scripts["test:serial"] = packageManifest.scripts["test:serial"].replace(
     "npm run test:telegram",
     "npm run test:custom-model-options test:telegram",
   );
@@ -58,16 +58,16 @@ test("npm package commands are accepted only for the audited standalone CLI suit
   );
 
   const elsewhere = structuredClone(readPackageManifest());
-  elsewhere.scripts.pretest += " && npm --prefix packages/cli test";
+  elsewhere.scripts["pretest:serial"] += " && npm --prefix packages/cli test";
   assert.throws(
     () => collectSourceTests({ packageManifest: elsewhere }),
-    /pretest uses an unregistered npm command/u,
+    /pretest:serial uses an unregistered npm command/u,
   );
 });
 
 test("new test environment and flags fail closed until explicitly audited", () => {
   const packageManifest = structuredClone(readPackageManifest());
-  packageManifest.scripts.pretest +=
+  packageManifest.scripts["pretest:serial"] +=
     " && FOO=bar tsx --test main/services/custom-model-options.test.ts";
   assert.throws(
     () => collectSourceTests({ packageManifest }),
@@ -75,7 +75,7 @@ test("new test environment and flags fail closed until explicitly audited", () =
   );
 
   const flaggedManifest = structuredClone(readPackageManifest());
-  flaggedManifest.scripts.pretest +=
+  flaggedManifest.scripts["pretest:serial"] +=
     " && tsx --test --test-name-pattern=slow main/services/custom-model-options.test.ts";
   assert.throws(
     () => collectSourceTests({ packageManifest: flaggedManifest }),
@@ -85,7 +85,7 @@ test("new test environment and flags fail closed until explicitly audited", () =
 
 test("a newly registered source test cannot bypass lane assignment", () => {
   const packageManifest = structuredClone(readPackageManifest());
-  packageManifest.scripts.pretest +=
+  packageManifest.scripts["pretest:serial"] +=
     " && tsx --test main/services/diagnostics-contract.test.ts";
 
   assert.throws(
@@ -95,10 +95,19 @@ test("a newly registered source test cannot bypass lane assignment", () => {
 });
 
 test("new npm post-test lifecycle coverage also requires a lane assignment", () => {
-  for (const script of ["posttest", "posttest:telegram"]) {
+  for (const script of ["posttest:serial", "posttest:telegram"]) {
     const packageManifest = structuredClone(readPackageManifest());
     packageManifest.scripts[script] = "tsx --test main/services/diagnostics-contract.test.ts";
     assert.throws(() => validateRegistry({ registry: readRegistry(), packageManifest }), /unassigned/u);
+  }
+});
+
+test("npm test hooks cannot run tests outside the registry runner", () => {
+  // npm runs pretest and posttest around `npm test`, which the lanes never see.
+  for (const hook of ["pretest", "posttest"]) {
+    const packageManifest = structuredClone(readPackageManifest());
+    packageManifest.scripts[hook] = "tsx --test main/services/diagnostics-contract.test.ts";
+    assert.throws(() => validateRegistry({ registry: readRegistry(), packageManifest }), /would bypass the CI registry/u);
   }
 });
 

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  parseAidenPairingRequestDecision,
+  parseAidenPairingRequestId,
   parseAidenRemoteConnectionMode,
   parseAidenRemoteScopedIdentifier,
   parseAidenRemoteTakeoverToken,
@@ -75,4 +77,23 @@ test("guided setup IPC binds the acknowledgement to its live document and settin
   assert.match(handler, /AidenRemoteTlsEndpointError/u);
   assert.match(handler, /ok: false as const/u);
   assert.match(handler, /!owner.isDestroyed\(\)/u);
+});
+
+test("connection request IPC accepts only well-formed request ids and an explicit decision", () => {
+  const requestId = `pairreq_${"A".repeat(32)}`;
+  assert.equal(parseAidenPairingRequestId(requestId), requestId);
+  for (const invalid of [
+    undefined,
+    `pairreq_${"A".repeat(31)}`,
+    `pairing_${"A".repeat(32)}`,
+    `pairreq_${"A".repeat(31)}/`,
+    [requestId],
+  ]) {
+    assert.throws(() => parseAidenPairingRequestId(invalid), /invalid/iu);
+  }
+  assert.equal(parseAidenPairingRequestDecision("allow"), "allow");
+  assert.equal(parseAidenPairingRequestDecision("deny"), "deny");
+  for (const invalid of [undefined, true, "Allow", "approve", { decision: "allow" }]) {
+    assert.throws(() => parseAidenPairingRequestDecision(invalid), /invalid/iu);
+  }
 });

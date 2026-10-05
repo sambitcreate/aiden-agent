@@ -21,6 +21,7 @@ import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
+import { syncDirectory } from "./durable-fs.js";
 
 const FILE = "pending-mcp-credential-cleanup.json";
 let cleanupTail: Promise<void> = Promise.resolve();
@@ -38,15 +39,6 @@ async function journalPath(): Promise<string> {
   const root = app.getPath("userData");
   await fs.mkdir(root, { recursive: true });
   return path.join(root, FILE);
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 async function readPending(): Promise<PendingMcpCredentialCleanupV1 | null> {

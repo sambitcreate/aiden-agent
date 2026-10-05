@@ -39,10 +39,7 @@ import {
   GenerationBoundConnectionAttempts,
   GenerationBoundConnectionCache,
 } from "./generation-bound-connection-cache.js";
-import {
-  assertUniqueMcpAgentToolNames,
-  mcpAgentToolName,
-} from "./mcp-tool-identity.js";
+import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
   type IsolatedSubagentMcpSdkClient,
@@ -62,6 +59,20 @@ import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { MAX_MCP_RESPONSE_BYTES } from "./mcp-fetch-policy.js";
 import { normalizeMcpToolInputSchema } from "./mcp-tool-schema.js";
+import {
+  MCP_DISCOVERY_DEADLINES,
+  MCP_TOOL_CALL_TIMEOUT_MS,
+  McpConnectionActivity,
+  mcpRequestDeadline,
+  mcpServerDiscoveryBudgetMs,
+  mergeMcpServerDiscovery,
+  raceDeadline,
+  settleMcpServerDiscovery,
+} from "./mcp-tool-discovery-core.js";
+
+/** Cached connections with no activity for this long are closed. */
+const MCP_IDLE_CONNECTION_MS = 10 * 60_000;
+const MCP_IDLE_SWEEP_MS = 60_000;
 
 interface Transport {
   close?: () => Promise<void>;
@@ -286,6 +297,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   );
 }
 
+
 class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();
   private readonly statusClients =
@@ -294,12 +306,15 @@ class McpManager {
     tools: McpToolInfo[];
     guard: ReturnType<typeof createMcpToolCallGuard>;
   }>();
+  private readonly activity = new McpConnectionActivity();
+  private readonly disconnecting = new Set<Promise<void>>();
+  private idleSweep: ReturnType<typeof setInterval> | undefined;
 
   private async ensureConnected(
     server: McpServer,
     generation: number,
   ): Promise<Client> {
-    return this.clients.getOrConnect(
+    const client = await this.clients.getOrConnect(
       server.id,
       () =>
         new Client(
@@ -318,27 +333,95 @@ class McpManager {
             connectionIsCurrent,
             { onTerminalFailure: onClosed },
           ) as never,
+          mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
         );
       },
       async (client) => client.close(),
       generation,
     );
+    this.activity.touch(server.id);
+    this.scheduleIdleSweep();
+    return client;
   }
 
-  async disconnect(id: string): Promise<void> {
-    await Promise.all([
+  /**
+   * Run one request against this generation's client. Idle expiry may have
+   * closed it without superseding the generation, so reconnect transparently;
+   * a configuration change still fails the call as superseded.
+   */
+  private async withLiveClient<R>(
+    server: McpServer,
+    generation: number,
+    client: Client,
+    request: (client: Client) => Promise<R>,
+  ): Promise<R> {
+    const end = this.activity.begin(server.id);
+    try {
+      const live = this.clients.isConnected(server.id, client)
+        ? client
+        : await this.ensureConnected(server, generation);
+      return await request(live);
+    } finally {
+      end();
+    }
+  }
+
+  private scheduleIdleSweep(): void {
+    if (this.idleSweep) return;
+    this.idleSweep = setInterval(
+      () => void this.closeIdleConnections(),
+      MCP_IDLE_SWEEP_MS,
+    );
+    this.idleSweep.unref?.();
+  }
+
+  private stopIdleSweep(): void {
+    if (this.idleSweep) clearInterval(this.idleSweep);
+    this.idleSweep = undefined;
+  }
+
+  async closeIdleConnections(): Promise<void> {
+    const idle = this.activity.idle(this.clients.connectedIds(), MCP_IDLE_CONNECTION_MS);
+    await Promise.all(idle.map((id) => this.clients.closeIdle(id)));
+    if (this.clients.ids().length === 0) this.stopIdleSweep();
+  }
+
+  disconnect(id: string): Promise<void> {
+    const closing = Promise.all([
       this.clients.disconnect(id),
       this.statusClients.disconnect(id),
-    ]);
+    ]).then(() => undefined);
+    this.disconnecting.add(closing);
+    void closing
+      .finally(() => this.disconnecting.delete(closing))
+      .catch(() => undefined);
+    return closing;
   }
 
+  /** Disconnect a removed server and drop its per-id bookkeeping. */
+  async forget(id: string): Promise<void> {
+    await Promise.all([this.clients.forget(id), this.statusClients.forget(id)]);
+    this.activity.forget(id);
+  }
+
+  /** Close every server in parallel, including closes already under way. */
   async closeAll(): Promise<void> {
     for (const id of new Set([
       ...this.clients.ids(),
       ...this.statusClients.ids(),
     ])) {
-      await this.disconnect(id);
+      void this.disconnect(id);
     }
+    this.stopIdleSweep();
+    await Promise.allSettled([...this.disconnecting]);
+  }
+
+  /** Shutdown variant: resolves false instead of waiting past `budgetMs`. */
+  closeAllWithin(budgetMs: number): Promise<boolean> {
+    return raceDeadline(this.closeAll(), budgetMs, "MCP shutdown").then(
+      () => true,
+      () => false,
+    );
   }
 
   /** Connect and return status (used by the settings "test" action). */
@@ -427,10 +510,10 @@ class McpManager {
     }));
     assertGeneration();
     const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
-      callTool: (params, _schema, options) => callMcpTool(cachedClient, params, options),
-      listResources: cachedClient.listResources.bind(cachedClient),
-      listResourceTemplates: cachedClient.listResourceTemplates.bind(cachedClient),
-      readResource: cachedClient.readResource.bind(cachedClient),
+      callTool: (params, _schema, options) => this.withLiveClient(server, generation, cachedClient, (live) => callMcpTool(live, params, options)),
+      listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResources(params, options)),
+      listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResourceTemplates(params, options)),
+      readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.readResource(params, options)),
     } : {
       callTool: (params, _schema, options) => scoped((connection, signal) => callMcpTool(connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
@@ -459,7 +542,7 @@ class McpManager {
               arguments: (args ?? {}) as Record<string, unknown>,
             },
             undefined,
-            { signal },
+            { signal, timeout: MCP_TOOL_CALL_TIMEOUT_MS, maxTotalTimeout: MCP_TOOL_CALL_TIMEOUT_MS },
           );
           callGuard.validateResult(t.name, result);
           return result;
@@ -493,17 +576,21 @@ class McpManager {
 
 export const mcpManager = new McpManager();
 
-/** Merge tools from enabled servers. Strict callers fail closed instead of silently losing access. */
+/**
+ * Merge tools from enabled servers. Servers are discovered concurrently, each
+ * within its own deadline, so one slow or hung server only loses its tools for
+ * this turn. Strict callers fail closed instead of silently losing access.
+ */
 export async function collectMcpAgentTools(
   servers: McpServer[],
   options: { strict?: boolean; allowProviderAuth?: boolean; providerScope?: McpProviderExecutionScope; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
 ): Promise<AgentTool[]> {
-  const all: AgentTool[] = [];
-  for (const server of admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true)) {
-    if (!server.enabled) continue;
-    try {
+  const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true).filter((server) => server.enabled);
+  const settled = await settleMcpServerDiscovery(
+    enabled,
+    (server) => {
       let generation = 0;
-      const serverContext = await withConfiguredMcp(
+      return withConfiguredMcp(
         server.id,
         mcpRuntimeConnectionSnapshot(server),
         () => mcpManager.agentContextFor(server, generation, options.providerScope),
@@ -512,17 +599,15 @@ export async function collectMcpAgentTools(
           generation = mcpManager.connectionGeneration(server.id);
         },
       );
-      assertUniqueMcpAgentToolNames([...all, ...serverContext.tools]);
-      all.push(...serverContext.tools);
-      if (serverContext.instructions) options.onServerInstructions?.(serverContext.instructions);
-    } catch (error) {
-      if (options.strict) {
-        throw new Error(
-          `MCP server "${server.name}" is unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+    },
+    mcpServerDiscoveryBudgetMs(),
+  );
+  return mergeMcpServerDiscovery(enabled, settled, {
+    strict: options.strict,
+    onServerInstructions: options.onServerInstructions,
+    onUnavailable: (_server, error) => {
+      // A skipped server, including one that missed its deadline, is surfaced
+      // as degraded MCP status in diagnostics rather than failing the turn.
       const projected = projectDiagnosticError(error);
       writeDiagnosticEvent({
         level: "warn",
@@ -538,10 +623,6 @@ export async function collectMcpAgentTools(
           failurePhase: "mcp-tool-discovery",
         },
       });
-    }
-  }
-  if (options.strict && servers.length > 0 && all.length === 0) {
-    throw new Error("The approved MCP servers did not provide any tools.");
-  }
-  return all;
+    },
+  });
 }

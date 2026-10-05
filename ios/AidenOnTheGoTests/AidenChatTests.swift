@@ -349,6 +349,35 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testChatOpenFetchesTheProgressSnapshotOnceAndReloadsDoNotDuplicateIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-progress-once-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try await makeProgressLifecycleModel(mode: .finite, cache: AidenChatCache(root: root))
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load()
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
+        XCTAssertNotNil(model.agentRoster)
+
+        // The observer that load() hands off to opens the live channel, which
+        // carries its own initial snapshot, without fetching the roster again.
+        try await waitForProgressRequestCount(1)
+        XCTAssertTrue(model.isProgressObservationRunning)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
+
+        // A pull-to-refresh while the observer owns progress reloads the
+        // transcript but leaves progress to that single owner. The finite
+        // channel's reconnect waits at least half a second, so no retry
+        // snapshot can land inside this window.
+        await model.load()
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
+    }
+
+    @MainActor
     func testRosterRefreshFailureDoesNotMarkFreshTaskProgressStale() async throws {
         let model = try await makeProgressLifecycleModel(mode: .rosterFailsAfterFirst)
         defer {
@@ -6053,13 +6082,30 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(gate.shouldReplay(.error))
     }
 
-    func testTerminalReconciliationRetriesIndefinitelyWithACappedBackoff() {
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: -1), 1_000)
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 0), 1_000)
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 1), 2_000)
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 4), 16_000)
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 5), 30_000)
-        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 500), 30_000)
+    func testTerminalReconciliationRetriesIndefinitelyWithACappedJitteredBackoff() {
+        func delay(_ attempt: Int, _ unit: Double) -> Int {
+            AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt, randomUnit: { unit })
+        }
+        // The lowest draw keeps half of each exponential step, so retries
+        // still back off; the highest draw never exceeds that step.
+        XCTAssertEqual(delay(-1, 0), 500)
+        XCTAssertEqual(delay(0, 0), 500)
+        XCTAssertEqual(delay(1, 0), 1_000)
+        XCTAssertEqual(delay(4, 0), 8_000)
+        XCTAssertEqual(delay(0, 0.999_999), 999)
+        XCTAssertEqual(delay(4, 0.999_999), 15_999)
+        // Attempts past the cap never wait longer than 30 seconds, even with
+        // an out-of-range random source.
+        XCTAssertEqual(delay(500, 0), 15_000)
+        XCTAssertEqual(delay(500, 1), 30_000)
+        XCTAssertEqual(delay(500, 7), 30_000)
+        XCTAssertEqual(delay(500, -3), 15_000)
+
+        // The default source spreads simultaneous reconnects instead of
+        // aligning every device on the same instant.
+        let draws = Set((0..<64).map { _ in AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 3) })
+        XCTAssertGreaterThan(draws.count, 1)
+        XCTAssertTrue(draws.allSatisfy { (4_000...8_000).contains($0) })
     }
 
     func testTypedMissingStreamFallsBackToDurableChatReconciliation() throws {

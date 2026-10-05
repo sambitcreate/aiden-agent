@@ -20,6 +20,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun ContentView(
@@ -36,8 +37,8 @@ fun ContentView(
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit
 ) {
-    val connectionState by coordinator.connectionState.collectAsState()
-    val errorMessage by coordinator.errorMessage.collectAsState()
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+    val errorMessage by coordinator.errorMessage.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(errorMessage) {

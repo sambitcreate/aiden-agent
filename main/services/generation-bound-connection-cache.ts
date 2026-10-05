@@ -19,8 +19,39 @@ export function closeAgainAfterSettled(
   );
 }
 
+/**
+ * Per-id generation counters drawn from one monotonic sequence. An id is
+ * assigned a fresh value the first time it is observed, so a forgotten id can
+ * be pruned without a stale caller's captured generation ever matching again.
+ */
+class GenerationCounters {
+  private readonly values = new Map<string, number>();
+  private last = 0;
+
+  get(id: string): number {
+    let value = this.values.get(id);
+    if (value === undefined) {
+      value = ++this.last;
+      this.values.set(id, value);
+    }
+    return value;
+  }
+
+  advance(id: string): void {
+    this.values.set(id, ++this.last);
+  }
+
+  forget(id: string): void {
+    this.values.delete(id);
+  }
+
+  get size(): number {
+    return this.values.size;
+  }
+}
+
 export class GenerationBoundConnectionCache<T> {
-  private readonly generations = new Map<string, number>();
+  private readonly generations = new GenerationCounters();
   private readonly connected = new Map<string, ConnectionRecord<T>>();
   private readonly pending = new Map<string, PendingConnection<T>>();
 
@@ -69,7 +100,7 @@ export class GenerationBoundConnectionCache<T> {
     const connectedRecord: ConnectionRecord<T> = { value, close: closeOnce };
     const isCurrent = () =>
       !cancelled &&
-      (this.generations.get(id) ?? 0) === generation &&
+      this.generation(id) === generation &&
       (this.pending.get(id) === attempt || this.connected.get(id) === connectedRecord);
     const onClosed = () => {
       // Transport loss expires this client's lease, not its configuration.
@@ -108,7 +139,7 @@ export class GenerationBoundConnectionCache<T> {
   }
 
   async disconnect(id: string): Promise<void> {
-    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+    this.generations.advance(id);
     const pending = this.pending.get(id);
     const connected = this.connected.get(id);
     this.pending.delete(id);
@@ -116,12 +147,45 @@ export class GenerationBoundConnectionCache<T> {
     await Promise.all([pending?.cancel(), connected?.close()]);
   }
 
+  /**
+   * Close an established connection that is no longer in use without
+   * superseding its generation: callers holding that generation may reconnect
+   * transparently. An in-flight connection attempt is left alone.
+   */
+  async closeIdle(id: string): Promise<boolean> {
+    if (this.pending.has(id)) return false;
+    const connected = this.connected.get(id);
+    if (!connected) return false;
+    this.connected.delete(id);
+    await connected.close();
+    return true;
+  }
+
+  /** Disconnect and drop all bookkeeping for an id that is no longer configured. */
+  async forget(id: string): Promise<void> {
+    await this.disconnect(id);
+    if (!this.pending.has(id) && !this.connected.has(id)) this.generations.forget(id);
+  }
+
   ids(): string[] {
     return [...new Set([...this.pending.keys(), ...this.connected.keys()])];
   }
 
+  connectedIds(): string[] {
+    return [...this.connected.keys()];
+  }
+
+  isConnected(id: string, value: T): boolean {
+    return this.connected.get(id)?.value === value;
+  }
+
   generation(id: string): number {
-    return this.generations.get(id) ?? 0;
+    return this.generations.get(id);
+  }
+
+  /** Number of ids with generation bookkeeping; bounded by configured servers. */
+  trackedIdCount(): number {
+    return this.generations.size;
   }
 }
 
@@ -134,11 +198,11 @@ interface ConnectionAttempt<T> {
 
 /** Tracks one-shot connection attempts that must be invalidated as a group. */
 export class GenerationBoundConnectionAttempts<T> {
-  private readonly generations = new Map<string, number>();
+  private readonly generations = new GenerationCounters();
   private readonly attempts = new Map<string, Set<ConnectionAttempt<T>>>();
 
   generation(id: string): number {
-    return this.generations.get(id) ?? 0;
+    return this.generations.get(id);
   }
 
   async run<R>(
@@ -182,7 +246,7 @@ export class GenerationBoundConnectionAttempts<T> {
   }
 
   async disconnect(id: string): Promise<void> {
-    this.generations.set(id, this.generation(id) + 1);
+    this.generations.advance(id);
     const records = [...(this.attempts.get(id) ?? [])];
     this.attempts.delete(id);
     for (const attempt of records) {
@@ -194,7 +258,17 @@ export class GenerationBoundConnectionAttempts<T> {
     await Promise.all(records.map((attempt) => attempt.close()));
   }
 
+  /** Disconnect and drop all bookkeeping for an id that is no longer configured. */
+  async forget(id: string): Promise<void> {
+    await this.disconnect(id);
+    if (!this.attempts.has(id)) this.generations.forget(id);
+  }
+
   ids(): string[] {
     return [...this.attempts.keys()];
+  }
+
+  trackedIdCount(): number {
+    return this.generations.size;
   }
 }

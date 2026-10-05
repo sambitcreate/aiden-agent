@@ -94,8 +94,8 @@ export function RemoteConnectionPopover({
   onManage: () => void;
 }) {
   const queryClient = useQueryClient();
-  const settings = useAidenRemoteSettings();
   const [open, setOpen] = React.useState(false);
+  const settings = useAidenRemoteSettings(open);
 
   React.useEffect(() => aidenRemoteApi.onChanged(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });

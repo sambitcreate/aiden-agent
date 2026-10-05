@@ -388,6 +388,7 @@ export function registerPhase2Handlers(): void {
         await withMcpConfigurationPublication(serverId, () =>
           configStore.removeMcpServer(serverId, isCurrent),
         );
+        await mcpManager.forget(serverId);
       },
       isCurrent,
     );

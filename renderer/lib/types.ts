@@ -15,6 +15,7 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
+import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
 import type {
   BoundedNonSecretProviderConfig,
@@ -634,6 +635,8 @@ export interface ChatMeta {
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /** Set when this chat was created by Fork. */
+  forkedFrom?: ChatForkLineageV1;
   createdAt: number;
   updatedAt: number;
 }

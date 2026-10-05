@@ -15,10 +15,10 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
@@ -64,6 +64,9 @@ const allowedExternalPackages = new Set([
 	"utf-8-validate",
 	// Optional debug output coloring.
 	"supports-color",
+	// Optional on-device speech engine (optionalDependencies); the parakeet
+	// engine requires it lazily and reports a load failure.
+	"sherpa-onnx-node",
 	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
 	// lazily inside try/catch and only reached behind a Negotiate proxy.
 	"kerberos",
@@ -109,9 +112,11 @@ const aidenRelativeTsRewritePlugin = {
 	name: "aiden-relative-ts-rewrite",
 	setup(build) {
 		// The Aiden cores import siblings with NodeNext ".js" specifiers. esbuild
-		// normally remaps those to ".ts" sources, but at least one sibling import
-		// (advisor-attempt-store) is left unresolved and marked external inside
-		// this graph. Finish the remap deterministically for repo sources.
+		// normally remaps those to ".ts" sources, but some sibling imports (the
+		// advisor runtime's, historically) were left unresolved and marked
+		// external inside this graph. Finish the remap deterministically for repo
+		// sources, which is what lets the CLI bundle main/services originals
+		// directly instead of vendoring copies.
 		build.onResolve({ filter: /^\.{1,2}\/.+\.(js|ts)$/ }, (args) => {
 			if (!args.resolveDir) return undefined;
 			let candidate = resolve(args.resolveDir, args.path);
@@ -147,12 +152,106 @@ const httpsProxyAgentNamedExportPlugin = {
 	},
 };
 
-// Note: the Aiden cores bundled from ../../../main/services resolve
-// @earendil-works packages through the repo root's node_modules while pi's
-// shrinkwrapped copies stay nested. esbuild aliasing cannot unify them without
-// breaking subpath exports resolution (pi-ai/compat etc.), so both copies are
-// bundled. This is safe: the Aiden cores use pi-ai only for TypeBox schema
-// construction (plain objects), never for identity-sensitive runtime behavior.
+const packageIdentityCache = new Map();
+
+/** Name and version of the installed node_modules package that owns a file. */
+function owningPackage(file) {
+	for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+		if (packageIdentityCache.has(dir)) return packageIdentityCache.get(dir);
+		const manifest = join(dir, "package.json");
+		if (!existsSync(manifest)) continue;
+		let parsed;
+		try {
+			parsed = JSON.parse(readFileSync(manifest, "utf8"));
+		} catch {
+			continue;
+		}
+		// Nested manifests (dist/esm/package.json with only "type") are not the
+		// package root; the root is the directory installed as node_modules/<name>.
+		if (typeof parsed.name !== "string" || !dir.endsWith(`${sep}node_modules${sep}${parsed.name.replaceAll("/", sep)}`)) {
+			continue;
+		}
+		const identity = { name: parsed.name, version: parsed.version, dir };
+		packageIdentityCache.set(dir, identity);
+		return identity;
+	}
+	return undefined;
+}
+
+/**
+ * One install location per name@version under packages/cli/node_modules: the
+ * shallowest, then lexically first. npm leaves identical copies nested where
+ * hoisting conflicts (pi-coding-agent's shrinkwrap, agent-base under two
+ * parents), and esbuild would bundle each one.
+ */
+function indexCanonicalPackages(nodeModulesDir) {
+	const canonical = new Map();
+	const visit = (dir) => {
+		let entries;
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+			if (entry.name.startsWith("@")) {
+				visit(join(dir, entry.name));
+				continue;
+			}
+			const packageDir = join(dir, entry.name);
+			const identity = owningPackage(join(packageDir, "package.json"));
+			if (identity?.dir === packageDir) {
+				const key = `${identity.name}@${identity.version}`;
+				const current = canonical.get(key);
+				const depth = (path) => path.split(`${sep}node_modules${sep}`).length;
+				if (!current || depth(packageDir) < depth(current) || (depth(packageDir) === depth(current) && packageDir < current)) {
+					canonical.set(key, packageDir);
+				}
+			}
+			visit(join(packageDir, "node_modules"));
+		}
+	};
+	visit(nodeModulesDir);
+	return canonical;
+}
+
+// Two sources of duplicate copies: the Aiden cores bundled from ../../../main
+// and ../../../renderer (and packages/cli sources importing pi-ai, which only
+// exists nested under pi-coding-agent) resolve bare imports through the repo
+// root's node_modules, and npm nests identical copies inside packages/cli's
+// own tree. Left alone that bundles pi-ai and its provider SDKs twice (about
+// 7 MB of input). Resolve every bare import normally, then move it to the
+// canonical packages/cli copy of the same name@version. Subpath exports keep
+// going through the package's own exports map, and a genuine version
+// difference keeps its own copy.
+let canonicalPackages;
+const dedupeRepoPackagesPlugin = {
+	name: "aiden-dedupe-repo-packages",
+	setup(build) {
+		build.onResolve({ filter: /^(?:@[^/]+\/)?[^./][^:]*$/ }, async (args) => {
+			if (args.pluginData?.aidenDedupe || args.namespace !== "file" || !args.importer || isBuiltin(args.path)) {
+				return undefined;
+			}
+			const resolved = await build.resolve(args.path, {
+				importer: args.importer,
+				kind: args.kind,
+				pluginData: { aidenDedupe: true },
+				resolveDir: args.resolveDir,
+			});
+			if (resolved.errors.length > 0 || resolved.external || !resolved.path.includes(`${sep}node_modules${sep}`)) {
+				return undefined;
+			}
+			const owner = owningPackage(resolved.path);
+			if (!owner) return undefined;
+			canonicalPackages ??= indexCanonicalPackages(resolve(pkgDir, "node_modules"));
+			const canonicalDir = canonicalPackages.get(`${owner.name}@${owner.version}`);
+			if (!canonicalDir || canonicalDir === owner.dir) return undefined;
+			return { path: join(canonicalDir, relative(owner.dir, resolved.path)), sideEffects: resolved.sideEffects };
+		});
+	},
+};
+
 const packageAlias = {
 	// Keep the desktop platform facade out of the bundle: cores that can reach
 	// for electron lazily resolve to a loud stub instead of the npm package.
@@ -177,7 +276,13 @@ function commonBuildOptions() {
 		minifySyntax: true,
 		minifyWhitespace: true,
 		platform: "node",
-		plugins: [credentialStorePlugin, aidenRelativeTsRewritePlugin, lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
+		plugins: [
+			credentialStorePlugin,
+			aidenRelativeTsRewritePlugin,
+			lazyJitiPlugin,
+			httpsProxyAgentNamedExportPlugin,
+			dedupeRepoPackagesPlugin,
+		],
 		sourcemap: false,
 		target: "node22.19",
 		tsconfigRaw: { compilerOptions: {} },
@@ -194,10 +299,6 @@ function validateExternalImports(metafiles) {
 				if (!imported.external || isBuiltin(imported.path) || allowedExternalPackages.has(imported.path)) {
 					continue;
 				}
-				if (imported.path.endsWith("advisor-runtime.vendor.mjs")) {
-					// Emitted beside the bundle by the vendor prebundle step above.
-					continue;
-				}
 				if (imported.path === "<runtime>") {
 					// esbuild's bookkeeping for dynamic-import machinery.
 					continue;
@@ -211,14 +312,34 @@ function validateExternalImports(metafiles) {
 	}
 }
 
-function findContainingOutput(metafile, inputSuffix) {
-	const normalizedSuffix = inputSuffix.replaceAll("\\", "/");
-	for (const [outputPath, output] of Object.entries(metafile.outputs)) {
-		if (Object.keys(output.inputs).some((inputPath) => inputPath.replaceAll("\\", "/").endsWith(normalizedSuffix))) {
-			return resolve(pkgDir, outputPath);
-		}
+/**
+ * Fails the build when one package version is bundled from two install
+ * locations, which is what the dedupe plugin above exists to prevent.
+ */
+function assertNoDuplicatePackages(metafile) {
+	const locations = new Map();
+	for (const inputPath of Object.keys(metafile.inputs)) {
+		if (!inputPath.includes("node_modules/")) continue;
+		const identity = owningPackage(resolve(pkgDir, inputPath));
+		if (!identity) continue;
+		const key = `${identity.name}@${identity.version}`;
+		const dirs = locations.get(key) ?? new Set();
+		dirs.add(identity.dir);
+		locations.set(key, dirs);
 	}
-	throw new Error(`Could not locate bundled output containing ${inputSuffix}`);
+	const duplicated = [...locations].filter(([, dirs]) => dirs.size > 1).map(([key, dirs]) => `${key} (${[...dirs].map((dir) => relative(pkgDir, dir)).join(", ")})`);
+	if (duplicated.length > 0) {
+		throw new Error(`Bundle contains the same package version from several install locations: ${duplicated.join("; ")}`);
+	}
+}
+
+function findContainingOutputs(metafile, inputSuffix) {
+	const normalizedSuffix = inputSuffix.replaceAll("\\", "/");
+	const outputs = Object.entries(metafile.outputs)
+		.filter(([, output]) => Object.keys(output.inputs).some((inputPath) => inputPath.replaceAll("\\", "/").endsWith(normalizedSuffix)))
+		.map(([outputPath]) => resolve(pkgDir, outputPath));
+	if (outputs.length === 0) throw new Error(`Could not locate bundled output containing ${inputSuffix}`);
+	return outputs;
 }
 
 for (const entry of [
@@ -235,86 +356,68 @@ for (const entry of [
 rmSync(appDir, { force: true, recursive: true });
 mkdirSync(appDir, { recursive: true });
 
-// Prebundle the vendored advisor runtime as a self-contained module: esbuild's
-// graph marks this file's own sibling imports external (see the vendored file's
-// header), so the main bundle consumes it as a runtime external instead.
-const vendorResult = await build({
-	absWorkingDir: resolve(pkgDir),
-	bundle: true,
-	format: "esm",
-	logLevel: "warning",
-	platform: "node",
-	target: "node22.19",
-	entryPoints: { "advisor-runtime.vendor": join(pkgDir, "src", "vendor", "advisor", "advisor-runtime.ts") },
-	outdir: appDir,
-	write: true,
-});
-renameSync(join(appDir, "advisor-runtime.vendor.js"), join(appDir, "advisor-runtime.vendor.mjs"));
-void vendorResult;
-cpSync(
-	join(pkgDir, "src", "vendor", "advisor", "advisor-runtime.vendor.d.mts"),
-	join(appDir, "advisor-runtime.vendor.d.mts"),
-);
+// Implementations reached through variable-specifier imports (OAuth
+// providers, Bedrock) or a worker URL (image resize) cannot be followed by
+// the bundler, so each is its own entry, emitted beside the chunk that
+// resolves it. They and the CLI's own workers join the CLI's code-splitting
+// graph, so pi, pi-ai and the Aiden cores are emitted once in shared chunks
+// instead of once per worker.
+const lazyChunkDir = "chunks";
+const lazyEntryPoints = {
+	"codemode-worker": join(piAgentPkg, "dist", "extensions", "codemode", "worker.js"),
+	meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
+	"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
+	anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
+	"bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
+	"github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
+	"image-resize-worker": join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
+	"kimi-coding": join(piAiPkg, "dist", "auth", "oauth", "kimi-coding.js"),
+	"openai-codex": join(piAiPkg, "dist", "auth", "oauth", "openai-codex.js"),
+	openrouter: join(piAiPkg, "dist", "auth", "oauth", "openrouter.js"),
+	radius: join(piAiPkg, "dist", "auth", "oauth", "radius.js"),
+	xai: join(piAiPkg, "dist", "auth", "oauth", "xai.js"),
+};
 
 const mainResult = await build({
 	...commonBuildOptions(),
-	entryNames: "[name]",
+	entryNames: "[dir]/[name]",
 	entryPoints: {
 		cli: join(pkgDir, "src", "cli.ts"),
+		// Spawned by path from AIDEN_CLI_ENTRY's directory.
+		"speech-worker": join(pkgDir, "src", "speech-worker.ts"),
+		"subagent-worker": join(pkgDir, "src", "subagent-worker.ts"),
+		"avatar-worker": join(pkgDir, "src", "avatar-worker.ts"),
+		...Object.fromEntries(Object.entries(lazyEntryPoints).map(([name, entry]) => [`${lazyChunkDir}/${name}`, entry])),
 	},
+	external: [...commonBuildOptions().external, "sherpa-onnx-node"],
 	outdir: appDir,
-	chunkNames: "chunks/[name]-[hash]",
+	chunkNames: `${lazyChunkDir}/[name]-[hash]`,
 	splitting: true,
 });
 
-const bedrockLoaderOutput = findContainingOutput(mainResult.metafile, "pi-ai/dist/api/bedrock-converse-stream.lazy.js");
-const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "pi-ai/dist/auth/oauth/load.js");
-const configOutput = findContainingOutput(mainResult.metafile, "pi-coding-agent/dist/config.js");
-const imageResizeOutput = findContainingOutput(mainResult.metafile, "pi-coding-agent/dist/utils/image-resize.js");
-if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
-	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
+// Every output that carries one of the resolving modules must sit in the
+// lazy entries' directory, or a variable import resolves to a missing file.
+for (const resolver of [
+	"pi-coding-agent/dist/config.js",
+	"pi-ai/dist/api/bedrock-converse-stream.lazy.js",
+	"pi-ai/dist/auth/oauth/load.js",
+	"pi-coding-agent/dist/utils/image-resize.js",
+]) {
+	for (const output of findContainingOutputs(mainResult.metafile, resolver)) {
+		if (dirname(output) !== join(appDir, lazyChunkDir)) {
+			throw new Error(`${resolver} was emitted into ${relative(pkgDir, output)}, away from the lazy entries it loads`);
+		}
+	}
 }
 
-// These implementations are reached through variable-specifier imports or a
-// worker URL, so the main bundle cannot follow them. Emit one self-contained
-// file per implementation beside the code that resolves it.
-const lazyResult = await build({
-	...commonBuildOptions(),
-	entryNames: "[name]",
-	entryPoints: {
-		anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
-		"bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
-		"github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
-		"codemode-worker": join(piAgentPkg, "dist", "extensions", "codemode", "worker.js"),
-		meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
-		"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
-		"image-resize-worker": join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
-		"kimi-coding": join(piAiPkg, "dist", "auth", "oauth", "kimi-coding.js"),
-		"openai-codex": join(piAiPkg, "dist", "auth", "oauth", "openai-codex.js"),
-		openrouter: join(piAiPkg, "dist", "auth", "oauth", "openrouter.js"),
-		radius: join(piAiPkg, "dist", "auth", "oauth", "radius.js"),
-		xai: join(piAiPkg, "dist", "auth", "oauth", "xai.js"),
-	},
-	outdir: dirname(bedrockLoaderOutput),
-	splitting: false,
-});
-
-const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-resize-worker.js");
-if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
-	throw new Error("Image resize implementation and worker were emitted into different directories");
-}
-
-if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) throw new Error("Codemode worker must be emitted beside config.js");
-
-validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+validateExternalImports([mainResult.metafile]);
+assertNoDuplicatePackages(mainResult.metafile);
 
 // Bundle externals resolve at runtime from the app root's node_modules
 // ancestry. Tree-shaking usually eliminates unreferenced ones (chord,
 // photon-node today); verify every specifier that survived so a future pi
 // change fails the build here instead of crashing on a headless machine.
-const emittedFiles = Object.keys(mainResult.metafile.outputs)
-	.concat(Object.keys(lazyResult.metafile.outputs))
-	.filter((path) => path.endsWith(".js"));
+const emittedFiles = Object.keys(mainResult.metafile.outputs).filter((path) => path.endsWith(".js"));
 const externalPattern = /(?:from\s*|import\s*\()\s*["'](@earendil-works\/chord(?:\/[a-z]+)?|@silvia-odwyer\/photon-node|jiti(?:\/static)?)["']/g;
 const referencedExternals = new Set();
 for (const output of emittedFiles) {
@@ -387,8 +490,14 @@ const exportDir = join(appDir, "src", "core", "export-html");
 mkdirSync(exportDir, { recursive: true });
 cpSync(join(piAgentPkg, "dist", "core", "export-html"), exportDir, { recursive: true });
 
-// pi's auth/model guidance prints absolute paths into these docs.
-cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), { recursive: true });
+// pi's auth/model guidance prints absolute paths into these docs. Their
+// screenshots are only <img> illustrations for a browser and never read by
+// the CLI.
+const piDocsImages = join(piAgentPkg, "docs", "images");
+cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), {
+	recursive: true,
+	filter: (source) => source !== piDocsImages && !source.startsWith(`${piDocsImages}${sep}`),
+});
 
 // Native helpers: prefer checksum-verified prebuilts (AIDEN_NATIVE_PREBUILT_DIR
 // or the repo's prebuilt/native/<target> tree) so installs need no C toolchain;
@@ -460,21 +569,14 @@ if (prebuiltFailure === undefined) {
 await vendorGenerativeUiLibraries(resolve(pkgDir, "../.."));
 cpSync(resolve(pkgDir, "../../THIRD_PARTY_NOTICES.md"), join(appDir, "THIRD_PARTY_NOTICES.md"));
 cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), { recursive: true });
-cpSync(resolve(pkgDir, "../../resources/model-capabilities.json"), join(appDir, "model-capabilities.json"));
+// Read with JSON.parse at runtime; the indentation in the checked-in copy is
+// a third of its size.
+writeFileSync(
+	join(appDir, "model-capabilities.json"),
+	JSON.stringify(JSON.parse(readFileSync(resolve(pkgDir, "../../resources/model-capabilities.json"), "utf8"))),
+);
 
 chmodSync(join(appDir, "cli.js"), 0o755);
-
-await build({
-	...commonBuildOptions(),
-	entryPoints: [join(pkgDir, "src", "speech-worker.ts"), join(pkgDir, "src", "subagent-worker.ts"), join(pkgDir, "src", "avatar-worker.ts")],
-	outdir: appDir,
-	external: [...commonBuildOptions().external, "sherpa-onnx-node"],
-});
-
-// Isolated workers resolve variable OAuth/Bedrock imports relative to appDir.
-for (const output of Object.keys(lazyResult.metafile.outputs)) {
-  if (output.endsWith(".js") && dirname(resolve(output)) !== appDir) cpSync(resolve(output), join(appDir, output.split("/").at(-1)));
-}
 
 // Test-only self-check entry (outside the app root so it never ships in the
 // package): reports registered Aiden extensions/tools from a real session.
@@ -485,10 +587,15 @@ await build({
 	splitting: false,
 });
 
-const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
-const mib =
-	[mainResult.metafile, lazyResult.metafile].reduce(
-		(total, metafile) => total + Object.values(metafile.outputs).reduce((subtotal, output) => subtotal + output.bytes, 0),
-		0,
-	) / (1024 * 1024);
+// Count everything that ships, not just the bundler's outputs: the copied
+// docs, themes, generative-ui libraries, catalog and native helpers are most
+// of the bytes.
+let files = 0;
+let bytes = 0;
+for (const entry of readdirSync(appDir, { recursive: true, withFileTypes: true })) {
+	if (!entry.isFile()) continue;
+	files += 1;
+	bytes += statSync(join(entry.parentPath, entry.name)).size;
+}
+const mib = bytes / (1024 * 1024);
 console.log(`Built ${relative(pkgDir, appDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

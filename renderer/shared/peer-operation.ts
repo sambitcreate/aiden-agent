@@ -10,7 +10,19 @@ export type PeerReadOperation =
   | "approval"
   | "files"
   | "file"
-  | "git";
+  | "git"
+  | "messagesWindow"
+  | "attachmentContent"
+  | "skills"
+  | "tasks"
+  | "agents"
+  | "streamQuestion"
+  | "bots"
+  | "bot"
+  | "botConversations"
+  | "botCapabilities"
+  | "botChatAccess"
+  | "botFavorites";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -19,13 +31,45 @@ export type PeerWriteOperation =
   | "cancel"
   | "respondApproval"
   | "selectFolder"
-  | "createWorkspace";
+  | "createWorkspace"
+  | "markRead"
+  | "interruptAgent"
+  | "respondQuestion"
+  | "inputs"
+  | "runCancel"
+  | "runRespondApproval"
+  | "runRespondQuestion"
+  | "runInputs"
+  | "createBotChat"
+  | "updateBotFavorites"
+  | "updateBotChatAccess"
+  | "uploadAttachment"
+  | "removeAttachment";
 export interface PeerOperation {
   operation: PeerReadOperation | PeerWriteOperation;
+  /** The chat, stream, run, Bot or prompt the operation addresses. */
   resourceId?: string;
+  /** A nested item: attachment, agent, approval or question prompt. */
+  itemId?: string;
   workspaceId?: string;
   cursor?: string;
+  /** `messagesWindow`: the message ID the window ends before. */
+  before?: string;
+  limit?: number;
+  /** `botConversations` search text. */
+  query?: string;
+  /** `botConversations` and `botCapabilities` Bot filter. */
+  botId?: string;
+  /** `agents`: the public turn to read. */
+  turnId?: string;
+  includeArchived?: boolean;
   body?: unknown;
   idempotencyKey?: string;
   revision?: string;
+}
+
+/** `attachmentContent` resolves to bounded image bytes instead of JSON. */
+export interface PeerAttachmentContent {
+  mimeType: "image/png" | "image/jpeg";
+  bytes: Uint8Array;
 }

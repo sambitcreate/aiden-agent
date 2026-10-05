@@ -330,7 +330,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
-  assert.match(chatPane, /chatsApi\.copyVisibleHistory\([\s\S]{0,100}throughAssistantMessageId/u);
   assert.match(chatPane, /logoutBuiltinProvider\(qc, providerId\)/u);
   assert.match(chatPane, /provider\.canLogout === true/u);
   assert.match(ipc, /"chats:export", \{ chatId \}/u);

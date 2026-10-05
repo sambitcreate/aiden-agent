@@ -12,6 +12,7 @@ import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import {
   verifyPackagedModelCatalogResources,
   verifyPackagedParakeetWorker,
+  verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
 } from "./verify-macos-package.mjs";
 
@@ -295,6 +296,7 @@ export async function verifyLinuxPackage(appDirectory) {
     throw new Error("Packaged app.asar is missing /build/main/index.js.");
   }
   await verifyPackagedModelCatalogResources(asar);
+  await verifyPackagedSlimness(asar);
   await verifyPackagedSubagentInferenceWorker(asar);
   await verifyPackagedParakeetWorker(asar);
 

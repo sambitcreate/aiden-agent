@@ -9,6 +9,18 @@ import * as React from "react";
 import type { Composer } from "./composer.js";
 import type { Attachment } from "../lib/types.js";
 import { attachmentInlineBytesRemaining } from "../shared/attachment-contract.js";
+import { composerSurfacesFor, LOCAL_COMPOSER_SURFACES } from "../lib/hosts/composer-surfaces.js";
+import {
+  HostChatControlError,
+  type HostChatAdapter,
+  type HostChatCapability,
+  type HostChatSendInput,
+  type HostChatTurnReceipt,
+} from "../lib/hosts/host-chat-adapter.js";
+import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger.js";
+import { ChatSessionControl } from "../lib/hosts/chat-session-control.js";
+import { remoteComposerActions } from "../main/remote-chat-view.js";
+import { hostResourceKey } from "../shared/peer-host.js";
 
 // Mount the production Composer and its send/restore/attachment logic. Replace only
 // peripheral UI, device hooks, and IPC; no lifecycle logic is copied into this fixture.
@@ -24,7 +36,7 @@ async function loadComposer() {
       export const toast={info:()=>{},error:()=>{},success:()=>{}};`,
     "../lib/use-voice-recorder": "export const useVoiceRecorder=()=>({});",
     "../lib/queries":
-      "export const useSettings=()=>({}); export const useDiscoveredSkills=()=>({});",
+      "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false});",
     "../lib/ipc":
@@ -327,6 +339,312 @@ test("mounted established Composer blocks attachment intake until failed send re
         before.picker + 1,
         "attachment intake resumes after the send settles and space is available",
       );
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("mounted Composer for a remote chat offers no local attachment or workspace surface and sends plain text", async () => {
+  const mounted = installDom();
+  const calls = { picker: 0, drop: 0, clipboard: 0 };
+  let picked: Attachment[] = [];
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        async pickAndRead() {
+          calls.picker++;
+          return { attachments: picked, skipped: 0 };
+        },
+        async readDroppedFiles() {
+          calls.drop++;
+          return [];
+        },
+        async readClipboardImages() {
+          calls.clipboard++;
+          return [];
+        },
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const labels = () =>
+    Array.from(mounted.container.getElementsByTagName("button")).map((element) => element.getAttribute("aria-label"));
+  const render = (
+    surfaces: React.ComponentProps<typeof Composer>["surfaces"],
+    onSend: React.ComponentProps<typeof Composer>["onSend"],
+    chatId = "host-b/chat-1",
+  ) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key={chatId}
+          chatId={chatId}
+          ready
+          hasMessages
+          initialText="Ship it"
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          surfaces={surfaces}
+          onSend={onSend}
+        />,
+      ),
+    );
+  try {
+    // This Mac's own chats keep the attachment button and workspace access control.
+    await render(LOCAL_COMPOSER_SURFACES, async () => {});
+    assert.ok(labels().includes("Attach files or images"));
+    assert.ok(labels().some((label) => label?.startsWith("Workspace access")));
+
+    const sent: Array<{ text: string; attachments: number }> = [];
+    const remoteCapabilities = new Set<HostChatCapability>(["send", "cancel", "respondApproval"]);
+    await render(composerSurfacesFor(remoteCapabilities), async (value, attachments) => {
+      sent.push({ text: value, attachments: attachments.length });
+    });
+    assert.equal(labels().includes("Attach files or images"), false);
+    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    // A Finder drop is neither accepted nor read from this Mac.
+    const dropZone = Array.from(mounted.container.getElementsByTagName("div")).find(
+      (element) => handlers(element).onDrop,
+    );
+    assert.ok(dropZone);
+    let dragAccepted = false;
+    await React.act(async () => {
+      handlers(dropZone).onDragOver({
+        preventDefault() {
+          dragAccepted = true;
+        },
+        dataTransfer: { types: ["Files"] },
+      });
+      handlers(dropZone).onDrop({ preventDefault() {}, dataTransfer: { files: [{}] } });
+    });
+    assert.equal(dragAccepted, false);
+
+    // A pasted image is not read from this Mac's clipboard; the paste stays an ordinary text paste.
+    let prevented = false;
+    await React.act(async () => {
+      handlers(mounted.container.getElementsByTagName("textarea")[0]).onPaste({
+        preventDefault() {
+          prevented = true;
+        },
+        clipboardData: {
+          getData: () => "",
+          items: [{ kind: "file", type: "image/png", getAsFile: () => ({ size: 1, type: "image/png" }) }],
+        },
+      });
+    });
+    assert.equal(prevented, false);
+
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
+    assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
+
+    // A host that stages uploads gets the attach button, still without this Mac's workspace access control.
+    picked = [text("notes")];
+    const attaching = new Set<HostChatCapability>(["send", "attach", "createChat"]);
+    const uploaded: Attachment[][] = [];
+    await render(
+      composerSurfacesFor(attaching),
+      async (_value, attachments) => {
+        uploaded.push(attachments);
+      },
+      "host-b/draft:new-chat",
+    );
+    assert.ok(labels().includes("Attach files or images"));
+    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Attach files or images")).onClick();
+    });
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(
+      uploaded.map((attachments) => attachments.map((attachment) => attachment.name)),
+      [["notes.txt"]],
+    );
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("mounted Composer reads this Mac's skills only for a local chat, and a remote chat's from its host", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, { __composerAttachmentFixture: { api: {} }, __composerSkillScopes: [] });
+  const scopes = () => (globalThis as unknown as { __composerSkillScopes: Array<string | null> }).__composerSkillScopes;
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const workspace = { id: "ws-local", name: "Local", permission: "ask", createdAt: 1, updatedAt: 1 } as React.ComponentProps<
+    typeof Composer
+  >["workspace"];
+  const render = (props: Partial<React.ComponentProps<typeof Composer>>, chatId: string) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key={chatId}
+          chatId={chatId}
+          ready
+          hasMessages
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async () => {}}
+          workspace={workspace}
+          {...props}
+        />,
+      ),
+    );
+  try {
+    await render({ surfaces: LOCAL_COMPOSER_SURFACES }, "chat-local");
+    assert.ok(scopes().includes("ws-local"), "a local chat reads this Mac's catalog for its project");
+
+    scopes().length = 0;
+    const hostSkills = { scopeId: "host-b/ws-b", data: [], isError: false, isFetching: false, isLoading: false, refetch() {} };
+    await render(
+      { surfaces: composerSurfacesFor(new Set<HostChatCapability>(["send", "skills"])), hostSkills },
+      "host-b/chat-1",
+    );
+    assert.ok(scopes().length > 0);
+    assert.ok(
+      scopes().every((scope) => scope === null),
+      "a remote chat never asks this Mac for a project's skills",
+    );
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerSkillScopes");
+  }
+});
+
+/** A paired Mac whose first answer to each send waits until the test gives it. */
+class AnsweringHost {
+  readonly hostId = "host-b";
+  readonly turns: HostChatSendInput[] = [];
+  private answer: ((outcome: "applied" | "lost" | "refused") => void) | null = null;
+  capabilities() {
+    return new Set<HostChatCapability>(["send", "steer"]);
+  }
+  status() {
+    return { availability: "online" as const, generation: 1 };
+  }
+  onStatus() {
+    return () => {};
+  }
+  send(_chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
+    this.turns.push(input);
+    // A same-key retry finds the turn the host already started.
+    if (this.turns.some((turn, index) => index < this.turns.length - 1 && turn.idempotencyKey === input.idempotencyKey)) {
+      return Promise.resolve({ turnId: "turn-1", streamId: "run-1" });
+    }
+    return new Promise((resolve, reject) => {
+      this.answer = (outcome) => {
+        if (outcome === "applied") resolve({ turnId: "turn-1", streamId: "run-1" });
+        else if (outcome === "lost") reject(new HostChatControlError({ code: "outcome_unknown", message: "The answer was lost." }));
+        else reject(new HostChatControlError({ code: "invalid_request", message: "That Mac refused the message." }));
+      };
+    });
+  }
+  give(outcome: "applied" | "lost" | "refused") {
+    this.answer?.(outcome);
+  }
+}
+
+test("a reopened remote chat's composer gets a message back only when the host refused it", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const surfaces = composerSurfacesFor(new Set<HostChatCapability>(["send", "steer"]));
+  const textarea = () => handlers(mounted.container.getElementsByTagName("textarea")[0]);
+  const mount = (draftKey: string, control: ChatSessionControl, initialText?: string) =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          key={`${draftKey}-${initialText ?? "reopened"}`}
+          chatId={draftKey}
+          ready
+          hasMessages
+          initialText={initialText}
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          surfaces={surfaces}
+          onSend={remoteComposerActions(control, null, "Studio").send}
+        />,
+      ),
+    );
+  try {
+    for (const outcome of ["applied", "lost", "refused"] as const) {
+      const ref = { hostId: "host-b", chatId: `chat-${outcome}` };
+      const draftKey = hostResourceKey({ hostId: ref.hostId, resourceId: ref.chatId });
+      const ledger = new ChatIntentLedger();
+      const host = new AnsweringHost();
+      const adapter = host as unknown as HostChatAdapter;
+
+      // The earlier pane sends, and the person starts a new thought while it is in flight.
+      const earlier = new ChatSessionControl(adapter, ref, ledger);
+      const detach = earlier.attach();
+      await mount(draftKey, earlier, "Tag the build");
+      let pending: Promise<unknown> = Promise.resolve();
+      await React.act(async () => {
+        pending = Promise.resolve(handlers(button(mounted.container, "Send message")).onClick()).catch(() => {});
+      });
+      if (outcome === "applied") {
+        await React.act(async () => {
+          textarea().onChange({ target: { value: "Also bump the version", selectionStart: 21, selectionEnd: 21 } });
+        });
+      }
+
+      // Navigating away unmounts it before the host answers.
+      await React.act(async () => root.render(<></>));
+      detach();
+      const reopened = new ChatSessionControl(adapter, ref, ledger);
+      reopened.attach();
+      const settled = reopened.submissionsSettled();
+      assert.ok(settled, `${outcome}: the reopened composer waits for the host's answer`);
+
+      await React.act(async () => {
+        host.give(outcome);
+        await settled;
+        // The pane renders the composer in a later task, after the sending composer settled its draft.
+        await pending;
+      });
+      await mount(draftKey, reopened);
+      const expected = { applied: "Also bump the version", lost: "", refused: "Tag the build" }[outcome];
+      assert.equal(textarea().value, expected, `${outcome}: the reopened draft`);
+
+      if (outcome === "lost") {
+        // The notice holds the text; its same-key retry starts no second turn and leaves the draft empty.
+        assert.equal(reopened.getSnapshot().unresolved?.text, "Tag the build");
+        await React.act(async () => reopened.retryUnresolved());
+        assert.equal(reopened.getSnapshot().unresolved, null);
+        assert.equal(new Set(host.turns.map((turn) => turn.idempotencyKey)).size, 1);
+        assert.equal(textarea().value, "");
+      } else {
+        assert.equal(host.turns.length, 1);
+      }
     }
   } finally {
     await React.act(async () => root.unmount());

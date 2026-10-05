@@ -10,6 +10,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
@@ -18,7 +19,11 @@ import {
 const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 
-function fixture(options: { issueFails?: boolean; botCapabilitiesSupported?: boolean } = {}) {
+function fixture(options: {
+  issueFails?: boolean;
+  botCapabilitiesSupported?: boolean;
+  hostCapabilitiesSupported?: boolean;
+} = {}) {
   let now = 1_000;
   let issued = 0;
   let issuedAcceptsBotCapabilities: boolean | undefined;
@@ -56,6 +61,7 @@ function fixture(options: { issueFails?: boolean; botCapabilitiesSupported?: boo
     },
     () => "Studio Mac",
     () => options.botCapabilitiesSupported ?? true,
+    () => options.hostCapabilitiesSupported ?? false,
   );
   return {
     service,
@@ -93,6 +99,29 @@ test("Mac and Linux pairing keep the existing grants without implicit host-wide 
     const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType }, "desktop");
     assert.deepEqual(result.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
   }
+});
+
+test("host-wide run authority is issued only to desktops that opt into progress on a capable host", async () => {
+  const grantsFor = async (
+    deviceType: "iphone" | "mac" | "linux",
+    acceptsProgressCapabilities: boolean,
+    hostCapabilitiesSupported: boolean,
+  ) => {
+    const pairing = fixture({ hostCapabilitiesSupported });
+    const opened = pairing.service.begin(endpoint, fingerprint);
+    const result = await pairing.service.exchange(
+      { ...exchange(opened.bootstrap.secret, true, true, acceptsProgressCapabilities), deviceType },
+      "host-grants",
+    );
+    return AIDEN_REMOTE_HOST_CAPABILITIES.filter((capability) =>
+      (result.capabilities as readonly string[]).includes(capability),
+    );
+  };
+  assert.deepEqual(await grantsFor("mac", true, true), [...AIDEN_REMOTE_HOST_CAPABILITIES]);
+  assert.deepEqual(await grantsFor("linux", true, true), [...AIDEN_REMOTE_HOST_CAPABILITIES]);
+  assert.deepEqual(await grantsFor("iphone", true, true), []);
+  assert.deepEqual(await grantsFor("mac", false, true), []);
+  assert.deepEqual(await grantsFor("mac", true, false), []);
 });
 
 test("pairing opens for exactly five minutes and consumes its 256-bit secret once", async () => {
@@ -274,11 +303,14 @@ test("pairing grants progress authority only to clients that explicitly accept i
     exchange(fullWindow.bootstrap.secret, true, true, true),
     "fully-aware-client",
   );
-  // Simulator control is never granted by pairing: only a desktop peer can negotiate it afterwards.
+  // Simulator control is never granted by pairing: only a desktop peer can
+  // negotiate it afterwards. Host-wide run authority is desktop-only.
   assert.deepEqual(
     fullResult.capabilities,
     AIDEN_REMOTE_CAPABILITIES.filter(
-      (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+      (capability) =>
+        !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+        !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
     ),
   );
   assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);

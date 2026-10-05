@@ -23,6 +23,7 @@ public struct ThinkingOrb: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     // ImageRenderer never advances a TimelineView, so snapshot.sh injects a
     // fixed instant here to capture a deterministic frame.
     @Environment(\.orbFrozenTime) private var frozenTime
@@ -67,11 +68,13 @@ public struct ThinkingOrb: View {
                 // directly, so applying the preset speed here would compare
                 // two different instants and report a false mismatch.
                 canvas(preset: preset, t: frozenTime)
-            } else if reduceMotion || paused {
+            } else if reduceMotion || paused || lowPowerMode {
                 // one static, deterministic frame — same instant as the web
                 canvas(preset: preset, t: OrbSpec.reducedMotionT * effSpeed)
             } else {
-                TimelineView(.animation(paused: paused)) { timeline in
+                // Capped at 30 fps: the orb is decorative, and ProMotion
+                // displays would otherwise redraw the Canvas at 120 Hz.
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { timeline in
                     // One shared clock, so several orbs on screen stay in
                     // phase exactly as they do on the web.
                     let t = timeline.date.timeIntervalSinceReferenceDate * effSpeed

@@ -2410,12 +2410,17 @@ test("startup finishes a chat deletion journaled before the owning chat was remo
     ".index.json.00000000-0000-4000-8000-000000000000.chat-delete.tmp",
   );
   await fs.writeFile(crashLeftChatIndex, "private crash-left chat metadata", "utf-8");
+  // The restarted process opens a fresh chat store; its first access sweeps
+  // crash-left index stages before reconciliation removes the chat.
+  const chatsAfterRestart = createChatStore(async () => chatsDirectory);
 
-  await reconcilePendingChatDeletions(afterRestart, async (chatId) => chats.remove(chatId));
+  await reconcilePendingChatDeletions(afterRestart, async (chatId) =>
+    chatsAfterRestart.remove(chatId),
+  );
 
-  assert.equal(await chats.get(chat.id), null);
+  assert.equal(await chatsAfterRestart.get(chat.id), null);
   assert.equal(
-    (await chats.list()).some((entry) => entry.id === chat.id),
+    (await chatsAfterRestart.list()).some((entry) => entry.id === chat.id),
     false,
   );
   assert.equal(await afterRestart.get("run-1"), null);

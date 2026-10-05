@@ -22,6 +22,12 @@ interface QueueSnapshot {
   editingId?: string;
   /** Set while a chat-wide operation (manual compaction) must finish before delivery. */
   holdReason?: "compaction";
+  /**
+   * Set while this chat is a fork whose summary is pending or failed. Main
+   * refuses its sends until the summary is ready or the user continues
+   * without it, so queued follow-ups wait here in order.
+   */
+  forkSummaryHeld?: boolean;
 }
 
 /** The subset of a compaction result that decides whether held follow-ups may proceed. */
@@ -78,6 +84,7 @@ export class ChatMessageQueue {
       messages: [structuredClone(message)],
       paused: false,
       holdReason: this.snapshot.holdReason,
+      forkSummaryHeld: this.snapshot.forkSummaryHeld,
     });
   }
   edit(id: string): boolean {
@@ -124,7 +131,17 @@ export class ChatMessageQueue {
     this.publish({ ...this.snapshot, paused: false });
   }
   discard() {
-    this.publish({ messages: [], paused: true, holdReason: this.snapshot.holdReason });
+    this.publish({
+      messages: [],
+      paused: true,
+      holdReason: this.snapshot.holdReason,
+      forkSummaryHeld: this.snapshot.forkSummaryHeld,
+    });
+  }
+  /** Follow the fork's summary state; releasing lets the queue continue in order. */
+  holdForForkSummary(held: boolean) {
+    if (Boolean(this.snapshot.forkSummaryHeld) === held) return;
+    this.publish({ ...this.snapshot, forkSummaryHeld: held || undefined });
   }
   /** Accept follow-ups while compaction runs, but deliver none until it settles. */
   holdForCompaction() {
@@ -157,6 +174,7 @@ export class ChatMessageQueue {
     if (
       this.snapshot.paused ||
       this.snapshot.holdReason ||
+      this.snapshot.forkSummaryHeld ||
       this.snapshot.sendingId ||
       this.snapshot.editingId
     )
@@ -224,6 +242,7 @@ export async function deliverQueuedMessage(input: {
       !input.isCurrent() ||
       input.queue.getSnapshot().paused ||
       input.queue.getSnapshot().holdReason ||
+      input.queue.getSnapshot().forkSummaryHeld ||
       input.queue.getSnapshot().sendingId !== message.id
     ) {
       input.queue.settle(message.id, "deferred");

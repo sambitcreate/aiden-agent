@@ -1,6 +1,14 @@
 // Chat history persistence: an index.json of metadata + one file per chat.
-// Every read-modify-write operation is serialized because all chats share the
-// same index file and background title generation can overlap message writes.
+//
+// Concurrency model:
+// - Operations on one chat are serialized by a per-chat lock, so background
+//   title generation cannot overlap a message write to the same chat, while
+//   writes to different chats proceed independently.
+// - index.json is guarded by its own lock. Once verified against payloads, the
+//   index is kept in memory and patched one entry at a time, so listing and
+//   appending never re-read every transcript.
+// - Startup cleanup, transaction reconciliation and full index verification
+//   run as exclusive maintenance that waits for in-flight operations to drain.
 
 import * as fs from "fs/promises";
 import * as path from "path";
@@ -12,6 +20,15 @@ import {
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import {
+  FORK_SUMMARY_HOLD_MESSAGE,
+  forkSummaryHoldsSend,
+  nextForkTitle,
+  parseChatForkLineageV1,
+  type ChatForkLineageV1,
+  type ChatForkPosition,
+  type ChatForkSummaryV1,
+} from "../../renderer/shared/chat-copy-contract.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
@@ -65,7 +82,23 @@ export interface ChatStoreDurability {
   readFile?: (target: string) => Promise<string>;
   syncDirectory?: (target: string) => Promise<void>;
   syncFile?: (target: string) => Promise<void>;
+  /** Told once per unreadable payload that was moved aside with its bytes intact. */
+  onQuarantine?: () => void;
 }
+
+/** Hidden sibling holding the untouched bytes of a payload that could not be parsed. */
+const QUARANTINED_PAYLOAD =
+  /^\.[A-Za-z0-9._:-]+\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.corrupt$/u;
+
+/**
+ * How a payload read may react to what it finds.
+ * - "owner": the caller holds the chat's lock; migrations may be written back
+ *   and corrupt payloads are quarantined and dropped from the index.
+ * - "exclusive": maintenance with no other operation in flight; same as owner,
+ *   except the caller rebuilds the index itself.
+ * - "pure": a read that may race other chats' writers; never writes anything.
+ */
+type ReadPolicy = "owner" | "exclusive" | "pure";
 
 export class ChatCreateReconciliationRequiredError extends Error {
   readonly chatId: string;
@@ -91,7 +124,7 @@ export function createChatStore(
     migrateLegacyPiProviderId(providerId),
   durability: ChatStoreDurability = {},
 ) {
-  let operationTail: Promise<void> = Promise.resolve();
+  const indexListeners = new Set<() => void>();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
   const readFile =
@@ -110,31 +143,191 @@ export function createChatStore(
     pendingDirectorySync = undefined;
   }
 
-  function serialized<T>(operation: () => Promise<T>): Promise<T> {
-    const guarded = async () => {
-      await retryPendingDirectorySync();
-      await reconcileChatTransactions();
-      return operation();
+  // --- Locks -------------------------------------------------------------
+  const lockTails = new Map<string, Promise<void>>();
+  const INDEX_LOCK = "\u0000index";
+
+  async function acquire(key: string): Promise<() => void> {
+    const previous = lockTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => current);
+    lockTails.set(key, tail);
+    await previous;
+    return () => {
+      release();
+      if (lockTails.get(key) === tail) lockTails.delete(key);
     };
-    const result = operationTail.then(guarded, guarded);
-    operationTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
   }
 
-  function serializedTranscriptFree<T>(operation: () => Promise<T>): Promise<T> {
-    const guarded = async () => {
-      await retryPendingDirectorySync();
-      return operation();
-    };
-    const result = operationTail.then(guarded, guarded);
-    operationTail = result.then(
-      () => undefined,
-      () => undefined,
+  async function withLocks<T>(
+    keys: readonly string[],
+    operation: () => Promise<T>,
+    onAcquired?: () => void,
+  ): Promise<T> {
+    // A stable acquisition order keeps multi-chat operations deadlock-free.
+    const releases: Array<() => void> = [];
+    try {
+      for (const key of [...new Set(keys)].sort()) releases.push(await acquire(key));
+      onAcquired?.();
+      return await operation();
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  }
+
+  function withIndexLock<T>(operation: () => Promise<T>): Promise<T> {
+    return withLocks([INDEX_LOCK], operation);
+  }
+
+  // --- Verified in-memory index ------------------------------------------
+  let memo: ChatMeta[] | null = null;
+  let memoStamp: string | null = null;
+
+  function invalidateIndexMemo(): void {
+    memo = null;
+    memoStamp = null;
+  }
+
+  async function currentIndexStamp(): Promise<string | null> {
+    try {
+      const stat = await fs.stat(await indexPath(), { bigint: true });
+      return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  // --- Shared operations and exclusive maintenance ------------------------
+  let initialized = false;
+  let reconcileNeeded = false;
+  let exclusive = false;
+  let activeShared = 0;
+  let drainWaiters: Array<() => void> = [];
+  let maintenance: Promise<void> | null = null;
+
+  function maintenanceNeeded(needsIndex: boolean): boolean {
+    return (
+      !initialized ||
+      reconcileNeeded ||
+      pendingDirectorySync !== undefined ||
+      (needsIndex && memo === null)
     );
-    return result;
+  }
+
+  async function drained(): Promise<void> {
+    if (activeShared === 0) return;
+    await new Promise<void>((resolve) => drainWaiters.push(resolve));
+  }
+
+  async function runMaintenance(needsIndex: boolean): Promise<void> {
+    await drained();
+    exclusive = true;
+    try {
+      await retryPendingDirectorySync();
+      if (!initialized) {
+        // Only crash leftovers can exist before this process has written, and
+        // nothing else is writing now, so no live writer's stage is touched.
+        await removeCrashLeftStages(await resolveChatsDir());
+      }
+      if (!initialized || reconcileNeeded) {
+        await reconcileChatTransactions();
+      }
+      initialized = true;
+      reconcileNeeded = false;
+      if (needsIndex && memo === null) await readIndex("exclusive");
+    } finally {
+      exclusive = false;
+    }
+  }
+
+  async function enterShared(needsIndex: boolean, maintain = true): Promise<void> {
+    let stampChecked = false;
+    let maintained = false;
+    for (;;) {
+      if (maintenance) {
+        // Whoever started maintenance reports its failure; others re-evaluate.
+        await maintenance.catch(() => undefined);
+        continue;
+      }
+      if (maintain && !maintained && maintenanceNeeded(needsIndex)) {
+        const run = runMaintenance(needsIndex);
+        const tracked = run.then(
+          () => {
+            maintenance = null;
+          },
+          (error: unknown) => {
+            maintenance = null;
+            throw error;
+          },
+        );
+        maintenance = tracked;
+        await tracked;
+        maintained = true;
+        continue;
+      }
+      if (maintain && needsIndex && memo !== null && !stampChecked) {
+        // Detect an index.json changed behind this process's back.
+        stampChecked = true;
+        const stamp = await currentIndexStamp().catch(() => "unreadable");
+        if (memo !== null && stamp !== memoStamp) {
+          invalidateIndexMemo();
+          maintained = false;
+        }
+        continue;
+      }
+      activeShared += 1;
+      return;
+    }
+  }
+
+  function leaveShared(): void {
+    activeShared -= 1;
+    if (activeShared === 0) {
+      const waiters = drainWaiters;
+      drainWaiters = [];
+      for (const wake of waiters) wake();
+    }
+  }
+
+  // enterShared() awaits file I/O whose completions are not FIFO, so without an
+  // admission queue a later call on a chat could take that chat's lock first.
+  const admissionTails = new Map<string, Promise<void>>();
+
+  async function shared<T>(
+    chatIds: readonly string[],
+    needsIndex: boolean,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const keys = [...new Set(chatIds)];
+    const prior = keys.map((key) => admissionTails.get(key));
+    let admit!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    for (const key of keys) admissionTails.set(key, admitted);
+    const finishAdmission = () => {
+      admit();
+      for (const key of keys) {
+        if (admissionTails.get(key) === admitted) admissionTails.delete(key);
+      }
+    };
+    try {
+      await Promise.all(prior);
+      await enterShared(needsIndex);
+    } catch (error) {
+      finishAdmission();
+      throw error;
+    }
+    try {
+      return await withLocks(chatIds, operation, finishAdmission);
+    } finally {
+      finishAdmission();
+      leaveShared();
+    }
   }
 
   async function indexPath(): Promise<string> {
@@ -195,7 +388,8 @@ export function createChatStore(
       (meta.lastAssistantAt === undefined ||
         (typeof meta.lastAssistantAt === "number" &&
           Number.isSafeInteger(meta.lastAssistantAt) &&
-          meta.lastAssistantAt >= 0))
+          meta.lastAssistantAt >= 0)) &&
+      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined)
     );
   }
 
@@ -243,14 +437,15 @@ export function createChatStore(
   ): Promise<void> {
     const target = await indexPath();
     const directory = path.dirname(target);
-    await removeCrashLeftStages(directory);
     const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
     const staged = path.join(
       directory,
       `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`,
     );
+    // Whatever happens below, the previous memo no longer describes the file.
+    invalidateIndexMemo();
     try {
-      await fs.writeFile(staged, JSON.stringify(sorted, null, 2), {
+      await fs.writeFile(staged, JSON.stringify(sorted), {
         encoding: "utf-8",
         flag: "wx",
         mode: 0o600,
@@ -260,6 +455,15 @@ export function createChatStore(
       await syncDirectoryDurably(directory);
     } finally {
       await removeStagedFileDurably(staged, directory);
+    }
+    memo = sorted;
+    memoStamp = await currentIndexStamp();
+    for (const listener of [...indexListeners]) {
+      try {
+        listener();
+      } catch {
+        // Observers are best-effort signals; the durable write already succeeded.
+      }
     }
   }
 
@@ -292,19 +496,19 @@ export function createChatStore(
   }
 
   async function recoverIndex(
+    policy: ReadPolicy,
     quarantineExisting: boolean,
     seed: readonly ChatMeta[] = [],
   ): Promise<ChatMeta[]> {
     const target = await indexPath();
     const directory = path.dirname(target);
-    await removeCrashLeftStages(directory);
 
     const recovered = new Map<string, ChatMeta>();
     // A schema-valid index entry is only a recovery-order hint. Reconstruct it
     // from the exact same-ID payload so missing or mismatched seed entries can
     // never survive as metadata ghosts.
     for (const meta of seed) {
-      const chat = await readChat(meta.id);
+      const chat = await readChat(meta.id, policy);
       if (!chat || chat.id !== meta.id) continue;
       const recoveredMeta = metaOf(chat);
       if (isValidMeta(recoveredMeta))
@@ -329,7 +533,7 @@ export function createChatStore(
       ) {
         continue;
       }
-      const chat = await readChat(id);
+      const chat = await readChat(id, policy);
       if (!chat || chat.id !== id) continue;
       const meta = metaOf(chat);
       if (isValidMeta(meta)) recovered.set(meta.id, meta);
@@ -352,24 +556,34 @@ export function createChatStore(
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    if (!quarantineExisting && resolved.length === 0) {
+      // A fresh store: there is nothing to persist until the first chat lands.
+      memo = [];
+      memoStamp = await currentIndexStamp();
+      return [];
+    }
     await writeIndex(resolved);
     return resolved;
   }
 
-  async function readIndex(): Promise<ChatMeta[]> {
+  /**
+   * Full verification: bind every index entry to its payload. Runs only when
+   * no verified in-memory index exists (startup, external edits, failures).
+   */
+  async function readIndex(policy: ReadPolicy): Promise<ChatMeta[]> {
     const target = await indexPath();
     let parsed: unknown;
     try {
       parsed = JSON.parse(await readFile(target)) as unknown;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        return recoverIndex(false);
-      if (error instanceof SyntaxError) return recoverIndex(true);
+        return recoverIndex(policy, false);
+      if (error instanceof SyntaxError) return recoverIndex(policy, true);
       throw error;
     }
-    if (!Array.isArray(parsed)) return recoverIndex(true);
+    if (!Array.isArray(parsed)) return recoverIndex(policy, true);
     const valid = parsed.filter(isValidMeta);
-    if (valid.length !== parsed.length) return recoverIndex(true, valid);
+    if (valid.length !== parsed.length) return recoverIndex(policy, true, valid);
 
     const canonical = new Map<string, ChatMeta>();
     // Schema validity is not existence or ownership. Bind every entry to its
@@ -377,7 +591,7 @@ export function createChatStore(
     // payload so a valid-looking stale index cannot expose a ghost title or
     // workspace.
     for (const indexed of valid) {
-      const chat = await readChat(indexed.id);
+      const chat = await readChat(indexed.id, policy);
       if (!chat || chat.id !== indexed.id) continue;
       const metadata = metaOf(chat);
       if (isValidMeta(metadata)) canonical.set(metadata.id, metadata);
@@ -388,8 +602,17 @@ export function createChatStore(
       // therefore leaves the valid index intact and retryable, without
       // quarantining it as corrupt.
       await writeIndex(resolved);
+    } else {
+      memo = [...resolved];
+      memoStamp = await currentIndexStamp();
     }
-    return resolved;
+    return resolved.map((meta) => ({ ...meta }));
+  }
+
+  /** The verified index. Callers hold the index lock or run exclusively. */
+  async function loadIndex(): Promise<ChatMeta[]> {
+    if (memo) return memo.map((meta) => ({ ...meta }));
+    return readIndex(exclusive ? "exclusive" : "pure");
   }
 
   /**
@@ -458,31 +681,110 @@ export function createChatStore(
     // opening payload files and makes subsequent summary reads constant-work.
     if (JSON.stringify(migrated) !== JSON.stringify(parsed)) {
       await writeIndex(migrated);
+      // These rows were not bound to payloads; verify before trusting them.
+      invalidateIndexMemo();
     }
     return migrated;
   }
 
   async function removeFromIndexDurably(id: string): Promise<void> {
-    const next = (await readIndex()).filter((entry) => entry.id !== id);
-    await writeIndexDurably(next, "chat-delete");
+    await withIndexLock(async () => {
+      const next = (await loadIndex()).filter((entry) => entry.id !== id);
+      await writeIndexDurably(next, "chat-delete");
+    });
   }
 
-  async function readChat(id: string): Promise<Chat | null> {
+  async function quarantinePayload(id: string, policy: ReadPolicy): Promise<void> {
+    const payload = await chatPath(id);
+    const directory = path.dirname(payload);
+    const quarantine = path.join(
+      directory,
+      `.${path.basename(payload)}.${randomUUID()}.corrupt`,
+    );
+    try {
+      await fs.rename(payload, quarantine);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    await syncDirectoryDurably(directory);
+    durability.onQuarantine?.();
+    if (policy === "owner") {
+      await withIndexLock(async () => {
+        const index = await loadIndex();
+        const next = index.filter((entry) => entry.id !== id);
+        if (next.length !== index.length) await writeIndex(next);
+      });
+    }
+  }
+
+  async function countQuarantinedPayloads(): Promise<number> {
+    try {
+      const entries = await fs.readdir(await resolveChatsDir());
+      return entries.filter((name) => QUARANTINED_PAYLOAD.test(name)).length;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+  }
+
+  /** Whether an earlier read set aside unreadable bytes for this chat ID. */
+  async function hasQuarantinedPayload(id: string): Promise<boolean> {
+    const prefix = `.${path.basename(await chatPath(id))}.`;
+    try {
+      const entries = await fs.readdir(await resolveChatsDir());
+      return entries.some((name) => name.startsWith(prefix) && QUARANTINED_PAYLOAD.test(name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  async function readChat(id: string, policy: ReadPolicy): Promise<Chat | null> {
     let data: string;
     try {
       data = await readFile(await chatPath(id));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      // An unreadable payload means the verified index may be wrong too; the
+      // next index read re-verifies against disk and surfaces the failure.
+      if (policy === "owner") invalidateIndexMemo();
       throw error;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(data) as unknown;
     } catch (error) {
-      if (error instanceof SyntaxError) return null;
-      throw error;
+      if (!(error instanceof SyntaxError)) throw error;
+      // Torn or garbled bytes: move them aside intact rather than leaving a
+      // file a later same-ID write could replace.
+      if (policy !== "pure") await quarantinePayload(id, policy);
+      return null;
+    }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "forkedFrom")
+    ) {
+      // Lineage is display-only provenance: a damaged value is dropped rather
+      // than hiding the whole transcript.
+      const record = parsed as Record<string, unknown>;
+      const lineage = parseChatForkLineageV1(record.forkedFrom);
+      if (lineage) record.forkedFrom = lineage;
+      else delete record.forkedFrom;
     }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
+    if (
+      policy !== "pure" &&
+      (parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        !Array.isArray(messages))
+    ) {
+      await quarantinePayload(id, policy);
+      return null;
+    }
     if (
       !isValidMeta(parsed) ||
       parsed.id !== id ||
@@ -561,8 +863,10 @@ export function createChatStore(
             : undefined,
       };
     });
-    if (privacyMigrationRequired) await writeChat(chat);
-    else if (migratedProvider) await writeChat(chat).catch(() => undefined);
+    if (policy !== "pure") {
+      if (privacyMigrationRequired) await writeChat(chat);
+      else if (migratedProvider) await writeChat(chat).catch(() => undefined);
+    }
     return chat;
   }
 
@@ -572,13 +876,14 @@ export function createChatStore(
   ): Promise<void> {
     const target = await chatPath(chat.id);
     const directory = path.dirname(target);
-    await removeCrashLeftStages(directory);
     const staged = path.join(
       directory,
       `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`,
     );
     try {
-      await fs.writeFile(staged, JSON.stringify(chat, null, 2), {
+      // Compact JSON: indentation roughly doubled base64-heavy payloads.
+      // Older indented files still parse.
+      await fs.writeFile(staged, JSON.stringify(chat), {
         encoding: "utf-8",
         flag: "wx",
         mode: 0o600,
@@ -630,17 +935,28 @@ export function createChatStore(
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
+      ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
   }
 
+  /** The index keeps a summary's state, not its text; only the transcript needs that. */
+  function indexedForkLineage(lineage: ChatForkLineageV1): ChatForkLineageV1 {
+    if (!lineage.summary) return lineage;
+    const { state, afterMessageId } = lineage.summary;
+    return { ...lineage, summary: { state, afterMessageId } };
+  }
+
+  /** Patch only this chat's entry; never re-read other transcripts. */
   async function updateMeta(chat: Chat): Promise<void> {
-    const index = await readIndex();
-    const idx = index.findIndex((entry) => entry.id === chat.id);
-    if (idx >= 0) index[idx] = metaOf(chat);
-    else index.push(metaOf(chat));
-    await writeIndex(index);
+    await withIndexLock(async () => {
+      const index = await loadIndex();
+      const idx = index.findIndex((entry) => entry.id === chat.id);
+      if (idx >= 0) index[idx] = metaOf(chat);
+      else index.push(metaOf(chat));
+      await writeIndex(index);
+    });
   }
 
   async function writeChatAndMeta(
@@ -649,9 +965,15 @@ export function createChatStore(
   ): Promise<void> {
     chat.summaryRevision = newChatSummaryRevision();
     await beginChatTransaction(chat.id);
-    await writeChat(chat, beforeRename);
-    await updateMeta(chat);
-    await clearChatTransaction(chat.id);
+    try {
+      await writeChat(chat, beforeRename);
+      await updateMeta(chat);
+      await clearChatTransaction(chat.id);
+    } catch (error) {
+      // A marker may remain; reconcile it before the next operation.
+      reconcileNeeded = true;
+      throw error;
+    }
   }
 
   async function reconcileChatTransactions(): Promise<void> {
@@ -668,10 +990,10 @@ export function createChatStore(
     }
     if (transactionIds.length === 0) return;
 
-    const index = await readIndex();
+    const index = await loadIndex();
     let changed = false;
     for (const id of transactionIds) {
-      const chat = await readChat(id);
+      const chat = await readChat(id, "exclusive");
       const indexPosition = index.findIndex((entry) => entry.id === id);
       if (!chat || chat.id !== id) {
         if (indexPosition >= 0) {
@@ -704,7 +1026,7 @@ export function createChatStore(
     } catch (createError) {
       let installed: Chat | null;
       try {
-        installed = await readChat(chat.id);
+        installed = await readChat(chat.id, "owner");
       } catch {
         throw new ChatCreateReconciliationRequiredError(chat.id);
       }
@@ -727,10 +1049,19 @@ export function createChatStore(
   }
 
   return {
+    /**
+     * Observe committed summary-index writes (save, delete, metadata). Lets the
+     * Remote host feed refresh without reading or scanning transcripts.
+     */
+    onIndexChanged(listener: () => void): () => void {
+      indexListeners.add(listener);
+      return () => indexListeners.delete(listener);
+    },
+
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
-      return serialized(async () => {
-        const index = (await readIndex()).map((meta) => ({
+      return shared([], true, () => withIndexLock(async () => {
+        const index = (await loadIndex()).map((meta) => ({
           ...meta,
           workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID,
         }));
@@ -738,7 +1069,7 @@ export function createChatStore(
           ? index.filter((meta) => meta.workspaceId === workspaceId)
           : index;
         return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
-      });
+      }));
     },
 
     async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
@@ -747,15 +1078,29 @@ export function createChatStore(
 
     /** Transcript-free metadata read for bounded Remote summary pages. */
     async listSummaryMetadata(): Promise<ChatMeta[]> {
-      return serializedTranscriptFree(() => readSummaryIndex());
+      // Deliberately skips transaction reconciliation and payload binding.
+      await enterShared(false, false);
+      try {
+        return await withIndexLock(async () => {
+          await retryPendingDirectorySync();
+          return readSummaryIndex();
+        });
+      } finally {
+        leaveShared();
+      }
     },
 
     async listByBot(botId: string): Promise<ChatMeta[]> {
       return (await this.list()).filter((chat) => chat.botId === botId);
     },
 
+    /** Unreadable payloads moved aside (bytes intact) in the chats directory. */
+    async quarantinedPayloadCount(): Promise<number> {
+      return countQuarantinedPayloads();
+    },
+
     async get(id: string): Promise<Chat | null> {
-      return serialized(() => readChat(id));
+      return shared([id], false, () => readChat(id, "owner"));
     },
 
     /** Install the first user message and sidebar metadata as one recoverable transaction. */
@@ -771,9 +1116,11 @@ export function createChatStore(
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
       assertCurrent: () => void;
     }): Promise<Chat> {
-      return serialized(async () => {
+      return shared([input.id], true, async () => {
         input.assertCurrent();
-        const existing = await readChat(input.id);
+        // "pure": a corrupt payload at a colliding draft ID must stay in place
+        // so the guard below rejects the collision instead of quarantining it.
+        const existing = await readChat(input.id, "pure");
         if (existing) {
           if (existing.firstMessageCommit?.turnId !== input.turnId ||
               existing.firstMessageCommit.fingerprint !== input.fingerprint) {
@@ -789,6 +1136,11 @@ export function createChatStore(
           throw new Error("This draft identifier belongs to an unreadable existing chat.");
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        // The same holds once a read has quarantined that payload: its bytes
+        // still belong to the earlier conversation, not to a new draft.
+        if (await hasQuarantinedPayload(input.id)) {
+          throw new Error("This draft identifier belongs to an unreadable existing chat.");
         }
         if (!input.message.content.trim() && !input.message.attachments?.length) {
           throw new Error("Add a message or attachment before sending.");
@@ -830,7 +1182,8 @@ export function createChatStore(
       initialAssistantMessage?: string;
       assertCurrent?: () => void;
     }): Promise<Chat> {
-      return serialized(async () => {
+      const id = input.id ?? newId();
+      return shared([id], true, async () => {
         input.assertCurrent?.();
         if (
           input.initialAssistantMessage !== undefined &&
@@ -841,7 +1194,7 @@ export function createChatStore(
         const now = Date.now();
         const openingGreeting = input.initialAssistantMessage?.trim();
         const chat: Chat = {
-          id: input.id ?? newId(),
+          id,
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
@@ -870,14 +1223,26 @@ export function createChatStore(
       /** Main-owned destination for copies that move legacy Bot history into its hidden home. */
       targetWorkspaceId?: string;
       expectedWorkspaceId?: string;
+      /** Legacy cut used by Bot copies: through a settled assistant reply, without lineage. */
       throughAssistantMessageId?: string;
+      /** Fork cut that records `forkedFrom` lineage on the new chat. */
+      forkAt?: { messageId: string; position: ChatForkPosition };
+      /** Start the fork with a pending summary of the source after the cut. */
+      forkSummary?: { instructions?: string };
       assertCurrent?: () => void;
-      /** Prepare dependent durable records before this chat becomes visible. */
-      beforeInstall?: (chat: Chat) => void | Promise<void>;
+      /**
+       * Prepare dependent durable records before this chat becomes visible.
+       * `sourceMessageIds[i]` is the source message copied into `chat.messages[i]`.
+       */
+      beforeInstall?: (
+        chat: Chat,
+        sourceMessageIds: readonly string[],
+      ) => void | Promise<void>;
     }): Promise<Chat> {
-      return serialized(async () => {
+      const newChatId = input.targetChatId ?? randomUUID();
+      return shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
-        const source = await readChat(input.sourceChatId);
+        const source = await readChat(input.sourceChatId, "owner");
         if (!source) throw new Error(`Chat ${input.sourceChatId} not found`);
         if (
           input.expectedWorkspaceId !== undefined &&
@@ -889,16 +1254,30 @@ export function createChatStore(
           );
         }
 
+        const cut =
+          input.forkAt ??
+          (input.throughAssistantMessageId !== undefined
+            ? { messageId: input.throughAssistantMessageId, position: "after" as const }
+            : undefined);
+        // Inclusive index of the last copied message.
         let throughIndex = source.messages.length - 1;
-        if (input.throughAssistantMessageId !== undefined) {
+        if (cut?.position === "after") {
           throughIndex = source.messages.findIndex(
-            (message) =>
-              message.id === input.throughAssistantMessageId &&
-              message.role === "assistant",
+            (message) => message.id === cut.messageId && message.role === "assistant",
           );
           if (throughIndex < 0) {
             throw new Error("Choose a completed assistant turn to fork from.");
           }
+        } else if (cut?.position === "before") {
+          const userIndex = source.messages.findIndex(
+            (message) => message.id === cut.messageId && message.role === "user",
+          );
+          if (userIndex < 0) {
+            throw new Error("Choose one of your messages to edit in a fork.");
+          }
+          throughIndex = userIndex - 1;
+        }
+        if (cut) {
           let hasVisibleUser = false;
           for (let index = 0; index <= throughIndex; index += 1) {
             if (source.messages[index]?.role === "user") {
@@ -907,12 +1286,23 @@ export function createChatStore(
             }
           }
           if (!hasVisibleUser) {
-            throw new Error("The selected turn has no user message to copy.");
+            throw new Error(
+              cut.position === "before"
+                ? "Nothing comes before the first message to fork."
+                : "The selected turn has no user message to copy.",
+            );
           }
         }
 
+        if (input.forkSummary && (!input.forkAt || source.botId)) {
+          throw new Error("Only a fork can carry a summary.");
+        }
+        if (input.forkSummary && throughIndex >= source.messages.length - 1) {
+          throw new Error("Nothing happened after this point to summarize.");
+        }
+
         const copiedMessages: ChatMessage[] = [];
-        const newChatId = input.targetChatId ?? randomUUID();
+        const sourceMessageIds: string[] = [];
         let chargedBytes = 0;
         const charge = (value: string | undefined) => {
           if (value === undefined) return;
@@ -926,13 +1316,23 @@ export function createChatStore(
           }
         };
         const metadata = projectVisibleChatMetadata(source);
-        const suffix = input.throughAssistantMessageId ? " (fork)" : " (copy)";
-        const maximumBaseLength = Math.max(1, 120 - suffix.length);
-        const title = `${Array.from(
-          metadata.title.slice(0, maximumBaseLength * 2),
-        )
-          .slice(0, maximumBaseLength)
-          .join("")}${suffix}`;
+        let title: string;
+        if (cut) {
+          const destinationWorkspaceId =
+            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID;
+          const siblings = (await withIndexLock(() => loadIndex())).filter(
+            (entry) => (entry.workspaceId ?? DEFAULT_WORKSPACE_ID) === destinationWorkspaceId,
+          );
+          title = nextForkTitle(metadata.title, siblings.map((entry) => entry.title));
+        } else {
+          const suffix = " (copy)";
+          const maximumBaseLength = Math.max(1, 120 - suffix.length);
+          title = `${Array.from(
+            metadata.title.slice(0, maximumBaseLength * 2),
+          )
+            .slice(0, maximumBaseLength)
+            .join("")}${suffix}`;
+        }
         chargedBytes += 1_024;
         charge(title);
         charge(input.targetWorkspaceId ?? metadata.workspaceId);
@@ -966,6 +1366,7 @@ export function createChatStore(
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new Error("This chat is too large to copy safely.");
           }
+          sourceMessageIds.push(message.id);
           copiedMessages.push({
             id: randomUUID(),
             role: message.role,
@@ -999,11 +1400,32 @@ export function createChatStore(
           botId: source.botId,
           providerId: metadata.providerId,
           model: metadata.model,
+          ...(input.forkAt && !source.botId
+            ? {
+                forkedFrom: {
+                  chatId: source.id,
+                  messageId: input.forkAt.messageId,
+                  position: input.forkAt.position,
+                  at: now,
+                  ...(input.forkSummary
+                    ? {
+                        summary: {
+                          state: "pending" as const,
+                          afterMessageId: copiedMessages[copiedMessages.length - 1]!.id,
+                          ...(input.forkSummary.instructions
+                            ? { instructions: input.forkSummary.instructions }
+                            : {}),
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
           createdAt: now,
           updatedAt: now,
           messages: copiedMessages,
         };
-        await input.beforeInstall?.(copied);
+        await input.beforeInstall?.(copied, sourceMessageIds);
         return installNewChat(copied, input.assertCurrent);
       });
     },
@@ -1013,12 +1435,34 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
         chat.title = title.trim() || chat.title;
         chat.updatedAt = Date.now();
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
+    /**
+     * Move a fork's summary through its lifecycle. `next` sees the current
+     * summary and returns the replacement, `undefined` to drop it, or `null`
+     * to leave the chat untouched (returned as null). Not a user edit, so
+     * `updatedAt` and the sidebar order stay put.
+     */
+    async updateForkSummary(
+      id: string,
+      next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
+    ): Promise<Chat | null> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat?.forkedFrom) return null;
+        const summary = next(chat.forkedFrom.summary, chat);
+        if (summary === null) return null;
+        const { summary: _previous, ...lineage } = chat.forkedFrom;
+        chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
         await writeChatAndMeta(chat);
         return chat;
       });
@@ -1030,8 +1474,8 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat || chat.title !== expectedTitle) return null;
         const nextTitle = title.trim();
         if (!nextTitle || nextTitle === chat.title) return null;
@@ -1048,8 +1492,8 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
         if (chat.messages.length > 0) {
@@ -1072,8 +1516,8 @@ export function createChatStore(
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
         if (!chat.botId) throw new Error("Only a Bot chat can change its Bot model authority.");
@@ -1095,8 +1539,8 @@ export function createChatStore(
       enabled: boolean,
       isCurrent: () => boolean = () => true,
     ): Promise<Chat> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], false, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         if (!isCurrent())
           throw new Error("The renderer document is no longer active.");
@@ -1115,11 +1559,10 @@ export function createChatStore(
       id: string,
       assertCurrent?: (chat: Chat | null) => void | Promise<void>,
     ): Promise<void> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (assertCurrent) await assertCurrent(chat);
         const payload = await chatPath(id);
-        await removeCrashLeftStages(path.dirname(payload));
         let removedPayload = false;
         try {
           await fs.rm(payload);
@@ -1146,8 +1589,8 @@ export function createChatStore(
         isCurrent?: () => boolean;
       },
     ): Promise<Chat> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         if (meta?.isCurrent && !meta.isCurrent()) {
           throw new Error("The renderer document is no longer active.");
@@ -1160,6 +1603,9 @@ export function createChatStore(
           throw new Error(
             "The chat workspace changed before the message could be saved.",
           );
+        }
+        if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
+          throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
         }
         const full: ChatMessage = {
           id: message.id ?? newId(),
@@ -1232,8 +1678,8 @@ export function createChatStore(
       expectedSeed: string,
       title: string,
     ): Promise<Chat | null> {
-      return serialized(async () => {
-        const chat = await readChat(id);
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
         if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
           return null;
         const nextTitle = title.trim();

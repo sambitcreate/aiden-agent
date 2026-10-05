@@ -1,0 +1,13 @@
+# Pi 1.0.3 upgrade (2026-10-05)
+
+User approved committing a plan and starting implementation. Execution source: `docs/plans/pi-1.0.3-upgrade-plan.md`; historical stable parity work: `docs/plans/pi-1-parity-plan.md` on the stack.
+
+Verified main `43d8adb02` (0.53.0, Pi 0.87.1); target `v1.0.3` / `d78dc83d633229d12f8b79631384c4c2717c399f`. Continue #299 → #302 → #301 → #304 → #303 → #306 → #305 → #307 via normal merges, not rebase. #300 is merged/closed. Start by reconciling #299 (`aa337d714`) with main in the existing 39a6 checkout. No PR merge/release/rollout advancement is requested.
+
+Keep frozen legacy harness and historical 0.87.1 fixtures. Azure migration must include separate encrypted Pi credentials and CLI auth/config as well as selections/cache and historical references; preserve custom aliases and define collisions. Codemode caps come from sandbox; image saving comes from coding-agent, requiring an explicit desktop decision. Desktop MCP uses the official MCP SDK. CIMD/Anthropic inline tool changes landed in 1.0.1. npm install regenerates locks; npm ci verifies them. Installed replay receipts require absolute executable/receipt paths. pi-env evaluation only.
+
+Plan commit: `9a5d67d7`. Foundation reconciliation with main is committed locally after final broad validation. Four textual conflicts were resolved in pi-session-port and CLI build/entry/commands. Preserve main's lazy entry and shared bundle graph: MCP migration and pi-mcp routing now live in cli-runtime; new OAuth loaders and codemode worker live in chunks. The legacy adapter now also exports NewEntry and adapts generateBranchSummary through current Models.completeSimple for main's fork-summary service.
+
+Main's new runtime dependency inventory rejects unused production pi-codemode in #299 (desktop consumer arrives in #302). Removed root dependency and premature unpack entries here; **restore these explicitly when merging into #302**, since an otherwise clean merge removes them there too. CLI's own codemode/QuickJS dependency remains intact.
+
+Local focused checks, root/CLI/e2e types, lint, desktop/CLI production builds and real Electron chat-fork smoke pass. Initial broad run found the dependency inventory mismatch above; fixed focused check and all preserved test modes pass. Final clean-install npm test passed end to end (6,820 unit cases: 6,818 passed, 2 skipped; all preserved modes, including CLI 74/74, passed). No hosted, signed, physical-device, paid-provider or installed rollout acceptance claimed. Live foundation pins remain 1.0.0 until the integrated stack's 1.0.3/Azure migration phase.

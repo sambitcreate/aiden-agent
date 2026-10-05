@@ -39,6 +39,7 @@ export type {
   CompactionPreparation,
   CompactionSettings,
   Entry,
+  NewEntry,
   JsonValue,
   JsonlSessionMetadata
 } from "@aiden/pi-legacy-harness";
@@ -64,6 +65,7 @@ declare module "@earendil-works/pi-agent-core" {
 }
 
 import { compact as legacyCompact } from "@aiden/pi-legacy-harness";
+import { generateBranchSummary as legacyGenerateBranchSummary } from "@aiden/pi-legacy-harness";
 import type { Models } from "@earendil-works/pi-ai";
 
 type LegacyCompactArguments = Parameters<typeof legacyCompact>;
@@ -91,4 +93,21 @@ export function compact(
     completeSimple: (...request: Parameters<Models["completeSimple"]>) => models.completeSimple(...request),
   };
   return legacyCompact(preparation, summaryModels as unknown as LegacyCompactArguments[1], ...args);
+}
+
+type LegacyBranchSummaryArguments = Parameters<typeof legacyGenerateBranchSummary>;
+
+/** Fork summaries use the same current-provider seam as compaction. */
+export function generateBranchSummary(
+  entries: LegacyBranchSummaryArguments[0],
+  options: Omit<LegacyBranchSummaryArguments[1], "models"> & { models: Pick<Models, "completeSimple"> },
+  context: LegacyBranchSummaryArguments[2],
+): ReturnType<typeof legacyGenerateBranchSummary> {
+  const summaryModels = {
+    completeSimple: (...request: Parameters<Models["completeSimple"]>) => options.models.completeSimple(...request),
+  };
+  return legacyGenerateBranchSummary(entries, {
+    ...options,
+    models: summaryModels as unknown as LegacyBranchSummaryArguments[1]["models"],
+  }, context);
 }
