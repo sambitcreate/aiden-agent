@@ -110,7 +110,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 21);
+  assert.equal(fixture.contractRevision, 22);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -422,6 +422,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.equal(info.version, "1.0.0");
   const paths = record(document.paths, "OpenAPI paths");
   const requiredPaths = [
+    "/providers",
     "/health",
     "/pairing/manual-bootstrap",
     "/pairing/exchange",
@@ -1981,6 +1982,22 @@ test("stream input contracts reject unknown modes, oversized text, and unknown r
     }),
     /queue/u,
   );
+});
+
+test("provider creation schemas accept the shared keyless fixture and reject unsafe credential shapes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const fixture = await json("fixtures/contract.json") as { providerCreation: Record<string, unknown>; providerCreationReceipt: Record<string, unknown> };
+  const ajv = new Ajv2020({ strict: false });
+  const request = ajv.compile({ $ref: "#/components/schemas/ProviderCreation", components: spec.components });
+  const receipt = ajv.compile({ $ref: "#/components/schemas/ProviderCreationReceipt", components: spec.components });
+  assert.equal(request(fixture.providerCreation), true, JSON.stringify(request.errors));
+  assert.equal(receipt(fixture.providerCreationReceipt), true, JSON.stringify(receipt.errors));
+  assert.equal(request({ ...fixture.providerCreation, apiKey: "unneeded-key" }), false);
+  assert.equal(request({ ...fixture.providerCreation, needsKey: true }), false);
+  assert.equal(request({ ...fixture.providerCreation, confirmedForeground: false }), false);
+  assert.equal(request({ ...fixture.providerCreation, extra: true }), false);
+  assert.equal(receipt({ ...fixture.providerCreationReceipt, apiKey: "leaked-key" }), false);
 });
 
 test("fork lineage parses on chats and rows, and a prefill only follows a fork before a prompt", async () => {

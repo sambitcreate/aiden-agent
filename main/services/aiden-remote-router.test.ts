@@ -27,6 +27,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  providers?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["providers"];
   readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
@@ -474,6 +475,7 @@ async function fixture(options: {
             response.end();
           },
         },
+    ...(options.providers ? { providers: options.providers } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -4024,7 +4026,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 21,
+      contractRevision: 22,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4263,6 +4265,32 @@ test("a revocation that wins while the host feed is opening refuses the subscrip
     hostFeed.close();
     await mac.close();
   }
+});
+
+
+test("provider creation is feature-gated, authorized, foreground-only, and exposes only its receipt", async () => {
+  const requests: unknown[] = [];
+  const providers = {create: async (_device: string, _key: string, body: unknown, current?: () => boolean) => {
+    assert.equal(current?.(), true); requests.push(body); return {id: "custom:remote-test", label: "Private", models: ["vision"]};
+  }};
+  const headers = {authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json", "idempotency-key": "fixture-provider-creation"};
+  const input = {label: "Private", baseUrl: "https://private.example.test/v1", kind: "openai", deployment: "hosted", needsKey: false, models: [{id: "vision", vision: true, reasoning: false, toolCall: true}], confirmedForeground: true};
+  for (const [grants, expected] of [[[], 403], [["server:read"], 403], [["server:read", "workspace:manage"], 201]] as const) {
+    const app = await fixture({providers, capabilities: [...grants]});
+    try {
+      const response = await fetch(`${app.base}/providers`, {method: "POST", headers, body: JSON.stringify(input)});
+      assert.equal(response.status, expected);
+      if (expected === 201) {
+        assert.deepEqual(await response.json(), {id: "custom:remote-test", label: "Private", models: ["vision"]});
+        const info = await (await fetch(`${app.base}/server`, {headers})).json() as {features: string[]};
+        assert.ok(info.features.includes("providers-create-v1"));
+      }
+    } finally { await app.close(); }
+  }
+  assert.equal(requests.length, 1);
+  const legacy = await fixture({capabilities: ["workspace:manage", "server:read"]});
+  try { assert.equal((await fetch(`${legacy.base}/providers`, {method: "POST", headers, body: JSON.stringify(input)})).status, 404); }
+  finally { await legacy.close(); }
 });
 
 test("forking is advertised with the host wiring and needs a revision and an idempotency key", async () => {
