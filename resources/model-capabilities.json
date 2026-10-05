@@ -119200,9 +119200,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.67,
+          "input": 0.99,
           "output": 14,
-          "cache_read": 0.22
+          "cache_read": 0.33
         },
         "canonical_model_id": "moonshotai/kimi-k3"
       },
@@ -123229,52 +123229,6 @@
           }
         },
         "canonical_model_id": "alibaba/qwen3.7-plus"
-      },
-      "qwen/qwen3.8-27b:free": {
-        "id": "qwen/qwen3.8-27b:free",
-        "name": "Qwen3.8 27B (free)",
-        "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
-        "family": "qwen",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          },
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-08-14",
-        "last_updated": "2026-08-14",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 235929
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        },
-        "canonical_model_id": "alibaba/qwen3.8-27b"
       },
       "qwen/qwen3.8-max-0902": {
         "id": "qwen/qwen3.8-max-0902",
