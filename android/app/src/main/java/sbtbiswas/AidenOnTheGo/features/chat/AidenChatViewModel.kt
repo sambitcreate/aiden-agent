@@ -39,6 +39,8 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
+import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
+import sbtbiswas.AidenOnTheGo.networking.AidenStreamNetworkRecovery
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
@@ -57,7 +59,8 @@ class AidenChatViewModel(
     private val draftStore: AidenChatDraftStore,
     val initialChat: AidenChat? = null,
     private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -80,6 +83,11 @@ class AidenChatViewModel(
 
     private val _streamState = MutableStateFlow<AidenStreamState?>(null)
     val streamState: StateFlow<AidenStreamState?> = _streamState.asStateFlow()
+
+    /** True while the active stream is parked offline, waiting for the network to return. */
+    private val _isWaitingForNetwork = MutableStateFlow(false)
+    val isWaitingForNetwork: StateFlow<Boolean> = _isWaitingForNetwork.asStateFlow()
+    private var networkWaitStreamId: String? = null
 
     private val _liveText = MutableStateFlow("")
     val liveText: StateFlow<String> = _liveText.asStateFlow()
@@ -1185,7 +1193,8 @@ class AidenChatViewModel(
         streamJob = viewModelScope.launch {
             var stream = originalStream
             val terminalReplayGate = AidenTerminalReplayGate()
-            var retryAttempt = 0
+            val recovery = AidenStreamNetworkRecovery(networkAvailability)
+            val onWaiting: (Boolean) -> Unit = { waiting -> setWaitingForNetwork(waiting, stream.streamId) }
 
             while (activeStreamId == stream.streamId) {
                 try {
@@ -1206,7 +1215,7 @@ class AidenChatViewModel(
 
                     val status = client.streamStatus(chatId, stream.streamId)
                     if (activeStreamId != stream.streamId) return@launch
-                    retryAttempt = 0
+                    recovery.recordHealthy()
                     clearRecoveryWarning()
                     apply(status, stream.streamId)
                     if (status.state.isTerminal) {
@@ -1217,10 +1226,14 @@ class AidenChatViewModel(
                     delay(500)
                 } catch (e: Exception) {
                     if (e is CancellationException) return@launch
+                    // Offline: park without probing, warning, or spending backoff,
+                    // then reopen after the last applied sequence.
+                    if (!recovery.shouldProbeAfterStreamFailure(onWaiting)) continue
+                    if (activeStreamId != stream.streamId) return@launch
                     try {
                         val status = client.streamStatus(chatId, stream.streamId)
                         if (activeStreamId != stream.streamId) return@launch
-                        retryAttempt = 0
+                        recovery.recordHealthy()
                         clearRecoveryWarning()
                         apply(status, stream.streamId)
                         if (status.state.isTerminal) {
@@ -1234,14 +1247,27 @@ class AidenChatViewModel(
                         if (AidenTerminalReconciliation.isDefinitiveMissingStream(inner)) {
                             if (reconcileMissingStream(stream)) return@launch
                         }
-                        showRecoveryWarning(inner.localizedMessage)
-                        val retryDelay = AidenTerminalReconciliation.retryDelayMilliseconds(retryAttempt)
-                        retryAttempt++
-                        delay(retryDelay)
+                        recovery.recoverAfterProbeFailure(
+                            onBackoff = { showRecoveryWarning(inner.localizedMessage) },
+                            onWaiting = onWaiting
+                        )
                         continue
                     }
                 }
             }
+        }
+    }
+
+    private fun setWaitingForNetwork(waiting: Boolean, streamId: String) {
+        if (waiting) {
+            if (activeStreamId != streamId) return
+            // Losing the network is not an error: drop any stale recovery warning.
+            clearRecoveryWarning()
+            networkWaitStreamId = streamId
+            _isWaitingForNetwork.value = true
+        } else if (networkWaitStreamId == streamId) {
+            networkWaitStreamId = null
+            _isWaitingForNetwork.value = false
         }
     }
 
@@ -2102,6 +2128,8 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
+            networkWaitStreamId = null
+            _isWaitingForNetwork.value = false
             liveTranscript.reset()
             _tools.value = emptyList()
             _activityTimeline.value = null
@@ -2166,7 +2194,8 @@ class AidenChatViewModel(
             coordinator: AidenRemoteCoordinator,
             chatCache: AidenChatCache,
             draftStore: AidenChatDraftStore,
-            liveNotificationManager: AidenRemoteLiveNotificationManager? = null
+            liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+            networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -2175,7 +2204,8 @@ class AidenChatViewModel(
                     coordinator,
                     chatCache,
                     draftStore,
-                    liveNotificationManager = liveNotificationManager
+                    liveNotificationManager = liveNotificationManager,
+                    networkAvailability = networkAvailability
                 ) as T
             }
         }

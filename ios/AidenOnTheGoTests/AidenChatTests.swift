@@ -799,6 +799,7 @@ final class AidenChatTests: XCTestCase {
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
+        networkPath: AidenNetworkPathSource? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
@@ -860,6 +861,7 @@ final class AidenChatTests: XCTestCase {
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
+            networkPath: networkPath ?? AidenNetworkAvailability(),
             onChatUpdated: onChatUpdated
         )
     }
@@ -2584,6 +2586,54 @@ final class AidenChatTests: XCTestCase {
         let finished = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
         XCTAssertNil(finished)
         XCTAssertTrue(model.canSend)
+    }
+
+    @MainActor
+    func testStreamLostOfflineWaitsForNetworkWithoutProbingThenResumesOnceFromLastSequence() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-network-wait-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let path = AidenNetworkAvailability(isNetworkAvailable: false)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, networkPath: path)
+        var final = model.chat
+        final.messages.append(AidenChatMessage(id: "final-reply", role: .assistant, text: "prefix suffix", createdAt: Date()))
+        let fixture = AidenNetworkWaitFixture(chat: model.chat, finalChat: final)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-network", turnId: "turn-network", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite()
+        )
+
+        // The first stream delivers sequence 1 and ends; the reopened stream
+        // then fails while the device is offline.
+        await model.load(observeProgress: false)
+        for _ in 0..<400 {
+            if model.isWaitingForNetwork { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.isWaitingForNetwork)
+        XCTAssertTrue(model.isStreaming)
+        XCTAssertEqual(model.liveText, "prefix ")
+        XCTAssertNil(model.presentedError, "losing the network is not an error")
+        let statusReadsWhenParked = fixture.statusReads
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(fixture.statusReads, statusReadsWhenParked, "no status probe is spent while offline")
+        XCTAssertEqual(fixture.eventCursors, [0, 1])
+        XCTAssertNil(model.presentedError)
+
+        // A flapping return wakes the one parked consumer exactly once.
+        path.setAvailable(true)
+        path.setAvailable(false)
+        path.setAvailable(true)
+        for _ in 0..<400 {
+            if model.chat.messages.last?.id == "final-reply" && !model.isStreaming { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.chat.messages.last?.id, "final-reply")
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertFalse(model.isWaitingForNetwork)
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(fixture.eventCursors, [0, 1, 1], "one reconnect, resumed after the last applied sequence")
     }
 
     @MainActor
@@ -8761,6 +8811,59 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// Stream `stream-network`: the first events read delivers sequence 1 and
+/// ends, the second fails with a 503, and the third finishes the turn.
+private final class AidenNetworkWaitFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let chat: AidenChat
+    private let finalChat: AidenChat
+    private var chatReads = 0
+    private var statuses = 0
+    private var cursors: [Int] = []
+    var statusReads: Int { lock.withLock { statuses } }
+    var eventCursors: [Int] { lock.withLock { cursors } }
+    init(chat: AidenChat, finalChat: AidenChat) { self.chat = chat; self.finalChat = finalChat }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            if path.hasSuffix("/models") {
+                return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+            }
+            if path.hasSuffix("/chats/" + chat.id) {
+                chatReads += 1
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return (200, "application/json", try! encoder.encode(chatReads > 1 ? finalChat : chat))
+            }
+            if path.hasSuffix("/streams/stream-network") {
+                statuses += 1
+                return (200, "application/json", Data("""
+                {"streamId":"stream-network","chatId":"\(chat.id)","turnId":"turn-network","state":"running","lastSequence":1,"updatedAt":"2026-10-04T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/streams/stream-network/events") {
+                let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "after" }?.value
+                cursors.append(Int(after ?? "0") ?? -1)
+                switch cursors.count {
+                case 1:
+                    return (200, "text/event-stream", Data(event(1, "text_delta", #"{"text":"prefix "}"#).utf8))
+                case 2:
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Offline","requestId":"r","retryable":true}}"#.utf8))
+                default:
+                    let body = event(2, "text_delta", #"{"text":"suffix"}"#) + event(3, "done", #"{"messageId":"final-reply"}"#, terminal: true)
+                    return (200, "text/event-stream", Data(body.utf8))
+                }
+            }
+            return nil
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-network\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-04T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
 
