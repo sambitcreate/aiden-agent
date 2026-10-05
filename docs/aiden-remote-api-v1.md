@@ -420,7 +420,7 @@ Fork creates a new regular chat in the same workspace from one message of an exi
 - `POST /chats/{chatId}/fork` (`chat:write`; requires `If-Match` with the chat revision and an `Idempotency-Key`). The body is `{messageId, position, summary?}`:
   - `position: "after"` keeps everything through `messageId`, which must be a settled assistant reply.
   - `position: "before"` keeps everything before `messageId`, which must be a user prompt that is not the first. The response's `prefill` returns that prompt's text, and its attachments are restaged as this device's pending attachments for the fork. Each is valid like an uploaded one until its `expiresAt` and is consumed by the fork's next turn. Attachments that cannot be restaged are omitted.
-  - `summary: {instructions?}` (`chat-fork-summary-v1` only; `instructions` is at most 1,000 characters) starts the fork with a pending summary of what followed the cut in the source.
+  - `summary: {focus?}` (`chat-fork-summary-v1` only; `focus` is at most 1,000 characters) starts the fork with a pending summary of what followed the cut in the source.
 
   The `201` response is `{chat, prefill?}`, where `chat.forkedFrom` names the source. The errors are:
   - a stale revision returns `409 revision_conflict`;
@@ -430,7 +430,7 @@ Fork creates a new regular chat in the same workspace from one message of an exi
   - a copy that would be too large returns `413 payload_too_large`.
 
   A replay with the same key and body returns the first fork.
-- **Summary lifecycle.** `forkedFrom.summary` is `{state: "pending" | "ready" | "failed", afterMessageId, instructions?, text?, files?: {read, modified}, error?}`. Messages sent to the fork wait for a pending summary. A failed summary blocks new turns until it is retried or skipped. The fork's chat-summary row updates through the existing feeds as the state changes.
+- **Summary lifecycle.** `forkedFrom.summary` is `{state: "pending" | "ready" | "failed", afterMessageId, focus?, text?, error?}`. `error` is one of Aiden's own failure messages; a provider's error text, and the files the summarized turns touched, stay on the Mac. Messages sent to the fork wait for a pending summary. A failed summary blocks new turns until it is retried or skipped. The fork's chat-summary row updates through the existing feeds as the state changes.
 - `POST /chats/{chatId}/fork-summary/retry` and `POST /chats/{chatId}/fork-summary/skip` (`chat:write`, `chat-fork-summary-v1`) return the updated Chat:
   - retry asks for a failed summary again with the same focus;
   - skip drops the summary, which turns the chat into a plain fork.

@@ -319,6 +319,11 @@ function cloneDurableResult(value: unknown): DurableJsonValue {
   return clone;
 }
 
+/** Throws `AidenOperationContractError` when a replay ledger could not record this result. */
+export function assertDurableOperationResult(value: unknown): void {
+  cloneDurableResult(value);
+}
+
 function serializedSnapshotBytes(snapshot: AidenIdempotencySnapshot): number {
   let serialized: string;
   try {

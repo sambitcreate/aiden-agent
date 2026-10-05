@@ -1234,7 +1234,7 @@
   "chatFork": {
     "features": ["chat-fork-v1", "chat-fork-summary-v1"],
     "fork": {
-      "request": { "messageId": "message_fixture_source_assistant_01", "position": "after", "summary": { "instructions": "the protocol decisions" } },
+      "request": { "messageId": "message_fixture_source_assistant_01", "position": "after", "summary": { "focus": "the protocol decisions" } },
       "response": {
         "chat": {
           "id": "chat_fixture_fork_01",
@@ -1254,7 +1254,7 @@
             "messageId": "message_fixture_source_assistant_01",
             "position": "after",
             "at": "2026-08-18T19:05:00.000Z",
-            "summary": { "state": "pending", "afterMessageId": "message_fixture_fork_assistant_01", "instructions": "the protocol decisions" }
+            "summary": { "state": "pending", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions" }
           }
         }
       }
@@ -1285,6 +1285,10 @@
         }
       }
     },
+    "summaryStates": [
+      { "state": "ready", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "text": "The review settled on revision 21 and kept every route additive." },
+      { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
+    ],
     "summaryCancel": { "cancelled": true }
   }
 }

@@ -30,6 +30,8 @@ export interface ChatForkCaller {
   assertCurrent?(): void;
   /** Throw when the source no longer matches what the caller saw. Runs under the copy lock. */
   assertSource?(source: Chat): void;
+  /** Throw to refuse the prepared fork before it is installed. */
+  assertInstallable?(chat: Chat): void;
   /** Copy a Bot chat. Without it Bot chats cannot be forked. */
   copyBotChat?(source: Chat, request: ChatForkRequest): Promise<Chat>;
 }
@@ -66,6 +68,11 @@ export interface ChatForkServiceDependencies {
   htmlArtifacts?: ChatForkHtmlArtifacts;
   /** Carries the model-side journal to the fork. Without it the fork rebuilds context from visible history. */
   journal?: ChatForkJournal;
+  /**
+   * The fork's model context exists only in its journal, so a journal that
+   * cannot be prepared fails the fork instead of degrading it.
+   */
+  journalRequired?: boolean;
   /** Begin summarizing a fork whose summary is pending. Summaries need this. */
   startSummary?(chatId: string): void;
   /** The journal could not be carried; the fork still works. */
@@ -172,6 +179,7 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         assertCurrent,
         ...(caller.assertSource ? { assertSource: caller.assertSource } : {}),
         beforeInstall: async (chat, sourceMessageIds) => {
+          caller.assertInstallable?.(chat);
           // The store has validated the cut, so the boundary exists here.
           const htmlMediaIds = deps.htmlArtifacts
             ? selectedHtmlArtifactMediaIds(source.messages, request.forkAt)
@@ -199,7 +207,16 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
               visible: chat.messages,
             });
           } catch (error) {
+            if (deps.journalRequired) {
+              // A seed write may have landed before it failed.
+              journalForked = true;
+              throw new ChatForkError("unavailable", "Aiden could not prepare the fork's history.");
+            }
             deps.reportDegraded?.(error);
+            return;
+          }
+          if (!journalForked && deps.journalRequired) {
+            throw new ChatForkError("unavailable", "Aiden could not prepare the fork's history.");
           }
         },
       });
