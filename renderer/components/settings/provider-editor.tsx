@@ -8,7 +8,6 @@ import {
 
 import * as React from "react";
 import {
-  Badge,
   Button,
   Dialog,
   Field,
@@ -37,14 +36,6 @@ import { resolveProviderDeployment } from "../../shared/provider-deployment";
 import { ProviderModelVisibility } from "./provider-model-visibility";
 import { ProviderIcon } from "../provider-icon";
 import { isModelHidden } from "../../shared/model-visibility";
-
-/** Compact k-token label, e.g. 128000 → "128K". */
-function formatContext(n: number | undefined): string | null {
-  if (!n) return null;
-  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}K`;
-  return String(n);
-}
 
 function isTailnetEndpoint(baseUrl: string): boolean {
   try {
@@ -335,58 +326,9 @@ export function ProviderEditor({
       onConfirm={handleSave}
       returnFocus={returnFocus}
     >
-      <FieldSet>
+      <FieldSet title="Connection">
         <Field label="Name">
           <Input value={label} onChange={(e) => setLabel(e.target.value)} />
-        </Field>
-
-        <Field
-          label="Provider icon"
-          description="Choose a PNG or SVG up to 512 KB. Aiden normalizes it locally and shares only the bounded PNG with paired iOS devices."
-        >
-          <div className="flex items-center gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-              <ProviderIcon
-                providerId={provider.id}
-                providerLabel={label.trim() || provider.label}
-                artwork={artwork}
-                className="size-6"
-              />
-            </span>
-            <input
-              ref={artworkInputRef}
-              type="file"
-              accept="image/png,image/svg+xml,.png,.svg"
-              className="sr-only"
-              aria-label="Choose provider icon"
-              disabled={artworkBusy}
-              onChange={(event) => void chooseArtwork(event.target.files?.[0])}
-            />
-            <Button
-              type="button"
-              variant="muted"
-              size="small"
-              disabled={artworkBusy}
-              onClick={() => artworkInputRef.current?.click()}
-            >
-              {artworkBusy
-                ? "Normalizing…"
-                : artwork
-                  ? "Replace"
-                  : "Choose image"}
-            </Button>
-            {artwork ? (
-              <Button
-                type="button"
-                variant="transparent"
-                size="small"
-                disabled={artworkBusy}
-                onClick={() => setArtwork(undefined)}
-              >
-                Use default
-              </Button>
-            ) : null}
-          </div>
         </Field>
 
         <Field
@@ -406,50 +348,6 @@ export function ProviderEditor({
             }}
             placeholder="https://api.example.com/v1"
           />
-        </Field>
-
-        <Field label="API format">
-          <Select
-            value={kind}
-            disabled={testing}
-            onValueChange={(v) => {
-              setKind(v as ProviderKind);
-              markDiscoveryStale();
-            }}
-          >
-            <SelectTrigger size="small">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="openai">OpenAI-compatible</SelectItem>
-              <SelectItem value="anthropic">Anthropic-compatible</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field
-          label="Deployment"
-          description={
-            deployment === "local"
-              ? "Aiden shows model-loading status and treats usage as on-device when this device (or a marked private host) serves the model."
-              : "Hosted cloud APIs skip local model-loading status and may track usage cost when available."
-          }
-        >
-          <Select
-            value={deployment}
-            disabled={testing}
-            onValueChange={(value) => {
-              setDeployment(value as ProviderDeployment);
-            }}
-          >
-            <SelectTrigger size="small">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="local">Local</SelectItem>
-              <SelectItem value="hosted">Hosted</SelectItem>
-            </SelectContent>
-          </Select>
         </Field>
 
         <Field
@@ -569,6 +467,12 @@ export function ProviderEditor({
                   ))}
                 </SelectContent>
               </Select>
+              <Text as="p" variant="small" color="tertiary">
+                {(modelMetadata[defaultModel]?.overrides?.vision ?? modelMetadata[defaultModel]?.vision) === true && modelMetadata[defaultModel]?.overrides?.maxImages !== 0
+                    ? "Images enabled for this connection"
+                    : "Text only for this connection"}
+                {" · Change capabilities in Model options"}
+              </Text>
               {usesArtificialAnalysis ? (
                 <a
                   href="https://artificialanalysis.ai"
@@ -587,69 +491,108 @@ export function ProviderEditor({
           </Text>
         )}
       </FieldSet>
+      <details className="settings-card mb-6 min-w-0 rounded-card bg-well">
+        <summary className="cursor-pointer px-4 py-3 text-small-strong text-primary">
+          Connection options
+          <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">API format, deployment, and provider icon</Text>
+        </summary>
+        <FieldSet className="mb-0">
+          <Field label="API format">
+            <Select
+              value={kind}
+              disabled={testing}
+              onValueChange={(v) => {
+                setKind(v as ProviderKind);
+                markDiscoveryStale();
+              }}
+            >
+              <SelectTrigger size="small">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="openai">OpenAI-compatible</SelectItem>
+                <SelectItem value="anthropic">Anthropic-compatible</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
 
-      {models.length > 0 ? (
-        <div className="mt-4">
-          <Text variant="small-strong" as="p">
-            Model capabilities
-          </Text>
-          <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Detected capabilities with your custom overrides. Check provider
-            documentation for exact support.
-          </Text>
-          <div className="mt-2 max-h-64 overflow-y-auto rounded-card bg-well">
-            {models.map((m, i) => {
-              const info = {
-                ...modelInfo.data?.[m],
-                ...modelInfo.data?.[m]?.detectedCapabilities,
-                ...modelMetadata[m]?.overrides,
-              };
-              if (modelMetadata[m]?.overrides?.maxImages === 0)
-                info.vision = false;
-              const display = resolveModelDisplay(m, info);
-              const ctx = formatContext(info?.contextLength);
-              return (
-                <div
-                  key={m}
-                  className={`flex items-center gap-2 px-3 py-2 ${i > 0 ? "border-t border-separator" : ""}`}
+          <Field
+            label="Deployment"
+            description={
+              deployment === "local"
+                ? "Aiden shows model-loading status and treats usage as on-device when this device (or a marked private host) serves the model."
+                : "Hosted cloud APIs skip local model-loading status and may track usage cost when available."
+            }
+          >
+            <Select
+              value={deployment}
+              disabled={testing}
+              onValueChange={(value) => {
+                setDeployment(value as ProviderDeployment);
+              }}
+            >
+              <SelectTrigger size="small">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="local">Local</SelectItem>
+                <SelectItem value="hosted">Hosted</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field
+            label="Provider icon"
+            description="Choose a PNG or SVG up to 512 KB. Aiden normalizes it locally and shares only the bounded PNG with paired iOS devices."
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+                <ProviderIcon
+                  providerId={provider.id}
+                  providerLabel={label.trim() || provider.label}
+                  artwork={artwork}
+                  className="size-6"
+                />
+              </span>
+              <input
+                ref={artworkInputRef}
+                type="file"
+                accept="image/png,image/svg+xml,.png,.svg"
+                className="sr-only"
+                aria-label="Choose provider icon"
+                disabled={artworkBusy}
+                onChange={(event) => void chooseArtwork(event.target.files?.[0])}
+              />
+              <Button
+                type="button"
+                variant="muted"
+                size="small"
+                disabled={artworkBusy}
+                onClick={() => artworkInputRef.current?.click()}
+              >
+                {artworkBusy
+                  ? "Normalizing…"
+                  : artwork
+                    ? "Replace"
+                    : "Choose image"}
+              </Button>
+              {artwork ? (
+                <Button
+                  type="button"
+                  variant="transparent"
+                  size="small"
+                  disabled={artworkBusy}
+                  onClick={() => setArtwork(undefined)}
                 >
-                  <Text
-                    variant="small"
-                    truncate
-                    className="min-w-0 flex-1"
-                    title={m}
-                  >
-                    {display.label}
-                  </Text>
-                  {info?.matched ? (
-                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                      {info.vision ? <Badge color="blue">Vision</Badge> : null}
-                      {info.toolCall ? (
-                        <Badge color="green">Tools</Badge>
-                      ) : null}
-                      {info.reasoning ? (
-                        <Badge>Reasoning</Badge>
-                      ) : null}
-                      {info.openWeights ? (
-                        <Badge>Open</Badge>
-                      ) : null}
-                      {ctx ? <Badge>{ctx}</Badge> : null}
-                    </div>
-                  ) : (
-                    <Text
-                      variant="small"
-                      color="quaternary"
-                      className="shrink-0"
-                    >
-                      {modelInfo.isLoading ? "…" : "Unlisted"}
-                    </Text>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+                  Use default
+                </Button>
+              ) : null}
+            </div>
+          </Field>
+
+        </FieldSet>
+      </details>
+
       <Button
         className="mt-4"
         variant="transparent"
@@ -658,10 +601,10 @@ export function ProviderEditor({
         aria-controls="custom-model-options"
         onClick={() => setMoreOptions((value) => !value)}
       >
-        More options
+        Model options
       </Button>
       {moreOptions ? (
-        <section id="custom-model-options" className="mt-3">
+        <section id="custom-model-options" className="mt-3 min-w-0">
           <CustomModelOptionsEditor
             models={models}
             metadata={modelMetadata}

@@ -390,6 +390,65 @@ struct AidenWorkspacePatch: Encodable, Equatable, Sendable {
     }
 }
 
+struct AidenProviderCreationModel: Encodable, Equatable, Sendable {
+    let id: String
+    let vision: Bool
+    let reasoning: Bool
+    let toolCall: Bool
+}
+
+struct AidenProviderCreation: Encodable, Equatable, Sendable {
+    let label: String
+    let baseUrl: String
+    let kind: String
+    let deployment: String
+    let needsKey: Bool
+    let apiKey: String?
+    let models: [AidenProviderCreationModel]
+    let confirmedForeground = true
+
+    var isValid: Bool { validationMessage == nil }
+
+    var validationMessage: String? {
+        func bounded(_ value: String, _ maximum: Int) -> Bool {
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf16.count <= maximum &&
+                !value.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+        }
+        guard bounded(label, 120) else { return "Enter a name of up to 120 characters without line breaks." }
+        guard bounded(baseUrl, 2048),
+              let url = URL(string: baseUrl), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            return "Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment (up to 2,048 characters)."
+        }
+        guard ["openai", "anthropic"].contains(kind), ["local", "hosted"].contains(deployment) else { return "Choose an API format and deployment." }
+        guard needsKey ? bounded(apiKey ?? "", 4096) : apiKey == nil else { return "Enter an API key of up to 4,096 characters without line breaks, or turn off Requires API key." }
+        guard (1...32).contains(models.count), models.allSatisfy({ bounded($0.id, 128) }),
+              Set(models.map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }).count == models.count else {
+            return "Enter 1–32 unique model IDs, each up to 128 characters without line breaks."
+        }
+        return nil
+    }
+}
+
+struct AidenProviderCreationReceipt: Decodable, Equatable, Sendable {
+    let id: String
+    let label: String
+    let models: [String]
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        models = try values.decode([String].self, forKey: .models)
+        guard id.hasPrefix("custom:remote-"), id.count <= 128, !label.isEmpty, label.count <= 120,
+              (1...32).contains(models.count), Set(models).count == models.count,
+              models.allSatisfy({ !$0.isEmpty && $0.count <= 128 }) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid provider creation receipt."))
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case id, label, models }
+}
+
 struct AidenMemorySettings: Codable, Equatable, Sendable {
     let enabled: Bool
     let revision: String
@@ -958,6 +1017,11 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: patch,
             headers: ["If-Match": revision]
         )
+    }
+
+    func createProvider(_ input: AidenProviderCreation, idempotencyKey: UUID) async throws -> AidenProviderCreationReceipt {
+        try await send(method: "POST", path: ["providers"], body: input,
+                       headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
     }
 
     func memorySettings() async throws -> AidenMemorySettings {

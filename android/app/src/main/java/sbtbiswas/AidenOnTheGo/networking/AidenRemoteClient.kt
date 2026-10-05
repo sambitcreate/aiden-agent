@@ -563,6 +563,12 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun createProvider(input: AidenProviderCreation, idempotencyKey: UUID): AidenProviderCreationReceipt =
+        executeRequest("/providers", method = "POST", idempotencyKey = idempotencyKey,
+            acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
+
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
