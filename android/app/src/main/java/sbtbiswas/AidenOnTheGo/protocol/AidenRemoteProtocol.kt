@@ -45,6 +45,9 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    /** Contract revision 21: phones may observe and control runs started on
+     * the Mac, in Telegram or by the scheduler. */
+    const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -442,6 +445,10 @@ data class AidenRemoteCapability(val rawValue: String) {
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
         val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
+        /** Contract revision 21: phone-scoped observation of foreign runs. */
+        val RUNS_OBSERVE = AidenRemoteCapability("runs:observe")
+        /** Contract revision 21: Stop, approvals and questions on foreign runs. */
+        val RUNS_CONTROL = AidenRemoteCapability("runs:control")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -452,6 +459,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         )
 
         val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE)
+
+        /** The phone-scoped run subset. It is never granted at pairing; a
+         * phone can only negotiate it behind `phone-run-control-v1`. */
+        val PHONE_RUNS = listOf(RUNS_OBSERVE, RUNS_CONTROL)
+
+        /** Every grant `POST /device/capabilities` may add. */
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS
+
+        /** The pairing vocabulary plus the negotiable run subset. */
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS
     }
 }
 

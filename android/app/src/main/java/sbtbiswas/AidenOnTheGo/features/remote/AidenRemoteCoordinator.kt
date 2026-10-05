@@ -218,6 +218,13 @@ class AidenRemoteCoordinator(
             if (server.supportsChatSkills && !installation.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE)) {
                 add(AidenRemoteCapability.SKILLS_INVOKE)
             }
+            // Contract revision 21: older Macs never advertise the feature, so
+            // they never see the phone-scoped run subset requested.
+            if (server.supportsPhoneRunControl) {
+                for (capability in AidenRemoteCapability.PHONE_RUNS) {
+                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
+                }
+            }
         }
         if (requested.isEmpty()) return server
         return try {

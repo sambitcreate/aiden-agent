@@ -1,5 +1,5 @@
 {
-  "contractRevision": 20,
+  "contractRevision": 21,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -1102,7 +1102,7 @@
     "nextOffset": 2,
     "complete": true
   },
-  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 20, "pairingRequests": true },
+  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 21, "pairingRequests": true },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },
@@ -1230,5 +1230,189 @@
         "matchCode": "086098"
       }
     ]
-  }
+  },
+  "phoneRunEvents": [
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:10:01.000Z",
+      "type": "run.started",
+      "terminal": false,
+      "payload": {
+        "runId": "run_fixture_02",
+        "chatId": "chat_fixture_01",
+        "origin": "renderer"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:10:02.000Z",
+      "type": "status",
+      "terminal": false,
+      "payload": {
+        "state": "running"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:10:03.000Z",
+      "type": "text_delta",
+      "terminal": false,
+      "payload": {
+        "text": "Checking the build."
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 4,
+      "timestamp": "2026-08-18T19:10:04.000Z",
+      "type": "tool_started",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_1",
+        "name": "run_command"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 5,
+      "timestamp": "2026-08-18T19:10:06.000Z",
+      "type": "tool_finished",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_1",
+        "status": "succeeded"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 6,
+      "timestamp": "2026-08-18T19:10:07.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_02",
+        "summary": "Create the nightly test schedule?",
+        "toolCallId": "tool_fixture_03",
+        "toolName": "schedule_task",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ]
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 7,
+      "timestamp": "2026-08-18T19:10:08.000Z",
+      "type": "approval_resolved",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_02",
+        "decision": "allow"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 8,
+      "timestamp": "2026-08-18T19:10:09.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_03",
+        "summary": "Write to the workspace?",
+        "toolCallId": "tool_fixture_04",
+        "toolName": "write_file",
+        "canAllow": false
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 9,
+      "timestamp": "2026-08-18T19:10:10.000Z",
+      "type": "approval_resolved",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_03",
+        "decision": "deny"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 10,
+      "timestamp": "2026-08-18T19:10:11.000Z",
+      "type": "question_required",
+      "terminal": false,
+      "payload": {
+        "promptId": "q-fixture-02",
+        "questions": [
+          {
+            "question": "Which tolerance should the chamfer use?",
+            "header": "Chamfer",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "0.5 mm",
+                "description": "Standard shop chamfer."
+              },
+              {
+                "label": "1.0 mm",
+                "description": "Heavy chamfer for handling."
+              }
+            ]
+          }
+        ],
+        "toolCallId": "tool_fixture_05"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 11,
+      "timestamp": "2026-08-18T19:10:12.000Z",
+      "type": "question_resolved",
+      "terminal": false,
+      "payload": {
+        "promptId": "q-fixture-02",
+        "outcome": "answered"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 12,
+      "timestamp": "2026-08-18T19:10:13.000Z",
+      "type": "done",
+      "terminal": true,
+      "payload": {
+        "messageId": "message_fixture_assistant_03"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 12,
+      "timestamp": "2026-08-18T19:10:13.000Z",
+      "type": "run.ended",
+      "terminal": true,
+      "payload": {
+        "runId": "run_fixture_02",
+        "chatId": "chat_fixture_01",
+        "state": "done"
+      }
+    }
+  ]
 }

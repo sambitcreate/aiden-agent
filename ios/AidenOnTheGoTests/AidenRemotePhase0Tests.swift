@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 20)
+        XCTAssertEqual(fixture.contractRevision, 21)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -1248,6 +1248,156 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeSSEEvent(from: Data(tooLargeNextSequence.utf8)))
     }
 
+    // MARK: Contract revision 21: phone observation and control of foreign runs
+
+    func testPhoneRunFixtureDrivesForeignRunProjectionThroughFirstResponderOutcomes() throws {
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))
+        )
+        let events = fixture.phoneRunEvents
+        XCTAssertEqual(events.count, 13)
+        XCTAssertTrue(events.allSatisfy { $0.runId == "run_fixture_02" })
+        // `run.ended` repeats the content terminal's sequence and is the only
+        // run-level terminal frame.
+        XCTAssertEqual(events.suffix(2).map(\.sequence), [12, 12])
+        XCTAssertEqual(events.last?.kind, .ended(chatId: "chat_fixture_01", state: .done))
+
+        var projection = AidenForeignRunProjection(runId: "run_fixture_02")
+        var effects: [[AidenForeignRunProjection.Effect]] = []
+        for event in events.prefix(6) { effects.append(projection.apply(event)) }
+        // Attaching mid-run surfaces status, text and tool rows like an owned run.
+        XCTAssertEqual(projection.liveText, "Checking the build.")
+        XCTAssertEqual(projection.tools.map(\.name), ["run_command"])
+        XCTAssertEqual(projection.tools.first?.status, "succeeded")
+        XCTAssertEqual(projection.state, .waitingForApproval)
+        let allowable = try XCTUnwrap(projection.pendingApproval)
+        XCTAssertEqual(allowable.approvalId, "approval_fixture_02")
+        XCTAssertTrue(allowable.canAllow)
+        XCTAssertEqual(allowable.scopes, [.once, .chat])
+        XCTAssertEqual(effects.last, [.approvalRequired("approval_fixture_02")])
+
+        // The Mac answered first: the phone learns the winning decision.
+        let lost = projection.apply(events[6])
+        XCTAssertEqual(lost, [.answeredElsewhere(AidenForeignRunResolution(
+            prompt: .approval(.allow), resolvedAt: events[6].timestamp
+        ))])
+        XCTAssertNil(projection.pendingApproval)
+        XCTAssertEqual(projection.state, .running)
+        if case let .answeredElsewhere(resolution) = lost.first {
+            XCTAssertEqual(resolution.notice, "Answered on Mac: allowed")
+        }
+
+        // A host-only approval reaches the phone as deny-only, without scopes.
+        _ = projection.apply(events[7])
+        let hostOnly = try XCTUnwrap(projection.pendingApproval)
+        XCTAssertFalse(hostOnly.canAllow)
+        XCTAssertNil(hostOnly.scopes)
+        // This phone answered it, so its resolution is not "answered elsewhere".
+        projection.markAnsweredLocally(hostOnly.approvalId)
+        XCTAssertEqual(projection.apply(events[8]), [])
+
+        XCTAssertEqual(projection.apply(events[9]), [.questionRequired("q-fixture-02")])
+        XCTAssertEqual(projection.pendingQuestion?.questions.first?.header, "Chamfer")
+        XCTAssertEqual(projection.apply(events[10]), [.answeredElsewhere(AidenForeignRunResolution(
+            prompt: .question("answered"), resolvedAt: events[10].timestamp
+        ))])
+
+        // A replayed frame is ignored; the content terminal and run.ended share
+        // a sequence and only run.ended closes the projection.
+        XCTAssertEqual(projection.apply(events[3]), [])
+        XCTAssertEqual(projection.apply(events[11]), [])
+        XCTAssertFalse(projection.isEnded)
+        XCTAssertEqual(projection.apply(events[12]), [.ended(.done)])
+        XCTAssertTrue(projection.isEnded)
+        XCTAssertEqual(projection.state, .done)
+        XCTAssertEqual(projection.apply(events[12]), [], "An ended run accepts nothing further.")
+    }
+
+    func testRunStreamGapSnapshotAtSequenceZeroRestatesPendingPrompts() throws {
+        let snapshot = #"{"protocolVersion":1,"streamId":"run-1","sequence":0,"timestamp":"2026-10-05T10:00:00Z","type":"snapshot","terminal":false,"payload":{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":["approval-1"],"pendingQuestionIds":[],"approvals":[{"approvalId":"approval-1","summary":"Run the tests?","toolName":"run_command","canAllow":true,"scopes":["once"]}],"questions":[],"nextSequence":1}}"#
+        let text = #"{"protocolVersion":1,"streamId":"run-1","sequence":1,"timestamp":"2026-10-05T10:00:01Z","type":"text_delta","terminal":false,"payload":{"text":"Still going"}}"#
+        var parser = AidenRunSSEParser()
+        var events: [AidenRemoteRunEvent] = []
+        for line in ["id: 0", "event: snapshot", "data: \(snapshot)", "", ": keep-alive", "id: 1", "event: text_delta", "data: \(text)", ""] {
+            if let event = try parser.consume(line: line) { events.append(event) }
+        }
+        XCTAssertEqual(events.map(\.sequence), [0, 1])
+
+        var projection = AidenForeignRunProjection(runId: "run-1")
+        XCTAssertEqual(projection.apply(events[0]), [.reconcile])
+        XCTAssertEqual(projection.pendingApproval?.approvalId, "approval-1")
+        XCTAssertEqual(projection.state, .waitingForApproval)
+        XCTAssertEqual(projection.apply(events[1]), [.textAppended("Still going")])
+        XCTAssertEqual(projection.lastSequence, 1)
+        // The projection of a different run never absorbs these frames.
+        var other = AidenForeignRunProjection(runId: "run-2")
+        XCTAssertEqual(other.apply(events[1]), [])
+        XCTAssertEqual(other.liveText, "")
+
+        // Turn streams keep their sequence floor of 1, and run frames must
+        // agree with their SSE id and event name.
+        var turnParser = AidenSSEParser()
+        XCTAssertThrowsError(try ["id: 0", "data: \(text)", ""].compactMap { try turnParser.consume(line: $0) }) {
+            XCTAssertEqual($0 as? AidenSSEParserError, .invalidEventID)
+        }
+        XCTAssertThrowsError(try AidenRunSSEParser().consumeAll(["id: 2", "data: \(text)", ""])) {
+            XCTAssertEqual($0 as? AidenSSEParserError, .eventIDMismatch)
+        }
+        XCTAssertThrowsError(try AidenRunSSEParser().consumeAll(["id: 1", "event: snapshot", "data: \(text)", ""])) {
+            XCTAssertEqual($0 as? AidenSSEParserError, .eventNameMismatch)
+        }
+    }
+
+    func testRunApprovalProjectionRejectsToolDetailsAndUnearnedScopes() throws {
+        func frame(_ payload: String, type: String = "approval_required", terminal: Bool = false) -> Data {
+            Data(#"{"protocolVersion":1,"streamId":"run-1","sequence":3,"timestamp":"2026-10-05T10:00:00Z","type":"\#(type)","terminal":\#(terminal),"payload":\#(payload)}"#.utf8)
+        }
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"approvalId":"a1","summary":"Write?","toolName":"write_file","canAllow":false}"#
+        )))
+        // Tool arguments and host previews stay on the Mac.
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"approvalId":"a1","summary":"Write?","toolName":"write_file","canAllow":true,"details":{"path":"/etc/hosts"}}"#
+        )))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"approvalId":"a1","summary":"Write?","toolName":"write_file","canAllow":false,"scopes":["once"]}"#
+        )))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"runId":"run-1","chatId":"chat-1","state":"done"}"#, type: "run.ended", terminal: false
+        )))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"runId":"run-other","chatId":"chat-1","state":"done"}"#, type: "run.ended", terminal: true
+        )))
+        // Progress snapshots belong to the chat progress channel, never a run.
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame(
+            #"{"tasks":[]}"#, type: "task_update"
+        )))
+    }
+
+    func testFirstResponderLoserEnvelopeNamesTheWinningAnswer() throws {
+        func loser(status: Int, _ json: String) throws -> AidenForeignRunResolution? {
+            let envelope = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: Data(json.utf8))
+            return AidenForeignRunResolution.loser(from: AidenRemoteClientError.server(statusCode: status, body: envelope.error))
+        }
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))
+        )
+        let fixtureError = try XCTUnwrap(fixture.runControlError?.error)
+        let denied = try XCTUnwrap(AidenForeignRunResolution.loser(
+            from: AidenRemoteClientError.server(statusCode: 409, body: fixtureError)
+        ))
+        XCTAssertEqual(denied.prompt, .approval(.deny))
+        XCTAssertEqual(denied.notice, "Answered on Mac: denied")
+        XCTAssertNotNil(denied.resolvedAt)
+
+        let expired = try XCTUnwrap(loser(status: 409, #"{"error":{"code":"question_already_resolved","message":"Resolved.","requestId":"r1","retryable":false,"details":{"outcome":"expired","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"#))
+        XCTAssertEqual(expired.notice, "Question expired on Mac")
+        XCTAssertNil(try loser(status: 403, #"{"error":{"code":"capability_denied","message":"No.","requestId":"r2","retryable":false}}"#))
+        XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
+    }
+
     func testGenericAidenJSONDecodeHasOneMiBBodyCeiling() throws {
         let oversized = Data(repeating: 0x20, count: AidenRemoteProtocol.maxJSONBodyBytes + 1)
         XCTAssertThrowsError(
@@ -1330,5 +1480,12 @@ final class AidenRemotePhase0Tests: XCTestCase {
         } catch {
             XCTAssertEqual(wrongPinDelegate.lastTrustError, .publicKeyPinMismatch)
         }
+    }
+}
+
+private extension AidenRunSSEParser {
+    func consumeAll(_ lines: [String]) throws -> [AidenRemoteRunEvent] {
+        var parser = self
+        return try lines.compactMap { try parser.consume(line: $0) }
     }
 }

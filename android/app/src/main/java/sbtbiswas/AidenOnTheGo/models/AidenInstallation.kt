@@ -97,6 +97,10 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
+    /** The Mac offers the phone-scoped `runs:observe` / `runs:control` subset. */
+    val supportsPhoneRunControl: Boolean
+        get() = features.contains(AidenRemoteProtocol.PHONE_RUN_CONTROL_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

@@ -8,13 +8,24 @@ enum AidenSSEParserError: Error, Equatable {
     case missingData
 }
 
-struct AidenSSEParser {
+/// One complete SSE frame before its JSON body is decoded.
+struct AidenSSERawFrame: Equatable {
+    let sequence: Int
+    let name: String?
+    let data: Data
+}
+
+/// Splits SSE lines into frames. Only a consumed blank line completes a frame;
+/// EOF must discard this parser, leaving any pending event for replay.
+struct AidenSSEFrameParser {
+    /// Run streams label a gap snapshot `nextSequence - 1`, which may be 0.
+    var minimumEventID = 1
     private var eventID: String?
     private var eventName: String?
     private var dataLines: [String] = []
     private var frameBytes = 0
 
-    mutating func consume(line: String) throws -> AidenRemoteStreamEvent? {
+    mutating func consume(line: String) throws -> AidenSSERawFrame? {
         frameBytes += line.utf8.count + 1
         guard frameBytes <= AidenRemoteProtocol.maxSSEFrameBytes else {
             throw AidenSSEParserError.frameTooLarge
@@ -44,25 +55,20 @@ struct AidenSSEParser {
         return nil
     }
 
-    // Only a consumed blank line completes a frame. EOF must discard this
-    // parser, leaving any pending event available for replay on reconnect.
-    private mutating func finishFrame() throws -> AidenRemoteStreamEvent? {
+    private mutating func finishFrame() throws -> AidenSSERawFrame? {
         defer { reset() }
         guard !dataLines.isEmpty else {
             if eventID == nil, eventName == nil { return nil }
             throw AidenSSEParserError.missingData
         }
-        guard let eventID, let sequence = Int(eventID), sequence > 0 else {
+        guard let eventID, let sequence = Int(eventID), sequence >= minimumEventID else {
             throw AidenSSEParserError.invalidEventID
         }
-        let event = try AidenRemoteJSONDecoder.decodeSSEEvent(
-            from: Data(dataLines.joined(separator: "\n").utf8)
+        return AidenSSERawFrame(
+            sequence: sequence,
+            name: eventName,
+            data: Data(dataLines.joined(separator: "\n").utf8)
         )
-        guard event.sequence == sequence else { throw AidenSSEParserError.eventIDMismatch }
-        if let eventName, eventName != event.type.rawValue {
-            throw AidenSSEParserError.eventNameMismatch
-        }
-        return event
     }
 
     private mutating func reset() {
@@ -70,6 +76,51 @@ struct AidenSSEParser {
         eventName = nil
         dataLines.removeAll(keepingCapacity: true)
         frameBytes = 0
+    }
+}
+
+struct AidenSSEParser: AidenSSEEventParsing {
+    private var frames = AidenSSEFrameParser()
+
+    mutating func consume(line: String) throws -> AidenRemoteStreamEvent? {
+        guard let frame = try frames.consume(line: line) else { return nil }
+        let event = try AidenRemoteJSONDecoder.decodeSSEEvent(from: frame.data)
+        guard event.sequence == frame.sequence else { throw AidenSSEParserError.eventIDMismatch }
+        if let name = frame.name, name != event.type.rawValue {
+            throw AidenSSEParserError.eventNameMismatch
+        }
+        return event
+    }
+}
+
+/// Parses the contract revision 19 run streams as a phone holding the
+/// revision 21 phone-scoped run subset sees them.
+struct AidenRunSSEParser: AidenSSEEventParsing {
+    private var frames = AidenSSEFrameParser(minimumEventID: 0)
+
+    mutating func consume(line: String) throws -> AidenRemoteRunEvent? {
+        guard let frame = try frames.consume(line: line) else { return nil }
+        let event = try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: frame.data)
+        guard event.sequence == frame.sequence else { throw AidenSSEParserError.eventIDMismatch }
+        if let name = frame.name, name != event.wireType {
+            throw AidenSSEParserError.eventNameMismatch
+        }
+        return event
+    }
+}
+
+extension AidenRemoteRunEvent {
+    var wireType: String {
+        switch kind {
+        case .started: "run.started"
+        case let .content(content): content.type.rawValue
+        case .approvalRequired: "approval_required"
+        case .approvalResolved: "approval_resolved"
+        case .questionRequired: "question_required"
+        case .questionResolved: "question_resolved"
+        case .snapshot: "snapshot"
+        case .ended: "run.ended"
+        }
     }
 }
 

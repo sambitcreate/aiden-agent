@@ -71,6 +71,13 @@ const observer = (id: string) => ({
   capabilities: new Set<AidenRemoteCapability>(["runs:observe"]),
 });
 
+/** A phone holding the phone-scoped run subset (contract revision 21). */
+const phone = (id: string) => ({
+  id,
+  type: "iphone",
+  capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control"]),
+});
+
 const KEY_A = "key-controller-a-0001";
 const KEY_B = "key-controller-b-0001";
 
@@ -177,7 +184,12 @@ function harness(registryOptions: Partial<HostRunRegistryOptions> = {}) {
   return { clock, registry, service, effects, access, accessed };
 }
 
-function open(service: AidenRemoteHostRunService, device: ReturnType<typeof controller>, runId: string, after = 0) {
+function open(
+  service: AidenRemoteHostRunService,
+  device: ReturnType<typeof controller> | ReturnType<typeof phone>,
+  runId: string,
+  after = 0,
+) {
   const response = new RecordingResponse();
   service.openRunEvents(device, runId, after, response.asServerResponse());
   return response;
@@ -298,6 +310,76 @@ test("observers without runs:control see the approval summary but not its tool d
   assert.equal(observedPrompt.data.payload.summary, "Run npm test");
   assert.equal("details" in observedPrompt.data.payload, false);
   assert.deepEqual(controlledPrompt.data.payload.details, scheduleDetails());
+});
+
+test("a phone attached to a foreign run sees the phone projection: summary, canAllow and no tool details", async () => {
+  const { registry, service } = harness();
+  registry.publish("run-1", "chat:tool", { toolName: "run_command", phase: "call", args: { command: "secret" } });
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  registry.publish("run-1", "chat:approval", approval("approval-2", { details: { kind: "unrecognized", secret: "x" } }));
+  const response = open(service, phone("device-phone"), "run-1");
+
+  const frames = response.frames();
+  assert.deepEqual(frames[0]!.data.payload, { runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  const tool = frames.find((frame) => frame.event === "tool_started")!;
+  assert.deepEqual(tool.data.payload, { toolId: "tool_1", name: "run_command" });
+  const prompts = frames.filter((frame) => frame.event === "approval_required").map((frame) => frame.data.payload);
+  // A scheduled-task approval may be allowed from the phone with its scopes, but its details never travel.
+  assert.deepEqual(prompts[0], {
+    approvalId: "approval-1",
+    summary: "Run npm test",
+    toolCallId: "call-a",
+    toolName: "run_command",
+    canAllow: true,
+    scopes: ["once", "chat"],
+  });
+  // Withheld details make the approval deny-only on a phone, without scopes.
+  assert.deepEqual(prompts[1], {
+    approvalId: "approval-2",
+    summary: "Run npm test",
+    toolCallId: "call-a",
+    toolName: "run_command",
+    canAllow: false,
+  });
+});
+
+test("a phone may deny a host-only approval but allowing it is refused with no effect", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", { details: { kind: "unrecognized" } }));
+
+  const refused = await rejection(
+    service.respondApproval("device-phone", "run-1", "approval-1", { decision: "allow" }, KEY_A, access, {
+      phoneScoped: true,
+    }),
+  );
+  assert.equal(refused.code, "capability_denied");
+  assert.equal(refused.status, 403);
+  assert.deepEqual(effects.approvals, []);
+
+  const denied = await service.respondApproval(
+    "device-phone", "run-1", "approval-1", { decision: "deny" }, KEY_B, access, { phoneScoped: true },
+  );
+  assert.equal(denied.decision, "deny");
+  assert.deepEqual(effects.approvals, ["approval-1:deny"]);
+});
+
+test("a phone losing an approval race to the Mac learns the Mac's decision and when it was made", async () => {
+  const { registry, service, access } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  const stream = open(service, phone("device-phone"), "run-1");
+
+  const mac = await service.respondApproval("device-mac", "run-1", "approval-1", { decision: "allow" }, KEY_A, access);
+  const lost = await rejection(
+    service.respondApproval("device-phone", "run-1", "approval-1", { decision: "deny" }, KEY_B, access, {
+      phoneScoped: true,
+    }),
+  );
+  assert.equal(lost.code, "approval_resolved");
+  assert.deepEqual(lost.details, { decision: "allow", resolvedAt: mac.resolvedAt });
+  await new Promise((resolve) => setImmediate(resolve));
+  const resolved = stream.frames().find((frame) => frame.event === "approval_resolved");
+  assert.equal(resolved?.data.payload.approvalId, "approval-1");
+  assert.equal(resolved?.data.payload.decision, "allow");
 });
 
 test("two controllers racing one approval: one wins, the loser learns the winning decision", async () => {

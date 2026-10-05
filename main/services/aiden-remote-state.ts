@@ -13,6 +13,7 @@ import {
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -227,6 +228,21 @@ function isHostCapability(
   );
 }
 
+function isPhoneRunCapability(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Host authority a device type may hold: desktops hold the full host
+ * vocabulary; phones only the phone-scoped run subset (contract revision 21).
+ */
+function mayHoldHostCapability(type: unknown, capability: unknown): boolean {
+  return type === "mac" || type === "linux" || isPhoneRunCapability(capability);
+}
+
 /** Simulator control is a desktop-to-desktop grant; phones and tablets never hold it. */
 export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boolean {
   return type === "mac" || type === "linux";
@@ -246,7 +262,8 @@ function parsePersistedCapabilities(
         (capability) =>
           (acceptsBotCapabilities || !isBotCapability(capability)) &&
           (acceptsProgressCapabilities || !isProgressCapability(capability)) &&
-          (desktop || (!isSimulatorCapability(capability) && !isHostCapability(capability))),
+          (desktop || !isSimulatorCapability(capability)) &&
+          (!isHostCapability(capability) || mayHoldHostCapability(type, capability)),
       )
     : value;
   return parseCapabilities(negotiatedValue);
@@ -767,10 +784,14 @@ export class AidenRemoteStateRegistry {
         return { changed: false, value: null };
       }
       // Callers check the device type first; a phone can never be granted
-      // simulator control or host-wide run authority.
+      // simulator control or the host feed, only the phone-scoped run subset.
       if (
-        (accepts.some(isSimulatorCapability) || accepts.some(isHostCapability)) &&
-        !mayHoldSimulatorCapabilities(device.type)
+        (accepts.some(isSimulatorCapability) &&
+          !mayHoldSimulatorCapabilities(device.type)) ||
+        accepts.some(
+          (capability) =>
+            isHostCapability(capability) && !mayHoldHostCapability(device.type, capability),
+        )
       ) {
         return { changed: false, value: null };
       }

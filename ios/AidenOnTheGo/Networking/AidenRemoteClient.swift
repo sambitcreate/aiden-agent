@@ -90,6 +90,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
+    /// Contract revision 21: phones may observe and control runs started on
+    /// the Mac, in Telegram or by the scheduler.
+    static let phoneRunControlFeature = "phone-run-control-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -244,6 +247,22 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
     var supportsChatReadState: Bool {
         features.contains(Self.chatReadStateFeature)
+    }
+
+    /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
+    var supportsPhoneRunControl: Bool {
+        features.contains(Self.phoneRunControlFeature)
+    }
+
+    /// This device both may and did negotiate foreign-run observation.
+    var canObserveForeignRuns: Bool {
+        supportsPhoneRunControl && capabilities.contains(.runsObserve)
+    }
+
+    /// This device may Stop, answer or steer a foreign run (per-chat grants
+    /// are still checked by the Mac).
+    var canControlForeignRuns: Bool {
+        canObserveForeignRuns && capabilities.contains(.runsControl)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -840,6 +859,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            .runsObserve, .runsControl,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -2008,12 +2028,117 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    // MARK: Contract revision 21: phone run observation and control
+
+    /// Attaches to the chat's newest run, wherever it started. Every frame
+    /// must name the same run as the first.
+    func currentRunEvents(chatId: String) -> AsyncThrowingStream<AidenRemoteRunEvent, Error> {
+        let identity = AidenRunStreamIdentity()
+        return sseStream(
+            path: ["chats", chatId, "runs", "current", "events"],
+            after: 0,
+            parser: AidenRunSSEParser()
+        ) { event in
+            try identity.check(event)
+        }
+    }
+
+    /// Resumes one run after `sequence` (the last fully delivered event).
+    func runEvents(runId: String, after sequence: Int) -> AsyncThrowingStream<AidenRemoteRunEvent, Error> {
+        let identity = AidenRunStreamIdentity(runId: runId)
+        return sseStream(
+            path: ["runs", runId, "events"],
+            after: sequence,
+            parser: AidenRunSSEParser()
+        ) { event in
+            try identity.check(event)
+        }
+    }
+
+    func cancelRun(id: String, idempotencyKey: UUID = UUID()) async throws -> AidenRemoteRunCancelResult {
+        let result: AidenRemoteRunCancelResult = try await send(
+            method: "POST",
+            path: ["runs", id, "cancel"],
+            body: AidenEmptyObject(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [202]
+        )
+        guard result.runId == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    /// A phone may always deny; allowing an approval the Mac marked
+    /// `canAllow: false` is refused with `capability_denied`. A loser receives
+    /// `409 approval_resolved` carrying the winning decision and `resolvedAt`.
+    func respondToRunApproval(
+        runId: String,
+        approvalId: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = nil,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenRemoteRunApprovalResult {
+        let result: AidenRemoteRunApprovalResult = try await send(
+            method: "POST",
+            path: ["runs", runId, "approvals", approvalId, "respond"],
+            body: ApprovalRequest(decision: decision, scope: decision == .allow ? scope : nil),
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+        guard result.runId == runId, result.approvalId == approvalId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    func respondToRunQuestion(
+        runId: String,
+        promptId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenRemoteRunQuestionResult {
+        let result: AidenRemoteRunQuestionResult = try await send(
+            method: "POST",
+            path: ["runs", runId, "questions", promptId, "respond"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+        guard result.runId == runId, result.promptId == promptId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
     private func eventStream(
         path: [String],
         expectedStreamId: String?,
         progressOnly: Bool,
         after sequence: Int
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
+        sseStream(path: path, after: sequence, parser: AidenSSEParser()) { event in
+            if let expectedStreamId, event.streamId != expectedStreamId {
+                throw AidenRemoteClientError.invalidResponse
+            }
+            if progressOnly,
+               event.type != .taskUpdate,
+               event.type != .agentsUpdate {
+                // The progress channel uses SSE comments for keep-alive.
+                // A protocol heartbeat belongs to the transcript channel.
+                throw AidenRemoteClientError.invalidResponse
+            }
+            if !progressOnly,
+               event.type == .taskUpdate || event.type == .agentsUpdate {
+                // Progress snapshots are a separate chat-scoped channel;
+                // never let one enter the parent turn cursor.
+                throw AidenRemoteClientError.invalidResponse
+            }
+        }
+    }
+
+    private func sseStream<Parser: AidenSSEEventParsing>(
+        path: [String],
+        after sequence: Int,
+        parser initialParser: Parser,
+        validate validateEvent: @escaping @Sendable (Parser.Event) throws -> Void
+    ) -> AsyncThrowingStream<Parser.Event, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -2045,27 +2170,12 @@ final class AidenRemoteClient: @unchecked Sendable {
                         throw AidenRemoteClientError.unexpectedStatus(httpResponse.statusCode)
                     }
 
-                    func yield(_ event: AidenRemoteStreamEvent) throws {
-                        if let expectedStreamId, event.streamId != expectedStreamId {
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if progressOnly,
-                           event.type != .taskUpdate,
-                           event.type != .agentsUpdate {
-                            // The progress channel uses SSE comments for keep-alive.
-                            // A protocol heartbeat belongs to the transcript channel.
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if !progressOnly,
-                           event.type == .taskUpdate || event.type == .agentsUpdate {
-                            // Progress snapshots are a separate chat-scoped channel;
-                            // never let one enter the parent turn cursor.
-                            throw AidenRemoteClientError.invalidResponse
-                        }
+                    func yield(_ event: Parser.Event) throws {
+                        try validateEvent(event)
                         continuation.yield(event)
                     }
 
-                    var parser = AidenSSEParser()
+                    var parser = initialParser
                     try await AidenSSELineDecoder.forEachLine(in: bytes) { line in
                         if let event = try parser.consume(line: line) {
                             try yield(event)
@@ -2527,5 +2637,30 @@ extension AidenRemoteClient {
     }
     func readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int) async throws -> AidenReadAloudAudio {
         try await send(method: "GET", path: ["chats", chatId, "read-aloud", "audio", jobId, String(segment), String(offset)], maximumResponseBytes: 100_000)
+    }
+}
+
+/// Parsers whose frames `AidenRemoteClient` can stream.
+protocol AidenSSEEventParsing: Sendable {
+    associatedtype Event: Sendable
+    mutating func consume(line: String) throws -> Event?
+}
+
+
+private struct AidenEmptyObject: Encodable {}
+
+/// Pins a run stream to one run: the current-run route adopts the first
+/// frame's run, and every later frame must name it.
+private final class AidenRunStreamIdentity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runId: String?
+
+    init(runId: String? = nil) { self.runId = runId }
+
+    func check(_ event: AidenRemoteRunEvent) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let runId, runId != event.runId { throw AidenRemoteClientError.invalidResponse }
+        runId = event.runId
     }
 }

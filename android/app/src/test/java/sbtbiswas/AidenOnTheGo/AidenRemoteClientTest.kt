@@ -31,6 +31,7 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -1019,5 +1020,114 @@ class AidenRemoteClientTest {
         } finally {
             AidenDiagnostics.testSink = null
         }
+    }
+
+    // --- Contract revision 21: runs started on the Mac, in Telegram or by the scheduler ---
+
+    @Test
+    fun testPhoneRunCapabilitiesAreNegotiableButNeverInventedByTheMac() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","runs:observe","runs:control"]}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","runs:observe","runs:admin"]}"""
+        ))
+
+        val granted = client.updateDeviceCapabilities(
+            listOf(AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL)
+        )
+        assertTrue(granted.containsAll(AidenRemoteCapability.PHONE_RUNS))
+        assertEquals(
+            listOf("runs:observe", "runs:control"),
+            Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+                .getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+
+        val failure = runCatching {
+            client.updateDeviceCapabilities(listOf(AidenRemoteCapability.RUNS_OBSERVE))
+        }.exceptionOrNull()
+        assertNotNull("An unknown grant in the response must be rejected.", failure)
+    }
+
+    @Test
+    fun testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"runId":"run-1","chatId":"chat-1","state":"running","cancelRequested":true}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","approvalId":"approval-1","decision":"allow","scope":"chat","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","approvalId":"approval-1","decision":"deny","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","promptId":"prompt-1","outcome":"answered","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(409).setBody(
+            """{"error":{"code":"approval_resolved","message":"Another controller already resolved this approval.","requestId":"r1","retryable":false,"details":{"decision":"allow","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"""
+        ))
+
+        val cancelKey = UUID.randomUUID()
+        assertTrue(client.cancelRun("run-1", cancelKey).cancelRequested)
+        assertEquals(AidenApprovalScope.CHAT, client.respondToRunApproval("run-1", "approval-1", AidenApprovalDecision.ALLOW, AidenApprovalScope.CHAT).scope)
+        assertEquals(AidenApprovalDecision.DENY, client.respondToRunApproval("run-1", "approval-1", AidenApprovalDecision.DENY, AidenApprovalScope.ALWAYS).decision)
+        assertEquals("answered", client.respondToRunQuestion("run-1", "prompt-1", AidenQuestionRespondRequest(cancelled = true, answers = emptyList()), UUID.randomUUID()).outcome)
+
+        val requests = (0 until 4).map { server.takeRequest() }
+        assertEquals(
+            listOf(
+                "/api/aiden/v1/runs/run-1/cancel",
+                "/api/aiden/v1/runs/run-1/approvals/approval-1/respond",
+                "/api/aiden/v1/runs/run-1/approvals/approval-1/respond",
+                "/api/aiden/v1/runs/run-1/questions/prompt-1/respond"
+            ),
+            requests.map { it.path }
+        )
+        assertTrue(requests.all { it.method == "POST" })
+        assertEquals(cancelKey.toString().lowercase(), requests[0].getHeader("Idempotency-Key"))
+        assertTrue(requests.all { request ->
+            val key = request.getHeader("Idempotency-Key") ?: return@all false
+            key == key.lowercase() && runCatching { UUID.fromString(key) }.isSuccess
+        })
+        assertEquals(emptyMap<String, Any>(), Json.parseToJsonElement(requests[0].body.readUtf8()).jsonObject)
+        assertEquals("chat", Json.parseToJsonElement(requests[1].body.readUtf8()).jsonObject.getValue("scope").jsonPrimitive.content)
+        // A deny never carries a remembered scope.
+        assertEquals(setOf("decision"), Json.parseToJsonElement(requests[2].body.readUtf8()).jsonObject.keys)
+
+        try {
+            client.respondToRunApproval("run-1", "approval-2", AidenApprovalDecision.ALLOW)
+            fail("A loser must surface the first-responder conflict.")
+        } catch (error: AidenRemoteClientException.Server) {
+            assertEquals("Answered on Mac: allowed", AidenForeignRunResolution.loser(error)?.notice)
+        }
+    }
+
+    @Test
+    fun testCurrentRunStreamAttachesToOneExternallyStartedRun() = runBlocking {
+        fun frame(run: String, sequence: Int, type: String, payload: String): String =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"$run\",\"sequence\":$sequence,\"timestamp\":\"2026-10-05T10:00:0${sequence}Z\",\"type\":\"$type\",\"terminal\":false,\"payload\":$payload}\n\n"
+        val started = frame("run-mac", 1, "run.started", """{"runId":"run-mac","chatId":"chat-1","origin":"scheduler"}""")
+        val text = frame("run-mac", 2, "text_delta", """{"text":"From the Mac"}""")
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream").setBody(started + text))
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream")
+                .setBody(started + text + frame("run-other", 3, "text_delta", """{"text":"x"}"""))
+        )
+
+        val events = client.currentRunEvents("chat-1").toList()
+        assertEquals(listOf("run-mac", "run-mac"), events.map { it.runId })
+        assertEquals(AidenRemoteRunEvent.Kind.Started("chat-1", "scheduler"), events.first().kind)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/api/aiden/v1/chats/chat-1/runs/current/events", request.path)
+
+        // A frame naming another run cannot slip into the attached run's feed.
+        val received = mutableListOf<AidenRemoteRunEvent>()
+        try {
+            client.currentRunEvents("chat-1").collect { received.add(it) }
+            fail("A second run identity must end the stream.")
+        } catch (_: AidenRemoteContractException.InvalidStreamIdentity) {
+        }
+        assertEquals(2, received.size)
     }
 }

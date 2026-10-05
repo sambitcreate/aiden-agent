@@ -2297,6 +2297,95 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() async throws {
+        let client = makeClient()
+        var requests: [(method: String?, path: String?, key: String?, body: [String: Any])] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = (try? Self.jsonBody(request)) ?? [:]
+            requests.append((request.httpMethod, request.url?.path, request.value(forHTTPHeaderField: "Idempotency-Key"), body))
+            switch request.url?.path {
+            case "/api/aiden/v1/runs/run-1/cancel":
+                return Self.response(for: request, status: 202, json: #"{"runId":"run-1","chatId":"chat-1","state":"running","cancelRequested":true}"#)
+            case "/api/aiden/v1/runs/run-1/approvals/approval-1/respond":
+                let decision = body["decision"] as? String ?? "deny"
+                let scope = (body["scope"] as? String).map { ",\"scope\":\"\($0)\"" } ?? ""
+                return Self.response(for: request, status: 200, json: "{\"runId\":\"run-1\",\"approvalId\":\"approval-1\",\"decision\":\"\(decision)\"\(scope),\"resolvedAt\":\"2026-10-05T10:00:00.000Z\"}")
+            case "/api/aiden/v1/runs/run-1/questions/prompt-1/respond":
+                return Self.response(for: request, status: 200, json: #"{"runId":"run-1","promptId":"prompt-1","outcome":"answered","resolvedAt":"2026-10-05T10:00:00.000Z"}"#)
+            default:
+                return Self.response(for: request, status: 409, json: #"{"error":{"code":"approval_resolved","message":"Another controller already resolved this approval.","requestId":"r1","retryable":false,"details":{"decision":"allow","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"#)
+            }
+        }
+
+        let cancelKey = UUID()
+        let cancelled = try await client.cancelRun(id: "run-1", idempotencyKey: cancelKey)
+        XCTAssertTrue(cancelled.cancelRequested)
+        let allowed = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-1", decision: .allow, scope: .chat)
+        XCTAssertEqual(allowed.scope, .chat)
+        let denied = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-1", decision: .deny, scope: .always)
+        XCTAssertEqual(denied.decision, .deny)
+        let answered = try await client.respondToRunQuestion(
+            runId: "run-1", promptId: "prompt-1",
+            request: AidenQuestionRespondRequest(cancelled: true, answers: []),
+            idempotencyKey: UUID()
+        )
+        XCTAssertEqual(answered.outcome, "answered")
+
+        XCTAssertEqual(requests.map(\.method), ["POST", "POST", "POST", "POST"])
+        XCTAssertEqual(requests[0].key, cancelKey.uuidString.lowercased())
+        XCTAssertTrue(requests[0].body.isEmpty)
+        XCTAssertTrue(requests.allSatisfy { $0.key.map { UUID(uuidString: $0) != nil && $0 == $0.lowercased() } ?? false })
+        XCTAssertEqual(requests[1].body["scope"] as? String, "chat")
+        // A deny never carries a remembered scope.
+        XCTAssertEqual(Set(requests[2].body.keys), ["decision"])
+
+        do {
+            _ = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-2", decision: .allow)
+            XCTFail("A loser must surface the first-responder conflict.")
+        } catch {
+            let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
+            XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+        }
+    }
+
+    func testCurrentRunStreamAttachesToOneExternallyStartedRun() async throws {
+        let client = makeClient()
+        func frame(_ run: String, _ sequence: Int, _ type: String, _ payload: String) -> String {
+            "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"\(run)\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:0\(sequence)Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
+        }
+        let started = frame("run-mac", 1, "run.started", #"{"runId":"run-mac","chatId":"chat-1","origin":"scheduler"}"#)
+        let text = frame("run-mac", 2, "text_delta", #"{"text":"From the Mac"}"#)
+        var serveForeignFrame = false
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat-1/runs/current/events")
+            let tail = serveForeignFrame ? frame("run-other", 3, "text_delta", #"{"text":"x"}"#) : ""
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url), statusCode: 200,
+                httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data((started + text + tail).utf8))
+        }
+
+        var events: [AidenRemoteRunEvent] = []
+        for try await event in client.currentRunEvents(chatId: "chat-1") { events.append(event) }
+        XCTAssertEqual(events.map(\.runId), ["run-mac", "run-mac"])
+        XCTAssertEqual(events.first?.kind, .started(chatId: "chat-1", origin: "scheduler"))
+
+        // A frame naming another run cannot slip into the attached run's feed.
+        serveForeignFrame = true
+        var received = 0
+        do {
+            for try await _ in client.currentRunEvents(chatId: "chat-1") { received += 1 }
+            XCTFail("A second run identity must end the stream.")
+        } catch {
+            guard case .invalidResponse? = error as? AidenRemoteClientError else {
+                return XCTFail("Expected invalidResponse, got \(error)")
+            }
+        }
+        XCTAssertEqual(received, 2)
+    }
+
     func testStreamEOFDiscardsUnterminatedFramesAndReplaysFromLastCompleteEvent() async throws {
         let client = makeClient()
         let first = #"{"protocolVersion":1,"streamId":"stream-1","sequence":1,"timestamp":"2026-09-19T12:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"Hello"}}"#
