@@ -44,7 +44,11 @@ export type PeerWriteOperation =
   | "updateBotFavorites"
   | "updateBotChatAccess"
   | "uploadAttachment"
-  | "removeAttachment";
+  | "removeAttachment"
+  | "forkChat"
+  | "forkSummaryRetry"
+  | "forkSummarySkip"
+  | "forkSummaryCancel";
 export interface PeerOperation {
   operation: PeerReadOperation | PeerWriteOperation;
   /** The chat, stream, run, Bot or prompt the operation addresses. */

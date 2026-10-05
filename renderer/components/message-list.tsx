@@ -76,6 +76,11 @@ interface MessageListProps {
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   /** This fork's summary card, placed after the last copied message. */
   forkSummary?: { afterMessageId: string; node: React.ReactNode };
+  /**
+   * False where nothing comes before the first prompt shown, and editing it
+   * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
+   */
+  forkBeforeFirstPrompt?: boolean;
 }
 
 interface AssistantResponseProps {
@@ -358,6 +363,7 @@ export function MessageList({
   forkDisabledReason = null,
   onForkWithSummary,
   forkSummary,
+  forkBeforeFirstPrompt = true,
 }: MessageListProps) {
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
@@ -499,6 +505,8 @@ export function MessageList({
 
   const transcriptRows: React.ReactNode[] = [];
   const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
+  const unforkablePromptId =
+    forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
   for (const message of messages) {
     transcriptRows.push(
       <SettledMessageRow
@@ -508,7 +516,7 @@ export function MessageList({
         richLinks={message.id !== richLinkHandoffDuplicateId}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
-        onFork={forkEnabled ? stableOnFork : undefined}
+        onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
         forkDisabledReason={forkDisabledReason}
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
       />,

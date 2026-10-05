@@ -71,3 +71,32 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - `fork-summary-card.test.tsx`: the card states.
   - `chat-copy-view.test.ts`: `withForkLineage` and `forkSummaryRows`.
   - `message-bubble.test.tsx`: the card's placement.
+
+## Paired Macs — desktop forks a peer's chat (branch `feat/chat-fork-peer`, stacked on `feat/chat-fork-remote`)
+
+- **Peer operations.**
+  - `forkChat` is `POST /chats/{id}/fork`, with If-Match, an Idempotency-Key and a strictly validated body.
+  - `forkSummaryRetry`, `forkSummarySkip` and `forkSummaryCancel` are `POST /chats/{id}/fork-summary/<action>`. They take an empty body and are not keyed.
+  - All of them are parsed by the protocol's own parsers.
+- **Adapter and gating.**
+  - `RemoteHostAdapter` grants `fork` when the host advertises `chat-fork-v1` and `forkSummary` when it also advertises `chat-fork-summary-v1`. Both also need `chat:write`.
+  - `LocalHostAdapter` never grants either: the local pane forks through `chatsApi`.
+  - `forkLineage(chatId)` reads the full chat, because feed rows leave the summary out.
+- **Keys.** `ChatSessionControl.fork` keeps the idempotency key for an identical request (same message, position, summary and revision) after an `outcome_unknown`. A retry therefore replays the first fork instead of making a second copy.
+- **Pane** (`remote-chat-view.tsx`).
+  - Fork is offered only for chats the feed lists (`forkable`). That excludes Bot chats, and also chats beyond the 2000-row feed cap.
+  - Edit in fork is hidden on the first prompt while no older page exists (`MessageList forkBeforeFirstPrompt`).
+  - Forks are disabled while a run has started or a send is in flight.
+  - After a fork the pane opens the new chat. A `before` fork seeds the composer draft with only `prefill.text`. The composer can't show uploads staged on the host, so those are released and the user is told to attach them again.
+  - The lineage row and `ForkSummaryCard` come from `useRemoteForkLineage`. It runs one full-chat read (best-effort, under the 1 MiB GET cap), and reads again only while a pending summary's feed revision moves.
+  - Summary actions write the returned lineage into that query.
+  - A pending or failed summary holds the composer with `FORK_SUMMARY_HOLD_MESSAGE`.
+- **Tests.**
+  - `main/services/peer-remote-chat-fork.test.ts` (in `test:remote-chat`) runs end to end over the real IPC, peer-operation and host chat service. It covers:
+    - a lost answer replaying one fork;
+    - a stale revision;
+    - the prefill;
+    - capability gating;
+    - the summary actions;
+    - refusal codes.
+  - `remote-chat-view.test.tsx` covers the rendered fork actions, lineage, summary hold and `remoteForkErrorMessage`.

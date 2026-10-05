@@ -1,10 +1,11 @@
 import * as React from "react";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Info, Loader2, MessageCircleQuestion, MoreHorizontal, ShieldQuestion, TriangleAlert } from "lucide-react";
+import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, ShieldQuestion, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { ChatApprovalCard, toolLabel, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
 import { Composer, type ComposerSkillCatalog } from "../components/composer";
+import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import { MessageList } from "../components/message-list";
 import { RemoteHostMarker, RemoteHostStatusRow } from "../components/sidebar-remote";
 import {
@@ -22,13 +23,20 @@ import {
   toast,
 } from "../components/ui";
 import { peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
-import type { ChatSessionControl, ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
+import { forkedFromLabel } from "../lib/chat-copy-view";
+import { saveComposerDraftText } from "../lib/composer-draft-store";
+import { releaseAttachments, type ChatSessionControl, type ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
 import { animationFrame } from "../lib/hosts/frame-scheduler";
-import { hostResultValue, isOutcomeUnknown } from "../lib/hosts/host-chat-adapter";
+import {
+  HostChatControlError,
+  hostResultValue,
+  isOutcomeUnknown,
+  type HostChatLineage,
+} from "../lib/hosts/host-chat-adapter";
 import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
-import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
+import { mapHostForkLineage, RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import type { RemoteTranscript } from "../lib/hosts/remote-chat-mapper";
 import { RemoteChatSession, type RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { remoteRunTranscript } from "../lib/hosts/remote-stream-translator";
@@ -36,6 +44,12 @@ import { useChatSession, type ChatSession } from "../lib/hosts/use-chat-session"
 import { sidebarHosts, type SidebarHost } from "../lib/sidebar-remote-groups";
 import type { Attachment } from "../lib/types";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../shared/ask-user-question";
+import {
+  FORK_SUMMARY_HOLD_MESSAGE,
+  forkSummaryHoldsSend,
+  type ChatForkLineageV1,
+  type ChatForkPosition,
+} from "../shared/chat-copy-contract";
 import type { ChatRunInputMode, ChatRunInputRejectionReason } from "../shared/chat-run-input";
 import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
@@ -157,6 +171,21 @@ function reportControlError(control: ChatSessionControl, error: unknown, fallbac
   toast.error(error instanceof Error ? error.message : fallback);
 }
 
+/** Why a fork on a paired Mac failed, worded like a local fork's failure. */
+export function remoteForkErrorMessage(error: unknown, hostLabel: string): string {
+  if (isOutcomeUnknown(error)) {
+    return `${hostLabel} didn't confirm the fork. Fork again to check; it won't make a second copy.`;
+  }
+  if (error instanceof HostChatControlError) {
+    // The source is mid-run or waiting on an approval on that Mac.
+    if (error.remoteCode === "operation_in_progress" && error.retryable) {
+      return "Finish the current response or approval before copying this chat.";
+    }
+    if (error.remoteCode === "revision_conflict") return `This chat changed on ${hostLabel}. Try forking again.`;
+  }
+  return error instanceof Error && error.message ? error.message : "Couldn't fork this chat.";
+}
+
 function ReadOnlyApprovalCard({ prompt, reason }: { prompt: ApprovalPrompt; reason: string }) {
   const titleId = `remote-approval-title-${prompt.approvalId}`;
   return (
@@ -260,6 +289,23 @@ export interface RemoteChatPaneProps {
   onRemoved(): void;
   /** The skills this chat's host offers after `$`; absent when it grants none. */
   hostSkills?: ComposerSkillCatalog;
+  /**
+   * True when the host's chat list includes this chat. Bot chats are never
+   * listed and can't be forked on a paired Mac, so only listed chats fork.
+   */
+  forkable?: boolean;
+  /** Where this chat was forked from, when it is a fork. */
+  lineage?: RemoteChatLineage;
+  /** Opens another chat on the same host: a new fork, or a fork's source. */
+  onOpenChat?(chatId: string): void;
+  /** A summary action answered with the fork's new lineage. */
+  onLineageChange?(lineage: HostChatLineage): void;
+}
+
+export interface RemoteChatLineage {
+  forkedFrom: ChatForkLineageV1;
+  /** The source chat's title, while the host still lists it. */
+  sourceTitle?: string;
 }
 
 /** The remote chat's presentation; all state arrives in `snapshot` and `chat`. */
@@ -273,6 +319,10 @@ export function RemoteChatPane({
   onManage,
   onRemoved,
   hostSkills,
+  forkable = false,
+  lineage,
+  onOpenChat,
+  onLineageChange,
 }: RemoteChatPaneProps) {
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
@@ -371,6 +421,91 @@ export function RemoteChatPane({
     }
   };
 
+  const [forking, setForking] = React.useState(false);
+  const [forkSummaryRequest, setForkSummaryRequest] = React.useState<{
+    messageId: string;
+    position: ChatForkPosition;
+  } | null>(null);
+  const [forkSummaryBusy, setForkSummaryBusy] = React.useState(false);
+  const forkOffered = forkable && Boolean(capabilities?.has("fork"));
+  const forkWithSummaryOffered = forkOffered && Boolean(capabilities?.has("forkSummary"));
+  const forkDisabledReason =
+    runId !== null || state?.sending
+      ? "Finish the current response or approval before forking"
+      : forking
+        ? "A fork is already being made"
+        : refusal("fork");
+
+  /**
+   * Forks on the host and opens the fork. `before` hands the prompt back as
+   * the fork's draft. The composer can't show uploads already staged on the
+   * host, so only the prompt's text comes back; its staged attachments are
+   * released and the user is told to attach them again.
+   */
+  const forkAt = async (messageId: string, position: ChatForkPosition, summary?: { instructions?: string }) => {
+    if (!control) throw new Error(`Connecting to ${host.label}…`);
+    if (forkDisabledReason) throw new Error(`${forkDisabledReason}.`);
+    setForking(true);
+    try {
+      const forked = await control.fork({ messageId, position, ...(summary ? { summary } : {}) }, revision);
+      if (forked.prefill) {
+        saveComposerDraftText(hostResourceKey({ hostId: control.ref.hostId, resourceId: forked.id }), forked.prefill.text);
+        if (forked.prefill.attachmentIds.length > 0) {
+          releaseAttachments(control.adapter, forked.id, forked.prefill.attachmentIds);
+          toast.info("The prompt's attachments weren't copied into the fork. Attach them again before you send.");
+        }
+      }
+      onOpenChat?.(forked.id);
+    } catch (error) {
+      throw new Error(remoteForkErrorMessage(error, host.label));
+    } finally {
+      setForking(false);
+    }
+  };
+
+  const forkFromTranscript = (messageId: string, position: ChatForkPosition) => {
+    void forkAt(messageId, position).then(
+      () => toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked"),
+      (error: unknown) => toast.error(error instanceof Error ? error.message : "Couldn't fork this chat."),
+    );
+  };
+
+  const forkWithSummary = async (instructions: string | undefined) => {
+    if (!forkSummaryRequest) return;
+    const { messageId, position } = forkSummaryRequest;
+    try {
+      await forkAt(messageId, position, instructions ? { instructions } : {});
+      toast.success(
+        position === "before"
+          ? "Forked — Aiden is summarizing the original chat. Edit your message and send"
+          : "Forked — Aiden is summarizing the original chat",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
+      throw error;
+    }
+  };
+
+  const forkSummary = lineage?.forkedFrom.summary;
+  const runForkSummaryAction = async (action: "retry" | "cancel" | "skip") => {
+    if (!control) return;
+    setForkSummaryBusy(true);
+    try {
+      if (action === "cancel") {
+        // The host settles the summary as failed once the attempt stops.
+        if (!(await control.cancelForkSummary())) toast.info("The summary already finished.");
+        return;
+      }
+      onLineageChange?.(await control.forkSummary(action));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't update the fork's summary.");
+    } finally {
+      setForkSummaryBusy(false);
+    }
+  };
+  // The host refuses a turn until the fork's summary settles.
+  const summaryHold = forkSummaryHoldsSend(lineage?.forkedFrom) ? FORK_SUMMARY_HOLD_MESSAGE : null;
+
   const canSend = Boolean(capabilities?.has("send"));
   const questionAnswerable = Boolean(capabilities?.has("answerQuestion"));
   const openQuestion = questionAnswerable && questionRefusal === null && runId ? questions[0] : undefined;
@@ -393,6 +528,24 @@ export function RemoteChatPane({
             <RemoteHostMarker hostLabel={host.label} stale={stale} />
             <span className="min-w-0">
               <span className="block truncate">{title}</span>
+              {lineage ? (
+                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary" data-chat-fork-lineage>
+                  <GitFork aria-hidden="true" className="size-3 shrink-0" />
+                  {lineage.sourceTitle !== undefined && onOpenChat ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      onClick={() => onOpenChat(lineage.forkedFrom.chatId)}
+                    >
+                      {forkedFromLabel(lineage.sourceTitle)}
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate">
+                      {lineage.sourceTitle !== undefined ? forkedFromLabel(lineage.sourceTitle) : "Forked from another chat"}
+                    </span>
+                  )}
+                </span>
+              ) : null}
               <span
                 className="block truncate text-small font-normal text-secondary"
                 data-remote-host-availability={host.availability}
@@ -563,9 +716,10 @@ export function RemoteChatPane({
                 key={composerKey}
                 chatId={composerKey}
                 surfaces={composerSurfacesFor(capabilities ?? new Set())}
-                ready={sendRefusal === null && !unresolved}
+                ready={sendRefusal === null && !unresolved && !summaryHold}
                 readinessMessage={
-                  sendRefusal ?? (unresolved ? "Retry or dismiss the message above before sending another." : undefined)
+                  sendRefusal ??
+                  (unresolved ? "Retry or dismiss the message above before sending another." : (summaryHold ?? undefined))
                 }
                 hasMessages={messages.length > 0}
                 onSend={send}
@@ -628,10 +782,43 @@ export function RemoteChatPane({
               onOpenSubagent={noop}
               agentActivity={row!.agentActivity}
               error={row!.error ?? snapshot.error}
+              onFork={forkOffered ? forkFromTranscript : undefined}
+              forkDisabledReason={forkDisabledReason}
+              onForkWithSummary={
+                forkWithSummaryOffered ? (messageId, position) => setForkSummaryRequest({ messageId, position }) : undefined
+              }
+              // The host refuses to edit the chat's first prompt in a fork.
+              forkBeforeFirstPrompt={snapshot.transcript.hasOlder}
+              forkSummary={
+                forkSummary
+                  ? {
+                      afterMessageId: forkSummary.afterMessageId,
+                      node: (
+                        <ForkSummaryCard
+                          key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
+                          summary={forkSummary}
+                          busy={forkSummaryBusy}
+                          onCancel={() => void runForkSummaryAction("cancel")}
+                          onRetry={() => void runForkSummaryAction("retry")}
+                          onSkip={() => void runForkSummaryAction("skip")}
+                        />
+                      ),
+                    }
+                  : undefined
+              }
             />
           </>
         )}
       </ScrollArea>
+
+      <ForkSummaryDialog
+        open={forkSummaryRequest !== null}
+        kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}
+        onOpenChange={(open) => {
+          if (!open) setForkSummaryRequest(null);
+        }}
+        onConfirm={forkWithSummary}
+      />
 
       <Dialog
         open={renaming}
@@ -742,15 +929,83 @@ export function useHostSkills(adapter: RemoteHostAdapter, chatId: string): Compo
   };
 }
 
+/**
+ * A fork's lineage with its summary. Feed rows carry the lineage without the
+ * summary, so a listed fork reads its chat once, and again only while a
+ * pending summary's row moves to a new revision. A chat too large for one
+ * read keeps the feed's lineage and shows no summary card.
+ */
+function useRemoteForkLineage(
+  adapter: RemoteHostAdapter,
+  chatId: string,
+  listed: ChatForkLineageV1 | undefined,
+  rowRevision: string | undefined,
+): { forkedFrom?: ChatForkLineageV1; update(lineage: HostChatLineage): void } {
+  const qc = useQueryClient();
+  const key = hostQueryKeys.forkLineage(adapter.hostId, chatId);
+  const enabled = Boolean(listed) && adapter.capabilities().has("messagesWindow");
+  const query = useQuery({
+    queryKey: key,
+    queryFn: async () => hostResultValue(await adapter.forkLineage(chatId)),
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const read = query.data;
+  const pendingElsewhere =
+    read?.forkedFrom?.summary?.state === "pending" && rowRevision !== undefined && rowRevision !== read.revision;
+  React.useEffect(() => {
+    if (pendingElsewhere) void qc.invalidateQueries({ queryKey: key, exact: true });
+    // `key` is rebuilt every render, so its parts are the dependencies.
+  }, [qc, pendingElsewhere, adapter.hostId, chatId, rowRevision]);
+  const update = React.useCallback(
+    (lineage: HostChatLineage) => qc.setQueryData(hostQueryKeys.forkLineage(adapter.hostId, chatId), lineage),
+    [qc, adapter.hostId, chatId],
+  );
+  const forkedFrom = enabled && read?.forkedFrom ? read.forkedFrom : listed;
+  return forkedFrom ? { forkedFrom, update } : { update };
+}
+
 /** Binds the pane's session control to this host's adapter and this chat. */
 function ControlledRemoteChatPane({
   adapter,
   chatId,
+  listedLineage,
+  sourceTitle,
+  rowRevision,
   ...props
-}: RemoteChatFrameProps & { adapter: RemoteHostAdapter; chatId: string }) {
+}: RemoteChatFrameProps & {
+  adapter: RemoteHostAdapter;
+  chatId: string;
+  listedLineage?: ChatForkLineageV1;
+  sourceTitle?: string;
+  rowRevision?: string;
+}) {
   const chat = useChatSession(adapter, { hostId: adapter.hostId, chatId });
   const hostSkills = useHostSkills(adapter, chatId);
-  return <RemoteChatPane {...props} chat={chat} {...(hostSkills ? { hostSkills } : {})} />;
+  const fork = useRemoteForkLineage(adapter, chatId, listedLineage, rowRevision);
+  const lineage: RemoteChatLineage | undefined = fork.forkedFrom
+    ? { forkedFrom: fork.forkedFrom, ...(sourceTitle !== undefined ? { sourceTitle } : {}) }
+    : undefined;
+  return (
+    <RemoteChatPane
+      {...props}
+      chat={chat}
+      {...(hostSkills ? { hostSkills } : {})}
+      {...(lineage ? { lineage } : {})}
+      onLineageChange={fork.update}
+    />
+  );
+}
+
+/** A feed row's lineage, or nothing when the row carries none or a malformed one. */
+function feedRowLineage(row: Record<string, unknown> | undefined): ChatForkLineageV1 | undefined {
+  if (!row?.forkedFrom) return undefined;
+  try {
+    return mapHostForkLineage(row.forkedFrom);
+  } catch {
+    return undefined;
+  }
 }
 
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {
@@ -761,7 +1016,15 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
   const removed = React.useCallback(() => {
     void navigate({ to: "/" });
   }, [navigate]);
-  return <RemoteChatRoute hostId={hostId} chatId={chatId} onManage={manage} onRemoved={removed} />;
+  const openChat = React.useCallback(
+    (next: string) => {
+      void navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId: next } });
+    },
+    [navigate, hostId],
+  );
+  return (
+    <RemoteChatRoute hostId={hostId} chatId={chatId} onManage={manage} onRemoved={removed} onOpenChat={openChat} />
+  );
 }
 
 export interface RemoteChatRouteProps {
@@ -771,10 +1034,12 @@ export interface RemoteChatRouteProps {
   onManage(): void;
   /** Leaves the route after the open chat was deleted. */
   onRemoved(): void;
+  /** Opens another chat on this host: a new fork, or a fork's source. */
+  onOpenChat?(chatId: string): void;
 }
 
 /** The remote chat route, fed by the host queries the sidebar keeps current. */
-export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved }: RemoteChatRouteProps) {
+export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenChat }: RemoteChatRouteProps) {
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
   const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
@@ -837,6 +1102,15 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved }: RemoteC
       : listed;
   const summary = feed.data?.summaries.find((row) => row.id === chatId);
   const title = typeof summary?.title === "string" && summary.title.trim() ? summary.title : "Remote chat";
+  const listedLineage = feedRowLineage(summary);
+  const source = listedLineage ? feed.data?.summaries.find((row) => row.id === listedLineage.chatId) : undefined;
+  const sourceTitle =
+    source === undefined
+      ? undefined
+      : typeof source.title === "string" && source.title.trim()
+        ? source.title
+        : "Remote chat";
+  const rowRevision = typeof summary?.revision === "string" ? summary.revision : undefined;
   const frame: RemoteChatFrameProps = {
     title,
     host,
@@ -845,10 +1119,20 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved }: RemoteC
     onReconnect: reconnect,
     onManage,
     onRemoved,
+    // Bot chats are never listed, and the host refuses to fork them.
+    forkable: summary !== undefined,
+    ...(onOpenChat ? { onOpenChat } : {}),
   };
 
   return binding ? (
-    <ControlledRemoteChatPane {...frame} adapter={binding.adapter} chatId={chatId} />
+    <ControlledRemoteChatPane
+      {...frame}
+      adapter={binding.adapter}
+      chatId={chatId}
+      {...(listedLineage ? { listedLineage } : {})}
+      {...(sourceTitle !== undefined ? { sourceTitle } : {})}
+      {...(rowRevision ? { rowRevision } : {})}
+    />
   ) : (
     <RemoteChatPane {...frame} chat={null} />
   );

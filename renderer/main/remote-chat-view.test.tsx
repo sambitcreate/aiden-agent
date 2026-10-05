@@ -22,7 +22,13 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
-import { RemoteChatPane, RemoteChatRoute, remoteComposerActions, type RemoteChatPaneProps } from "./remote-chat-view";
+import {
+  RemoteChatPane,
+  RemoteChatRoute,
+  remoteComposerActions,
+  remoteForkErrorMessage,
+  type RemoteChatPaneProps,
+} from "./remote-chat-view";
 
 const noop = () => undefined;
 const reconnect = async () => undefined;
@@ -544,4 +550,102 @@ test("a remote chat whose Mac is unpaired, turned off or unreadable says so once
   assert.doesNotMatch(failed, /Loading…/);
   assert.match(failed, /Paired Macs could not be read/);
   assert.match(failed, /Keychain locked/);
+});
+
+const FORKING: HostChatCapability[] = [...RUN_CONTROL, "fork", "forkSummary"];
+
+function forkActions(view: ReturnType<typeof render>, label: string) {
+  return view.buttons.filter((node) => node.getAttribute("aria-label") === label);
+}
+
+test("a listed chat on a Mac that forks offers Fork from here on replies and Edit in fork past the first prompt", () => {
+  const forkable = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat(), forkable: true });
+  assert.equal(forkActions(forkable, "Fork from here").length, 1, "the settled reply forks after itself");
+  assert.equal(forkActions(forkable, "Edit in fork").length, 0, "the host can't fork before a chat's first prompt");
+
+  // With older messages above, the oldest prompt shown isn't the chat's first.
+  const paged = snapshot(online, { transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: true } });
+  const older = render({ host: online, snapshot: paged, chat: session(online, FORKING).chat(), forkable: true });
+  assert.equal(forkActions(older, "Edit in fork").length, 1);
+  assert.equal(forkActions(older, "Fork from here")[0]?.hasAttribute("aria-disabled"), false);
+
+  // Bot chats are never listed; a host without the feature offers nothing.
+  const unlisted = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat() });
+  assert.equal(forkActions(unlisted, "Fork from here").length, 0);
+  const plain = render({ host: online, snapshot: snapshot(online), chat: session(online).chat(), forkable: true });
+  assert.equal(forkActions(plain, "Fork from here").length, 0);
+});
+
+test("forking waits while a run on the host is still going", () => {
+  const live = run([event(1, "run.started", { runId: "run-1", chatId: "chat-1", origin: "device" })]);
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: live }),
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+  });
+  const fork = forkActions(view, "Fork from here")[0];
+  assert.equal(fork?.getAttribute("aria-disabled"), "true");
+  assert.equal(fork?.getAttribute("title"), "Finish the current response or approval before forking");
+});
+
+test("a fork shows where it came from, and a pending summary holds the composer", () => {
+  const view = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+    onOpenChat: noop,
+    lineage: {
+      forkedFrom: {
+        chatId: "chat-0",
+        messageId: "m9",
+        position: "after",
+        at: 1,
+        summary: { state: "pending", afterMessageId: "m2", instructions: "the parser" },
+      },
+      sourceTitle: "Release plan",
+    },
+  });
+  assert.ok(view.button(/Forked from “Release plan”/), "the source opens from the lineage row");
+  assert.match(view.text, /Summarizing the original chat…/);
+  assert.ok(view.markup.indexOf('data-fork-summary="pending"') > view.markup.indexOf("Here is the summary so far"));
+  assert.match(view.text, /This fork is waiting for its summary\./);
+  assert.ok(view.button(/Send message/)?.hasAttribute("disabled"));
+
+  const unlistedSource = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+    lineage: { forkedFrom: { chatId: "chat-0", messageId: "m9", position: "after", at: 1 } },
+  });
+  assert.match(unlistedSource.text, /Forked from another chat/);
+  assert.equal(unlistedSource.button(/Forked from/), undefined, "a source the host doesn't list can't be opened");
+  assert.doesNotMatch(unlistedSource.text, /waiting for its summary/);
+});
+
+test("a failed remote fork says what to do next", () => {
+  assert.match(
+    remoteForkErrorMessage(new HostChatControlError({ code: "outcome_unknown", message: "lost" }), "Studio"),
+    /Studio didn't confirm the fork\. Fork again to check; it won't make a second copy\./,
+  );
+  assert.equal(
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "failed", message: "busy", remoteCode: "operation_in_progress", retryable: true }),
+      "Studio",
+    ),
+    "Finish the current response or approval before copying this chat.",
+  );
+  assert.equal(
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "failed", message: "Forking is turned off.", remoteCode: "operation_in_progress" }),
+      "Studio",
+    ),
+    "Forking is turned off.",
+    "a fork the host won't make at all isn't blamed on a running response",
+  );
+  assert.match(
+    remoteForkErrorMessage(new HostChatControlError({ code: "failed", message: "x", remoteCode: "revision_conflict" }), "Studio"),
+    /This chat changed on Studio\./,
+  );
 });

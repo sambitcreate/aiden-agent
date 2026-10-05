@@ -1,4 +1,5 @@
 import { peerHostsApi } from "../ipc";
+import { parseChatForkLineageV1, type ChatForkLineageV1 } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult } from "../../shared/chat-run-input";
 import type { PeerOperation } from "../../shared/peer-operation";
 import { hostAvailability } from "../sidebar-remote-groups";
@@ -20,6 +21,9 @@ import {
   type HostChatCancelInput,
   type HostChatCapability,
   type HostChatError,
+  type HostChatForkInput,
+  type HostChatLineage,
+  type HostForkedChat,
   type HostChatInput,
   type HostChatQuestionInput,
   type HostChatQuestionResult,
@@ -78,6 +82,10 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
     if (features.has("chat-skills-v1") && grants.has("skills:invoke")) capabilities.add("skills");
     // Bot grants are bound at pairing; a Bot chat also reads the Bot and writes a chat.
     if (grants.has("bot:write") && grants.has("bot:read")) capabilities.add("botChats");
+    if (features.has("chat-fork-v1")) {
+      capabilities.add("fork");
+      if (features.has("chat-fork-summary-v1")) capabilities.add("forkSummary");
+    }
     // Run control also needs chat write access on the host.
     if (features.has("run-control-v1") && grants.has("runs:control")) {
       capabilities.add("cancel");
@@ -121,6 +129,37 @@ function record(value: unknown): Record<string, unknown> {
 
 function failure(error: unknown): HostChatError {
   return { code: "failed", message: error instanceof Error ? error.message : "The host request failed." };
+}
+
+/** A host's lineage carries an RFC 3339 time; the chat UI reads epoch milliseconds. */
+export function mapHostForkLineage(value: unknown): ChatForkLineageV1 {
+  const lineage = record(value);
+  const at = typeof lineage.at === "string" ? Date.parse(lineage.at) : Number.NaN;
+  const parsed = Number.isFinite(at) ? parseChatForkLineageV1({ ...lineage, at }) : undefined;
+  if (!parsed) throw new Error("The host's fork lineage was malformed.");
+  return parsed;
+}
+
+export function mapHostChatLineage(value: unknown): HostChatLineage {
+  const chat = record(value);
+  const revision = text(chat.revision);
+  if (!revision) throw new Error("The host's chat had no revision.");
+  return { revision, ...(chat.forkedFrom === undefined ? {} : { forkedFrom: mapHostForkLineage(chat.forkedFrom) }) };
+}
+
+export function mapHostForkedChat(value: unknown): HostForkedChat {
+  const body = record(value);
+  const chat = record(body.chat);
+  const id = text(chat.id);
+  if (!id || typeof chat.title !== "string") throw new Error("The host's fork was incomplete.");
+  const forked: HostForkedChat = { id, title: chat.title, forkedFrom: mapHostForkLineage(chat.forkedFrom) };
+  if (body.prefill === undefined) return forked;
+  const prefill = record(body.prefill);
+  if (typeof prefill.text !== "string") throw new Error("The host's fork prefill was incomplete.");
+  const attachments = Array.isArray(prefill.attachments) ? prefill.attachments : [];
+  const attachmentIds = attachments.map((attachment) => text(record(attachment).id));
+  if (attachmentIds.some((attachmentId) => !attachmentId)) throw new Error("The host's fork prefill was incomplete.");
+  return { ...forked, prefill: { text: prefill.text, attachmentIds: attachmentIds as string[] } };
 }
 
 /**
@@ -402,6 +441,49 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   async removeAttachment(chatId: string, attachmentId: string): Promise<void> {
     await this.mutate("attach", { operation: "removeAttachment", resourceId: chatId, itemId: attachmentId });
+  }
+
+  async fork(chatId: string, input: HostChatForkInput): Promise<HostForkedChat> {
+    const summary = input.summary
+      ? { summary: input.summary.instructions ? { instructions: input.summary.instructions } : {} }
+      : {};
+    // A summary fork needs the summary feature too; a plain fork does not.
+    const value = await this.guarded(chatId, () =>
+      this.mutate(input.summary ? "forkSummary" : "fork", {
+        operation: "forkChat",
+        resourceId: chatId,
+        body: { messageId: input.messageId, position: input.position, ...summary },
+        revision: input.revision,
+        idempotencyKey: input.idempotencyKey,
+      }),
+    );
+    // A fork leaves its source untouched, so the open transcript stays current.
+    return this.shaped(value, mapHostForkedChat);
+  }
+
+  async forkSummary(chatId: string, action: "retry" | "skip"): Promise<HostChatLineage> {
+    const value = await this.guarded(chatId, () =>
+      this.mutate("forkSummary", {
+        operation: action === "retry" ? "forkSummaryRetry" : "forkSummarySkip",
+        resourceId: chatId,
+        body: {},
+      }),
+    );
+    this.chatChanged(chatId);
+    return this.shaped(value, mapHostChatLineage);
+  }
+
+  async cancelForkSummary(chatId: string): Promise<boolean> {
+    const value = await this.guarded(chatId, () =>
+      this.mutate("forkSummary", { operation: "forkSummaryCancel", resourceId: chatId, body: {} }),
+    );
+    this.chatChanged(chatId);
+    return record(value).cancelled === true;
+  }
+
+  /** The chat's lineage with its summary. It reads the whole chat, so a very long one may not fit the response cap. */
+  forkLineage(chatId: string): Promise<HostChatResult<HostChatLineage>> {
+    return this.read("messagesWindow", { operation: "chat", resourceId: chatId }, mapHostChatLineage);
   }
 
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
