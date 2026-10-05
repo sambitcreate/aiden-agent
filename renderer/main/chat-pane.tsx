@@ -1669,30 +1669,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
-  const redirectMessage = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
-      if (!text.trim() || attachments.length > 0 || skillInvocation) {
-        throw new Error("Redirect requires text without attachments or a skill.");
-      }
-      if (
-        !(canStopGeneration || visibleDetachedProjection) ||
-        isStoppingGeneration ||
-        stopRequestedRef.current
-      ) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
-      const replacement = {
-        id: createChatTurnId(), text, attachments: [] as Attachment[],
-      };
-      messageQueue.replaceWith(replacement, () => {
-        const stopping = handleStop();
-        if (stopping) stopRequestedRef.current = true;
-        return stopping;
-      });
-    },
-    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
-  );
-
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
     generationRef.current?.cancel("lifecycle");
@@ -2509,7 +2485,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
                 onSteer={draft ? undefined : steerMessage}
-                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 queuedMessages={

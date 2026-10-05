@@ -1165,11 +1165,14 @@ final class AidenChatViewModel {
     private(set) var catalog: AidenModelCatalog?
     private(set) var isLoading = false
     private(set) var isStarting = false
+    /// The busy send pill's mode. Resets to Queue when the run ends.
+    private(set) var runInputMode: AidenStreamInputMode = .queue
     private(set) var streamState: AidenStreamState? {
         didSet {
             let wasActive = oldValue.map { !$0.isTerminal } ?? false
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
+            if !isActive { runInputMode = .queue }
             onChatActivityChanged(chat.id, isActive ? .active : .idle)
         }
     }
@@ -2662,7 +2665,7 @@ final class AidenChatViewModel {
         return await cancelStreamOnce(streamID: streamID, context: context)
     }
 
-    /// Shared cancel core for Stop and Redirect. Callers hold `isStopping` so
+    /// Cancel core for Stop. Callers hold `isStopping` so
     /// the composer controls stay inert for the whole operation.
     private func cancelStreamOnce(
         streamID expectedStreamID: String,
@@ -2702,20 +2705,27 @@ final class AidenChatViewModel {
         return coordinator.server?.supportsChatRunInput == true
     }
 
-    /// The busy composer shows Steer/Queue/Redirect only when the server
-    /// negotiated the feature and the composer holds text. Old servers keep
-    /// the Stop-only control.
+    /// The busy composer shows the Steer/Queue pill only when the server
+    /// negotiated the feature. Old servers keep the Stop-only control.
     var showsRunInputOptions: Bool {
         AidenRunInputPresentation.offersRunInput(
             isStreaming: isStreaming,
             canControl: canControlCurrentRun,
-            supports: supportsRunInput,
-            hasDraft: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            supports: supportsRunInput
         )
     }
 
     var canSubmitRunInput: Bool {
         showsRunInputOptions && !isSubmittingRunInput && !isStopping
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Picking a mode sends the draft in that mode; with nothing to send it only
+    /// switches the pill.
+    func selectRunInputMode(_ mode: AidenStreamInputMode) async {
+        runInputMode = mode
+        guard canSubmitRunInput else { return }
+        await submitRunInput(mode)
     }
 
     func submitRunInput(_ mode: AidenStreamInputMode) async {
@@ -2962,42 +2972,6 @@ final class AidenChatViewModel {
                 _ = await coordinator.handleCredentialRevocation(error, context: context)
             }
         }
-    }
-
-    /// Destructive: stop the current run, then send the composer contents as a
-    /// new turn once the stream is confirmed terminal. The draft is only
-    /// consumed by the new send; a failed cancel leaves it untouched.
-    /// `isStopping` stays held for the whole operation so the composer controls
-    /// remain inert while the run winds down.
-    func redirectRun() async {
-        guard canControlCurrentRun, !isStopping, !isSubmittingRunInput, !isReadOnlyPresentation, !isRemoved,
-              let streamID = activeStreamID,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
-        // Reserve before the cache read yields so simultaneous taps cannot both
-        // dispatch, and keep the current run visible until the Mac confirms Stop.
-        isStopping = true
-        defer { isStopping = false }
-        guard await cancelStreamOnce(streamID: streamID, context: context) else { return }
-        do {
-            var waited = 0
-            while isStreaming && activeStreamID == streamID && waited < 50 {
-                try await Task.sleep(for: .milliseconds(100))
-                waited += 1
-                guard coordinator.isCurrent(context) else { return }
-            }
-        } catch {
-            return
-        }
-        guard coordinator.isCurrent(context) else { return }
-        guard !isStreaming else {
-            presentedError = String(localized: "The run is still stopping. Send your message once it finishes.")
-            return
-        }
-        guard canSend else {
-            presentedError = String(localized: "The run stopped, but your message could not be sent. Check your connection and try again.")
-            return
-        }
-        await send()
     }
 
     private func consumeRunInputDraft(_ text: String) {
@@ -6937,7 +6911,6 @@ private struct AidenComposerView: View {
     let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
-    @State private var redirectConfirmPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -7181,44 +7154,7 @@ private struct AidenComposerView: View {
 
                 if model.isStreaming {
                     if model.showsRunInputOptions {
-                        Menu {
-                            Button {
-                                Task { await model.submitRunInput(.steer) }
-                            } label: {
-                                Label("Steer now", systemImage: "arrow.triangle.turn.up.right.circle")
-                            }
-                            Button {
-                                Task { await model.submitRunInput(.queue) }
-                            } label: {
-                                Label("Queue to run next", systemImage: "text.append")
-                            }
-                            Divider()
-                            Button(role: .destructive) {
-                                redirectConfirmPresented = true
-                            } label: {
-                                Label("Redirect…", systemImage: "arrow.uturn.right")
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.headline.bold())
-                                .frame(width: 30, height: 30)
-                                .background(runInputButtonBackground, in: Circle())
-                                .foregroundStyle(runInputButtonForeground)
-                                .frame(width: 44, height: 44)
-                        }
-                        .disabled(!model.canSubmitRunInput)
-                        .accessibilityLabel("Run input options")
-                        .accessibilityHint("Steer, queue, or redirect the current run")
-                        .confirmationDialog(
-                            "Stop this run and send your message as a new request?",
-                            isPresented: $redirectConfirmPresented,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Stop and send", role: .destructive) {
-                                Task { await model.redirectRun() }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        }
+                        runInputPill
                     }
                     Button { Task { await model.stop() } } label: {
                         Image(systemName: "stop.fill")
@@ -7311,6 +7247,70 @@ private struct AidenComposerView: View {
 
     private var sendButtonForeground: Color {
         model.canSend ? palette.canvas : palette.secondary
+    }
+
+    /// One pill while a run streams, matching the desktop and Android control:
+    /// the mode's name sends in that mode (touch and hold for the menu), and the
+    /// chevron opens the same Steer/Queue menu.
+    private var runInputPill: some View {
+        HStack(spacing: 0) {
+            Menu {
+                runInputModeMenu
+            } label: {
+                Text(model.runInputMode.busyLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .contentTransition(.interpolate)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 4)
+                    .frame(minHeight: 44)
+            } primaryAction: {
+                voiceInput.stopBeforeSubmittingDraft()
+                Task { await model.submitRunInput(model.runInputMode) }
+            }
+            .accessibilityLabel(model.runInputMode.busyActionLabel)
+            .accessibilityHint(String(localized: "Touch and hold to choose Steer or Queue"))
+
+            Menu {
+                runInputModeMenu
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .padding(.leading, 4)
+                    .padding(.trailing, 12)
+                    .frame(minHeight: 44)
+            }
+            .accessibilityLabel(String(localized: "Choose message action"))
+        }
+        .foregroundStyle(runInputButtonForeground)
+        .background(runInputButtonBackground, in: Capsule().inset(by: 7))
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .disabled(model.isStopping || model.isSubmittingRunInput || model.isReadOnlyPresentation)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: model.runInputMode)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.canSubmitRunInput)
+    }
+
+    @ViewBuilder
+    private var runInputModeMenu: some View {
+        ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
+            Button {
+                voiceInput.stopBeforeSubmittingDraft()
+                Task { await model.selectRunInputMode(mode) }
+            } label: {
+                if model.runInputMode == mode {
+                    Label {
+                        Text(mode.busyLabel)
+                        Text(mode.busyDetail)
+                    } icon: {
+                        Image(systemName: "checkmark")
+                    }
+                } else {
+                    Text(mode.busyLabel)
+                    Text(mode.busyDetail)
+                }
+            }
+            .accessibilityAddTraits(model.runInputMode == mode ? .isSelected : [])
+        }
     }
 
     private var runInputButtonBackground: Color {

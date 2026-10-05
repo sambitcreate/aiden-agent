@@ -2506,6 +2506,33 @@ textarea {
   .button-press-feedback { scale: none !important; }
 }
 
+/* Busy send pill: a new mode rolls its label in, and holding the label fills it
+   toward the moment the mode menu opens (BUSY_SEND_HOLD_MS). */
+:root[data-reduce-motion="false"] .busy-send-label {
+  animation: aiden-busy-send-label-in 220ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+.busy-send-button [data-holding]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0.16;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+:root[data-reduce-motion="false"] .busy-send-button [data-holding]::before {
+  animation: aiden-busy-send-hold 330ms linear 120ms both;
+}
+@keyframes aiden-busy-send-label-in {
+  from { opacity: 0; transform: translateY(45%); }
+}
+@keyframes aiden-busy-send-hold {
+  to { transform: scaleX(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .busy-send-label, .busy-send-button [data-holding]::before { animation: none !important; }
+}
+
 /* Aiden Live replaces the previous Assistant panel with one persistent,
    stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
 :root {

@@ -1,8 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -22,7 +25,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -54,7 +62,8 @@ fun AidenComposerView(
     showsRunInputOptions: Boolean = false,
     canSubmitRunInput: Boolean = false,
     onSubmitRunInput: (AidenStreamInputMode) -> Unit = {},
-    onRedirectRequest: () -> Unit = {},
+    runInputMode: AidenStreamInputMode = AidenRunInputPresentation.defaultMode,
+    onRunInputModeChange: (AidenStreamInputMode) -> Unit = {},
     runInputReceipt: String? = null,
     isVoiceListening: Boolean,
     isVoiceBusy: Boolean = false,
@@ -81,9 +90,6 @@ fun AidenComposerView(
     var isFieldFocused by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
-    // Reset when the options cluster leaves composition so a remembered-open
-    // menu cannot reappear unsolicited on the next busy stream.
-    var showRunInputMenu by remember(showsRunInputOptions) { mutableStateOf(false) }
 
     Surface(
         modifier = modifier
@@ -481,61 +487,23 @@ fun AidenComposerView(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Busy composer: negotiated servers offer Steer | Queue |
-                // Redirect from the submit affordance while Stop stays its own
-                // control; older servers keep the single morphing button.
+                // Busy composer: negotiated servers get one Queue/Steer pill
+                // next to its own Stop control; older servers keep the single
+                // morphing button.
                 if (isStreaming && showsRunInputOptions) {
-                    Box {
-                        Surface(
-                            onClick = { showRunInputMenu = true },
-                            enabled = canSubmitRunInput && !isReadOnly,
-                            shape = CircleShape,
-                            color = if (canSubmitRunInput) palette.accent else palette.canvas.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .size(AidenUi.MinimumTouchTarget)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Run input options",
-                                    tint = if (canSubmitRunInput) Color.White else palette.secondary.copy(alpha = 0.4f),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                    val canSubmitNow = canSubmitRunInput && !isReadOnly && draft.isNotBlank()
+                    AidenRunInputPill(
+                        mode = runInputMode,
+                        canSubmit = canSubmitNow,
+                        canChooseMode = !isReadOnly,
+                        onSubmit = { onSubmitRunInput(runInputMode) },
+                        onPickMode = { mode ->
+                            // Picking a mode sends the draft in that mode; with
+                            // nothing to send it only switches.
+                            onRunInputModeChange(mode)
+                            if (canSubmitNow) onSubmitRunInput(mode)
                         }
-                        DropdownMenu(
-                            expanded = showRunInputMenu,
-                            onDismissRequest = { showRunInputMenu = false },
-                            shape = RoundedCornerShape(18.dp),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Steer now") },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onSubmitRunInput(AidenStreamInputMode.STEER)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Queue to run next") },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onSubmitRunInput(AidenStreamInputMode.QUEUE)
-                                }
-                            )
-                            HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
-                            DropdownMenuItem(
-                                text = { Text("Redirect…", color = palette.danger) },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onRedirectRequest()
-                                }
-                            )
-                        }
-                    }
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         onClick = onStop,
@@ -629,6 +597,163 @@ fun AidenComposerView(
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.danger,
                     modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+private data class AidenRunInputModeOption(
+    val mode: AidenStreamInputMode,
+    val label: String,
+    val detail: String,
+    val actionLabel: String
+)
+
+// Menu order matches desktop and iOS: Steer first, then Queue.
+private val runInputModeOptions = listOf(
+    AidenRunInputModeOption(AidenStreamInputMode.STEER, "Steer", "Add guidance without stopping", "Steer response"),
+    AidenRunInputModeOption(AidenStreamInputMode.QUEUE, "Queue", "Run after this response", "Queue message")
+)
+
+/**
+ * Send control while a response runs (desktop/iOS parity): one accent pill
+ * whose label sends the draft in the current mode, and a chevron that opens
+ * the Steer / Queue menu. Long-pressing the label opens the same menu. The
+ * pill dims when there is nothing to send but the menu stays usable, so a
+ * mode can be picked before typing.
+ */
+@Composable
+private fun AidenRunInputPill(
+    mode: AidenStreamInputMode,
+    canSubmit: Boolean,
+    canChooseMode: Boolean,
+    onSubmit: () -> Unit,
+    onPickMode: (AidenStreamInputMode) -> Unit
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = AidenTheme.config.reduceMotion
+    val current = runInputModeOptions.first { it.mode == mode }
+    var showMenu by remember { mutableStateOf(false) }
+    val pillAlpha by animateFloatAsState(
+        targetValue = if (canSubmit) 1f else 0.6f,
+        animationSpec = if (reduceMotion) snap() else AidenMotion.nonSpatialExpressiveSpring(),
+        label = "run_input_pill_alpha"
+    )
+
+    Box {
+        Surface(
+            shape = CircleShape,
+            color = palette.accent,
+            modifier = Modifier
+                .height(AidenUi.MinimumTouchTarget)
+                .graphicsLayer { alpha = pillAlpha }
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(min = AidenUi.MinimumTouchTarget)
+                        .combinedClickable(
+                            enabled = canChooseMode,
+                            role = Role.Button,
+                            onLongClickLabel = "Choose message action",
+                            onLongClick = { showMenu = true },
+                            onClick = { if (canSubmit) onSubmit() }
+                        )
+                        .semantics {
+                            contentDescription = current.actionLabel
+                            if (!canSubmit) disabled()
+                        }
+                        .padding(start = 16.dp, end = 2.dp)
+                ) {
+                    AnimatedContent(
+                        targetState = current.label,
+                        transitionSpec = {
+                            if (reduceMotion) {
+                                EnterTransition.None togetherWith ExitTransition.None
+                            } else {
+                                (slideInVertically(AidenMotion.spatialExpressiveSpring()) { it / 2 } +
+                                    fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
+                                    .togetherWith(
+                                        slideOutVertically(AidenMotion.spatialExpressiveSpring()) { -it / 2 } +
+                                            fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                                    )
+                                    .using(SizeTransform(clip = true))
+                            }
+                        },
+                        label = "run_input_mode_label"
+                    ) { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            maxLines = 1,
+                            // The label part announces its action instead.
+                            modifier = Modifier.clearAndSetSemantics {}
+                        )
+                    }
+                }
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .size(AidenUi.MinimumTouchTarget)
+                        .clickable(
+                            enabled = canChooseMode,
+                            role = Role.Button,
+                            onClick = { showMenu = true }
+                        )
+                        .semantics { contentDescription = "Choose message action" }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .size(18.dp)
+                    )
+                }
+            }
+        }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            shape = RoundedCornerShape(18.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ) {
+            runInputModeOptions.forEach { option ->
+                val isCurrent = option.mode == mode
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                color = palette.foreground
+                            )
+                            Text(
+                                text = option.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.secondary
+                            )
+                        }
+                    },
+                    trailingIcon = {
+                        if (isCurrent) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                        } else {
+                            Spacer(modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    onClick = {
+                        showMenu = false
+                        onPickMode(option.mode)
+                    },
+                    modifier = Modifier.semantics { selected = isCurrent }
                 )
             }
         }

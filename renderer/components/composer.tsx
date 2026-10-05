@@ -39,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { ComposerContextBar } from "./composer-context-bar";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
@@ -151,7 +152,6 @@ interface ComposerProps {
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
-  onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
   /** Queue-owned compaction hold, retained across Composer remounts. */
@@ -159,7 +159,7 @@ interface ComposerProps {
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
-  /** Stop has been requested; no busy Queue/Steer/Redirect may be admitted until it settles. */
+  /** Stop has been requested; no busy Queue or Steer may be admitted until it settles. */
   stoppingGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
@@ -335,7 +335,6 @@ export function Composer({
   onStop,
   onQueue,
   onSteer,
-  onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
   compactionHeld = false,
@@ -401,13 +400,9 @@ export function Composer({
     slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
-  const [busyMode, setBusyMode] = React.useState<"steer" | "queue" | "redirect">("queue");
-  const [confirmRedirect, setConfirmRedirect] = React.useState(false);
+  const [busyMode, setBusyMode] = React.useState<BusySendMode>("queue");
   React.useEffect(() => {
-    if (!isGenerating) {
-      setBusyMode("queue");
-      setConfirmRedirect(false);
-    }
+    if (!isGenerating) setBusyMode("queue");
   }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
@@ -965,7 +960,7 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
-      mode?: "steer" | "queue" | "redirect";
+      mode?: BusySendMode;
       afterCompaction?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
@@ -999,9 +994,6 @@ export function Composer({
         if (payload.mode === "steer") {
           if (!onSteer) throw new Error("Steer is unavailable for this response.");
           submit = onSteer;
-        } else if (payload.mode === "redirect") {
-          if (!onRedirect) throw new Error("Redirect is unavailable for this response.");
-          submit = onRedirect;
         } else if (payload.mode === "queue") {
           if (!onQueue) throw new Error("Queue is unavailable for this response.");
           submit = onQueue;
@@ -1026,7 +1018,6 @@ export function Composer({
               : "Follow-up queued. It will run after the current response.",
           );
         }
-        if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
         settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
       } catch (error) {
@@ -1067,7 +1058,7 @@ export function Composer({
         setSending(false);
       }
     },
-    [chatId, onSend, onQueue, onSteer, onRedirect, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
@@ -1590,11 +1581,7 @@ export function Composer({
       busy: gitOperationBusy || attaching,
     });
 
-  const submit = async (redirectConfirmed = false) => {
-    if (redirectConfirmed && !isGenerating) {
-      blockSend("The previous response has finished. Send your message normally.");
-      return;
-    }
+  const submit = async (busyModeOverride?: BusySendMode) => {
     if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current.isBusy || attaching) {
       blockSend("Wait for the selected attachments to finish loading before sending.");
@@ -1611,7 +1598,7 @@ export function Composer({
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
     const mode = isGenerating
-      ? busyMode
+      ? (busyModeOverride ?? busyMode)
       : hasQueuedMessages || queueDuringCompaction
         ? "queue"
         : undefined;
@@ -1619,15 +1606,6 @@ export function Composer({
       blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
       return;
     }
-    if (mode === "redirect" && !redirectConfirmed) {
-      if (attachments.length > 0 || selectedSkill) {
-        blockSend("Redirect accepts text only. Remove attachments and the selected skill first.");
-        return;
-      }
-      setConfirmRedirect(true);
-      return;
-    }
-    if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
       blockSend(selectedSkillState.reason);
       return;
@@ -2397,31 +2375,13 @@ export function Composer({
                   )}
                 </Button>
                 {onQueue && isGenerating ? (
-                  <>
-                    <Button variant="accent" size="small" disabled={!canSend}
-                      onClick={() => void submit()} aria-label={busyMode === "queue" ? "Queue message" : busyMode === "steer" ? "Steer response" : "Redirect response"}>
-                      {busyMode === "queue" ? <ListPlus /> : <ArrowUp />}
-                      {busyMode === "queue" ? "Queue" : busyMode === "steer" ? "Steer" : "Redirect"}
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="transparent" size="small" iconOnly aria-label="Choose message action">
-                          <ChevronDown aria-hidden="true" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem disabled={!onSteer || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("steer")}>
-                          Steer · Add guidance without stopping
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => setBusyMode("queue")}>
-                          Queue · Run after this response
-                        </DropdownMenuItem>
-                        <DropdownMenuItem disabled={!onRedirect || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("redirect")}>
-                          Redirect · Stop and change direction
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </>
+                  <BusySendButton
+                    mode={busyMode}
+                    canSubmit={canSend}
+                    steerAvailable={Boolean(onSteer) && attachments.length === 0 && !selectedSkill}
+                    onModeChange={setBusyMode}
+                    onSubmit={(mode) => void submit(mode)}
+                  />
                 ) : null}
                 {isGenerating ? (
                   <Button
@@ -2453,18 +2413,6 @@ export function Composer({
           </div>
         </div>
       </div>
-      <AlertDialog
-        open={confirmRedirect}
-        onOpenChange={setConfirmRedirect}
-        title="Redirect this response?"
-        description="Aiden will stop the current response and run your new direction next. Queued follow-ups will be cleared."
-        confirmLabel="Redirect"
-        returnFocus={() => inputRef?.current ?? null}
-        onConfirm={() => {
-          setConfirmRedirect(false);
-          void submit(true);
-        }}
-      />
       <AlertDialog
         open={voice.awaitingRecordedRetryConsent}
         onOpenChange={(open) => {

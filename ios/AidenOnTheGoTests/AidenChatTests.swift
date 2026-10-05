@@ -8344,23 +8344,19 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
-    func testRunInputOptionsRequireBusyControlledSupportedDraft() {
+    func testRunInputPillRequiresBusyControlledSupportedRun() {
         XCTAssertTrue(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: true, hasDraft: true
+            isStreaming: true, canControl: true, supports: true
         ))
         // Old servers keep the Stop-only control.
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: false, hasDraft: true
+            isStreaming: true, canControl: true, supports: false
         ))
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: false, canControl: true, supports: true, hasDraft: true
+            isStreaming: false, canControl: true, supports: true
         ))
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: false, supports: true, hasDraft: true
-        ))
-        // An empty composer can never offer a submission.
-        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: true, hasDraft: false
+            isStreaming: true, canControl: false, supports: true
         ))
     }
 

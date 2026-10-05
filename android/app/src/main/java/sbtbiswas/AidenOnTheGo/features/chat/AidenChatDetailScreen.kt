@@ -131,6 +131,7 @@ fun AidenChatDetailScreen(
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
+    val runInputMode by viewModel.runInputMode.collectAsStateWithLifecycle()
     val runInputReceipt by viewModel.runInputReceipt.collectAsStateWithLifecycle()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsStateWithLifecycle()
     val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
@@ -183,7 +184,6 @@ fun AidenChatDetailScreen(
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     var selectTextFor by remember { mutableStateOf<String?>(null) }
-    var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
     val currentChat by rememberUpdatedState(chat)
@@ -323,11 +323,6 @@ fun AidenChatDetailScreen(
             pendingVoiceStart = true
             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
-    }
-
-    // The destructive confirm must not outlive the run it would interrupt.
-    LaunchedEffect(isStreaming) {
-        if (!isStreaming) showRedirectConfirm = false
     }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -649,7 +644,8 @@ fun AidenChatDetailScreen(
                     showsRunInputOptions = viewModel.showsRunInputOptions,
                     canSubmitRunInput = viewModel.canSubmitRunInput,
                     onSubmitRunInput = { mode -> viewModel.submitRunInput(mode) },
-                    onRedirectRequest = { showRedirectConfirm = true },
+                    runInputMode = runInputMode,
+                    onRunInputModeChange = { mode -> viewModel.setRunInputMode(mode) },
                     runInputReceipt = runInputReceipt,
                     selectedSkill = selectedSkill,
                     onClearSkill = { viewModel.clearSelectedSkill() },
@@ -900,35 +896,6 @@ fun AidenChatDetailScreen(
             palette = palette,
             onAskAbout = if (viewModel.isReadOnlyPresentation) null else { selection -> viewModel.askAbout(selection) },
             onDismiss = { selectTextFor = null }
-        )
-    }
-
-    if (showRedirectConfirm) {
-        AlertDialog(
-            onDismissRequest = { showRedirectConfirm = false },
-            title = { Text("Redirect this run?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "Stop this run and send your message as a new request.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.secondary
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showRedirectConfirm = false
-                        viewModel.redirectRun()
-                    }
-                ) {
-                    Text("Stop and send", color = palette.danger)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRedirectConfirm = false }) {
-                    Text("Cancel")
-                }
-            }
         )
     }
 }

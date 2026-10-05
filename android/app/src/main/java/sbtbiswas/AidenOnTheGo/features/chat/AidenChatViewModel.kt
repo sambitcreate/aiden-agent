@@ -106,6 +106,10 @@ class AidenChatViewModel(
     private val _isSubmittingRunInput = MutableStateFlow(false)
     val isSubmittingRunInput: StateFlow<Boolean> = _isSubmittingRunInput.asStateFlow()
 
+    private val _runInputMode = MutableStateFlow(AidenRunInputPresentation.defaultMode)
+    /** The busy composer's sticky Queue/Steer mode; back to Queue when the run ends. */
+    val runInputMode: StateFlow<AidenStreamInputMode> = _runInputMode.asStateFlow()
+
     private val _runInputReceipt = MutableStateFlow<String?>(null)
     val runInputReceipt: StateFlow<String?> = _runInputReceipt.asStateFlow()
 
@@ -300,6 +304,14 @@ class AidenChatViewModel(
         loadChat()
         loadCatalog()
         resumeActiveStreamIfNeeded()
+        viewModelScope.launch {
+            _streamState.collect { state ->
+                _runInputMode.value = AidenRunInputPresentation.stickyMode(
+                    _runInputMode.value,
+                    isStreaming = state != null && !state.isTerminal
+                )
+            }
+        }
         viewModelScope.launch {
             combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
                 Triple(state, text, timeline)
@@ -1483,27 +1495,24 @@ class AidenChatViewModel(
         }
     }
 
-    /** Suspends until the cancel request resolves. True when the server
-     * accepted the cancel for the displayed stream; false leaves the draft
-     * and stream untouched so callers like Redirect can bail safely. */
-    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String): Boolean {
-        return try {
+    /** Suspends until the cancel request resolves. A mismatched or failed
+     * cancel leaves the draft and stream untouched and reports the error. */
+    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String) {
+        try {
             val status = client.cancelStream(streamId)
             if (activeClient() !== client || activeStreamId != streamId ||
-                _streamState.value?.isTerminal == true) return false
+                _streamState.value?.isTerminal == true) return
             if (status.streamId != streamId || status.chatId != chatId) {
                 _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                return false
+                return
             }
             apply(status, streamId)
-            true
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (activeClient() === client && activeStreamId == streamId &&
                 _streamState.value?.isTerminal != true) {
                 _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
             }
-            false
         }
     }
 
@@ -1513,19 +1522,29 @@ class AidenChatViewModel(
     private val isStreamingNow: Boolean
         get() = _streamState.value != null && !_streamState.value!!.isTerminal
 
-    /** The busy composer shows Steer/Queue/Redirect only when the server
-     * negotiated the feature and the composer holds text. Old servers keep
-     * the Stop-only control. */
+    /** The busy composer shows the Queue/Steer pill whenever the server
+     * negotiated the feature, even with an empty draft (dimmed) so a mode can
+     * be picked before typing. Old servers keep the Stop-only control. */
     val showsRunInputOptions: Boolean
         get() = AidenRunInputPresentation.offersRunInput(
             isStreaming = isStreamingNow,
             canControl = canControlCurrentRun,
-            supports = supportsRunInput,
-            hasDraft = _draft.value.trim().isNotEmpty()
+            supports = supportsRunInput
         )
 
     val canSubmitRunInput: Boolean
-        get() = showsRunInputOptions && !_isSubmittingRunInput.value && !_isStopping.value
+        get() = AidenRunInputPresentation.canSubmitRunInput(
+            offered = showsRunInputOptions,
+            hasDraft = _draft.value.trim().isNotEmpty(),
+            isSubmitting = _isSubmittingRunInput.value,
+            isStopping = _isStopping.value
+        )
+
+    /** Picks the busy composer's mode for the rest of the current run. */
+    fun setRunInputMode(mode: AidenStreamInputMode) {
+        if (!isStreamingNow) return
+        _runInputMode.value = mode
+    }
 
     fun submitRunInput(mode: AidenStreamInputMode) {
         val text = _draft.value.trim()
@@ -1782,41 +1801,6 @@ class AidenChatViewModel(
         if (isProgressCredentialRevoked(error) &&
             coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
             coordinator.removeInstallation(instanceId)
-        }
-    }
-
-    /** Destructive: stop the current run, then send the composer contents as
-     * a new turn once the stream is confirmed terminal. The draft is only
-     * consumed by the new send; a failed cancel leaves it untouched. */
-    fun redirectRun() {
-        if (!canControlCurrentRun || _isStopping.value || _isSubmittingRunInput.value) return
-        val client = activeClient() ?: return
-        val streamId = activeStreamId ?: return
-        _isStopping.value = true
-        viewModelScope.launch {
-            try {
-                if (!cancelStreamOnce(client, streamId)) return@launch
-                var waited = 0
-                while (isStreamingNow && activeStreamId == streamId &&
-                    activeClient() === client && waited < 50) {
-                    delay(100)
-                    waited++
-                }
-                if (activeClient() !== client) return@launch
-                if (isStreamingNow) {
-                    _presentedError.value =
-                        "The run is still stopping. Send your message once it finishes."
-                    return@launch
-                }
-                if (!canSend) {
-                    _presentedError.value =
-                        "The run stopped, but your message could not be sent. Check your connection and try again."
-                    return@launch
-                }
-                send()
-            } finally {
-                _isStopping.value = false
-            }
         }
     }
 

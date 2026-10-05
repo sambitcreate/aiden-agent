@@ -1,5 +1,9 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -50,49 +54,100 @@ class AidenComposerUiTest {
         compose.runOnIdle { assertEquals(1, fileClicks) }
     }
 
-    @Test
-    fun busyComposerOffersSteerQueueRedirectAlongsideStop() {
-        val submitted = mutableListOf<AidenStreamInputMode>()
-        var redirectRequested = false
-        var stopClicks = 0
+    /** Hosts the busy composer with the mode held the way the chat screen
+     * holds it, so relabelling is observable. */
+    private fun setBusyComposer(
+        draft: String,
+        canSubmitRunInput: Boolean,
+        submitted: MutableList<AidenStreamInputMode>,
+        onStop: () -> Unit = {}
+    ) {
         compose.setContent {
+            var mode by remember { mutableStateOf(AidenStreamInputMode.QUEUE) }
             AidenTheme {
                 AidenComposerView(
-                    draft = "hold on",
+                    draft = draft,
                     onDraftChange = {},
                     onSend = {},
-                    onStop = { stopClicks++ },
+                    onStop = onStop,
                     canStop = true,
                     canSend = false,
                     isStreaming = true,
                     showsRunInputOptions = true,
-                    canSubmitRunInput = true,
+                    canSubmitRunInput = canSubmitRunInput,
                     onSubmitRunInput = { submitted += it },
-                    onRedirectRequest = { redirectRequested = true },
+                    runInputMode = mode,
+                    onRunInputModeChange = { mode = it },
                     isVoiceListening = false,
                     onToggleVoice = {}
                 )
             }
         }
+    }
 
-        // Stop stays its own control next to the run-input options button.
+    @Test
+    fun busyPillDefaultsToQueueAndItsLabelSubmitsTheCurrentMode() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        var stopClicks = 0
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted, onStop = { stopClicks++ })
+
+        // Stop stays its own control next to the pill.
         compose.onNodeWithContentDescription("Stop generation").assertIsEnabled()
-        compose.onNodeWithContentDescription("Run input options").assertIsEnabled().performClick()
-        compose.onNodeWithText("Steer now").assertExists()
-        compose.onNodeWithText("Queue to run next").assertExists()
-        compose.onNodeWithText("Redirect…").assertExists()
-
-        compose.onNodeWithText("Steer now").performClick()
-        compose.runOnIdle { assertEquals(listOf(AidenStreamInputMode.STEER), submitted) }
-
-        // Redirect is confirm-gated: the menu reports a request, never the action.
-        compose.onNodeWithContentDescription("Run input options").performClick()
-        compose.onNodeWithText("Redirect…").performClick()
+        compose.onNodeWithContentDescription("Queue message").assertIsEnabled().performClick()
         compose.runOnIdle {
-            assertEquals(true, redirectRequested)
-            assertEquals(listOf(AidenStreamInputMode.STEER), submitted)
+            assertEquals(listOf(AidenStreamInputMode.QUEUE), submitted)
             assertEquals(0, stopClicks)
         }
+        // A plain tap sends; it does not open the mode menu.
+        compose.onNodeWithText("Run after this response").assertDoesNotExist()
+    }
+
+    @Test
+    fun chevronOffersOnlySteerAndQueueAndPickingSteerWithADraftSendsAndRelabels() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Choose message action").assertIsEnabled().performClick()
+        compose.onAllNodes(isSelectable()).assertCountEquals(2)
+        compose.onNode(hasText("Steer") and hasText("Add guidance without stopping")).assertIsNotSelected()
+        compose.onNode(hasText("Queue") and hasText("Run after this response")).assertIsSelected()
+        compose.onAllNodes(hasText("Redirect", substring = true, ignoreCase = true)).assertCountEquals(0)
+
+        compose.onNodeWithText("Steer").performClick()
+        compose.runOnIdle { assertEquals(listOf(AidenStreamInputMode.STEER), submitted) }
+        compose.onNodeWithText("Add guidance without stopping").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Queue message").assertDoesNotExist()
+
+        // The chosen mode sticks: the next label tap steers again.
+        compose.onNodeWithContentDescription("Steer response").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(AidenStreamInputMode.STEER, AidenStreamInputMode.STEER), submitted)
+        }
+    }
+
+    @Test
+    fun withAnEmptyDraftThePillIsDimmedAndPickingAModeOnlySwitches() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "", canSubmitRunInput = false, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Queue message").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+
+        compose.onNodeWithContentDescription("Choose message action").assertIsEnabled().performClick()
+        compose.onNodeWithText("Steer").performClick()
+        compose.onNodeWithContentDescription("Steer response").assertExists()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+    }
+
+    @Test
+    fun longPressingThePillLabelOpensTheModeMenuWithoutSending() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Queue message").performTouchInput { longClick() }
+        compose.onNodeWithText("Run after this response").assertExists()
+        compose.onNodeWithText("Add guidance without stopping").assertExists()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
     }
 
     @Test
@@ -115,7 +170,8 @@ class AidenComposerUiTest {
         }
 
         compose.onNodeWithContentDescription("Stop generation").assertIsEnabled()
-        compose.onNodeWithContentDescription("Run input options").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Queue message").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Choose message action").assertDoesNotExist()
     }
 
     @Test

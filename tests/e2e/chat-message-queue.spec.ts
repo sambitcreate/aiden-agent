@@ -309,36 +309,45 @@ test("Stop pauses queued messages instead of erasing them, and Resume sends them
   await expect(queue).toBeHidden();
 });
 
-test("choosing Redirect does not submit, confirmation is required, and Stop keeps a new draft", async ({ aiden }) => {
+test("the busy send pill offers only Steer and Queue, and hold-drag-release sends in the chosen mode", async ({ aiden }) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
   const composer = page.locator("textarea");
-  await composer.fill("First response before redirect");
+  await composer.fill("First response before choosing a mode");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
-  await composer.fill("Change direction now");
+
+  // With nothing to send, picking a mode only switches the pill.
   await page.getByRole("button", { name: "Choose message action" }).click();
-  await page.getByRole("menuitem", { name: /Redirect · Stop and change direction/u }).click();
-  await expect(page.getByRole("button", { name: "Redirect response" })).toBeVisible();
-  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Change direction now"))
+  const modes = page.getByRole("menuitemradio");
+  await expect(modes).toHaveCount(2);
+  await expect(modes.nth(0)).toContainText("Steer");
+  await expect(modes.nth(1)).toContainText("Queue");
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
+  await expect(page.getByRole("button", { name: "Steer response" })).toBeVisible();
+  await expect(page.getByText(/Guidance sent/u)).toHaveCount(0);
+
+  // Holding the label opens the menu; releasing on Queue sends the draft as a follow-up.
+  await composer.fill("Queue me by holding");
+  const pill = (await page.getByRole("button", { name: "Steer response" }).boundingBox())!;
+  await page.mouse.move(pill.x + pill.width / 2, pill.y + pill.height / 2);
+  await page.mouse.down();
+  const queueMode = page.getByRole("menuitemradio", { name: /^Queue/u });
+  await expect(queueMode).toBeVisible();
+  const target = (await queueMode.boundingBox())!;
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 4 });
+  await page.mouse.up();
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("listitem")).toContainText("Queue me by holding");
+  await expect(composer).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeVisible();
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue me by holding"))
     .toHaveLength(0);
-  await composer.press("Enter");
-  const confirmation = page.getByRole("alertdialog", { name: "Redirect this response?" });
-  await expect(confirmation).toBeVisible();
-  await confirmation.getByRole("button", { name: "Cancel" }).click();
-  await expect(composer).toHaveValue("Change direction now");
-  await composer.press("Enter");
-  await confirmation.getByRole("button", { name: "Redirect", exact: true }).click();
-  await expect.poll(() => lmStudio.requests.filter(
-    (request) => lastUserText(request) === "Change direction now",
-  ).length).toBe(1);
-  await composer.fill("Unrelated draft stays after Stop");
-  await page.getByRole("button", { name: "Stop generating" }).click();
-  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
-  await expect(composer).toHaveValue("Unrelated draft stays after Stop");
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   lmStudio.releaseCompletions!();
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === "Queue me by holding",
+  ).length).toBe(1);
 });
 
 test("Steer queues text guidance without stopping the active response", async ({ aiden }) => {
@@ -350,12 +359,10 @@ test("Steer queues text guidance without stopping the active response", async ({
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   await composer.fill("Use a shorter answer");
+  // Picking Steer with a draft sends it as guidance right away.
   await page.getByRole("button", { name: "Choose message action" }).click();
-  await page.getByRole("menuitem", { name: /Steer · Add guidance without stopping/u }).click();
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
   await expect(page.getByRole("button", { name: "Steer response" })).toBeVisible();
-  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Use a shorter answer"))
-    .toHaveLength(0);
-  await composer.press("Enter");
   await expect(composer).toHaveValue("");
   // The receipt arrives only after main saved the guidance and Pi accepted it.
   await expect(page.getByText(/Guidance sent/u)).toBeVisible();
@@ -418,8 +425,7 @@ test("Stop before Aiden reads accepted Steer guidance keeps it once in the conve
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   await composer.fill("Guidance that must not vanish");
   await page.getByRole("button", { name: "Choose message action" }).click();
-  await page.getByRole("menuitem", { name: /Steer · Add guidance without stopping/u }).click();
-  await composer.press("Enter");
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
   await expect(composer).toHaveValue("");
   // Admission writes the guidance to the transcript before Pi reads it.
   await expect(page.getByText("Guidance that must not vanish", { exact: true })).toHaveCount(1);
@@ -459,8 +465,7 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   });
   await composer.fill("Keep this guidance");
   await page.getByRole("button", { name: "Choose message action" }).click();
-  await page.getByRole("menuitem", { name: /Steer · Add guidance without stopping/u }).click();
-  await composer.press("Enter");
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
   await expect(page.getByText(/maximum pending guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
   await composer.press("Enter");
