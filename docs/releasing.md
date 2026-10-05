@@ -22,7 +22,9 @@ tracked file and runs `npm run test:model-catalog`. A changed snapshot does not 
 key, opens a pull request with auto-merge, and closes any older catalog pull request it
 supersedes. CI runs the catalog contracts and the desktop unit lanes on that branch (the runtime
 takes model limits from the snapshot), and GitHub merges once `main`'s required checks pass. A
-failed fetch leaves the known-good snapshot untouched.
+merge made through the job token starts no workflows, so `Model catalog main baseline` waits for
+that merge and then starts full CI on `main`. A failed fetch leaves the known-good snapshot
+untouched.
 
 The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
 Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,

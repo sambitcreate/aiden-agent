@@ -277,6 +277,17 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.match(workflow, /gh pr merge --repo "\$GITHUB_REPOSITORY" --auto --merge/u);
   const ci = parse(await readFile(workflowUrl, "utf8"));
   assert.ok(ci.on.push.branches.includes("automation/models-dev-catalog-*"));
+
+  // A job-token merge starts no push workflows, so a follow-up run gives main
+  // its own CI after each catalog merge.
+  assert.ok("workflow_dispatch" in ci.on);
+  const baseline = parse(await readFile(new URL("../.github/workflows/model-catalog-main-baseline.yml", import.meta.url), "utf8"));
+  assert.deepEqual(baseline.on, { workflow_run: { workflows: ["CI"], types: ["completed"] } });
+  assert.deepEqual(baseline.permissions, { contents: "read" });
+  assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", "pull-requests": "read" });
+  assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
+  assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
+  assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
 
 test("Pullfrog allows aggregate release reviews to finish", async () => {

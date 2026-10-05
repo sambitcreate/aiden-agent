@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+  # Started by model-catalog-main-baseline.yml after a catalog merge, which
+  # (made with the job token) produces no push event of its own.
+  workflow_dispatch:
   push:
     branches:
       - main
