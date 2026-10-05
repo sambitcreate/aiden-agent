@@ -71,3 +71,11 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - `fork-summary-card.test.tsx`: the card states.
   - `chat-copy-view.test.ts`: `withForkLineage` and `forkSummaryRows`.
   - `message-bubble.test.tsx`: the card's placement.
+
+## PR 5 — Android (branch `feat/chat-fork-android`)
+
+- **Client.** `AidenRemoteClient.forkChat` posts `/chats/{id}/fork` with `If-Match` and an `Idempotency-Key`, expects `201 {chat, prefill?}`, and rejects a result that has no lineage or is the source chat. A blank focus sends `summary: {}`. `retryForkSummary`, `skipForkSummary` and `cancelForkSummary` post to `/fork-summary/{retry|skip|cancel}`. 409 `operation_in_progress` and `revision_conflict` get their own copy in `AidenChatForkErrors`.
+- **Models.** `AidenChat.forkedFrom` (an `AidenChatForkLineage`, optional summary) and `AidenChatSummary.forkedFrom` (lineage only; summary rows never carry the summary). The validator lets `instructions` through only at `forkedFrom.summary` in a chat projection.
+- **Gating.** `supportsChatFork` (`chat-fork-v1`) and `supportsChatForkSummary` (`chat-fork-summary-v1`) on the installation; `AidenChatForkEligibility` mirrors the Mac's cut rules (settled replies; user prompts that are not the first; no `local-` ids; no running turn).
+- **UI.** `AidenMessageContextMenu` gains Fork from here, Fork with summary… (opens `AidenForkSummaryDialog`, 1,000-character focus) and Edit in fork. After a fork the view model sets `forkNavigation`; the screen pushes the fork, so Back returns to the source. `prefill.text` becomes the fork's draft and its attachments are staged in memory in `AidenChatDraftStore` and taken once by the fork's view model. The transcript shows `AidenForkLineageRow` at the top and `AidenForkSummaryCard` after `afterMessageId`; a pending or failed summary holds sends. Workspace chat rows show a `CallSplit` glyph.
+- **Tests.** `AidenRemoteClientTest` (fixture request shapes, prefill, summary routes, 409 copy, optional lineage), `AidenChatTest` (eligibility, Edit in fork → navigation → prefill seeding, summary hold and skip, hidden without the features) and `AidenBotContractTest` (where fork-summary `instructions` may appear).

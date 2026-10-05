@@ -683,7 +683,9 @@ data class AidenChatSummary(
      */
     @SerialName("rowState") val rowStateWire: String? = null,
     /** True only when assistant output arrived after the chat was last viewed. */
-    val unread: Boolean = false
+    val unread: Boolean = false,
+    /** Fork lineage (revision 21); rows never carry the summary. */
+    val forkedFrom: AidenChatForkLineageRow? = null
 ) {
     val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
 
@@ -728,7 +730,8 @@ data class AidenChatSummary(
             createdAt = chat.createdAt,
             updatedAt = chat.updatedAt,
             revision = chat.revision,
-            activity = activity
+            activity = activity,
+            forkedFrom = chat.forkedFrom?.row
         )
     }
 }
@@ -773,7 +776,9 @@ data class AidenChat(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant,
     var revision: String,
-    var titlePending: Boolean? = null
+    var titlePending: Boolean? = null,
+    /** Set when the chat was created by Fork (revision 21). */
+    val forkedFrom: AidenChatForkLineage? = null
 ) {
     val isBotChat: Boolean get() = botId != null
     val lastViewedMessageId: String? get() = messages.lastOrNull()?.id
@@ -804,6 +809,130 @@ data class AidenChat(
         fun regularWorkspaceChats(chats: List<AidenChat>): List<AidenChat> = chats.filter { !it.isBotChat }
     }
 }
+
+@Serializable
+enum class AidenChatForkPosition(val wire: String) {
+    /** Everything through a settled assistant reply. */
+    @SerialName("after") AFTER("after"),
+    /** Everything before a user prompt, which comes back as `prefill`. */
+    @SerialName("before") BEFORE("before")
+}
+
+@Serializable
+enum class AidenChatForkSummaryState {
+    @SerialName("pending") PENDING,
+    @SerialName("ready") READY,
+    @SerialName("failed") FAILED
+}
+
+@Serializable
+data class AidenChatForkSummaryFiles(
+    val read: List<String>,
+    val modified: List<String>
+) {
+    init {
+        if (!isBounded(read) || !isBounded(modified)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork summary files")
+        }
+    }
+
+    private fun isBounded(paths: List<String>): Boolean =
+        paths.size <= 200 && paths.all { it.length in 1..1_024 }
+}
+
+/** What happened in the source after the fork point, summarized for the fork. */
+@Serializable
+data class AidenChatForkSummary(
+    val state: AidenChatForkSummaryState,
+    val afterMessageId: String,
+    val instructions: String? = null,
+    val text: String? = null,
+    val files: AidenChatForkSummaryFiles? = null,
+    val error: String? = null
+) {
+    init {
+        if (afterMessageId.length !in 1..160 || !AFTER_MESSAGE_ID.matches(afterMessageId) ||
+            (instructions != null && instructions.length !in 1..AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH) ||
+            (text != null && text.length !in 1..32_000) ||
+            (error != null && error.length !in 1..1_000)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork summary")
+        }
+    }
+
+    /** A pending or failed summary holds new turns until it is ready, retried or skipped. */
+    val holdsTurns: Boolean get() = state != AidenChatForkSummaryState.READY
+
+    private companion object {
+        val AFTER_MESSAGE_ID = Regex("^[A-Za-z0-9_-]+$")
+    }
+}
+
+/** The chat and message a fork came from. The source may since have been deleted. */
+@Serializable
+data class AidenChatForkLineage(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant,
+    val summary: AidenChatForkSummary? = null
+) {
+    init {
+        if (!AidenChatForkLineageRow.IDENTIFIER.matches(chatId) || !AidenChatForkLineageRow.IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    val row: AidenChatForkLineageRow
+        get() = AidenChatForkLineageRow(chatId = chatId, messageId = messageId, position = position, at = at)
+}
+
+/** Fork lineage on a chat summary row, which never carries the summary. */
+@Serializable
+data class AidenChatForkLineageRow(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant
+) {
+    init {
+        if (!IDENTIFIER.matches(chatId) || !IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    internal companion object {
+        val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+    }
+}
+
+/** The prompt an "Edit in fork" returns, with its attachments restaged for this device. */
+@Serializable
+data class AidenChatForkPrefill(
+    val text: String,
+    val attachments: List<AidenAttachmentReference> = emptyList()
+) {
+    init {
+        if (text.length > AidenRemoteProtocol.MAX_TEXT_LENGTH || attachments.size > AidenRemoteProtocol.MAX_FORK_PREFILL_ATTACHMENTS) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork prefill")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkResult(
+    val chat: AidenChat,
+    val prefill: AidenChatForkPrefill? = null
+) {
+    init {
+        if (chat.forkedFrom == null) {
+            throw AidenRemoteContractException.InvalidJson("Fork result chat has no lineage")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkSummaryCancel(val cancelled: Boolean)
 
 @Serializable
 data class AidenModel(

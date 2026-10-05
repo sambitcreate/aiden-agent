@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -45,6 +47,7 @@ import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
 import sbtbiswas.AidenOnTheGo.notifications.throttleLatest
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
@@ -281,7 +284,230 @@ class AidenChatViewModel(
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
                 _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
+                !isHeldByForkSummary &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
+
+    // --- Fork (contract revision 21) ---
+
+    /** A fork waits for a pending summary, and a failed one blocks turns until retried or skipped. */
+    val isHeldByForkSummary: Boolean
+        get() = _chat.value?.forkedFrom?.summary?.holdsTurns == true
+
+    private val _isForking = MutableStateFlow(false)
+    val isForking: StateFlow<Boolean> = _isForking.asStateFlow()
+
+    private val _forkNavigation = MutableStateFlow<String?>(null)
+    /** The new fork to open. The screen navigates, then calls [consumeForkNavigation]. */
+    val forkNavigation: StateFlow<String?> = _forkNavigation.asStateFlow()
+
+    private val _isUpdatingForkSummary = MutableStateFlow(false)
+    val isUpdatingForkSummary: StateFlow<Boolean> = _isUpdatingForkSummary.asStateFlow()
+
+    private val _forkSource = MutableStateFlow<AidenChatForkSource?>(null)
+    /** How the lineage row names the source; null when this chat is not a fork. */
+    val forkSource: StateFlow<AidenChatForkSource?> = _forkSource.asStateFlow()
+
+    private var forkAttempt: Pair<AidenChatForkAttempt, UUID>? = null
+    private var forkSummaryPollJob: Job? = null
+    private var forkSourceJob: Job? = null
+    private var resolvedForkSourceId: String? = null
+
+    private fun canWriteChats(): Boolean {
+        if (isReadOnlyPresentation || !isConnected) return false
+        val installation = coordinator.installationStore.activeInstallation
+            ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId } ?: return false
+        return installation.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE)
+    }
+
+    /** Bot chats are never forked, and nothing forks while this device runs a turn here. */
+    val canFork: Boolean
+        get() {
+            val currentChat = _chat.value ?: return false
+            return !currentChat.isBotChat && coordinator.serverInfo.value?.supportsChatFork == true &&
+                canWriteChats() && !_isStarting.value && activeStreamId == null &&
+                (_streamState.value == null || _streamState.value!!.isTerminal)
+        }
+
+    val canForkWithSummary: Boolean
+        get() = canFork && coordinator.serverInfo.value?.supportsChatForkSummary == true
+
+    /** Retry, Continue without summary, and Cancel on this fork's summary card. */
+    val canManageForkSummary: Boolean
+        get() = _chat.value?.forkedFrom?.summary != null &&
+            coordinator.serverInfo.value?.supportsChatForkSummary == true && canWriteChats()
+
+    /**
+     * Forks this chat at [messageId]. Once the Mac created the fork, this
+     * caches it, seeds its composer from any `prefill`, and publishes it to
+     * [forkNavigation]. Retrying the same failed fork reuses its idempotency
+     * key, so a lost response cannot create a second copy.
+     */
+    fun fork(
+        messageId: String,
+        position: AidenChatForkPosition,
+        withSummary: Boolean = false,
+        summaryInstructions: String? = null
+    ) {
+        if (_isForking.value || !canFork || (withSummary && !canForkWithSummary)) return
+        val client = activeClient() ?: return
+        val source = _chat.value ?: return
+        val eligible = when (position) {
+            AidenChatForkPosition.AFTER -> if (withSummary) {
+                AidenChatForkEligibility.canForkWithSummary(source.messages, messageId)
+            } else {
+                AidenChatForkEligibility.canForkFrom(source.messages, messageId)
+            }
+            AidenChatForkPosition.BEFORE ->
+                !withSummary && AidenChatForkEligibility.canEditInFork(source.messages, messageId)
+        }
+        if (!eligible) return
+        val instructions = summaryInstructions?.trim()
+            ?.takeIf { withSummary && it.isNotEmpty() }
+            ?.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH)
+        val attempt = AidenChatForkAttempt(source.revision, messageId, position, withSummary, instructions)
+        val idempotencyKey = forkAttempt?.takeIf { it.first == attempt }?.second ?: UUID.randomUUID()
+        forkAttempt = attempt to idempotencyKey
+        _isForking.value = true
+        _presentedError.value = null
+        viewModelScope.launch {
+            try {
+                val result = client.forkChat(
+                    chatId, source.revision, messageId, position,
+                    withSummary = withSummary,
+                    summaryInstructions = instructions,
+                    idempotencyKey = idempotencyKey
+                )
+                if (activeClient() !== client) return@launch
+                forkAttempt = null
+                val fork = result.chat
+                if (instanceId.isNotEmpty()) {
+                    withContext(ioDispatcher) {
+                        runCatching { chatCache.saveChat(fork, instanceId) }
+                        result.prefill?.let { prefill ->
+                            if (prefill.text.isNotEmpty()) draftStore.setDraft(instanceId, fork.id, prefill.text)
+                            draftStore.stageAttachments(instanceId, fork.id, prefill.attachments)
+                        }
+                    }
+                }
+                _forkNavigation.value = fork.id
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() !== client) return@launch
+                _presentedError.value = AidenChatForkErrors.forkMessage(e)
+                if (AidenChatForkErrors.isRevisionConflict(e)) {
+                    forkAttempt = null
+                    loadChat()
+                }
+            } finally {
+                _isForking.value = false
+            }
+        }
+    }
+
+    fun consumeForkNavigation(forkChatId: String) {
+        if (_forkNavigation.value == forkChatId) _forkNavigation.value = null
+    }
+
+    fun retryForkSummary() = runForkSummaryAction { client -> client.retryForkSummary(chatId) }
+
+    fun skipForkSummary() = runForkSummaryAction { client -> client.skipForkSummary(chatId) }
+
+    /** A cancelled summary fails; the refreshed chat then offers Retry and Continue without summary. */
+    fun cancelForkSummary() = runForkSummaryAction { client ->
+        client.cancelForkSummary(chatId)
+        null
+    }
+
+    private fun runForkSummaryAction(action: suspend (AidenRemoteClient) -> AidenChat?) {
+        if (_isUpdatingForkSummary.value || !canManageForkSummary) return
+        val client = activeClient() ?: return
+        _isUpdatingForkSummary.value = true
+        _presentedError.value = null
+        viewModelScope.launch {
+            try {
+                val writeToken = chatCache.reserveChatWrite()
+                val updated = action(client) ?: client.chat(chatId)
+                if (activeClient() !== client) return@launch
+                acceptRemoteChat(updated, writeToken, scheduleTitleRefresh = false)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() !== client) return@launch
+                // The summary already moved on (finished, retried or skipped
+                // elsewhere), so the current chat is the answer.
+                if (AidenChatForkErrors.isSummaryMovedOn(e)) {
+                    reconcileChat()
+                } else {
+                    _presentedError.value = e.localizedMessage
+                }
+            } finally {
+                _isUpdatingForkSummary.value = false
+            }
+        }
+    }
+
+    /** A pending summary settles on the Mac; poll the chat until it does. */
+    private fun ensureForkSummaryPolling() {
+        if (forkSummaryPollJob?.isActive == true) return
+        val client = activeClient() ?: return
+        forkSummaryPollJob = viewModelScope.launch {
+            var attempt = 0
+            while (_chat.value?.forkedFrom?.summary?.state == AidenChatForkSummaryState.PENDING &&
+                activeClient() === client
+            ) {
+                delay(FORK_SUMMARY_POLL_MILLIS[attempt.coerceAtMost(FORK_SUMMARY_POLL_MILLIS.lastIndex)])
+                attempt++
+                if (_isStarting.value || _isUpdatingForkSummary.value) continue
+                val generation = transcriptGeneration
+                try {
+                    val writeToken = chatCache.reserveChatWrite()
+                    val remote = client.chat(chatId)
+                    if (generation != transcriptGeneration || activeClient() !== client) continue
+                    acceptRemoteChat(remote, writeToken, scheduleTitleRefresh = false)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    // A transient read failure keeps polling on the backoff.
+                }
+            }
+        }
+    }
+
+    /** Names the source from the local cache, else asks the Mac once. A 404 means it was deleted. */
+    private fun resolveForkSource(lineage: AidenChatForkLineage?) {
+        val sourceId = lineage?.chatId
+        if (sourceId == null) {
+            forkSourceJob?.cancel()
+            resolvedForkSourceId = null
+            _forkSource.value = null
+            return
+        }
+        if (resolvedForkSourceId == sourceId) return
+        resolvedForkSourceId = sourceId
+        forkSourceJob?.cancel()
+        _forkSource.value = AidenChatForkSource.Resolving(sourceId)
+        forkSourceJob = viewModelScope.launch {
+            val cachedTitle = withContext(ioDispatcher) {
+                chatCache.getChat(sourceId)?.title
+                    ?: instanceId.takeIf { it.isNotEmpty() }?.let { id ->
+                        runCatching { chatCache.loadSummaries(id) }.getOrNull()
+                            ?.firstOrNull { it.id == sourceId }?.title
+                    }
+            }
+            if (cachedTitle != null) {
+                _forkSource.value = AidenChatForkSource.Named(sourceId, cachedTitle)
+                return@launch
+            }
+            val client = activeClient()
+            _forkSource.value = if (client == null) {
+                AidenChatForkSource.Unknown(sourceId)
+            } else try {
+                AidenChatForkSource.Named(sourceId, client.chat(sourceId).title)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (AidenChatForkErrors.isNotFound(e)) AidenChatForkSource.Deleted(sourceId)
+                else AidenChatForkSource.Unknown(sourceId)
+            }
+        }
+    }
 
     init {
         val currentInstanceId = instanceId
@@ -295,6 +521,18 @@ class AidenChatViewModel(
             val cachedChat = chatCache.loadChat(currentInstanceId, chatId)
             if (cachedChat != null) {
                 _chat.value = cachedChat
+            }
+            // "Edit in fork" restaged these for this new chat. Expired ones
+            // can no longer be sent and are dropped.
+            val staged = draftStore.takeStagedAttachments(currentInstanceId, chatId)
+                .filter { it.isValid() }
+                .take(AidenRemoteProtocol.MAX_FORK_PREFILL_ATTACHMENTS)
+            if (staged.isNotEmpty()) _pendingAttachments.value = staged
+        }
+        viewModelScope.launch {
+            _chat.map { it?.forkedFrom }.distinctUntilChanged().collect { lineage ->
+                resolveForkSource(lineage)
+                if (lineage?.summary?.state == AidenChatForkSummaryState.PENDING) ensureForkSummaryPolling()
             }
         }
         loadChat()
@@ -698,6 +936,8 @@ class AidenChatViewModel(
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
+        forkSummaryPollJob?.cancel()
+        forkSourceJob?.cancel()
         // The last keystrokes may still be inside the debounce window.
         draftWriter?.flush()
         draftWriteScope.cancel()
@@ -2160,6 +2400,8 @@ class AidenChatViewModel(
         private const val MAX_AGENT_ROSTER_HISTORY = 8
         /** Ongoing-notification cadence; terminal and approval states skip it. */
         private const val LIVE_NOTIFICATION_PERIOD_MILLIS = 1_000L
+        /** Backoff while a fork summary is pending; the last step repeats. */
+        private val FORK_SUMMARY_POLL_MILLIS = longArrayOf(1_500L, 2_000L, 3_000L, 5_000L)
 
         fun factory(
             chatId: String,

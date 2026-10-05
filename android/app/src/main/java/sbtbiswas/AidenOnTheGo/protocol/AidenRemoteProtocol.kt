@@ -45,6 +45,10 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    const val CHAT_FORK_FEATURE = "chat-fork-v1"
+    const val CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1"
+    const val MAX_FORK_SUMMARY_INSTRUCTIONS_LENGTH = 1_000
+    const val MAX_FORK_PREFILL_ATTACHMENTS = 10
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -387,6 +391,17 @@ object AidenBotPrivateResponseValidator {
         return false
     }
 
+    /**
+     * A fork summary's optional focus is the user's own text for a regular
+     * chat, so `forkedFrom.summary.instructions` is public on a Chat (alone, as
+     * the `chat` of a fork result, or in a chat list). Nowhere else does
+     * `instructions` pass.
+     */
+    private fun isForkSummaryPath(parentPath: List<String>): Boolean =
+        parentPath == listOf("forkedFrom", "summary") ||
+            parentPath == listOf("chat", "forkedFrom", "summary") ||
+            parentPath == listOf("chats", "[]", "forkedFrom", "summary")
+
     private fun isAllowedKnownIdentityKey(
         key: String,
         root: String,
@@ -396,6 +411,7 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
+        if (key == "instructions" && root == "chatProjection" && isForkSummaryPath(parentPath)) return true
         if (key != "instructions" && key != "openingGreeting") return false
         if (root in listOf("botDetail", "botArchive", "botRestore")) {
             return parentPath.isEmpty()

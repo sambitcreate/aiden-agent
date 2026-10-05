@@ -101,6 +101,7 @@ fun AidenChatDetailScreen(
     voiceInputStore: AidenVoiceInputStore,
     liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
     startVoiceOnOpen: Boolean = false,
+    onNavigateToChat: (String) -> Unit = {},
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -158,6 +159,20 @@ fun AidenChatDetailScreen(
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
+    val isForking by viewModel.isForking.collectAsStateWithLifecycle()
+    val forkNavigation by viewModel.forkNavigation.collectAsStateWithLifecycle()
+    val forkSource by viewModel.forkSource.collectAsStateWithLifecycle()
+    val isUpdatingForkSummary by viewModel.isUpdatingForkSummary.collectAsStateWithLifecycle()
+    var forkWithSummaryMessageId by remember(chatId) { mutableStateOf<String?>(null) }
+    val currentOnNavigateToChat by rememberUpdatedState(onNavigateToChat)
+
+    // A created fork opens in place of the menu that asked for it.
+    LaunchedEffect(forkNavigation) {
+        val forkId = forkNavigation ?: return@LaunchedEffect
+        forkWithSummaryMessageId = null
+        viewModel.consumeForkNavigation(forkId)
+        currentOnNavigateToChat(forkId)
+    }
 
     val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
     var followLatest by remember(listState) {
@@ -619,6 +634,17 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                if (viewModel.isHeldByForkSummary && (draft.isNotBlank() || pendingAttachments.isNotEmpty())) {
+                    Text(
+                        text = AidenChatForkErrors.SUMMARY_HOLD_MESSAGE,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+
                 if (canReadTaskProgress || canReadAgentRoster) {
                     AidenChatProgressControls(
                         taskProgress = taskProgress.takeIf { canReadTaskProgress },
@@ -739,12 +765,39 @@ fun AidenChatDetailScreen(
         val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
             remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
         val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
+        val canForkMessages = viewModel.canFork && !isForking
+        val canForkMessagesWithSummary = canForkMessages && viewModel.canForkWithSummary
+        val forkLineage = chat?.forkedFrom
+        val forkSummary = forkLineage?.summary
+        val forkSummaryAnchored = forkSummary != null &&
+            rawMessages.any { it.id == forkSummary.afterMessageId }
         val onOpenMessageUrl = remember(uriHandler, isBotChat) {
             { url: String ->
                 if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
                 else if (android.net.Uri.parse(url).scheme?.lowercase() in listOf("https", "http", "mailto")) {
                     try { uriHandler.openUri(url) } catch (_: Exception) {}
                 }
+            }
+        }
+        val forkSummaryCard: @Composable () -> Unit = {
+            forkSummary?.let { summary ->
+                AidenForkSummaryCard(
+                    summary = summary,
+                    palette = palette,
+                    busy = isUpdatingForkSummary,
+                    canManage = viewModel.canManageForkSummary,
+                    onCancel = viewModel::cancelForkSummary,
+                    onRetry = viewModel::retryForkSummary,
+                    onSkip = viewModel::skipForkSummary,
+                    body = { text ->
+                        RichFormattedMessage(
+                            text = text,
+                            palette = palette,
+                            onCopy = onCopyMessage,
+                            onOpenUrl = onOpenMessageUrl
+                        )
+                    }
+                )
             }
         }
 
@@ -794,7 +847,25 @@ fun AidenChatDetailScreen(
                 ) { index, message ->
                     val pos = calculateClusterPosition(index, reversedMessages)
                     val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
+                    val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
+                        if (!canForkMessages) return@remember null
+                        val actions = AidenMessageForkActions(
+                            onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
+                                { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
+                            } else null,
+                            onForkWithSummary = if (canForkMessagesWithSummary &&
+                                AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
+                            ) {
+                                { forkWithSummaryMessageId = message.id }
+                            } else null,
+                            onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
+                                { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
+                            } else null
+                        )
+                        actions.takeUnless { it.isEmpty }
+                    }
 
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (message.role == AidenChatRole.USER) {
                         UserMessageRow(
                             message = message,
@@ -805,7 +876,8 @@ fun AidenChatDetailScreen(
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
                             onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage
+                            onAskAbout = onAskAboutMessage,
+                            forkActions = forkActions
                         )
                     } else {
                         val readAloudEligible = !isStreaming &&
@@ -829,8 +901,28 @@ fun AidenChatDetailScreen(
                             onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
-                            onOpenUrl = onOpenMessageUrl
+                            onOpenUrl = onOpenMessageUrl,
+                            forkActions = forkActions
                         )
+                    }
+                    // The summary stands where the copied conversation ends.
+                    if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
+                        forkSummaryCard()
+                    }
+                    }
+                }
+
+                // The top of the reversed transcript: where this fork came from.
+                if (forkLineage != null) {
+                    item(key = "fork_lineage") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AidenForkLineageRow(
+                                source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                                palette = palette,
+                                onOpenSource = onNavigateToChat
+                            )
+                            if (!forkSummaryAnchored) forkSummaryCard()
+                        }
                     }
                 }
             }
@@ -903,6 +995,23 @@ fun AidenChatDetailScreen(
         )
     }
 
+    forkWithSummaryMessageId?.let { messageId ->
+        AidenForkSummaryDialog(
+            palette = palette,
+            busy = isForking,
+            onDismiss = { forkWithSummaryMessageId = null },
+            onConfirm = { instructions ->
+                forkWithSummaryMessageId = null
+                viewModel.fork(
+                    messageId = messageId,
+                    position = AidenChatForkPosition.AFTER,
+                    withSummary = true,
+                    summaryInstructions = instructions
+                )
+            }
+        )
+    }
+
     if (showRedirectConfirm) {
         AlertDialog(
             onDismissRequest = { showRedirectConfirm = false },
@@ -962,7 +1071,8 @@ private fun UserMessageRow(
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onSelectText: (String) -> Unit,
-    onAskAbout: ((String) -> Unit)?
+    onAskAbout: ((String) -> Unit)?,
+    forkActions: AidenMessageForkActions? = null
 ) {
     val shape = when (position) {
         MessageClusterPosition.SINGLE -> RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
@@ -987,7 +1097,8 @@ private fun UserMessageRow(
                     onCopy = { onCopy(message.text) },
                     onShare = { onShare(message.text) },
                     onSelectText = { onSelectText(message.text) },
-                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } }
+                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } },
+                    forkActions = forkActions
                 ) {
                     Surface(
                         color = palette.accent,
@@ -1056,7 +1167,8 @@ private fun AssistantMessageRow(
     onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
-    onOpenUrl: (String) -> Unit
+    onOpenUrl: (String) -> Unit,
+    forkActions: AidenMessageForkActions? = null
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1077,7 +1189,8 @@ private fun AssistantMessageRow(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
                 onSelectText = { onSelectText(displayText) },
-                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } },
+                forkActions = forkActions
             ) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
@@ -1138,7 +1251,8 @@ private fun AssistantMessageRow(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
                 onSelectText = { onSelectText(displayText) },
-                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } },
+                forkActions = forkActions
             ) {
                 Surface(
                     color = Color.Transparent,

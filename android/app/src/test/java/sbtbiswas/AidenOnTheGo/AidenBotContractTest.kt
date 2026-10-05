@@ -97,6 +97,35 @@ class AidenBotContractTest {
     }
 
     @Test
+    fun testForkSummaryFocusIsTheOnlyChatInstructionsField() {
+        val summary = """{"state":"ready","afterMessageId":"m1","instructions":"the parser","text":"Summary"}"""
+        val lineage = """{"chatId":"c0","messageId":"m0","position":"after","at":"2026-10-05T12:00:00Z","summary":$summary}"""
+        // A chat, a fork result's chat, and a chat list may each carry the focus.
+        for (payload in listOf(
+            """{"id":"c1","messages":[],"forkedFrom":$lineage}""",
+            """{"chat":{"id":"c1","messages":[],"forkedFrom":$lineage}}""",
+            """{"chats":[{"id":"c1","messages":[],"forkedFrom":$lineage}]}"""
+        )) {
+            AidenBotPrivateResponseValidator.validate(payload, AidenBotPrivateResponseScope.ChatProjection)
+        }
+        for (payload in listOf(
+            """{"id":"c1","instructions":"leaked","messages":[]}""",
+            """{"id":"c1","messages":[{"id":"m1","instructions":"leaked"}]}""",
+            """{"id":"c1","messages":[],"forkedFrom":{"chatId":"c0","instructions":"leaked"}}"""
+        )) {
+            assertThrows("Expected rejection for $payload", AidenRemoteContractException.UnsafePayloadField::class.java) {
+                AidenBotPrivateResponseValidator.validate(payload, AidenBotPrivateResponseScope.ChatProjection)
+            }
+        }
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(
+                """{"summaries":[{"id":"c1","forkedFrom":$lineage}]}""",
+                AidenBotPrivateResponseScope.ChatSummaryProjection
+            )
+        }
+    }
+
+    @Test
     fun testPrivateMetadataIsRejectedAtUnknownChildDepth() {
         val rawForbiddenPayloads = listOf(
             """{"message":{"child":{"systemPrompt":"private instructions"}}}""",

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import sbtbiswas.AidenOnTheGo.models.AidenAttachmentReference
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -39,6 +40,7 @@ class AidenChatDraftStore(
     private val maximumDraftScalars = 100_000
     private val maximumDraftBytes = 400_000
     private val generations = ConcurrentHashMap<String, Long>()
+    private val stagedAttachments = ConcurrentHashMap<String, List<AidenAttachmentReference>>()
 
     val root: File
 
@@ -101,8 +103,25 @@ class AidenChatDraftStore(
         return true
     }
 
+    /**
+     * Hands server-staged attachments (an "Edit in fork" prefill) to the next
+     * composer that opens [chatId]. They are only valid until their
+     * `expiresAt`, so they live in memory rather than on disk.
+     */
+    @Synchronized
+    fun stageAttachments(instanceId: String, chatId: String, attachments: List<AidenAttachmentReference>) {
+        val key = sessionKey(instanceId, chatId)
+        if (attachments.isEmpty()) stagedAttachments.remove(key) else stagedAttachments[key] = attachments
+    }
+
+    /** Returns and forgets the attachments staged for [chatId]. */
+    @Synchronized
+    fun takeStagedAttachments(instanceId: String, chatId: String): List<AidenAttachmentReference> =
+        stagedAttachments.remove(sessionKey(instanceId, chatId)).orEmpty()
+
     @Synchronized
     fun remove(instanceId: String, chatId: String) {
+        stagedAttachments.remove(sessionKey(instanceId, chatId))
         invalidate(instanceId, chatId)
         val file = fileURL(instanceId, chatId)
         if (file.exists()) file.delete()
@@ -116,6 +135,7 @@ class AidenChatDraftStore(
                 generations.compute(key) { _, current -> (current ?: 0L) + 1L }
             }
         }
+        stagedAttachments.keys.removeAll { it.startsWith(prefix) }
         val dir = instanceDirectory(instanceId)
         if (dir.exists()) dir.deleteRecursively()
         _drafts.value = emptyMap()
