@@ -1,6 +1,6 @@
 # Pi 1.0.3 upgrade and stack reconciliation
 
-Status: active, 2026-10-05. Implementation integrated on `feature/pi-1.0.3-upgrade`; final local and exact-head hosted acceptance in progress. The plan was committed first as `9a5d67d7`. This supersedes the individual open stack PRs with one replacement PR, preserving their commit ancestry. Historical implementation evidence remains in [Pi parity](pi-1-parity-plan.md).
+Status: active, 2026-10-05. Implementation integrated on `feature/pi-1.0.3-upgrade`; local acceptance complete; exact-head hosted acceptance and merge pending in [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357). The plan was committed first as `9a5d67d7`. This supersedes the individual open stack PRs with one replacement PR, preserving their commit ancestry. Historical implementation evidence remains in [Pi parity](pi-1-parity-plan.md).
 
 ## Verified baseline
 
@@ -55,11 +55,11 @@ Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-l
 
 ### 5. Acceptance and documentation
 
-- [ ] Node 22.22.3: root and CLI type checks, lint, test:compaction, test:mcp, test:subagents, test:cli, focused provider/config recovery, test:ci-policy, full npm test and npm run build. Register new tests in CI; use behavioral tests, not production-source matching.
-- [ ] Run native suites for shared transcript/contracts and changed provider identity consumers. Verify CLI worker/WASM and Electron packaged sandbox wiring offline; distinguish unsigned/synthetic checks from signed/device acceptance.
+- [x] Node 22.22.3: root and CLI type checks, lint, test:compaction, test:mcp, test:subagents, test:cli, focused provider/config recovery, test:ci-policy, full npm test and npm run build. Register new tests in CI; use behavioral tests, not production-source matching.
+- [x] Run native suites for shared transcript/contracts and changed provider identity consumers. Verify CLI worker/WASM and Electron packaged sandbox wiring offline; distinguish unsigned/synthetic checks from signed/device acceptance.
 - [ ] For an installed-candidate evaluation, supply absolute AIDEN_PI_UPGRADE_RECEIPT_DIR and AIDEN_PI_UPGRADE_EXECUTABLE to npm run test:compaction:evaluate. Local replay fixtures alone do not establish installed/signed acceptance. Do not run pi-upgrade:advance without deliberate rollout authorization, valid receipts and an explicit target stage.
 - [ ] Revalidate exact-head hosted CI after main merges; never reuse old green results. A flaky rerun is still recorded as a bug, at most one rerun.
-- [ ] Update parity plan, pin memory, plan index and release notes with actual results and intentional client differences. Add a short pi-env evaluation note without production dependency or execution integration.
+- [x] Update parity plan, pin memory, plan index and release notes with actual results and intentional client differences. Add a short pi-env evaluation note without production dependency or execution integration.
 - [ ] Keep plans active until implementation and required acceptance finish; archive completed plans and update the index together. Do not claim hosted, signed, paid-provider or physical-device results that were not run.
 
 ## Progress log
@@ -75,3 +75,5 @@ Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-l
 - Local integration checks to date: CLI 78/78, compaction 22 VCC plus 463 cases, MCP 174/174, full subagent scripts, CI policy 55/55, OAuth/approval 24/24, desktop build, focused Android model/chat/protocol tests and iOS chat/protocol simulator suites passed. iOS's signed-device-only test skipped by design. React Doctor reported 82/100, 13 warnings: test JSON-roundtrip oracles, intentionally ordered authority/tool operations, bounded lookups and a mixed export; no new actionable React defect established.
 - The broad run caught a contradictory source-grep assertion brought over from main for the gallery's keyboard focus. Removed that assertion; the existing real Electron keyboard/reduced-motion/narrow-width gallery test is the behavioral oracle. Its assertions passed but its first local run hit a 35-second Electron shutdown timeout; rerun status and final full-suite results are recorded below/ in the PR. No timeouts or retry policy were relaxed.
 - Merged current main `6a12fdc35` via `cbd3db949`; only catalog CI/workflow changes, no protocol/test-chain conflicts. Root/e2e types and lint pass. The gallery's sole rerun passed (4 seconds), so the original shutdown timeout is recorded as a local flake, not erased. The other 19 Electron cases passed on their first run. Final broad run follows this main merge.
+
+- Final local acceptance after merging `6a12fdc35`: clean `npm test` passed all three unit lanes (6,991 cases; 6,989 pass, 2 skip), all preserved browser/generative-UI/terminal/native/Rust modes, and the 78-test CLI suite. Root, e2e and CLI types and lint passed. Full logs are `/tmp/pi103-full-test-final.log`; the original gallery teardown failure and sole passing rerun remain recorded. PR #357 is the exact-head CI/merge record. The plan stays active for hosted acceptance and the separately scoped installed-candidate release gates; do not infer signed acceptance from these local results.
