@@ -7264,6 +7264,99 @@ private final class AidenChatReadStateHTTPFixture: @unchecked Sendable {
     }
 }
 
+/// A Mac that serves `GET /chats/{chatId}/messages` pages over a transcript
+/// it can rewrite between reads, and records which reads the phone made.
+private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [AidenChatMessage]
+    private var revision: String
+    private let advertisesWindow: Bool
+    private var conflictsOnCursor = false
+    private var windowQueries: [[String: String]] = []
+    private var fullReadCount = 0
+
+    init(messages: [AidenChatMessage], revision: String, advertisesWindow: Bool) {
+        self.messages = messages
+        self.revision = revision
+        self.advertisesWindow = advertisesWindow
+    }
+
+    var windowRequests: [[String: String]] { lock.withLock { windowQueries } }
+    var fullChatReads: Int { lock.withLock { fullReadCount } }
+
+    func replaceTranscript(_ messages: [AidenChatMessage], revision: String) {
+        lock.withLock {
+            self.messages = messages
+            self.revision = revision
+        }
+    }
+
+    /// The next cursor read answers `409 revision_conflict`, as when the Mac
+    /// no longer has the message the phone paged from.
+    func conflictNextCursorRead() { lock.withLock { conflictsOnCursor = true } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        guard let url = request.url else { return nil }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        switch url.path {
+        case "/api/aiden/v1/server":
+            let body: [String: Any] = [
+                "protocolVersion": 1,
+                "instanceId": "instance-progress-lifecycle",
+                "name": "Window Mac",
+                "appVersion": "1.0",
+                "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "features": advertisesWindow ? ["chat-messages-window-v1"] : [],
+                "connectionMode": "lan",
+                "serverTime": "2026-09-27T12:00:00Z",
+            ]
+            return (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[],"defaults":{}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            let snapshot = lock.withLock { () -> AidenChat in
+                fullReadCount += 1
+                let date = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
+                return AidenChat(
+                    id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: "Windowed",
+                    providerId: nil, modelId: nil, messages: messages,
+                    createdAt: date, updatedAt: date, revision: revision
+                )
+            }
+            return (200, "application/json", try! encoder.encode(snapshot))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/messages":
+            guard advertisesWindow else { return (404, "application/json", Data()) }
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            var query: [String: String] = [:]
+            for item in items { query[item.name] = item.value ?? "" }
+            return lock.withLock { () -> (Int, String, Data) in
+                windowQueries.append(query)
+                let limit = Int(query["limit"] ?? "") ?? 50
+                var end = messages.count
+                if let before = query["before"] {
+                    guard !conflictsOnCursor, let index = messages.firstIndex(where: { $0.id == before }) else {
+                        conflictsOnCursor = false
+                        return (409, "application/json", Data(#"{"error":{"code":"revision_conflict","message":"The transcript changed.","requestId":"window","retryable":false}}"#.utf8))
+                    }
+                    end = index
+                }
+                let start = max(0, end - limit)
+                let page: [String: Any] = [
+                    "chatId": "chat-progress-lifecycle",
+                    "revision": revision,
+                    "messages": try! JSONSerialization.jsonObject(with: encoder.encode(Array(messages[start..<end]))),
+                    "hasOlder": start > 0,
+                ]
+                return (200, "application/json", try! JSONSerialization.data(withJSONObject: page))
+            }
+        default:
+            return nil
+        }
+    }
+}
+
 final class AidenChatSummaryPerformanceTests: XCTestCase {
     private enum Profile: CaseIterable {
         case small, medium, large, pathological
@@ -8813,4 +8906,181 @@ private final class AidenRenameRequestLog: @unchecked Sendable {
     func record(_ request: URLRequest) { lock.lock(); defer { lock.unlock() }; requests.append(request) }
     func count(_ method: String) -> Int { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.httpMethod == method }.count }
     func lastRevision() -> String? { lock.lock(); defer { lock.unlock() }; return requests.last { $0.httpMethod == "PATCH" }?.value(forHTTPHeaderField: "If-Match") }
+}
+
+extension AidenChatTests {
+    private static let windowDate = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
+
+    private func windowMessages(_ range: ClosedRange<Int>, prefix: String = "m") -> [AidenChatMessage] {
+        range.map { index in
+            AidenChatMessage(
+                id: "\(prefix)\(index)",
+                role: index.isMultiple(of: 2) ? .assistant : .user,
+                text: "Message \(index)",
+                createdAt: Self.windowDate
+            )
+        }
+    }
+
+    @MainActor
+    private func windowedChatModel(
+        fixture: AidenChatMessagesWindowHTTPFixture
+    ) async throws -> (AidenChatViewModel, URL) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-window-\(UUID())")
+        let initial = AidenChat(
+            id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: "Windowed",
+            providerId: nil, modelId: nil, messages: [],
+            createdAt: Self.windowDate, updatedAt: Self.windowDate, revision: "window-r0"
+        )
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            initialChat: initial,
+            responseOverride: { fixture.response($0) }
+        )
+        return (model, root)
+    }
+
+    func testMergingLatestWindowKeepsEarlierPagesOnlyWhenTheWindowOverlaps() {
+        let onScreen = windowMessages(1...8)
+        let refreshed = AidenChatMessagesWindow(
+            chatId: "c", revision: "r2",
+            messages: windowMessages(5...9),
+            hasOlder: true
+        )
+        let merged = AidenTranscriptWindowing.mergingLatest(refreshed, into: onScreen, currentHasOlder: true)
+        XCTAssertEqual(merged.messages.map(\.id), (1...9).map { "m\($0)" })
+        XCTAssertTrue(merged.hasOlder, "pages above the loaded ones are still on the Mac")
+
+        let disjoint = AidenChatMessagesWindow(
+            chatId: "c", revision: "r3",
+            messages: windowMessages(20...24),
+            hasOlder: true
+        )
+        let replaced = AidenTranscriptWindowing.mergingLatest(disjoint, into: onScreen, currentHasOlder: false)
+        XCTAssertEqual(replaced.messages.map(\.id), (20...24).map { "m\($0)" })
+        XCTAssertTrue(replaced.hasOlder)
+
+        let whole = AidenChatMessagesWindow(chatId: "c", revision: "r4", messages: windowMessages(1...3), hasOlder: false)
+        let short = AidenTranscriptWindowing.mergingLatest(whole, into: onScreen, currentHasOlder: true)
+        XCTAssertEqual(short.messages.map(\.id), ["m1", "m2", "m3"], "a complete window is the whole transcript")
+        XCTAssertFalse(short.hasOlder)
+    }
+
+    func testPrependingEarlierPageSkipsDuplicatesAndPagesFromTheOldestServerMessage() {
+        let onScreen = [AidenChatMessage(id: "local-pending", role: .user, text: "Draft", createdAt: Self.windowDate)]
+            + windowMessages(4...6)
+        XCTAssertEqual(AidenTranscriptWindowing.earlierCursor(in: onScreen), "m4")
+
+        let page = AidenChatMessagesWindow(chatId: "c", revision: "r", messages: windowMessages(1...4), hasOlder: false)
+        let combined = AidenTranscriptWindowing.prepending(page, to: windowMessages(4...6))
+        XCTAssertEqual(combined.messages.map(\.id), (1...6).map { "m\($0)" })
+        XCTAssertFalse(combined.hasOlder)
+    }
+
+    @MainActor
+    func testOpeningAWindowedChatShowsTheLatestPageAndPagesBackToTheStart() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (71...120).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertEqual(model.chat.revision, "window-r1")
+        XCTAssertEqual(model.chat.title, "Windowed")
+        XCTAssertEqual(fixture.fullChatReads, 0, "a windowed Mac is never asked for the whole transcript")
+        XCTAssertEqual(fixture.windowRequests.first, ["limit": "50"])
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(fixture.windowRequests.last, ["limit": "50", "before": "m71"])
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...120).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+        XCTAssertFalse(model.isLoadingEarlierMessages)
+
+        let requestsBefore = fixture.windowRequests.count
+        await model.loadEarlierMessages()
+        XCTAssertEqual(fixture.windowRequests.count, requestsBefore, "the start of the chat needs no further page")
+    }
+
+    @MainActor
+    func testRefreshingAWindowedChatKeepsEarlierPagesAndAppendsNewMessages() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.count, 100)
+
+        fixture.replaceTranscript(windowMessages(1...121), revision: "window-r2")
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...121).map { "m\($0)" })
+        XCTAssertEqual(model.chat.revision, "window-r2")
+        XCTAssertTrue(model.hasOlderMessages)
+    }
+
+    @MainActor
+    func testRevisionConflictWhilePagingReloadsTheLatestWindow() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.first?.id, "m21")
+
+        // The Mac rewrote the chat (an edit or fork removed earlier turns).
+        fixture.replaceTranscript(windowMessages(1...80, prefix: "n"), revision: "window-r9")
+        await model.loadEarlierMessages()
+
+        XCTAssertEqual(model.chat.messages.map(\.id), (31...80).map { "n\($0)" })
+        XCTAssertEqual(model.chat.revision, "window-r9")
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertNil(model.presentedError, "a conflict recovers without an error")
+        XCTAssertEqual(fixture.windowRequests.last, ["limit": "50"], "the reload starts from the newest message")
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...80).map { "n\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+    }
+
+    @MainActor
+    func testAMacWithoutTheWindowFeatureServesTheWholeTranscript() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: false
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+        XCTAssertEqual(fixture.fullChatReads, 1)
+
+        await model.loadEarlierMessages()
+        XCTAssertTrue(fixture.windowRequests.isEmpty, "an older Mac is never asked for message pages")
+    }
 }

@@ -146,6 +146,8 @@ fun AidenChatDetailScreen(
     val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsStateWithLifecycle()
     val composerSuggestions by viewModel.composerSuggestions.collectAsStateWithLifecycle()
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
+    val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
+    val isLoadingEarlierMessages by viewModel.isLoadingEarlierMessages.collectAsStateWithLifecycle()
     val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
     val taskProgress by viewModel.taskProgress.collectAsStateWithLifecycle()
     val currentAgentRoster by viewModel.agentRoster.collectAsStateWithLifecycle()
@@ -830,6 +832,21 @@ fun AidenChatDetailScreen(
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl
+                        )
+                    }
+                }
+
+                // Last in reverse layout, so it sits above the oldest message.
+                // Earlier pages join the end of the list, leaving the anchored
+                // rows and the reader's position where they were.
+                if (hasOlderMessages) {
+                    item(key = "load_earlier_messages") {
+                        AidenLoadEarlierMessages(
+                            isLoading = isLoadingEarlierMessages,
+                            onClick = {
+                                followLatest = false
+                                viewModel.loadEarlierMessages()
+                            }
                         )
                     }
                 }

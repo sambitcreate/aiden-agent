@@ -1164,6 +1164,12 @@ final class AidenChatViewModel {
     private(set) var chat: AidenChat
     private(set) var catalog: AidenModelCatalog?
     private(set) var isLoading = false
+    /// The Mac holds visible messages older than the first one on screen.
+    private(set) var hasOlderMessages = false
+    private(set) var isLoadingEarlierMessages = false
+    /// Set once a newest-transcript read has settled what is on screen, so a
+    /// later refresh keeps earlier pages the reader loaded.
+    @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
     private(set) var streamState: AidenStreamState? {
         didSet {
@@ -1343,6 +1349,7 @@ final class AidenChatViewModel {
         // The shell can remain mounted while removal/revocation awaits cleanup.
         // Redact published content synchronously with lifetime invalidation.
         chat.messages = []
+        hasOlderMessages = false
         draftPersistenceTask?.cancel()
         draftPersistenceTask = nil
         draftSession = nil
@@ -1575,7 +1582,13 @@ final class AidenChatViewModel {
         // status probe run alongside independent transcript/catalog reads.
         async let restoration: Void = restoreStreamIfNeeded(needed: needsStreamRestoration)
         let cacheGeneration = transcriptGeneration
-        if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
+        // Once a network window has settled, the transcript on screen already
+        // holds everything the cache does plus earlier pages the reader loaded;
+        // presenting the cache again would drop those pages before the merge.
+        let keepsSettledWindow = hasSettledTranscriptWindow
+            && coordinator.server?.supportsChatMessagesWindow == true
+        if !keepsSettledWindow,
+           let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             if cacheGeneration == transcriptGeneration, !isStarting {
                 let presented = await cache.presenting(cached, instanceId: instanceId)
@@ -1590,10 +1603,10 @@ final class AidenChatViewModel {
         // Keep both reads structured under this load and independently fenced.
         async let catalogRefresh: Void = refreshModelCatalog(context: context)
         do {
-            let remoteChat = try await coordinator.remoteClient(for: context).chat(id: chat.id)
+            let latest = try await fetchLatestTranscript(context: context)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             if generation == transcriptGeneration, !isStarting {
-                await acceptRemoteChat(remoteChat, context: context, writeToken: writeToken)
+                await acceptLatestTranscript(latest, context: context, writeToken: writeToken)
             }
         } catch {
             clearProgressStateIfCredentialRevoked(error)
@@ -3703,14 +3716,14 @@ final class AidenChatViewModel {
         let generation = transcriptGeneration
         let writeToken = cache.reserveChatWrite()
         do {
-            let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
+            let latest = try await fetchLatestTranscript(context: context)
             guard !isRemoved, coordinator.isCurrent(context) else { return false }
             guard generation == transcriptGeneration, !isStarting else { return false }
             // Supersede reads admitted while the authoritative fetch was pending,
             // before its cache write yields to the main actor again.
             transcriptGeneration &+= 1
             let publicationGeneration = transcriptGeneration
-            guard await acceptRemoteChat(remote, context: context, writeToken: writeToken) else { return false }
+            guard await acceptLatestTranscript(latest, context: context, writeToken: writeToken) else { return false }
             guard publicationGeneration == transcriptGeneration, coordinator.isCurrent(context) else { return false }
             clearRecoveryWarning()
             return true
@@ -3720,6 +3733,110 @@ final class AidenChatViewModel {
             showRecoveryWarning(error.localizedDescription)
             return false
         }
+    }
+
+    /// Read the newest transcript. With `chat-messages-window-v1` this is the
+    /// newest page, folded into earlier pages already on screen (or replacing
+    /// them when `replacing`); without it, the whole chat as before. The page
+    /// carries no chat metadata, so the current title and model are kept.
+    private func fetchLatestTranscript(
+        context: AidenRemoteRequestContext,
+        replacing: Bool = false
+    ) async throws -> (chat: AidenChat, hasOlder: Bool) {
+        let client = try coordinator.remoteClient(for: context)
+        guard coordinator.server?.supportsChatMessagesWindow == true else {
+            return (try await client.chat(id: chat.id), false)
+        }
+        let window = try await client.messagesWindow(
+            chatId: chat.id,
+            limit: AidenTranscriptWindowing.pageSize
+        )
+        let presentation = replacing || !hasSettledTranscriptWindow
+            ? AidenTranscriptWindowing.latest(window)
+            : AidenTranscriptWindowing.mergingLatest(
+                window,
+                into: chat.messages,
+                currentHasOlder: hasOlderMessages
+            )
+        var assembled = chat
+        assembled.messages = presentation.messages
+        assembled.revision = window.revision
+        return (assembled, presentation.hasOlder)
+    }
+
+    @discardableResult
+    private func acceptLatestTranscript(
+        _ latest: (chat: AidenChat, hasOlder: Bool),
+        context: AidenRemoteRequestContext,
+        writeToken: UInt64,
+        scheduleTitleRefresh: Bool = true
+    ) async -> Bool {
+        guard await acceptRemoteChat(
+            latest.chat,
+            context: context,
+            writeToken: writeToken,
+            scheduleTitleRefresh: scheduleTitleRefresh
+        ) else { return false }
+        hasOlderMessages = latest.hasOlder
+        hasSettledTranscriptWindow = true
+        return true
+    }
+
+    /// Page back one window from the oldest message on screen. If the Mac no
+    /// longer has that message (`revision_conflict`), reload from the newest.
+    func loadEarlierMessages() async {
+        guard !isReadOnlyFixture, hasOlderMessages, !isLoadingEarlierMessages, !isRemoved,
+              coordinator.server?.supportsChatMessagesWindow == true,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context),
+              let cursor = AidenTranscriptWindowing.earlierCursor(in: chat.messages) else { return }
+        isLoadingEarlierMessages = true
+        defer { isLoadingEarlierMessages = false }
+        do {
+            let page = try await coordinator.remoteClient(for: context).messagesWindow(
+                chatId: chat.id,
+                before: cursor,
+                limit: AidenTranscriptWindowing.pageSize
+            )
+            // A reload that replaced the transcript meanwhile owns the screen.
+            guard !isRemoved, coordinator.isCurrent(context),
+                  AidenTranscriptWindowing.earlierCursor(in: chat.messages) == cursor else { return }
+            let presentation = AidenTranscriptWindowing.prepending(page, to: chat.messages)
+            chat.messages = presentation.messages
+            hasOlderMessages = presentation.hasOlder
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            if Self.isRevisionConflict(error) {
+                await reloadLatestTranscriptWindow(context: context)
+            } else {
+                presentedError = error.localizedDescription
+            }
+        }
+    }
+
+    private func reloadLatestTranscriptWindow(context: AidenRemoteRequestContext) async {
+        guard !isStarting else { return }
+        let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let latest = try await fetchLatestTranscript(context: context, replacing: true)
+            guard !isRemoved, coordinator.isCurrent(context), generation == transcriptGeneration, !isStarting else { return }
+            await acceptLatestTranscript(latest, context: context, writeToken: writeToken)
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            presentedError = error.localizedDescription
+        }
+    }
+
+    private static func isRevisionConflict(_ error: Error) -> Bool {
+        guard case .server(_, let body)? = error as? AidenRemoteClientError else { return false }
+        return body.code.rawValue == "revision_conflict"
     }
 
     @discardableResult
@@ -3766,7 +3883,13 @@ final class AidenChatViewModel {
                     let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
                     guard !isRemoved, coordinator.isCurrent(context) else { return }
                     guard generation == transcriptGeneration, !isStarting else { continue }
-                    await acceptRemoteChat(remote, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
+                    // A whole-chat read carries the title and every message.
+                    await acceptLatestTranscript(
+                        (remote, false),
+                        context: context,
+                        writeToken: writeToken,
+                        scheduleTitleRefresh: false
+                    )
                     if !remote.isTitlePending { return }
                 } catch let error where aidenIsCancellation(error) {
                     return
@@ -4318,7 +4441,7 @@ struct AidenChatDetailView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                messageList
+                messageList(proxy)
             }
             .defaultScrollAnchor(
                 AidenChatScrollPolicy.initialTranscriptAnchor,
@@ -4374,11 +4497,16 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private var messageList: some View {
+    private func messageList(_ proxy: ScrollViewProxy) -> some View {
         LazyVStack(
             alignment: .leading,
             spacing: presentationStyle == .botMessages ? 3 : 18
         ) {
+            if model.hasOlderMessages {
+                AidenLoadEarlierMessagesButton(isLoading: model.isLoadingEarlierMessages) {
+                    loadEarlierMessages(proxy)
+                }
+            }
             // Settled rows live in a child view that tracks only `chat`, so
             // per-token liveText updates never re-evaluate finished messages.
             // `chat` is a value snapshot: comparing model.chat would read the
@@ -4694,6 +4822,19 @@ struct AidenChatDetailView: View {
         }
     }
 
+    /// Prepending would otherwise leave the viewport at the same offset over
+    /// new content; re-anchor on the message that was first so the reader
+    /// stays where they were.
+    private func loadEarlierMessages(_ proxy: ScrollViewProxy) {
+        let anchorID = model.chat.messages.first?.id
+        Task {
+            await model.loadEarlierMessages()
+            guard let anchorID, model.chat.messages.first?.id != anchorID,
+                  model.chat.messages.contains(where: { $0.id == anchorID }) else { return }
+            proxy.scrollTo(anchorID, anchor: .top)
+        }
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
         let scroll = {
             proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
@@ -4739,6 +4880,41 @@ private struct AidenChatJumpToLatestButton: View {
         .contentShape(Rectangle())
         .accessibilityLabel("Jump to latest")
         .accessibilityHint("Scrolls to the newest message")
+    }
+}
+
+/// Pages the transcript back one window. A soft raised capsule with no
+/// border, matching the transcript's other quiet secondary controls.
+private struct AidenLoadEarlierMessagesButton: View {
+    @Environment(\.aidenPalette) private var palette
+
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(isLoading ? "Loading earlier messages" : "Load earlier messages")
+                    .font(.footnote.weight(.medium))
+            }
+            .foregroundStyle(palette.secondary)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 32)
+            .background(palette.raised, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .accessibilityHint("Shows older messages in this conversation")
     }
 }
 

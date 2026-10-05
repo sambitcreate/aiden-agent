@@ -97,6 +97,10 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
+    /** `GET /chats/{chatId}/messages` pages (revision 19); without it, whole-chat reads. */
+    val supportsChatMessagesWindow: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

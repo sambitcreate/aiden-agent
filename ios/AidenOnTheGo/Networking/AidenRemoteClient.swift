@@ -90,6 +90,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
+    static let chatMessagesWindowFeature = "chat-messages-window-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -244,6 +245,12 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
     var supportsChatReadState: Bool {
         features.contains(Self.chatReadStateFeature)
+    }
+
+    /// `GET /chats/{chatId}/messages` pages (revision 19). Without it the
+    /// client keeps reading whole transcripts through `GET /chats/{chatId}`.
+    var supportsChatMessagesWindow: Bool {
+        features.contains(Self.chatMessagesWindowFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -1058,6 +1065,32 @@ final class AidenRemoteClient: @unchecked Sendable {
     func chat(id: String) async throws -> AidenChat {
         let value: AidenChat = try await send(method: "GET", path: ["chats", id])
         guard value.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return value
+    }
+
+    /// One page of a chat's visible messages, oldest first. Without `before`
+    /// the page ends at the newest message; otherwise it ends just before that
+    /// message. A `before` the Mac no longer has is `409 revision_conflict`.
+    func messagesWindow(
+        chatId: String,
+        before: String? = nil,
+        limit: Int = AidenChatMessagesWindow.defaultLimit
+    ) async throws -> AidenChatMessagesWindow {
+        guard (1...AidenChatMessagesWindow.maximumLimit).contains(limit) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        let value: AidenChatMessagesWindow = try await send(
+            method: "GET",
+            path: ["chats", chatId, "messages"],
+            query: query
+        )
+        guard value.chatId == chatId,
+              value.messages.count <= limit,
+              before.map({ cursor in !value.messages.contains { $0.id == cursor } }) ?? true else {
+            throw AidenRemoteClientError.invalidResponse
+        }
         return value
     }
 

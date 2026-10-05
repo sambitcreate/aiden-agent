@@ -3194,6 +3194,7 @@ private enum AidenBotPrivateResponseScope {
     case root(String)
     case botClassifiedChat
     case chatList
+    case messagesWindow
     case sharedFixture
 }
 
@@ -3276,6 +3277,11 @@ private enum AidenBotPrivateResponseValidator {
                     try validate(chat, root: chat["botId"] is String ? "chat" : "regularChat", path: [])
                 }
             }
+        case .messagesWindow:
+            // A window page carries the same message projection as a chat
+            // read, so it is held to the same private-field rules.
+            try validateChildProjectionFields(value)
+            try validate(value, root: "regularChat", path: [])
         case .sharedFixture:
             guard let object = value as? [String: Any] else {
                 throw AidenRemoteContractError.invalidJSON
@@ -3389,6 +3395,54 @@ extension AidenChat: AidenBotPrivateResponseScoped {
 
 struct AidenChatListResponse: Decodable {
     let chats: [AidenChat]
+}
+
+/// One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
+/// messages oldest first, ending just before the requested cursor (or at the
+/// newest message), plus whether older visible messages exist.
+struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
+    static let defaultLimit = 50
+    static let maximumLimit = 200
+
+    let chatId: String
+    let revision: String
+    let messages: [AidenChatMessage]
+    let hasOlder: Bool
+
+    init(chatId: String, revision: String, messages: [AidenChatMessage], hasOlder: Bool) {
+        self.chatId = chatId
+        self.revision = revision
+        self.messages = messages
+        self.hasOlder = hasOlder
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        revision = try values.decode(String.self, forKey: .revision)
+        messages = try values.decode([AidenChatMessage].self, forKey: .messages)
+        hasOlder = try values.decode(Bool.self, forKey: .hasOlder)
+        guard !chatId.isEmpty, chatId.utf8.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            throw DecodingError.dataCorruptedError(forKey: .chatId, in: values, debugDescription: "Expected a chat ID.")
+        }
+        guard !revision.isEmpty, revision.utf8.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            throw DecodingError.dataCorruptedError(forKey: .revision, in: values, debugDescription: "Expected a chat revision.")
+        }
+        guard messages.count <= Self.maximumLimit,
+              Set(messages.map(\.id)).count == messages.count else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .messages,
+                in: values,
+                debugDescription: "A messages window holds at most 200 unique messages."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case chatId, revision, messages, hasOlder }
+}
+
+extension AidenChatMessagesWindow: AidenBotPrivateResponseScoped {
+    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .messagesWindow }
 }
 
 extension AidenChatListResponse: AidenBotPrivateResponseScoped {

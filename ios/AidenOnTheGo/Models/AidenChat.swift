@@ -2101,3 +2101,56 @@ enum AidenQuietOpenChat {
         !isChatForegrounded
     }
 }
+
+/// Client-side transcript windowing over `chat-messages-window-v1`. The chat
+/// screen holds the newest page plus any earlier pages the reader asked for;
+/// these rules decide how a fetched page combines with what is on screen.
+enum AidenTranscriptWindowing {
+    static let pageSize = AidenChatMessagesWindow.defaultLimit
+
+    struct Presentation: Equatable {
+        var messages: [AidenChatMessage]
+        var hasOlder: Bool
+    }
+
+    /// Replace the transcript with the newest window, as on open or after a
+    /// `revision_conflict`.
+    static func latest(_ window: AidenChatMessagesWindow) -> Presentation {
+        Presentation(messages: window.messages, hasOlder: window.hasOlder)
+    }
+
+    /// Fold a refreshed newest window into the transcript on screen. When the
+    /// window overlaps it, earlier pages the reader already loaded are kept in
+    /// front of it; otherwise the window replaces the transcript. Optimistic
+    /// and stale messages after the overlap point give way to the window.
+    static func mergingLatest(
+        _ window: AidenChatMessagesWindow,
+        into current: [AidenChatMessage],
+        currentHasOlder: Bool
+    ) -> Presentation {
+        guard window.hasOlder, let first = window.messages.first,
+              let overlap = current.firstIndex(where: { $0.id == first.id }),
+              overlap > 0 else {
+            return latest(window)
+        }
+        let windowIDs = Set(window.messages.map(\.id))
+        let earlier = current[..<overlap].filter { !windowIDs.contains($0.id) }
+        return Presentation(messages: earlier + window.messages, hasOlder: currentHasOlder)
+    }
+
+    /// Put an earlier page in front of the transcript on screen.
+    static func prepending(
+        _ page: AidenChatMessagesWindow,
+        to current: [AidenChatMessage]
+    ) -> Presentation {
+        let presentIDs = Set(current.map(\.id))
+        let earlier = page.messages.filter { !presentIDs.contains($0.id) }
+        return Presentation(messages: earlier + current, hasOlder: page.hasOlder)
+    }
+
+    /// The cursor for the next earlier page: the oldest message the Mac
+    /// issued. Optimistic local messages never reach the server.
+    static func earlierCursor(in messages: [AidenChatMessage]) -> String? {
+        messages.first { !$0.id.hasPrefix("local-") }?.id
+    }
+}

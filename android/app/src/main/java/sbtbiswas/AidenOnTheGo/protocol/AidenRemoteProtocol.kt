@@ -45,6 +45,7 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -206,6 +207,8 @@ sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
     object ChatSummaryProjection : AidenBotPrivateResponseScope()
+    /** A `GET /chats/{id}/messages` page: the regular-chat message projection without chat metadata. */
+    object MessagesWindowProjection : AidenBotPrivateResponseScope()
     /** Progress has its own strict DTO parser; this scope only applies the generic wire-key guard. */
     object ChatProgressProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
@@ -274,6 +277,11 @@ object AidenBotPrivateResponseValidator {
                 // Chat projections may contain additive public fields, but never
                 // receive the Bot identity exceptions for instructions/greetings.
                 validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false)
+            }
+            is AidenBotPrivateResponseScope.MessagesWindowProjection -> {
+                // A window page carries the same message projection as a
+                // regular chat read, so it is held to the same rules.
+                validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false, regularChat = true)
             }
             is AidenBotPrivateResponseScope.ChatSummaryProjection -> {
                 rejectExplicitNullCursor(element)
