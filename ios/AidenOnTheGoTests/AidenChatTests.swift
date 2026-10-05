@@ -5376,6 +5376,25 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(currentRemoval)
     }
 
+    func testModelOperationApprovalsRequireDesktopInspection() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        for toolName in ["generate_image", "classify"] {
+            let approval = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+                .init(approvalId: "model-approval", streamId: "stream-1", chatId: "chat-1",
+                      summary: "Review the complete payload on desktop", toolCallId: "model-call",
+                      toolName: toolName, expiresAt: now.addingTimeInterval(60), canAllow: false),
+                streamId: "stream-1", chatId: "chat-1", capabilities: .unrestricted, now: now
+            ))
+            XCTAssertFalse(approval.canAllow)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .allow, capabilities: .unrestricted
+            ), .hostApprovalRequired)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .deny, capabilities: .unrestricted
+            ), .allowed)
+        }
+    }
+
     func testApprovalSnapshotMustBeLiveAndBoundToTheExactStreamAndChat() {
         let now = Date(timeIntervalSince1970: 10_000)
         let valid = AidenStreamPendingApproval(

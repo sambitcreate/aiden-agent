@@ -777,3 +777,38 @@ test("denying or cancelling full classifier approval dispatches no provider requ
     finally { await harness.dispose(); }
   }
 });
+
+
+test("long image prompts are disclosed before approval and dispatched only after Allow", async () => {
+  const { createFauxCore, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const { PiAgentRuntimeHarness } = await import("./pi-agent-runtime-harness.js");
+  const { ToolApprovalCoordinator } = await import("./tool-approval.js");
+  const { summarizeToolCall } = await import("./coding-tools.js");
+  const { convertToLlm } = await import("./pi-legacy-harness.js");
+  const prompt = "x".repeat(3000) + "PRIVATE-LATE-PROMPT\nEnd of exact prompt";
+  for (const outcome of ["allow", "deny", "cancel"] as const) {
+    const { tools, controls } = fixture();
+    const core = createFauxCore({ provider: `image-${outcome}` });
+    core.setResponses([fauxAssistantMessage([fauxToolCall("generate_image", { ...imageRequest, prompt })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    let displayed = 0;
+    const coordinator = new ToolApprovalCoordinator(approval => {
+      assert.equal(controls.imageCalls, 0, "approval must precede any provider dispatch");
+      assert.ok(approval.summary.endsWith(JSON.stringify(prompt)), "the complete exact prompt must be inspectable");
+      assert.match(approval.summary, /fixture\/image.*charges/);
+      displayed++;
+      queueMicrotask(() => outcome === "cancel" ? coordinator.cancelStream("image") : coordinator.decide(approval.approvalId, outcome === "allow"));
+    });
+    const harness = new PiAgentRuntimeHarness({ convertToLlm, streamFn: core.streamSimple,
+      initialState: { model: core.getModel(), systemPrompt: "Test", thinkingLevel: "off", messages: [], tools },
+      beforeToolCall: async ({ toolCall, args }) => {
+        const approval = await coordinator.request({ streamId: "image", toolCallId: toolCall.id, toolName: toolCall.name, summary: summarizeToolCall(toolCall.name, args) });
+        return approval === "allowed" ? undefined : { block: true, reason: "User did not approve image generation" };
+      } });
+    try {
+      await harness.prompt("generate image");
+      assert.equal(displayed, 1);
+      assert.equal(controls.imageCalls, outcome === "allow" ? 1 : 0);
+      if (outcome === "allow") assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: prompt }] });
+    } finally { await harness.dispose(); }
+  }
+});

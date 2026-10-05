@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Host-owned namespace identity. Remote descriptions/instructions are reference data only. */
@@ -50,8 +51,11 @@ function namespaceMetadata(value: PiToolDiscoveryMetadata | undefined): PiToolDi
   if (!/^[a-zA-Z][a-zA-Z0-9_.:-]*$/u.test(namespace)) throw new Error("Invalid tool namespace.");
   const label = boundedString(value.label, 256, "namespace label");
   if (!label.trim()) throw new Error("Invalid namespace label.");
+  // Saved descriptions are bounded in UTF-16 code units; keep that same contract.
+  // The serialized discovery result still has its independent UTF-8 byte budget.
+  validateMcpServerMetadata({ description: value.description });
   const metadata: PiToolDiscoveryMetadata = Object.freeze({ namespace, label,
-    ...(value.description === undefined ? {} : { description: boundedString(value.description, 1024, "namespace description") }),
+    ...(value.description === undefined ? {} : { description: value.description }),
     ...(value.instructions === undefined ? {} : { instructions: boundedString(value.instructions, 8192, "namespace instructions") }),
   });
   // Every field is a primitive, so a frozen source cannot change after validation.

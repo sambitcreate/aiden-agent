@@ -1581,6 +1581,23 @@ class AidenChatTest {
     }
 
     @Test
+    fun testModelOperationApprovalsRequireDesktopInspection() {
+        val now = Instant.ofEpochSecond(10_000)
+        for (toolName in listOf("generate_image", "classify")) {
+            val wire = AidenStreamPendingApproval(
+                approvalId = "model-approval", streamId = "stream-1", chatId = "chat-1",
+                summary = "Review the complete payload on desktop", toolCallId = "model-call",
+                toolName = toolName, expiresAt = now.plusSeconds(60), canAllow = false
+            )
+            val approval = AidenPendingApprovalResolution.resolve(wire, "stream-1", "chat-1", now = now)!!
+            assertTrue(approval.canRespond)
+            assertFalse(approval.canAllow)
+            assertFalse(approval.hostCanAllow)
+            assertEquals(listOf(AidenApprovalScope.ONCE), approval.scopes)
+        }
+    }
+
+    @Test
     fun testPendingApprovalResolution() {
         val now = Instant.ofEpochSecond(10_000)
         val valid = AidenStreamPendingApproval(

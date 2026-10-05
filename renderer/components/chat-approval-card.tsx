@@ -181,7 +181,8 @@ export function ChatApprovalCard({
             variant="small"
             as="p"
             id={summaryId}
-            className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+            tabIndex={0}
+            className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
           >
             {pending.summary}
           </Text>

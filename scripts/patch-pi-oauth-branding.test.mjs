@@ -83,7 +83,7 @@ test("fails closed when the pinned Pi package changes", async (t) => {
   const packageJsonPath = path.join(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   await writeFile(packageJsonPath, `${JSON.stringify({ ...packageJson, version: "0.84.1" })}\n`);
-  await assert.rejects(patchPiOAuthBranding(root), /Expected @earendil-works\/pi-ai 1\.0\.0/u);
+  await assert.rejects(patchPiOAuthBranding(root), /Expected @earendil-works\/pi-ai 1\.0\.3/u);
 });
 
 test("fails closed when an upstream callback template drifts", async (t) => {

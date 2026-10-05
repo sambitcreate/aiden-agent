@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { createPiToolDiscovery, type PiDiscoverableTool } from "./pi-tool-discovery.js";
 
 function tool(name: string, namespace?: string): PiDiscoverableTool {
@@ -128,4 +129,21 @@ test("server descriptions make otherwise generic tools discoverable without expo
   assert.deepEqual(names(discovery.searchTools("inventory", { namespace: "mcp:shipping" })), []);
   admitted = [specific, excluded];
   assert.deepEqual(names(discovery.searchTools("inventory")), []);
+});
+
+
+test("saved multibyte descriptions remain discoverable alongside independent tools", async () => {
+  const description = "雪".repeat(1024);
+  validateMcpServerMetadata({ description });
+  const localized = tool("localized", "mcp:localized");
+  localized.discovery!.description = description;
+  const discovery = createPiToolDiscovery({ tools: () => [localized, tool("independent")], isCallable: () => true });
+  assert.deepEqual(names(discovery.searchTools("雪")), ["localized"]);
+  assert.deepEqual(names(discovery.searchTools("independent")), ["independent"]);
+  assert.equal(discovery.describeNamespace("mcp:localized").description, description);
+  const result = await discovery.toolSearch.execute("search", { query: "" });
+  assert.deepEqual(names(result.structuredContent as JsonObject), ["independent", "localized"]);
+  assert.ok(Buffer.byteLength(JSON.stringify(discovery.describeNamespace("mcp:localized"))) <= 32768);
+  localized.discovery!.description += "雪";
+  assert.throws(() => discovery.searchTools(""), /1,024 characters/);
 });

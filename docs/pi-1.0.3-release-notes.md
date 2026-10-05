@@ -23,3 +23,5 @@ Project `mcp.json` overrides remain native Pi CLI functionality. Desktop/Aiden-m
 ## Validation boundary
 
 Local replay, types, builds, behavioral suites, CLI worker tests, Electron UI tests, and focused native suites are recorded in the execution plan and PR. Merge requires green hosted CI on the exact PR head. Signed installed-candidate evaluation, physical-device acceptance, live paid-provider calls, and rollout advancement remain release gates; this change does not claim those results or advance rollout.
+
+Image generation approvals disclose the complete prompt as quoted text alongside the recipient and reference-image disclosure. The desktop approval is keyboard-scrollable; Remote image approvals are deny-only because its bounded summaries cannot disclose the complete prompt. MCP discovery accepts the same 1,024-character Unicode descriptions as saved server configuration while retaining byte limits on returned results.

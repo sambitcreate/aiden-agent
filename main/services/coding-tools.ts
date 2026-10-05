@@ -862,7 +862,7 @@ function rejectEnvironmentSecret(root: string, fullPath: string): void {
   }
 }
 
-/** Build a short human summary of a mutating tool call for the approval prompt. */
+/** Build approval disclosure; image prompts must remain complete before provider dispatch. */
 export function summarizeToolCall(toolName: string, args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   switch (toolName) {
@@ -873,7 +873,7 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
     case "generate_image":
-      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} (may incur charges): ${String(a.prompt ?? "?").slice(0, 240)}`;
+      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":
       return `Send structured data and questions to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} for classification (may incur charges)`;
     case "share_image":

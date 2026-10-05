@@ -39,3 +39,21 @@ test("the shared chat approval card inspects classifier state and fails closed o
   assert.doesNotMatch(invalid, /Allow once/);
   assert.match(invalid, /Deny/);
 });
+
+
+test("image approval renders the entire prompt with the recipient and reference disclosure", async () => {
+  const { ChatApprovalCard } = await import("./chat-approval-card.js");
+  const { summarizeToolCall } = await import("../../main/services/coding-tools.js");
+  const summary = summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "x".repeat(3000) + "PRIVATE-LATE-PROMPT <script>unsafe()</script>\nFinal line" }) + " Reference image: attached drawing.";
+  const pending = { approvalId: "image", toolCallId: "call", toolName: "generate_image", summary };
+  const html = renderToStaticMarkup(<ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} />);
+  assert.match(html, /studio\/canvas/);
+  assert.match(html, /PRIVATE-LATE-PROMPT &lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.match(html, /Final line/);
+  assert.match(html, /Reference image: attached drawing/);
+  assert.match(html, /Allow once/);
+  assert.doesNotMatch(html, /<script>/);
+  const remote = renderToStaticMarkup(<ChatApprovalCard pending={{ ...pending, canAllow: false }} deciding={false} onDecide={() => undefined} />);
+  assert.doesNotMatch(remote, /Allow once/);
+  assert.match(remote, /Deny/);
+});
