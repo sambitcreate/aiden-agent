@@ -389,13 +389,13 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const status = await remote.service.status(); assert.equal(status.running, true);
   const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test" });
   const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
-  async function request(path, method = "GET", body, key) {
+  async function request(path, method = "GET", body, key, headers = {}) {
     return new Promise((resolve, reject) => {
       const request = httpsRequest({ hostname: "127.0.0.1", port: status.lanPort, ca, path: `/api/aiden/v1${path}`, method,
-        headers: { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "idempotency-key": key } : {}) } }, (response) => {
+        headers: { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "idempotency-key": key } : {}), ...headers } }, (response) => {
         let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: response.headers["content-type"]?.includes("json") ? JSON.parse(data) : data }));
       });
-      request.setTimeout(15000, () => request.destroy(new Error("Remote request timed out")));
+      request.setTimeout(15000, () => request.destroy(new Error(`Remote request timed out: ${method} ${path}`)));
       request.on("error", reject); request.end(body ? JSON.stringify(body) : undefined);
     });
   }
@@ -411,6 +411,20 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
   assert.equal(events.status, 200); assert.match(events.data, /event: done/); assert.match(events.data, /event: timeline/); assert.match(events.data, /Remote succeeded/);
+  // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
+  const features = (await request("/server")).data.features;
+  assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
+  const forked = await request(`/chats/${created.data.id}/fork`, "POST", { messageId: chat.data.messages.at(-1).id, position: "after" }, "fork-cli-test-000001", { "if-match": chat.data.revision });
+  assert.equal(forked.status, 201, JSON.stringify(forked));
+  assert.equal(forked.data.chat.forkedFrom.chatId, created.data.id);
+  assert.deepEqual(forked.data.chat.messages.map((message) => message.text), ["Hello remote", "Remote succeeded"]);
+  const followUp = await request(`/chats/${forked.data.chat.id}/turns`, "POST", { text: "Continue in the fork" }, "turn-cli-fork-000001");
+  assert.equal(followUp.status, 202, JSON.stringify(followUp));
+  await daemon.llmClient.waitForChatIdle(forked.data.chat.id);
+  assert.equal(requests.length, 2, JSON.stringify(generationEvents));
+  assert.deepEqual(requests[1].messages.filter((message) => message.role !== "system").map((message) => [message.role, JSON.stringify(message.content)]).map(([role, content]) => [role, ["Hello remote", "Remote succeeded", "Continue in the fork"].find((text) => content.includes(text))]),
+    [["user", "Hello remote"], ["assistant", "Remote succeeded"], ["user", "Continue in the fork"]]);
+  assert.equal((await request(`/chats/${created.data.id}`)).data.messages.length, 2);
   assert.equal((await remote.command(["revoke", issued.device.id])).revoked, true);
   assert.equal((await request("/workspaces")).status, 403);
 });

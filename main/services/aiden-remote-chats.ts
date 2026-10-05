@@ -13,6 +13,15 @@ import {
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import {
+  MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
+  parseChatForkLineageV1,
+  type ChatForkPosition,
+  type ChatForkSummaryV1,
+} from "../../renderer/shared/chat-copy-contract.js";
+import { isChatForkError, type ChatForkError } from "./chat-fork-error.js";
+import type { ChatForkService, ChatForkWorkspaceAdmission } from "./chat-fork-service.js";
+import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import {
   chatRowState,
@@ -140,6 +149,16 @@ export interface AidenRemoteAttachmentContent {
   mimeType: string;
 }
 
+/** Additive (protocol revision 21): the chat this one was forked from. */
+export interface AidenRemoteChatForkLineageProjection {
+  chatId: string;
+  messageId: string;
+  position: ChatForkPosition;
+  at: string;
+  /** Fork with summary only; list rows never carry it. */
+  summary?: ChatForkSummaryV1;
+}
+
 export interface AidenRemoteChatProjection {
   id: string;
   workspaceId: string;
@@ -152,6 +171,7 @@ export interface AidenRemoteChatProjection {
   updatedAt: string;
   revision: string;
   titlePending?: true;
+  forkedFrom?: AidenRemoteChatForkLineageProjection;
 }
 
 export interface AidenRemoteChatSummaryProjection {
@@ -167,6 +187,8 @@ export interface AidenRemoteChatSummaryProjection {
   rowState?: ChatRowState;
   /** Additive (protocol revision 18): assistant output arrived after the last view. */
   unread?: boolean;
+  /** Additive (protocol revision 21): fork lineage, without its summary. */
+  forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
 }
 
 type SafeSummaryRow = Omit<
@@ -330,9 +352,32 @@ function projectMessageTimeline(message: ChatMessage): GenerationTimeline | unde
   return parseGenerationTimeline(message.timeline, message.content.length);
 }
 
+/** The lineage a paired device may see; a damaged lineage is omitted. */
+function projectForkLineage(
+  chat: Pick<Chat, "botId" | "forkedFrom">,
+  includeSummary: boolean,
+): AidenRemoteChatForkLineageProjection | undefined {
+  if (chat.botId) return undefined;
+  const lineage = parseChatForkLineageV1(chat.forkedFrom);
+  if (!lineage || !SAFE_ID.test(lineage.chatId) || !SAFE_ID.test(lineage.messageId)) {
+    return undefined;
+  }
+  const at = new Date(lineage.at);
+  if (!Number.isFinite(at.getTime())) return undefined;
+  return {
+    chatId: lineage.chatId,
+    messageId: lineage.messageId,
+    position: lineage.position,
+    at: at.toISOString(),
+    ...(includeSummary && lineage.summary ? { summary: lineage.summary } : {}),
+  };
+}
+
 function chatRevision(chat: Chat): string {
   const hasModelSelection = Boolean(chat.providerId && chat.model);
+  const forkedFrom = projectForkLineage(chat, true);
   const visible = {
+    ...(forkedFrom ? { forkedFrom } : {}),
     id: chat.id,
     workspaceId: persistedChatWorkspaceId(chat.workspaceId),
     ...(chat.botId ? { botId: chat.botId } : {}),
@@ -389,6 +434,7 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
   ) {
     return null;
   }
+  const forkedFrom = projectForkLineage(meta, false);
   return {
     id: meta.id,
     workspaceId,
@@ -396,6 +442,7 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
     createdAt: new Date(meta.createdAt).toISOString(),
     updatedAt: new Date(meta.updatedAt).toISOString(),
     revision: chatSummaryRevision(meta),
+    ...(forkedFrom ? { forkedFrom } : {}),
     ...(typeof meta.lastAssistantAt === "number" && Number.isSafeInteger(meta.lastAssistantAt)
       ? { lastAssistantAt: meta.lastAssistantAt, lastAssistantSequence: meta.lastAssistantSequence }
       : {}),
@@ -472,6 +519,8 @@ export interface AidenRemoteChatMessagesWindow {
   messages: AidenRemoteMessageProjection[];
   /** Older visible messages exist before the first returned message. */
   hasOlder: boolean;
+  /** Additive (protocol revision 21): present on a fork, with its summary. */
+  forkedFrom?: AidenRemoteChatForkLineageProjection;
 }
 
 /**
@@ -499,11 +548,13 @@ export function projectAidenRemoteChatMessagesWindow(
   let first = Math.max(0, end - input.limit);
   try {
     const messages = visible.slice(first, end).map((message) => projectMessage(chat, message));
+    const forkedFrom = projectForkLineage(chat, true);
     const window: AidenRemoteChatMessagesWindow = {
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
       hasOlder: true,
+      ...(forkedFrom ? { forkedFrom } : {}),
     };
     const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
     let bytes = size();
@@ -558,6 +609,8 @@ export function projectAidenRemoteChat(
       revision: chatRevision(chat),
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
     };
+    const forkedFrom = projectForkLineage(chat, true);
+    if (forkedFrom) projection.forkedFrom = forkedFrom;
     // Reasoning is optional presentation data. Keep the existing chat available
     // when several otherwise valid assistant messages exceed the response cap.
     let responseBytes = Buffer.byteLength(JSON.stringify(projection), "utf8");
@@ -632,6 +685,66 @@ function parseMove(input: unknown): { workspaceId: string; confirmedForeground: 
     throw new AidenRemoteServiceError("invalid_request", "The chat move request is invalid.", 400);
   }
   return { workspaceId: safeId(record.workspaceId, "workspace"), confirmedForeground: true };
+}
+
+interface ParsedFork {
+  messageId: string;
+  position: ChatForkPosition;
+  summary?: { instructions?: string };
+}
+
+function parseFork(input: unknown): ParsedFork {
+  const record = ownRecord(input);
+  const summary = record?.summary === undefined ? undefined : ownRecord(record.summary);
+  const instructions = summary?.instructions;
+  if (
+    !record ||
+    !exactKeys(record, ["messageId", "position"], ["summary"]) ||
+    !boundedString(record.messageId, 128) ||
+    !SAFE_ID.test(record.messageId) ||
+    (record.position !== "after" && record.position !== "before") ||
+    (record.summary !== undefined && (!summary || !exactKeys(summary, [], ["instructions"]))) ||
+    (instructions !== undefined &&
+      (typeof instructions !== "string" ||
+        !instructions.trim() ||
+        instructions.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
+  ) {
+    throw new AidenRemoteServiceError("invalid_request", "The chat fork request is invalid.", 400);
+  }
+  return {
+    messageId: record.messageId,
+    position: record.position,
+    ...(summary
+      ? { summary: typeof instructions === "string" ? { instructions: instructions.trim() } : {} }
+      : {}),
+  };
+}
+
+function forkRemoteError(error: ChatForkError): AidenRemoteServiceError {
+  switch (error.code) {
+    case "busy":
+      return new AidenRemoteServiceError("operation_in_progress", error.message, 409, true);
+    case "not_found":
+    case "message_not_found":
+      return new AidenRemoteServiceError("not_found", error.message, 404);
+    case "ineligible":
+      return new AidenRemoteServiceError("invalid_request", error.message, 400);
+    case "too_large":
+      return new AidenRemoteServiceError("payload_too_large", error.message, 413);
+    case "unavailable":
+      return new AidenRemoteServiceError("operation_in_progress", error.message, 409);
+  }
+}
+
+/** `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
+export interface AidenRemoteChatForkResult {
+  chat: AidenRemoteChatProjection;
+  /**
+   * A `before` fork leaves the chosen prompt out so it can be edited. Its text
+   * and any attachments that still fit come back for the composer; the
+   * attachments are held for this device like fresh uploads.
+   */
+  prefill?: { text: string; attachments?: AidenRemoteAttachmentProjection[] };
 }
 
 function parseMarkRead(input: unknown): { throughMessageId?: string } {
@@ -872,6 +985,18 @@ export class AidenRemoteChatService {
       activitySnapshot?: () => ChatActivitySnapshot;
       /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
       readMarkers?: AidenRemoteChatReadMarkers;
+      /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
+      forks?: {
+        service: Pick<ChatForkService, "fork" | "supportsSummaries">;
+        /** Hold the destination workspace still while the fork is created. */
+        admitWorkspace(workspaceId: string): ChatForkWorkspaceAdmission;
+        /** Enables the `fork-summary` routes (`chat-fork-summary-v1`). */
+        summaries?: {
+          retry(chatId: string): Promise<Chat>;
+          skip(chatId: string): Promise<Chat>;
+          cancel(chatId: string): boolean;
+        };
+      };
       now?: () => number;
       summaryCursorSecret?: Buffer;
     },
@@ -1451,6 +1576,135 @@ export class AidenRemoteChatService {
     } catch (error) {
       return this.mapOperationError(error);
     }
+  }
+
+  /** Whether this host can fork chats (`chat-fork-v1`). */
+  get supportsForks(): boolean {
+    return this.options.forks !== undefined;
+  }
+
+  /** Whether this host can fork with a summary (`chat-fork-summary-v1`). */
+  get supportsForkSummaries(): boolean {
+    return this.options.forks?.service.supportsSummaries === true &&
+      this.options.forks.summaries !== undefined;
+  }
+
+  /**
+   * Fork a regular chat at one message. `after` keeps the chosen settled
+   * reply; `before` keeps everything before the chosen prompt and returns
+   * that prompt as `prefill` so the device can edit and resend it.
+   */
+  async fork(
+    deviceId: string,
+    chatId: string,
+    revision: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteChatForkResult> {
+    const forks = this.options.forks;
+    if (!forks) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    const parsed = parseFork(input);
+    if (parsed.summary && !this.supportsForkSummaries) {
+      throw new AidenRemoteServiceError("not_found", "Fork with summary is unavailable on this host.", 404);
+    }
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /chats/{id}/fork", resourceId: safeId(chatId, "chat"), key },
+        { revision, ...parsed },
+        async () => {
+          let cut: ChatMessage | undefined;
+          let forked: Chat;
+          try {
+            forked = await forks.service.fork(
+              {
+                chatId,
+                forkAt: { messageId: parsed.messageId, position: parsed.position },
+                ...(parsed.summary ? { summary: parsed.summary } : {}),
+              },
+              {
+                admitWorkspace: (workspaceId) => forks.admitWorkspace(workspaceId),
+                assertSource: (source) => {
+                  requireRevision(revision, source);
+                  cut = source.messages.find((message) => message.id === parsed.messageId);
+                },
+              },
+            );
+          } catch (error) {
+            if (isChatForkError(error)) throw forkRemoteError(error);
+            if (isChatCreateReconciliationRequiredError(error)) {
+              throw new AidenOperationUnknownOutcomeError();
+            }
+            throw error;
+          }
+          this.options.notifyChanged?.(forked.id);
+          const result: AidenRemoteChatForkResult = { chat: this.project(forked) };
+          if (parsed.position === "before" && cut?.role === "user") {
+            const stored = safeStoredAttachments(cut.attachments) ?? [];
+            const { staged } = stored.length > 0
+              ? this.attachments.stage(deviceId, forked.id, stored)
+              : { staged: [] };
+            result.prefill = {
+              text: boundedUnicodeScalarPrefix(cut.content, 200_000),
+              ...(staged.length > 0 ? { attachments: staged } : {}),
+            };
+          }
+          return result;
+        },
+      );
+    } catch (error) {
+      return this.mapOperationError(error);
+    }
+  }
+
+  /** Try a failed fork summary again with the same focus. */
+  async retryForkSummary(chatId: string): Promise<AidenRemoteChatProjection> {
+    const summaries = await this.forkSummaries(chatId);
+    return this.project(await this.settleForkSummary(chatId, () => summaries.retry(chatId)));
+  }
+
+  /** Continue without the summary: the fork becomes a plain fork. */
+  async skipForkSummary(chatId: string): Promise<AidenRemoteChatProjection> {
+    const summaries = await this.forkSummaries(chatId);
+    return this.project(await this.settleForkSummary(chatId, () => summaries.skip(chatId)));
+  }
+
+  /** Stop a running summary; it becomes failed. False when none was running. */
+  async cancelForkSummary(chatId: string): Promise<{ cancelled: boolean }> {
+    const summaries = await this.forkSummaries(chatId);
+    return { cancelled: summaries.cancel(chatId) };
+  }
+
+  private async forkSummaries(chatId: string) {
+    const summaries = this.options.forks?.summaries;
+    if (!summaries || !this.supportsForkSummaries) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    const chat = await this.chat(chatId);
+    if (chat.botId || !chat.forkedFrom?.summary) {
+      throw new AidenRemoteServiceError("not_found", "This chat has no fork summary.", 404);
+    }
+    return summaries;
+  }
+
+  private async settleForkSummary(chatId: string, action: () => Promise<Chat>): Promise<Chat> {
+    let chat: Chat;
+    try {
+      chat = await action();
+    } catch (error) {
+      if (error instanceof AidenRemoteServiceError) throw error;
+      // The summary moved on (finished, retried or cancelled elsewhere).
+      throw new AidenRemoteServiceError(
+        "revision_conflict",
+        error instanceof Error ? error.message : "The fork summary changed. Refresh it before trying again.",
+        409,
+      );
+    }
+    this.options.notifyChanged?.(chatId);
+    return chat;
   }
 
   async remove(chatId: string, revision: string): Promise<void> {
