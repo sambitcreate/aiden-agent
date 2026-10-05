@@ -240,13 +240,16 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(!jobs.verify.steps.some((step) => step.run === "npm test"));
 });
 
-test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {
+test("model catalog workflow verifies read-only and publishes through a checked pull request", async () => {
   const workflow = await readFile(catalogWorkflowUrl, "utf8");
+  const { permissions, jobs } = parse(workflow);
 
   assert.match(workflow, /branches:\s*\n\s*- main/u);
   assert.match(workflow, /workflow_dispatch:/u);
-  assert.match(workflow, /permissions:\s*\n\s*contents: read/u);
-  assert.doesNotMatch(workflow, /contents: write/u);
+  // Only the publish job may write, and only to open and auto-merge its pull request.
+  assert.deepEqual(permissions, { contents: "read" });
+  assert.equal(jobs.refresh.permissions, undefined);
+  assert.deepEqual(jobs.publish.permissions, { contents: "write", "pull-requests": "write" });
   assert.match(workflow, /group: model-catalog-refresh-main/u);
   assert.match(workflow, /cancel-in-progress: true/u);
   assert.match(workflow, /author_email.*41898282\+github-actions\[bot\]@users\.noreply\.github\.com/u);
@@ -267,7 +270,38 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /publish:\s*\n\s*needs: refresh\s*\n\s*if: github\.ref == 'refs\/heads\/main' && /u);
   assert.match(workflow, /git merge-base --is-ancestor "\$BASE_SHA" FETCH_HEAD/u);
   assert.match(workflow, /publish:[\s\S]*\n {4}environment: model-catalog\n[\s\S]*CATALOG_DEPLOY_KEY/u);
-  assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" HEAD:main/u);
+  // The snapshot goes to a fresh automation branch that CI runs on, never straight to main.
+  assert.match(workflow, /branch="automation\/models-dev-catalog-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/u);
+  assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" "HEAD:refs\/heads\/\$\{branch\}"/u);
+  assert.doesNotMatch(workflow, /HEAD:main|--force|push -f/u);
+  assert.match(workflow, /gh pr merge --repo "\$GITHUB_REPOSITORY" --auto --merge/u);
+  const ci = parse(await readFile(workflowUrl, "utf8"));
+  assert.ok(ci.on.push.branches.includes("automation/models-dev-catalog-*"));
+
+  // A job-token merge starts no push workflows, so a follow-up run gives main
+  // its own CI after each catalog merge.
+  assert.ok("workflow_dispatch" in ci.on);
+  const baseline = parse(await readFile(new URL("../.github/workflows/model-catalog-main-baseline.yml", import.meta.url), "utf8"));
+  // The schedule catches a catalog merge that lands after the fast path stops waiting.
+  assert.deepEqual(baseline.on.workflow_run, { workflows: ["CI"], types: ["completed"] });
+  assert.ok(Array.isArray(baseline.on.schedule) && baseline.on.schedule.length === 1);
+  assert.deepEqual(baseline.permissions, { contents: "read" });
+  // Job permissions replace the workflow's, so the compare API needs contents: read here.
+  assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", contents: "read", "pull-requests": "read" });
+  assert.match(baseline.jobs.dispatch.if, /github\.event_name == 'schedule'/u);
+  assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
+  // Coverage means a main CI run tested a commit containing the catalog merge
+  // (commit ancestry, not run timestamps), and catalog merges are found by title
+  // and branch prefix rather than among the newest-created PRs.
+  const dispatchScript = baseline.jobs.dispatch.steps[0].run;
+  assert.match(dispatchScript, /compare\/\$merge_sha\.\.\.\$run_sha/u);
+  assert.match(dispatchScript, /"identical" \|\| "\$status" == "ahead"/u);
+  assert.match(dispatchScript, /in:title "chore: refresh models\.dev catalog" sort:updated-desc/u);
+  assert.doesNotMatch(dispatchScript, /createdAt/u);
+  // A failed comparison stops the job instead of dispatching CI on every run.
+  assert.match(dispatchScript, /if ! status="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/compare\/[^\n]*\n[^\n]*\n\s*exit 1/u);
+  assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
+  assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
 
 test("Pullfrog allows aggregate release reviews to finish", async () => {

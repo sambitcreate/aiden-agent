@@ -2,9 +2,15 @@ name: CI
 
 on:
   pull_request:
+  # Started by model-catalog-main-baseline.yml after a catalog merge, which
+  # (made with the job token) produces no push event of its own.
+  workflow_dispatch:
   push:
     branches:
       - main
+      # The model catalog bot pushes here with its deploy key; a pull request it
+      # opens with the job token would not start CI on its own.
+      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -211,7 +217,8 @@ jobs:
   unit:
     name: Desktop tests (${{ matrix.lane }})
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    # Catalog refreshes run these too: the runtime takes model limits from it.
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
     runs-on: macos-26
     timeout-minutes: 25
     strategy:
