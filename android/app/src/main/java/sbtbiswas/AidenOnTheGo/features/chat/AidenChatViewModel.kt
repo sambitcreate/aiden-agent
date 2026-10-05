@@ -42,6 +42,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
+import sbtbiswas.AidenOnTheGo.notifications.AgentRunBlockingStatus
 import sbtbiswas.AidenOnTheGo.notifications.throttleLatest
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -301,12 +302,19 @@ class AidenChatViewModel(
         loadCatalog()
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
-            combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
-                Triple(state, text, timeline)
-            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { (state, _, _) ->
+            combine(
+                _streamState,
+                _liveText,
+                _activityTimeline,
+                _pendingApproval,
+                _pendingQuestion
+            ) { state, text, timeline, approval, question ->
+                LiveNotificationInput(state, text, timeline, approval != null, question != null)
+            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { input ->
+                val state = input.state
                 state == null || state.isTerminal || state == AidenStreamState.WAITING_FOR_APPROVAL
-            }.collect { (state, text, timeline) ->
-                publishLiveNotification(state, text, timeline)
+            }.collect { input ->
+                publishLiveNotification(input)
             }
         }
     }
@@ -704,15 +712,25 @@ class AidenChatViewModel(
         super.onCleared()
     }
 
-    private fun publishLiveNotification(
-        state: AidenStreamState?,
-        responseText: String,
-        timeline: AidenGenerationTimeline?
-    ) {
+    /** Pending prompt presence tells approval and question waits apart. */
+    private data class LiveNotificationInput(
+        val state: AidenStreamState?,
+        val responseText: String,
+        val timeline: AidenGenerationTimeline?,
+        val hasPendingApproval: Boolean,
+        val hasPendingQuestion: Boolean
+    )
+
+    private fun publishLiveNotification(input: LiveNotificationInput) {
+        val state = input.state
+        val responseText = input.responseText
         if (state == null || instanceId.isEmpty()) return
-        val activeStep = timeline?.steps?.lastOrNull { it.isActive }
+        val activeStep = input.timeline?.steps?.lastOrNull { it.isActive }
         val status = when {
-            state == AidenStreamState.WAITING_FOR_APPROVAL -> AgentRunActivityStatus.WAITING_FOR_APPROVAL
+            state == AidenStreamState.WAITING_FOR_APPROVAL -> AgentRunBlockingStatus.status(
+                hasPendingApproval = input.hasPendingApproval,
+                hasPendingQuestion = input.hasPendingQuestion
+            )
             state == AidenStreamState.DONE -> AgentRunActivityStatus.COMPLETE
             state == AidenStreamState.ERROR || state == AidenStreamState.INTERRUPTED -> AgentRunActivityStatus.FAILED
             state == AidenStreamState.CANCELLED -> AgentRunActivityStatus.CANCELLED
@@ -729,10 +747,9 @@ class AidenChatViewModel(
             }
             AidenQuietOpenChat.Decision.POST -> Unit
         }
+        val blockingLine = AgentRunBlockingStatus.activityLine(status)
         val activity = when {
-            state == AidenStreamState.WAITING_FOR_APPROVAL && _pendingQuestion.value != null ->
-                "Aiden needs your input"
-            state == AidenStreamState.WAITING_FOR_APPROVAL -> "Waiting for your approval"
+            blockingLine != null -> blockingLine
             activeStep?.label?.isNotBlank() == true -> activeStep.label
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
             responseText.isNotBlank() -> "Writing a response"

@@ -388,7 +388,7 @@ private struct AgentRunProgressRail: View {
             0.3
         case .usingTool, .searchingFiles, .readingFiles, .runningCommand:
             0.52
-        case .waitingForApproval:
+        case .waitingForApproval, .waitingForAnswer:
             0.62
         case .responding:
             0.78
@@ -478,7 +478,7 @@ private enum AgentRunStatusStyle {
             return Color(red: 0.58, green: 0.78, blue: 1.0)
         case .runningCommand:
             return Color(red: 0.76, green: 0.55, blue: 1.0)
-        case .waitingForApproval:
+        case .waitingForApproval, .waitingForAnswer:
             return Color(red: 1.0, green: 0.58, blue: 0.24)
         case .complete:
             return Color(red: 0.35, green: 0.95, blue: 0.55)
@@ -505,6 +505,8 @@ private enum AgentRunStatusStyle {
             "text.bubble"
         case .waitingForApproval:
             "checkmark.shield"
+        case .waitingForAnswer:
+            "questionmark.bubble"
         case .complete:
             "checkmark"
         case .failed:

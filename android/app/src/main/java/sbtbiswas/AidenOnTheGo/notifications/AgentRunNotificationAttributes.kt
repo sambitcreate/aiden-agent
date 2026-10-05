@@ -24,9 +24,32 @@ enum class AgentRunActivityStatus(val title: String, val compactTitle: String) {
     RUNNING_COMMAND("Running command", "Cmd"),
     RESPONDING("Responding", "Reply"),
     WAITING_FOR_APPROVAL("Waiting for approval", "Approve"),
+    WAITING_FOR_ANSWER("Waiting for answer", "Answer"),
     COMPLETE("Complete", "Done"),
     FAILED("Failed", "Fail"),
     CANCELLED("Cancelled", "Stop")
+}
+
+/**
+ * The Remote contract projects both a pending tool approval and a pending
+ * `ask_user_question` prompt as `waiting_for_approval`. The phone already
+ * holds both prompt snapshots, so it tells them apart client-side: an
+ * approval wins when both are pending (it gates the tool call), a lone
+ * question reads as "Needs your answer". Mirrors iOS `AgentRunBlockingStatus`.
+ */
+object AgentRunBlockingStatus {
+    fun status(hasPendingApproval: Boolean, hasPendingQuestion: Boolean): AgentRunActivityStatus =
+        if (hasPendingQuestion && !hasPendingApproval) {
+            AgentRunActivityStatus.WAITING_FOR_ANSWER
+        } else {
+            AgentRunActivityStatus.WAITING_FOR_APPROVAL
+        }
+
+    fun activityLine(status: AgentRunActivityStatus): String? = when (status) {
+        AgentRunActivityStatus.WAITING_FOR_APPROVAL -> "Needs your approval"
+        AgentRunActivityStatus.WAITING_FOR_ANSWER -> "Needs your answer"
+        else -> null
+    }
 }
 
 object AgentRunActivitySanitizer {

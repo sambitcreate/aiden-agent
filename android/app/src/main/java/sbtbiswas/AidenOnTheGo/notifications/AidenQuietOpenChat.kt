@@ -26,6 +26,7 @@ object AidenQuietOpenChat {
         if (!isChatForegrounded) return Decision.POST
         return when (status) {
             AgentRunActivityStatus.WAITING_FOR_APPROVAL,
+            AgentRunActivityStatus.WAITING_FOR_ANSWER,
             AgentRunActivityStatus.FAILED -> Decision.POST
             AgentRunActivityStatus.COMPLETE,
             AgentRunActivityStatus.CANCELLED -> Decision.DISMISS

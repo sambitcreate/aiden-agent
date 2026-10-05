@@ -3,6 +3,7 @@ import Foundation
 import Photos
 import SwiftUI
 import UIKit
+import UserNotifications
 import XCTest
 @testable import AidenOnTheGo
 
@@ -8662,6 +8663,190 @@ final class AidenQuietOpenChatTests: XCTestCase {
                 "\(state) needs attention or clears the surface and must publish"
             )
         }
+    }
+}
+
+private final class FakeRunAlertCenter: AidenRunAlertCenter {
+    var status: UNAuthorizationStatus
+    var grantsAuthorization: Bool
+    private(set) var authorizationRequests = 0
+    private(set) var posted: [UNNotificationRequest] = []
+
+    init(status: UNAuthorizationStatus = .authorized, grantsAuthorization: Bool = true) {
+        self.status = status
+        self.grantsAuthorization = grantsAuthorization
+    }
+
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus { status }
+
+    func requestAlertAuthorization() async -> Bool {
+        authorizationRequests += 1
+        status = grantsAuthorization ? .authorized : .denied
+        return grantsAuthorization
+    }
+
+    func add(_ request: UNNotificationRequest) async throws { posted.append(request) }
+}
+
+@MainActor
+final class AidenRunAlertTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private var suiteName: String!
+    private var appState = AidenRunAlertAppState.background
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "AidenRunAlertTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        appState = .background
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    private func notifier(_ center: FakeRunAlertCenter) -> AidenRunAlertNotifier {
+        AidenRunAlertNotifier(defaults: defaults, center: center, appState: { [unowned self] in self.appState })
+    }
+
+    private func notify(
+        _ notifier: AidenRunAlertNotifier,
+        _ kind: AidenRunAlertKind,
+        id: String = "prompt-1",
+        instanceID: String = "mac-a",
+        chatID: String = "chat-1",
+        isChatOnScreen: Bool = false
+    ) async {
+        await notifier.notify(
+            kind,
+            id: id,
+            instanceID: instanceID,
+            chatID: chatID,
+            chatTitle: "Ship the release",
+            isChatOnScreen: isChatOnScreen
+        )
+    }
+
+    func testBlockingPromptPostsOneTimeSensitiveAlertThatOpensItsChat() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        await notify(notifier, .needsAnswer, id: "question-7")
+        await notify(notifier, .needsAnswer, id: "question-7")
+
+        XCTAssertEqual(center.posted.count, 1, "a prompt alerts once, however often the wait is re-reported")
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.title, "Ship the release")
+        XCTAssertEqual(content.body, "Needs your answer")
+        XCTAssertEqual(content.interruptionLevel, .timeSensitive)
+        let url = try XCTUnwrap(AidenRunAlertNotifier.deepLink(from: content.userInfo))
+        let request = try XCTUnwrap(AidenDeepLink.request(from: url))
+        XCTAssertEqual(request.destination, .chat("chat-1"))
+        XCTAssertEqual(request.instanceId, "mac-a")
+    }
+
+    func testDedupeIsPerPromptAndPerInstanceAndSurvivesANewNotifier() async {
+        let center = FakeRunAlertCenter()
+        await notify(notifier(center), .needsApproval, id: "approval-1")
+        await notify(notifier(center), .needsApproval, id: "approval-1")
+        XCTAssertEqual(center.posted.count, 1, "the delivered set persists across notifier instances")
+
+        await notify(notifier(center), .needsApproval, id: "approval-2")
+        await notify(notifier(center), .needsApproval, id: "approval-1", instanceID: "mac-b")
+        XCTAssertEqual(center.posted.count, 3)
+        XCTAssertEqual(center.posted.map(\.content.body), Array(repeating: "Needs your approval", count: 3))
+    }
+
+    func testAlertsPostOnlyWhileTheUserIsAwayAndStayQuietForTheOpenChat() async {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+
+        appState = .active
+        await notify(notifier, .needsApproval, id: "a-active")
+        await notify(notifier, .failed, id: "stream-active")
+        XCTAssertTrue(center.posted.isEmpty, "the active app already shows the prompt and result")
+
+        appState = .inactive
+        await notify(notifier, .needsApproval, id: "a-overlay", isChatOnScreen: true)
+        XCTAssertTrue(center.posted.isEmpty, "an overlay over the open chat returns straight to it")
+        await notify(notifier, .needsApproval, id: "a-other", chatID: "chat-2", isChatOnScreen: false)
+        XCTAssertEqual(center.posted.count, 1)
+
+        appState = .background
+        await notify(notifier, .needsAnswer, id: "q-bg", isChatOnScreen: true)
+        XCTAssertEqual(center.posted.count, 2, "a backgrounded app alerts even for the chat left open")
+
+        // A prompt suppressed while active can still alert once the user leaves.
+        await notify(notifier, .needsApproval, id: "a-active")
+        XCTAssertEqual(center.posted.count, 3)
+    }
+
+    func testCompletionAndFailureAlertsNameTheChatWithoutTimeSensitivity() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        await notify(notifier, .completed, id: "stream-1")
+        await notify(notifier, .completed, id: "stream-1")
+        await notify(notifier, .failed, id: "stream-2")
+
+        XCTAssertEqual(center.posted.map(\.content.body), ["Response complete", "Response failed"])
+        for request in center.posted {
+            XCTAssertEqual(request.content.title, "Ship the release")
+            XCTAssertEqual(request.content.interruptionLevel, .active)
+            XCTAssertNotNil(AidenRunAlertNotifier.deepLink(from: request.content.userInfo))
+        }
+    }
+
+    func testPermissionIsRequestedOnceAfterTheFirstCompletedRunWhileInApp() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: false)
+        let notifier = notifier(center)
+
+        appState = .active
+        await notify(notifier, .needsApproval, id: "a-1")
+        await notify(notifier, .failed, id: "stream-0")
+        appState = .background
+        await notify(notifier, .completed, id: "stream-1")
+        XCTAssertEqual(center.authorizationRequests, 0, "never for prompts, failures, or while away")
+        XCTAssertTrue(center.posted.isEmpty, "nothing posts without authorization")
+
+        appState = .active
+        await notify(notifier, .completed, id: "stream-2")
+        XCTAssertEqual(center.authorizationRequests, 1)
+
+        // Declined once: a later completion never asks again, even if iOS
+        // still reports the permission as undetermined.
+        center.status = .notDetermined
+        await notify(notifier, .completed, id: "stream-3")
+        XCTAssertEqual(center.authorizationRequests, 1)
+        XCTAssertTrue(center.posted.isEmpty)
+    }
+
+    func testGrantedPermissionLetsLaterAwayAlertsPost() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: true)
+        let notifier = notifier(center)
+        appState = .active
+        await notify(notifier, .completed, id: "stream-1")
+        XCTAssertEqual(center.authorizationRequests, 1)
+        XCTAssertTrue(center.posted.isEmpty, "the in-app completion itself stays silent")
+
+        appState = .background
+        await notify(notifier, .needsApproval, id: "a-1")
+        XCTAssertEqual(center.posted.count, 1)
+    }
+
+    func testDisabledNotifierNeverAsksOrPosts() async {
+        let center = FakeRunAlertCenter(status: .notDetermined)
+        let notifier = AidenRunAlertNotifier(isEnabled: false, defaults: defaults, center: center, appState: { .active })
+        await notifier.notify(.completed, id: "s", instanceID: "mac-a", chatID: "chat-1", chatTitle: "Chat", isChatOnScreen: false)
+        XCTAssertEqual(center.authorizationRequests, 0)
+        XCTAssertTrue(center.posted.isEmpty)
+    }
+
+    func testTappedAlertOnlyOpensValidAidenLinks() {
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: [:]))
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": "https://example.com/chat"]))
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": 42]))
+        let link = AidenDeepLink.chatURL(instanceId: "mac-a", chatId: "chat-1")?.absoluteString
+        XCTAssertNotNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": link as Any]))
     }
 }
 
