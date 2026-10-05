@@ -472,6 +472,7 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       appendMessage: (message) => session.appendMessage(message),
       appendCustomEntry: (type, data) => session.appendCustomEntry(type, data),
       appendCompaction: (input) => session.appendCompaction(input),
+      importBranch: () => Promise.reject(new Error("A projected Pi session cannot import a branch.")),
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
       getEntries: getBranch,
@@ -700,6 +701,62 @@ export async function recordPiEffectRecoveryBoundary(
       } satisfies PiEffectRecoveryMarker);
     }
   });
+}
+
+/** One visible message carried into a fork, paired with the source message it copies. */
+export interface PiForkedChatMessage {
+  sourceId: string;
+  id: string;
+}
+
+/**
+ * The source branch prefix a fork may reuse: everything through the last
+ * copied message's marker, extended to the commit that closes every Aiden
+ * transaction open at that point. Returns undefined when that boundary is
+ * not provable (no marker, a later message inside the open envelope, or a
+ * transaction that never commits), so the caller rebuilds from visible
+ * history instead of guessing.
+ */
+export function piJournalForkPrefix(
+  branch: readonly PiSessionEntry[],
+  copied: readonly PiForkedChatMessage[],
+): PiSessionEntry[] | undefined {
+  const lastSourceId = copied[copied.length - 1]?.sourceId;
+  if (lastSourceId === undefined) return undefined;
+  let markerIndex = -1;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index]!;
+    if (
+      entry.type === "custom" &&
+      entry.customType === AIDEN_CHAT_MESSAGE_MARKER &&
+      markerId(entry.data) === lastSourceId
+    ) {
+      markerIndex = index;
+      break;
+    }
+  }
+  if (markerIndex < 0) return undefined;
+  const transactionAt = (index: number) => {
+    const entry = branch[index];
+    return entry?.type === "custom" && entry.customType === AIDEN_PI_TRANSACTION
+      ? transactionMarker(entry.data)
+      : undefined;
+  };
+  const open = new Set<string>();
+  for (let index = 0; index <= markerIndex; index += 1) {
+    const marker = transactionAt(index);
+    if (marker?.phase === "begin") open.add(marker.transactionId);
+    else if (marker) open.delete(marker.transactionId);
+  }
+  let cutIndex = markerIndex;
+  while (open.size > 0) {
+    cutIndex += 1;
+    // Only commits may separate the marker from its closing boundary.
+    const marker = transactionAt(cutIndex);
+    if (marker?.phase !== "commit") return undefined;
+    open.delete(marker.transactionId);
+  }
+  return branch.slice(0, cutIndex + 1);
 }
 
 export interface PiCompactionSessionStoreOptions {
@@ -1089,6 +1146,73 @@ export class PiCompactionSessionStore {
       }
     }
     return false;
+  }
+
+  /**
+   * Give a forked chat its own journal holding the source's model context
+   * (tool results, compaction checkpoints) up to the cut, never anything
+   * after it. Each copied message's marker is renamed in place to its new
+   * id, so later synchronization does not replay it. Returns false, creating
+   * nothing, when the source has no reusable journal boundary; the fork then
+   * rebuilds its context from visible history on first use.
+   */
+  async forkChat(input: {
+    sourceChatId: string;
+    targetChatId: string;
+    targetCreatedAt: number;
+    messages: readonly PiForkedChatMessage[];
+  }): Promise<boolean> {
+    const { sourceChatId, targetChatId } = input;
+    if (!SAFE_SESSION_ID.test(sourceChatId) || !SAFE_SESSION_ID.test(targetChatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    this.assertNotQuarantined(sourceChatId);
+    this.assertNotQuarantined(targetChatId);
+    if (this.sessions.has(targetChatId) || this.opening.has(targetChatId)) {
+      throw new Error("The fork already has a Pi journal.");
+    }
+    if (!(await this.hasChatHistory(sourceChatId))) return false;
+    const rollout = await this.options.rollout?.load();
+    if (
+      rollout && this.options.rollout &&
+      !piUpgradeJournalCreationEligible(rollout, input.targetCreatedAt, {
+        development: this.options.rollout.development,
+        behaviorEnabled: this.options.rollout.behaviorEnabled,
+      })
+    ) {
+      return false;
+    }
+    const opened = await this.openChatIfEligible(sourceChatId);
+    if (!opened.session) return false;
+    const sourcePrefix = piJournalForkPrefix(await opened.session.getBranch(), input.messages);
+    if (!sourcePrefix) return false;
+    // Rename each copied marker where it stands, so every inherited reply
+    // keeps the transaction boundary a later fork of the fork cuts at.
+    const copiedIds = new Map(input.messages.map((message) => [message.sourceId, message.id]));
+    const prefix = sourcePrefix.map((entry) => {
+      if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) return entry;
+      const id = copiedIds.get(markerId(entry.data) ?? "");
+      return id ? { ...entry, data: { chatMessageId: id } satisfies ChatMessageMarker } : entry;
+    });
+
+    const { repo, root } = await this.repository();
+    const session = await repo.create({
+      id: targetChatId,
+      cwd: root,
+      metadata: { kind: SESSION_METADATA_KIND, chatId: targetChatId },
+    });
+    try {
+      const persisted = await session.getMetadata();
+      await chmod(path.dirname(persisted.path), 0o700);
+      await chmod(persisted.path, 0o600);
+      await this.rememberPath(root, targetChatId, persisted.path);
+      await session.importBranch(prefix);
+    } catch (error) {
+      await this.deleteChat(targetChatId).catch(() => undefined);
+      throw error;
+    }
+    this.sessions.set(targetChatId, session);
+    return true;
   }
 
   async deleteChat(chatId: string): Promise<void> {

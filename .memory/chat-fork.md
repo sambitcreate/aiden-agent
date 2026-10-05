@@ -25,7 +25,7 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
 - **Deferred.**
   - Moving fork into `ChatApplicationService` waits for PR 4 (Remote).
   - The right-click context menu and skill pre-fill are not built.
-  - The Pi journal is not forked yet (PR 2), so the forked model context is rebuilt from visible messages only.
+  - The Pi journal was not forked in PR 1; PR 2 below adds it.
 - **Tests.**
   - `chat-session-copy.test.ts`: cuts, titles, lineage survival, and corrupt lineage being dropped.
   - `chat-copy-contract.test.ts` (registered in `test:slash-commands`).
@@ -33,3 +33,12 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - `message-bubble.test.tsx`: which rows show fork actions.
   - `tests/e2e/chat-fork.spec.ts`: the real flow against the fake LM Studio.
 - **CI note.** Renderer-only PRs skip the Linux packaging jobs, so the required Linux checks never post. #342 (prompt selection) was therefore landed through this branch.
+
+## PR 2 — Pi journal fork (branch `feat/chat-fork-journal`)
+
+- **What carries over.** A fork's journal is the source's active branch up to the last copied message's `AIDEN_CHAT_MESSAGE_MARKER`, extended through the commits that close every Aiden transaction open at that marker (a reply's marker sits inside its generation envelope). Tool results and compaction checkpoints before the cut come along; nothing after it does. `piJournalForkPrefix` computes the boundary and returns `undefined` when it isn't provable.
+- **Why custom import.** Pi's branch-scope fork needs a complete AgentLane, which Aiden doesn't keep, and its tree-scope fork copies post-cut data. `PiSessionPort.importBranch` instead inserts one root-to-tip path into an empty journal. The skills-disabled projection view refuses imports.
+- **Fresh markers.** `PiCompactionSessionStore.forkChat` then appends markers under the fork's new message ids for every copied message the prefix had synchronized, so `syncChatMessagesToPiSession` does not append them again.
+- **Fallback.** No source journal, the rollout gate, or no provable boundary → returns false and creates nothing; the fork rebuilds model context from visible history like before. A thrown journal error in the IPC handler is logged as a `chat-degraded` diagnostic and never fails the fork.
+- **Cleanup.** `copyVisibleHistory`'s `beforeInstall(chat, sourceMessageIds)` runs the journal fork. If the chat install then fails, the handler deletes the target journal unless the error requires reconciliation (startup `reconcileChats` also removes orphans).
+- **Tests.** `main/services/pi-journal-fork.test.ts` (in `test:compaction`): context through the cut survives a reopen, no duplicate sync, the no-boundary fallbacks, and the `importBranch` guards. `chat-session-copy.test.ts` checks the source-id pairing.

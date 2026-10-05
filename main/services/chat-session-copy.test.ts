@@ -186,11 +186,18 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
     { chatId: chat.id, messageId: firstReplyId, position: "after", at: undefined },
   );
 
-  // Editing the second prompt keeps everything strictly before it.
+  // Editing the second prompt keeps everything strictly before it. Dependent
+  // stores (the model journal) learn which source message each copy came from.
+  let pairs: Array<[string, string]> = [];
   const before = await store.copyVisibleHistory({
     sourceChatId: chat.id,
     forkAt: { messageId: secondUserId, position: "before" },
+    beforeInstall: (installed, sourceMessageIds) => {
+      pairs = installed.messages.map((message, index) => [sourceMessageIds[index]!, message.id]);
+    },
   });
+  assert.deepEqual(pairs.map(([sourceId]) => sourceId), [firstUserId, firstReplyId]);
+  assert.deepEqual(pairs.map(([, id]) => id), before.messages.map(({ id }) => id));
   assert.equal(before.title, "Plan trip (fork 2)");
   assert.deepEqual(before.messages.map(({ content }) => content), ["Where to go?", "Lisbon."]);
   assert.equal(before.forkedFrom?.position, "before");

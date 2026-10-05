@@ -1217,8 +1217,14 @@ export function createChatStore(
       /** Fork cut that records `forkedFrom` lineage on the new chat. */
       forkAt?: { messageId: string; position: ChatForkPosition };
       assertCurrent?: () => void;
-      /** Prepare dependent durable records before this chat becomes visible. */
-      beforeInstall?: (chat: Chat) => void | Promise<void>;
+      /**
+       * Prepare dependent durable records before this chat becomes visible.
+       * `sourceMessageIds[i]` is the source message copied into `chat.messages[i]`.
+       */
+      beforeInstall?: (
+        chat: Chat,
+        sourceMessageIds: readonly string[],
+      ) => void | Promise<void>;
     }): Promise<Chat> {
       const newChatId = input.targetChatId ?? randomUUID();
       return shared([input.sourceChatId, newChatId], true, async () => {
@@ -1276,6 +1282,7 @@ export function createChatStore(
         }
 
         const copiedMessages: ChatMessage[] = [];
+        const sourceMessageIds: string[] = [];
         let chargedBytes = 0;
         const charge = (value: string | undefined) => {
           if (value === undefined) return;
@@ -1339,6 +1346,7 @@ export function createChatStore(
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new Error("This chat is too large to copy safely.");
           }
+          sourceMessageIds.push(message.id);
           copiedMessages.push({
             id: randomUUID(),
             role: message.role,
@@ -1386,7 +1394,7 @@ export function createChatStore(
           updatedAt: now,
           messages: copiedMessages,
         };
-        await input.beforeInstall?.(copied);
+        await input.beforeInstall?.(copied, sourceMessageIds);
         return installNewChat(copied, input.assertCurrent);
       });
     },
