@@ -21,8 +21,24 @@ test("session command parsers accept only exact bounded chat selectors", () => {
       { chatId: "chat-1", forkAt: { messageId: "message-1", position } },
     );
   }
+  // A fork may ask for a summary; blank focus means no focus.
+  assert.deepEqual(
+    parseChatCopyRequest({
+      chatId: "chat-1", messageId: "message-1", position: "after", summary: { instructions: "  tests  " },
+    }),
+    { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: { instructions: "tests" } },
+  );
+  assert.deepEqual(
+    parseChatCopyRequest({ chatId: "chat-1", throughMessageId: "message-1", summary: { instructions: " " } }),
+    { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: {} },
+  );
   assert.deepEqual(parseChatOnlyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
   for (const invalid of [
+    { chatId: "chat", summary: {} },
+    { chatId: "chat", messageId: "m", position: "after", summary: true },
+    { chatId: "chat", messageId: "m", position: "after", summary: { instructions: 1 } },
+    { chatId: "chat", messageId: "m", position: "after", summary: { focus: "x" } },
+    { chatId: "chat", messageId: "m", position: "after", summary: { instructions: "x".repeat(1_001) } },
     null,
     {},
     { chatId: "" },

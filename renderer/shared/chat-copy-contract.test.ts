@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MAX_CHAT_TITLE_CHARS,
+  MAX_FORK_SUMMARY_FILES,
+  MAX_FORK_SUMMARY_TEXT_CHARS,
+  forkSummaryHoldsSend,
   nextForkTitle,
   parseChatForkLineageV1,
 } from "./chat-copy-contract.js";
@@ -52,5 +55,38 @@ test("fork lineage parsing accepts only the exact recorded shape", () => {
     { ...lineage, at: 1.5 },
   ]) {
     assert.equal(parseChatForkLineageV1(invalid), undefined);
+  }
+});
+
+test("a fork summary survives parsing only in its exact shape, and never takes the lineage with it", () => {
+  const lineage = { chatId: "chat_1", messageId: "msg-2", position: "after", at: 1 } as const;
+  const ready = {
+    state: "ready",
+    afterMessageId: "copy-9",
+    instructions: "the database choice",
+    text: "## Goal\nShip it",
+    files: { read: ["a.ts"], modified: [] },
+  } as const;
+  assert.deepEqual(parseChatForkLineageV1({ ...lineage, summary: ready }), { ...lineage, summary: ready });
+  for (const damaged of [
+    { ...ready, state: "done" },
+    { ...ready, afterMessageId: "../x" },
+    { ...ready, extra: 1 },
+    { ...ready, text: "" },
+    { ...ready, text: "x".repeat(MAX_FORK_SUMMARY_TEXT_CHARS + 1) },
+    { ...ready, files: { read: [] } },
+    { ...ready, files: { read: Array(MAX_FORK_SUMMARY_FILES + 1).fill("a"), modified: [] } },
+    "ready",
+  ]) {
+    assert.deepEqual(parseChatForkLineageV1({ ...lineage, summary: damaged }), lineage);
+  }
+});
+
+test("only an unsettled summary holds a fork's sends", () => {
+  const lineage = { chatId: "c", messageId: "m", position: "after", at: 1 } as const;
+  assert.equal(forkSummaryHoldsSend(undefined), false);
+  assert.equal(forkSummaryHoldsSend(lineage), false);
+  for (const [state, held] of [["pending", true], ["failed", true], ["ready", false]] as const) {
+    assert.equal(forkSummaryHoldsSend({ ...lineage, summary: { state, afterMessageId: "x" } }), held);
   }
 });

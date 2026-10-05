@@ -70,6 +70,13 @@ export interface PiSessionPort<Metadata extends PiSessionMetadata = PiSessionMet
     details?: unknown;
     usage?: Usage;
   }): Promise<string>;
+  /** A summary of another branch's history, fed to the model where it sits. */
+  appendBranchSummary(input: {
+    id: string;
+    fromId: string | null;
+    summary: string;
+    details?: unknown;
+  }): Promise<string>;
   appendCustomEntry(customType: string, data?: unknown): Promise<string>;
   appendMessage(message: AgentMessage): Promise<string>;
   buildContext(): Promise<PiSessionContext>;
@@ -126,6 +133,29 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
           tokensBefore: input.tokensBefore,
           ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
           ...(input.usage === undefined ? {} : { usage: input.usage }),
+          fromHook: false,
+        }),
+        setValue(branchTip("main"), input.id),
+      ], TODO_CONTEXT);
+    }, TODO_CONTEXT);
+    return input.id;
+  }
+
+  async appendBranchSummary(
+    input: Parameters<PiSessionPort<Metadata>["appendBranchSummary"]>[0],
+  ): Promise<string> {
+    await this.#branch();
+    await this.#session.mutate(async (mutator) => {
+      const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
+      if (!tip) throw new Error("The Pi main branch is missing.");
+      await mutator.commit([
+        insertEntry({
+          type: "branch_summary",
+          id: input.id,
+          parentId: tip.value,
+          fromId: input.fromId,
+          summary: input.summary,
+          ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
           fromHook: false,
         }),
         setValue(branchTip("main"), input.id),
