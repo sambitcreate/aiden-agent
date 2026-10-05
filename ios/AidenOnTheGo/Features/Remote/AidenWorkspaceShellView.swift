@@ -865,7 +865,8 @@ struct AidenWorkspaceShellView: View {
                                 onChatUpdated: acceptSelectedChatUpdate,
                                 onChatActivityChanged: { chatID, activity in
                                     homeModel.setActivity(activity, forChatID: chatID)
-                                }
+                                },
+                                onOpenChat: openFork
                             )
                             .id(selectedSidebarChat.id)
                         } else {
@@ -894,7 +895,8 @@ struct AidenWorkspaceShellView: View {
                                     onChatUpdated: acceptSelectedChatUpdate,
                                     onChatActivityChanged: { chatID, activity in
                                         homeModel.setActivity(activity, forChatID: chatID)
-                                    }
+                                    },
+                                    onOpenChat: openFork
                                 )
                                 .id(selectedSidebarChat.id)
                             }
@@ -1531,10 +1533,18 @@ struct AidenWorkspaceShellView: View {
     private func homeChatRow(_ chat: AidenChatSummary, showsWorkspace: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(chat.title)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if chat.forkedFrom != nil {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .accessibilityLabel("Fork")
+                    }
+                    Text(chat.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(2)
+                }
 
                 if showsWorkspace,
                    let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
@@ -1788,6 +1798,11 @@ struct AidenWorkspaceShellView: View {
     private func openChat(_ chat: AidenChat, startsVoice: Bool = false) {
         cancelPendingSidebarChatNavigation()
         commitOpenChat(chat, startsVoice: startsVoice)
+    }
+
+    private func openFork(_ chat: AidenChat) {
+        homeModel.accept(chat)
+        openChat(chat)
     }
 
     private func acceptSelectedChatUpdate(_ updated: AidenChat) {
