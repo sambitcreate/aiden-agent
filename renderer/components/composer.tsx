@@ -32,6 +32,7 @@ import {
   Monitor,
   MousePointer2,
   OctagonAlert,
+  Paperclip,
   Plus,
   ShieldQuestion,
   Square,
@@ -98,6 +99,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
@@ -106,15 +108,18 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
-import type { SkillInvocationV1, SkillSource } from "../shared/slash-commands";
-import { filterForkTurnChoices, forkTurnEligibility } from "../lib/chat-copy-view";
-import { MAX_FORK_QUERY_CODE_UNITS } from "../shared/chat-copy-contract";
+import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import { filterForkTurnChoices, forkSummaryRows, forkTurnEligibility } from "../lib/chat-copy-view";
+import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
   attachmentInlineBytesRemaining,
   attachmentSlotsRemaining,
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
+import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
+import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
+import { escapeStopsGeneration } from "../lib/composer-type-focus";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -152,6 +157,8 @@ interface ComposerProps {
   hasQueuedMessages?: boolean;
   /** Queue-owned compaction hold, retained across Composer remounts. */
   compactionHeld?: boolean;
+  /** This fork's summary is pending or failed; sends queue until it settles. */
+  forkSummaryHold?: "pending" | "failed";
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -211,7 +218,10 @@ interface ComposerProps {
   sessionChat?: Chat;
   authenticatedProviders?: Array<{ id: string; label: string; detail: string }>;
   onCloneChat?: () => Promise<void>;
-  onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
+  /** `after` keeps the reply; `before` cuts ahead of a prompt and pre-fills it for editing. */
+  onForkChat?: (messageId: string, position: ChatForkPosition) => Promise<void>;
+  /** Open the pane's "Fork with summary" confirmation for a turn. */
+  onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   onExportChat?: () => Promise<"saved" | "cancelled">;
   onCompactChat?: (engine?: CompactionEngine) => Promise<
     | {
@@ -238,6 +248,28 @@ interface ComposerProps {
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
+  /** Affordances that act on this Mac; a remote chat turns them off. */
+  surfaces?: ComposerSurfaces;
+  /**
+   * A remote chat's skills, read from its host. When set, `$` offers this
+   * catalog instead of this Mac's, even while the slash palette is off.
+   */
+  hostSkills?: ComposerSkillCatalog;
+  /** Replaces the "Local" label: which Mac a new chat will run on. */
+  machinePicker?: React.ReactNode;
+  /** The context bar for a chat whose project lives on another Mac. */
+  remoteContext?: React.ReactNode;
+}
+
+/** A skill catalog the composer offers after `$`, scoped to one chat or project. */
+export interface ComposerSkillCatalog {
+  /** A selected skill stays valid only while this scope is unchanged. */
+  scopeId: string;
+  data?: SkillCatalogEntry[];
+  isError: boolean;
+  isFetching: boolean;
+  isLoading: boolean;
+  refetch(): unknown;
 }
 const PERMISSION_META: Record<
   WorkspacePermission,
@@ -313,6 +345,7 @@ export function Composer({
   queuedMessages,
   hasQueuedMessages = false,
   compactionHeld = false,
+  forkSummaryHold,
   isGenerating,
   canStopGeneration = isGenerating,
   stoppingGeneration = false,
@@ -355,12 +388,17 @@ export function Composer({
   authenticatedProviders = [],
   onCloneChat,
   onForkChat,
+  onForkWithSummary,
   onExportChat,
   onCompactChat,
   onCancelCompact,
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
+  surfaces = LOCAL_COMPOSER_SURFACES,
+  hostSkills,
+  machinePicker,
+  remoteContext,
 }: ComposerProps) {
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
@@ -424,6 +462,10 @@ export function Composer({
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  React.useEffect(() => {
+    const seed = takeComposerAttachmentSeed(chatId);
+    if (seed) updateAttachments(seed);
+  }, [chatId, updateAttachments]);
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {
@@ -437,8 +479,20 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
+  // A blocked send explains itself beside the composer, not in a toast, and the
+  // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
+  const [blockedSend, setBlockedSend] = React.useState<{
+    reason: string;
+    text: string;
+    attachments: Attachment[];
+    skill: typeof selectedSkill;
+    busyMode: typeof busyMode;
+    generating: boolean;
+    busy: boolean;
+  } | null>(null);
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  const [fileDragActive, setFileDragActive] = React.useState(false);
   React.useLayoutEffect(() => {
     if (!workspace?.id) return;
     const available = () => {
@@ -476,6 +530,7 @@ export function Composer({
     return () => operation.cancel();
   }, []);
   const attachmentDescriptionId = React.useId();
+  const sendBlockedId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
   const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
@@ -505,6 +560,8 @@ export function Composer({
   // Manual compaction keeps the draft editable when the chat can queue:
   // submissions wait behind compaction instead of locking the composer.
   const queueDuringCompaction = compactionActive && Boolean(onQueue);
+  // A fork's sends wait for its summary the same way, in the queue.
+  const queueForForkSummary = Boolean(forkSummaryHold) && Boolean(onQueue);
   const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
@@ -548,13 +605,17 @@ export function Composer({
   // Read at transcript time so dictionary edits apply to an in-flight recording.
   const dictationDictionaryRef = React.useRef<unknown>(undefined);
   dictationDictionaryRef.current = settings.data?.dictationDictionary;
-  const skillCatalog = useDiscoveredSkills(workspace?.id);
+  // A remote chat's skills come from its host; this Mac's catalog is never read for it.
+  const localSkillCatalog = useDiscoveredSkills(hostSkills ? undefined : workspace?.id);
+  const skillCatalog: ComposerSkillCatalog | typeof localSkillCatalog = hostSkills ?? localSkillCatalog;
+  const skillScopeId = hostSkills ? hostSkills.scopeId : workspace?.id;
+  const skillsOffered = surfaces.slashCommands || Boolean(hostSkills);
   const selectedSkillState = React.useMemo(
     () =>
       selectedSkill
         ? selectedSkillStatus(
             selectedSkill,
-            workspace?.id,
+            skillScopeId,
             skillCatalog.data,
             skillCatalog.isError ? "error" : skillCatalog.isFetching ? "loading" : "ready",
           )
@@ -564,7 +625,7 @@ export function Composer({
       skillCatalog.data,
       skillCatalog.isError,
       skillCatalog.isFetching,
-      workspace?.id,
+      skillScopeId,
     ],
   );
   const canSend =
@@ -594,15 +655,21 @@ export function Composer({
 
   const forkEligibility = React.useMemo(() => {
     if (!sessionChat) return { turns: [], cloneBlocked: false };
-    return forkTurnEligibility(sessionChat.messages);
+    // A Bot has one canonical chat, so its forks may only keep a reply.
+    return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  const forkSummaryTurnIds = React.useMemo(
+    () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
+    [onForkWithSummary, sessionChat],
+  );
   const visibleForkTurns = React.useMemo(() => {
     return filterForkTurnChoices(completedForkTurns, forkQuery);
   }, [completedForkTurns, forkQuery]);
 
-  const slashSession = React.useMemo(
-    () =>
+  const slashSession = React.useMemo(() => {
+    const session =
+      !skillsOffered ||
       slashPaletteBlocked ||
       confirmFullAccess ||
       renameDialogOpen ||
@@ -618,8 +685,12 @@ export function Composer({
             selectionEnd: selection.end,
             composing,
             tracker: slashTracker,
-          }),
-    [
+          });
+    // Without this Mac's palette only `$` skills from the chat's host remain.
+    return session && !surfaces.slashCommands && session.kind !== "skill" ? null : session;
+  }, [
+      skillsOffered,
+      surfaces.slashCommands,
       composing,
       confirmFullAccess,
       forkDialogOpen,
@@ -861,14 +932,14 @@ export function Composer({
   );
 
   const forkFromTurn = React.useCallback(
-    async (messageId: string) => {
+    async (messageId: string, position: ChatForkPosition = "after") => {
       if (!onForkChat || sessionCommandBusy) return;
       sessionCommandBusyRef.current = true;
       setSessionCommandStatus("Forking chat…");
       try {
-        await onForkChat(messageId);
+        await onForkChat(messageId, position);
         setForkDialogOpen(false);
-        toast.success("Chat forked");
+        toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
       } finally {
@@ -915,6 +986,7 @@ export function Composer({
       btw?: boolean;
       mode?: "steer" | "queue" | "redirect";
       afterCompaction?: boolean;
+      afterForkSummary?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -971,7 +1043,9 @@ export function Composer({
           toast.info(
             payload.afterCompaction
               ? "Follow-up queued. It will send after compaction finishes."
-              : "Follow-up queued. It will run after the current response.",
+              : payload.afterForkSummary
+                ? "Message queued. It will send once the fork's summary is ready."
+                : "Follow-up queued. It will run after the current response.",
           );
         }
         if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
@@ -1030,13 +1104,13 @@ export function Composer({
         return;
       }
       if (result.kind === "skill") {
-        if (!workspace?.id) return;
+        if (!skillScopeId) return;
         const nextText = consumeSlashToken(text, slashSession);
         const nextCaret = slashSession.tokenStart;
         dispatchSkillSelection({
           type: "select",
           selected: {
-            workspaceId: workspace.id,
+            workspaceId: skillScopeId,
             invocation: {
               version: 1,
               invocationId: result.skill.invocationId,
@@ -1238,7 +1312,7 @@ export function Composer({
       slashResultSelectable,
       slashSession,
       text,
-      workspace?.id,
+      skillScopeId,
     ],
   );
 
@@ -1458,6 +1532,8 @@ export function Composer({
   );
 
   const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+    setFileDragActive(false);
+    if (!surfaces.attachments) return;
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1465,11 +1541,25 @@ export function Composer({
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+    // Not accepting the drag leaves the drop to the system, so nothing is read from this Mac.
+    if (!surfaces.attachments) return;
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setFileDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    // Moving between children fires dragleave on the shell; only clear when the
+    // pointer actually leaves it.
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setFileDragActive(false);
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    // Without attachments, a paste is plain text only.
+    if (!surfaces.attachments) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1501,38 +1591,59 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const sendBlockedReason =
+    blockedSend &&
+    blockedSend.text === text &&
+    blockedSend.attachments === attachments &&
+    blockedSend.skill === selectedSkill &&
+    blockedSend.busyMode === busyMode &&
+    blockedSend.generating === isGenerating &&
+    blockedSend.busy === (gitOperationBusy || attaching)
+      ? blockedSend.reason
+      : null;
+  const blockSend = (reason: string) =>
+    setBlockedSend({
+      reason,
+      text,
+      attachments,
+      skill: selectedSkill,
+      busyMode,
+      generating: isGenerating,
+      busy: gitOperationBusy || attaching,
+    });
+
   const submit = async (redirectConfirmed = false) => {
     if (redirectConfirmed && !isGenerating) {
-      toast.info("The previous response has finished. Send your message normally.");
+      blockSend("The previous response has finished. Send your message normally.");
       return;
     }
     if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current.isBusy || attaching) {
-      toast.info("Wait for the selected attachments to finish loading before sending.");
+      blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
     }
     if (gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before sending.");
+      blockSend("Wait for the current Git operation to finish before sending.");
       return;
     }
     const trimmed = text.trim();
     if (new TextEncoder().encode(trimmed).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
-      toast.info("Message text exceeds the 1 MB limit.");
+      blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
     const mode = isGenerating
       ? busyMode
-      : hasQueuedMessages || queueDuringCompaction
+      : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
     if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
-      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
       return;
     }
     if (mode === "redirect" && !redirectConfirmed) {
       if (attachments.length > 0 || selectedSkill) {
-        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
+        blockSend("Redirect accepts text only. Remove attachments and the selected skill first.");
         return;
       }
       setConfirmRedirect(true);
@@ -1540,14 +1651,14 @@ export function Composer({
     }
     if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
-      toast.info(selectedSkillState.reason);
+      blockSend(selectedSkillState.reason);
       return;
     }
     if (
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
     ) {
-      toast.info("Switch to a vision-capable model before sending these images.");
+      blockSend("Switch to a vision-capable model before sending these images.");
       return;
     }
     try {
@@ -1559,6 +1670,7 @@ export function Composer({
         skillRevision: skillSelection.revision,
         mode,
         afterCompaction: !isGenerating && queueDuringCompaction,
+        afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -1628,6 +1740,21 @@ export function Composer({
           return;
         }
       }
+    }
+    if (
+      escapeStopsGeneration({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        isComposing: event.nativeEvent.isComposing,
+        repeat: event.repeat,
+        canStop: isGenerating && canStopGeneration,
+        draftEmpty: !text.trim() && attachments.length === 0 && !selectedSkill,
+      })
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onStop();
+      return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -1766,6 +1893,7 @@ export function Composer({
           ) : null}
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
+          {surfaces.localContext ? (
           <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
@@ -1811,14 +1939,16 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this host. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this device"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
+            {/* Execution location — Pi runs locally on this host, unless a new chat picks another Mac. */}
+            {machinePicker ?? (
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this device"
+              >
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+            )}
             {gitBranch && workspace?.folderPath ? (
               <GitBranchPicker
                 key={`git-branch-picker-${worktreeRequest}`}
@@ -1844,15 +1974,38 @@ export function Composer({
             <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
+          ) : remoteContext ? (
+            <ComposerContextBar hasUserMessages={hasMessages} inputRef={inputRef}>
+              <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+                {remoteContext}
+              </div>
+            </ComposerContextBar>
+          ) : null}
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            <span id={attachmentDescriptionId} className="sr-only">
-              Drag files here or paste an image to attach it. Use Attach files or images to choose
-              files with the keyboard.
-            </span>
+            {surfaces.attachments && fileDragActive ? (
+              <div
+                aria-hidden="true"
+                data-composer-drop-target
+                className="composer-drop-overlay pointer-events-none absolute inset-0 z-30 grid place-items-center bg-popover"
+              >
+                <span className="composer-drop-overlay absolute inset-0 bg-status-accent-surface" />
+                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent">
+                  <Paperclip className="size-4" aria-hidden="true" />
+                  Drop to attach
+                </span>
+              </div>
+            ) : null}
+            {surfaces.attachments ? (
+              <span id={attachmentDescriptionId} className="sr-only">
+                Drag files here or paste an image to attach it. Use Attach files or images to choose
+                files with the keyboard.
+              </span>
+            ) : null}
             {selectedSkill ? (
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
@@ -1975,7 +2128,11 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
-              aria-describedby={attachmentDescriptionId}
+              aria-describedby={
+                [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
               placeholder={composerPlaceholder({
@@ -2004,7 +2161,31 @@ export function Composer({
                   </Button>
                 ) : null}
               </div>
+            ) : forkSummaryHold ? (
+              <Text
+                as="p"
+                role="status"
+                aria-live="polite"
+                variant="small"
+                color="tertiary"
+                className="px-1.5 pb-1"
+              >
+                {forkSummaryHold === "pending"
+                  ? "Summarizing the original chat…"
+                  : "The fork's summary didn't finish. Retry it or continue without it."}
+                {queueForForkSummary ? " Messages you send now wait until it's settled." : null}
+              </Text>
             ) : null}
+            <Text
+              as="p"
+              id={sendBlockedId}
+              role="status"
+              variant="small"
+              color="secondary"
+              className={sendBlockedReason ? "px-1.5 pb-1" : "sr-only"}
+            >
+              {sendBlockedReason}
+            </Text>
             {voice.lastError ? (
               <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
                 <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
@@ -2015,11 +2196,13 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? CONNECT_PROVIDER_ACTION : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
               <div className="flex shrink-0 items-center gap-1">
+                {surfaces.attachments ? (
+                <>
                 <Button
                   variant="transparent"
                   size="small"
@@ -2039,6 +2222,9 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
+                </>
+                ) : null}
+                {surfaces.localContext ? (
                 <div
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
                   data-open={permissionMenuOpen || undefined}
@@ -2172,6 +2358,7 @@ export function Composer({
                     })}
                   </div>
                 </div>
+                ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}
@@ -2281,6 +2468,8 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
+                    aria-keyshortcuts="Escape"
+                    title="Stop generating (Esc from an empty message)"
                   >
                     <Square className="fill-current" />
                   </Button>
@@ -2291,9 +2480,17 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label={hasQueuedMessages || queueDuringCompaction ? "Queue message" : "Send message"}
+                    aria-label={
+                      hasQueuedMessages || queueDuringCompaction || queueForForkSummary
+                        ? "Queue message"
+                        : "Send message"
+                    }
                   >
-                    {hasQueuedMessages || queueDuringCompaction ? <ListPlus /> : <ArrowUp />}
+                    {hasQueuedMessages || queueDuringCompaction || queueForForkSummary ? (
+                      <ListPlus />
+                    ) : (
+                      <ArrowUp />
+                    )}
                   </Button>
                 )}
               </div>
@@ -2370,7 +2567,11 @@ export function Composer({
           if (!open) setForkQuery("");
         }}
         title="Fork from a completed turn"
-        description="The new chat copies visible messages and attachments through the selected response. Private reasoning, tool state, and subagent runtime records are omitted."
+        description={`Fork keeps visible messages and attachments through the selected response.${
+          sessionChat?.botId
+            ? ""
+            : " Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer."
+        } Private reasoning, tool state, and subagent runtime records are omitted.`}
         confirmHidden
         busy={sessionCommandBusy}
         returnFocus={() => inputRef?.current ?? null}
@@ -2397,10 +2598,10 @@ export function Composer({
         <ul className="flex flex-col gap-1" aria-label="Completed turns">
           {visibleForkTurns.length > 0 ? (
             visibleForkTurns.map((turn) => (
-              <li key={turn.id}>
+              <li key={turn.id} className="flex items-center gap-1">
                 <Button
                   variant="transparent"
-                  className="h-auto min-h-11 w-full justify-start px-3 py-2 text-left"
+                  className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-2 text-left"
                   disabled={sessionCommandBusy}
                   onClick={() => void forkFromTurn(turn.id)}
                 >
@@ -2413,6 +2614,34 @@ export function Composer({
                     </span>
                   </span>
                 </Button>
+                {turn.userMessageId ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
+                    onClick={() => void forkFromTurn(turn.userMessageId!, "before")}
+                  >
+                    Edit in fork
+                  </Button>
+                ) : null}
+                {forkSummaryTurnIds?.has(turn.id) ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Fork from turn ${turn.turnNumber} with a summary of what followed`}
+                    onClick={() => {
+                      setForkDialogOpen(false);
+                      setForkQuery("");
+                      onForkWithSummary?.(turn.id, "after");
+                    }}
+                  >
+                    With summary…
+                  </Button>
+                ) : null}
               </li>
             ))
           ) : (

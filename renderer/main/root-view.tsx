@@ -1,5 +1,6 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { appApi, chatsApi, onNotification } from "../lib/ipc";
@@ -10,6 +11,7 @@ import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/env
 import { toast } from "../components/ui";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
+import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
@@ -248,6 +250,8 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(() => subscribeGitQuerySync(queryClient, onNotification), [queryClient]);
+
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
       void Promise.all([
@@ -404,6 +408,7 @@ function RootContent() {
       <OnboardingFlow />
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+      <PairingRequestSheet />
     </div>
   );
 }

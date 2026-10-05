@@ -27,6 +27,7 @@ import {
   SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
 } from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
+import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-enter";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
   compactSidebarAutoFocusIntent,
@@ -186,13 +187,18 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
   return <span className={cn("text-mini text-tertiary", className)} {...props} />;
 }
 
+export type BadgeColor = "gray" | "green" | "red" | "blue" | "warning";
+
 export function Badge({
   color = "gray",
   icon,
   className,
   children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
+}: Omit<React.HTMLAttributes<HTMLSpanElement>, "color"> & {
+  color?: BadgeColor;
+  icon?: React.ReactNode;
+}) {
   return (
     <span
       className={cn(
@@ -231,16 +237,23 @@ export function Callout({
 export function EmptyState({
   title,
   description,
+  action,
   placement,
+  role,
   className,
 }: {
   title: React.ReactNode;
   description?: React.ReactNode;
+  /** Next step for the user, usually a single shared `Button`. */
+  action?: React.ReactNode;
   placement?: "inline";
+  /** `alert` for failure states that should be announced when they appear. */
+  role?: "alert" | "status";
   className?: string;
 }) {
   return (
     <div
+      role={role}
       className={cn(
         "flex flex-col items-center justify-center px-6 py-10 text-center",
         placement === "inline" && "py-6",
@@ -253,6 +266,7 @@ export function EmptyState({
           {description}
         </Text>
       ) : null}
+      {action ? <div className="mt-4 flex items-center justify-center gap-2">{action}</div> : null}
     </div>
   );
 }
@@ -558,8 +572,13 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const splitContext = React.useMemo(
+    () => ({ collapsed, toggle, leadingAnchor }),
+    [collapsed, toggle, leadingAnchor],
+  );
+
   return (
-    <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
+    <SplitContext.Provider value={splitContext}>
       <div
         data-compact-sidebar-open={compactOpen ? "true" : "false"}
         className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary"
@@ -928,9 +947,12 @@ export function ScrollArea({
     });
   }, [followBottomNow]);
 
+  const hasToolbar = Boolean(toolbar ?? (title || leading || actions));
+  const hasFooter = Boolean(footer);
   React.useLayoutEffect(() => {
     const measure = () => {
-      setToolbarHeight(toolbarRef.current?.getBoundingClientRect().height ?? 0);
+      const nextToolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      setToolbarHeight((current) => current === nextToolbarHeight ? current : nextToolbarHeight);
       const nextFooterHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
       if (alignFooterToScrollContent) {
         const scrollViewport = viewport.current;
@@ -951,7 +973,9 @@ export function ScrollArea({
     if (toolbarRef.current) observer.observe(toolbarRef.current);
     if (footerRef.current) observer.observe(footerRef.current);
     return () => observer.disconnect();
-  }, [alignFooterToScrollContent, toolbar, footer, title, leading, actions, scheduleFollowBottom]);
+    // Content changes inside the toolbar/footer surface through the observer;
+    // only their presence decides which elements are observed.
+  }, [alignFooterToScrollContent, hasToolbar, hasFooter, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     scheduleFollowBottom();
@@ -1088,6 +1112,11 @@ type DialogProps = React.PropsWithChildren<{
   returnFocus?: () => HTMLElement | null;
   size?: "large";
   layer?: DialogLayer;
+  /**
+   * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
+   * dialog, while confirm is visible, enabled, and not busy.
+   */
+  submitOnEnter?: boolean;
 }>;
 
 export function Dialog({
@@ -1110,6 +1139,7 @@ export function Dialog({
   returnFocus,
   size,
   layer = "default",
+  submitOnEnter = false,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1140,6 +1170,28 @@ export function Dialog({
           }}
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
+          onKeyDown={
+            submitOnEnter
+              ? (event) => {
+                  if (confirmHidden || confirmDisabled || busy || !onConfirm) return;
+                  const target = event.target;
+                  // React events bubble through portals; ignore keys from nested popovers or dialogs.
+                  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+                  const key = {
+                    key: event.key,
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                    isComposing: event.nativeEvent.isComposing,
+                    defaultPrevented: event.defaultPrevented,
+                  };
+                  if (!shouldSubmitDialogOnEnter(key, dialogEnterTarget(target))) return;
+                  event.preventDefault();
+                  void onConfirm();
+                }
+              : undefined
+          }
           className={cn(
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
@@ -1213,6 +1265,13 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  // Remember what had focus when the dialog opened so closing can return there.
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, [open]);
   const confirm = (
     <Button
       variant={confirmVariant === "destructive" ? "destructive" : "accent"}
@@ -1238,8 +1297,12 @@ export function AlertDialog({
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
+            const opener = openerRef.current?.isConnected ? openerRef.current : null;
+            openerRef.current = null;
             const target =
-              returnFocus?.() ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+              returnFocus?.() ??
+              opener ??
+              document.querySelector<HTMLElement>("[data-app-focus-root]");
             if (target?.isConnected) {
               event.preventDefault();
               target.focus();
@@ -1359,6 +1422,27 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
         ) : null}
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
+  );
+});
+export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
+/** Single-choice menu row; the check mark and `aria-checked` carry selection. */
+export const DropdownMenuRadioItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>
+>(function RadioItem({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      ref={ref}
+      className={cn(menuItemClass, "group pl-7", className)}
+      {...props}
+    >
+      <span className="absolute left-2">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check className="size-3.5" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
   );
 });
 

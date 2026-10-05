@@ -416,3 +416,144 @@ test("relay targets exist only for enabled hosts and carry pinned trust", async 
   assert.equal(await store.relayTarget("host_b"), null);
   assert.equal(await store.relayTarget("missing"), null);
 });
+
+function scripted(
+  server: Record<string, unknown>,
+  respond: (input: { method?: string; path: string; body?: unknown }) => unknown,
+) {
+  const requests: { method: string; path: string; body?: unknown }[] = [];
+  let hosts = [saved()];
+  const store = new PeerHostRegistry({
+    storage: {
+      load: async () => hosts,
+      save: async (next) => {
+        hosts = next;
+      },
+    },
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
+    client: () => ({
+      json: async (input) => {
+        requests.push({
+          method: input.method ?? "GET",
+          path: input.path,
+          ...(input.body === undefined ? {} : { body: input.body }),
+        });
+        if (input.path === "/server")
+          return { protocolVersion: 1, instanceId: "host_a", ...server };
+        return respond(input);
+      },
+      events: async () => ({ reason: "eof" as const }),
+    }),
+  });
+  return { store, requests, stored: () => hosts };
+}
+
+test("verification persists refreshed grants and negotiates advertised host grants once", async () => {
+  const { store, requests, stored } = scripted(
+    {
+      capabilities: ["chat:read"],
+      features: ["host-events-v1", "run-streams-v1", "chat-tasks-v1"],
+      // The host knows tasks but does not advertise the grant to this device.
+      serverCapabilities: ["chat:read", "host:events", "runs:observe"],
+    },
+    (input) =>
+      input.path === "/device/capabilities"
+        ? { capabilities: ["chat:read", "host:events", "runs:observe"] }
+        : { ok: true },
+  );
+  let changes = 0;
+  store.onChanged(() => changes++);
+  await store.request("host_a", { path: "/chats" });
+  assert.deepEqual(
+    requests.filter((request) => request.path === "/device/capabilities"),
+    [
+      {
+        method: "POST",
+        path: "/device/capabilities",
+        body: { accepts: ["host:events", "runs:observe"] },
+      },
+    ],
+  );
+  assert.deepEqual(stored()[0]!.capabilities, ["chat:read", "host:events", "runs:observe"]);
+  assert.deepEqual(stored()[0]!.features, ["host-events-v1", "run-streams-v1", "chat-tasks-v1"]);
+  assert.ok(changes > 0);
+  assert.ok((await store.list())[0]!.capabilities.includes("runs:observe"));
+  // A reconnect in the same session re-verifies but never re-negotiates.
+  await store.connect("host_a");
+  assert.equal(
+    requests.filter((request) => request.path === "/device/capabilities").length,
+    1,
+  );
+  assert.equal(requests.filter((request) => request.path === "/server").length, 2);
+});
+
+test("an older host without negotiation keeps its grants and still serves requests", async () => {
+  const { store, stored } = scripted(
+    { capabilities: ["chat:read"], features: ["host-events-v1"] },
+    (input) => {
+      if (input.path === "/device/capabilities")
+        throw new PeerTransportError("request_failed", 404);
+      return { ok: true };
+    },
+  );
+  assert.deepEqual(await store.request("host_a", { path: "/chats" }), { ok: true });
+  assert.deepEqual(stored()[0]!.capabilities, ["chat:read"]);
+  assert.equal((await store.list())[0]?.state, "connected");
+});
+
+test("identity and protocol mismatches surface as typed blocking failures", async () => {
+  for (const [server, code] of [
+    [{ protocolVersion: 1, instanceId: "replacement", capabilities: [] }, "identity_changed"],
+    [{ protocolVersion: 2, instanceId: "host_a", capabilities: [] }, "unsupported_protocol"],
+  ] as const) {
+    const store = new PeerHostRegistry({
+      storage: { load: async () => [saved()], save: async () => {} },
+      localInstanceId: async () => "self",
+      deviceName: "Desktop",
+      clientVersion: "1",
+      platform: "mac",
+      client: () => ({
+        json: async () => server,
+        events: async () => {},
+      }),
+    });
+    await assert.rejects(
+      store.connect("host_a"),
+      (error: unknown) => error instanceof PeerTransportError && error.code === code,
+    );
+  }
+});
+
+test("streams have their own budget so live runs cannot starve unary operations", async () => {
+  const held: (() => void)[] = [];
+  const store = new PeerHostRegistry({
+    storage: { load: async () => [saved()], save: async () => {} },
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
+    client: () => ({
+      json: async (input) =>
+        input.path === "/server"
+          ? { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"] }
+          : new Promise((resolve) => held.push(() => resolve({ ok: true }))),
+      events: () =>
+        new Promise((resolve) => held.push(() => resolve({ reason: "eof" }))),
+    }),
+  });
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const stream = () =>
+    store.request("host_a", { path: "/host/events" }, () => {}, { partition: "stream" });
+  const streams = Array.from({ length: 17 }, stream);
+  await settle();
+  await assert.rejects(stream(), /Too many pending/);
+  const unary = Array.from({ length: 8 }, () => store.request("host_a", { path: "/chats" }));
+  await settle();
+  await assert.rejects(store.request("host_a", { path: "/chats" }), /Too many pending/);
+  for (const release of held.splice(0)) release();
+  assert.deepEqual(await Promise.all(streams), Array(17).fill({ reason: "eof" }));
+  assert.deepEqual(await Promise.all(unary), Array(8).fill({ ok: true }));
+});

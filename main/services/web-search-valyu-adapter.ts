@@ -1,10 +1,10 @@
 /** Valyu hosted web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -23,10 +23,6 @@ export interface ValyuWebSearchApiKeyCredential {
 }
 
 export type ValyuWebSearchCredential = ValyuWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("valyu", value);
@@ -84,19 +80,6 @@ export function buildValyuWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Parse Valyu's successful Search API envelope into source evidence. */
 export function parseValyuWebSearchResponse(
   payload: unknown,
@@ -117,7 +100,7 @@ export function parseValyuWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url) || typeof item.title !== "string") continue;
     const text =
       typeof item.content === "string"
@@ -153,8 +136,3 @@ export function createValyuWebSearchAdapter(
 }
 
 export const valyuWebSearchAdapterFactory = createValyuWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireValyuWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "valyu");
-}

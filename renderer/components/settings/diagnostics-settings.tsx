@@ -2,7 +2,7 @@ import * as React from "react";
 import { FileArchive, FolderOpen, Loader2, ShieldAlert, Trash2 } from "lucide-react";
 
 import { diagnosticsApi } from "../../lib/ipc";
-import type { DiagnosticSupportStatusView } from "../../shared/diagnostics";
+import { quarantinedChatsNotice, type DiagnosticSupportStatusView } from "../../shared/diagnostics";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 
 type Confirmation = "delete" | "dump-export" | "mode" | null;
@@ -20,7 +20,8 @@ function statusDescription(status: DiagnosticSupportStatusView | null, failed: b
   const range = status.oldestAt
     ? ` Oldest retained event: ${new Date(status.oldestAt).toLocaleDateString()}.`
     : "";
-  return `${formatBytes(status.retainedBytes)} across ${status.fileCount} local file${status.fileCount === 1 ? "" : "s"}.${range} Nothing is uploaded automatically.`;
+  const damaged = quarantinedChatsNotice(status.quarantinedChats);
+  return `${formatBytes(status.retainedBytes)} across ${status.fileCount} local file${status.fileCount === 1 ? "" : "s"}.${range} Nothing is uploaded automatically.${damaged ? ` ${damaged}` : ""}`;
 }
 
 export function DiagnosticsSettings() {

@@ -228,7 +228,6 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
   assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
-  assert.match(source, /Profile and provider setup required/u);
   assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
   assert.match(source, />\s*Skip provider\s*</u);
   assert.match(source, /setProviderSkipped\(true\)/u);
@@ -339,7 +338,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
-  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Connections/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",

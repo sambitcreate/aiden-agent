@@ -237,6 +237,7 @@ private struct AidenBotHomeSkeletonView: View {
 
 struct AidenBotSkeletonBlock: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let width: CGFloat?
     let height: CGFloat
     let radius: CGFloat
@@ -247,7 +248,7 @@ struct AidenBotSkeletonBlock: View {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(palette.raised)
                 .overlay {
-                    if !reduceMotion {
+                    if !reduceMotion && !lowPowerMode {
                         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                             let duration = 1.6
                             let elapsed = timeline.date.timeIntervalSinceReferenceDate

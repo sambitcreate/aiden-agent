@@ -5,12 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, ipcMain, logger } from "../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification, onBroadcast } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { recordRemoteRequestHealth } from "./diagnostic-health.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
+import {
+  aidenPairingRequestHostNoun,
+  createAidenPairingRequestNotifier,
+  createAidenPairingRequestSettingsStore,
+} from "./aiden-remote-pairing-request-host.js";
 import {
   AidenRemoteService,
   createAidenRemoteBonjourPublisher,
@@ -102,6 +107,7 @@ import { botStore } from "./bot-store.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
+  BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
   preflightBotTurnAuthority,
   resolveBotRuntimeCatalogSnapshot,
@@ -133,6 +139,15 @@ import {
   withBotFavoritesMutation,
 } from "./bot-favorites-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import {
+  AidenRemoteHostFeedService,
+  type AidenRemoteHostFeedBot,
+} from "./aiden-remote-host-feed.js";
+import { hostRunRegistry } from "./host-runs-main.js";
+import { gitCachedRepositoryIdentity } from "./git.js";
+import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
+import { aidenRemoteHostPlatform } from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
@@ -239,7 +254,10 @@ async function authorizeRemoteRetainedBotChat(
   request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
 ): Promise<boolean> {
   return botApplicationService.authorizeRetainedChat({
-    audienceId: request.deviceId,
+    // A paired desktop reading host-wide sees Bot chats as the host owner does.
+    audienceId: request.audience === "host-owner" && request.access === "read"
+      ? BOT_DESKTOP_AUDIENCE_ID
+      : request.deviceId,
     botId: request.botId,
     chatId: request.chatId,
     access: request.access,
@@ -340,8 +358,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     { version: 1, streams: [] },
     () => userData,
     {
-      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
+      // The journal budgets its compact JSON; allow the trailing newline.
+      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
       fileMode: 0o600,
+      compact: true,
       normalize: normalizeAidenRemoteStreamSnapshot,
       isSafe: (value) => {
         try {
@@ -409,7 +429,28 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
   let activeProgress: AidenRemoteChatProgressService | undefined;
+  let activeHostRuns: AidenRemoteHostRunService | undefined;
+  let activeHostFeed: AidenRemoteHostFeedService | undefined;
+  let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
+  const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
+    list: () => service.listPairingRequests(),
+    broadcast: () => ipcMain.broadcast("remote:pairing-requests-changed", {}),
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    focusApp: () => {
+      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+      if (!window) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+    hostNoun: aidenPairingRequestHostNoun(process.platform),
+    onError: (stage) => {
+      // Native errors can carry the device name; keep only the phase.
+      logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);
+    },
+  });
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
@@ -422,7 +463,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    pairingRequestSettings: createAidenPairingRequestSettingsStore(() => userData),
+    notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
+    hostPlatform: aidenRemoteHostPlatform(process.platform),
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -809,6 +853,73 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
+          const hostRuns = new AidenRemoteHostRunService({
+            registry: hostRunRegistry,
+            now: Date.now,
+            controls: {
+              cancel: (runId) => llmClient.cancel(runId, "user_stop"),
+              // A phone-owned approval settles through the stream service so its
+              // device records stay consistent; everything else settles directly.
+              approve: ({ chatId, approvalId, decision, scope }) =>
+                streams.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
+                llmClient.approveAsHost(approvalId, decision, scope ? { scope } : undefined),
+              answer: ({ promptId, response }) => {
+                const outcome = llmClient.answerQuestionnaireAsHost(promptId, response);
+                if (outcome !== "rejected") streams.retireQuestionSettledByHost(promptId);
+                return outcome;
+              },
+              admitInput: (input) => llmClient.admitChatRunInput(input),
+            },
+          });
+          activeHostRuns = hostRuns;
+          detachHostFeed?.();
+          activeHostFeed?.close();
+          const hostFeed = new AidenRemoteHostFeedService({
+            now: Date.now,
+            source: {
+              read: async () => {
+                const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
+                  chats.hostFeedChats(),
+                  workspaceApplicationService.list(),
+                  bots ? bots.list(false) : Promise.resolve(undefined),
+                ]);
+                return {
+                  summaries,
+                  botChatIds,
+                  workspaces: workspaceRows.map((workspace) => {
+                    const repository = workspace.folderPath
+                      ? gitCachedRepositoryIdentity(workspace.folderPath)
+                      : undefined;
+                    return {
+                      ...projectAidenRemoteWorkspace(workspace),
+                      ...(repository ? { repository } : {}),
+                    };
+                  }),
+                  bots: (botList?.bots ?? []) as unknown as AidenRemoteHostFeedBot[],
+                };
+              },
+            },
+          });
+          activeHostFeed = hostFeed;
+          const hostFeedChannels = new Set([
+            "chats:changed",
+            "chats:metadata-updated",
+            "chats:activity-changed",
+            "chats:read-markers-changed",
+            "workspaces:changed",
+            "bots:changed",
+          ]);
+          const detachers = [
+            onBroadcast((channel) => {
+              if (hostFeedChannels.has(channel)) hostFeed.invalidate();
+            }),
+            chatStore.onIndexChanged(() => hostFeed.invalidate()),
+            configStore.onWorkspacesChanged(() => hostFeed.invalidate()),
+            hostRunRegistry.onChange((summary, removed) => hostFeed.noteRun(summary, removed)),
+          ];
+          detachHostFeed = () => {
+            for (const detach of detachers) detach();
+          };
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
@@ -848,6 +959,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
+            hostFeed,
+            hostRuns,
             settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
@@ -877,6 +990,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       activeReadAloud?.revokeDevice(deviceId);
       activeProgress?.revokeDevice(deviceId);
       simulatorShareRelay.revokeDevice(deviceId);
+      // Revocation drains host-wide subscriptions; it never cancels a run.
+      activeHostFeed?.revokeDevice(deviceId);
+      activeHostRuns?.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
@@ -885,6 +1001,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }, deviceId);
       // A relay admitted between the first close and the revocation fence is closed here.
       simulatorShareRelay.revokeDevice(deviceId);
+      activeHostFeed?.revokeDevice(deviceId);
+      activeHostRuns?.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       if (hostPlatformCapabilities().bots) {

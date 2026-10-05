@@ -1,6 +1,6 @@
 # Pi 1.0.3 upgrade and stack reconciliation
 
-Status: active, 2026-10-05. Planning committed before implementation; begin with the existing runtime foundation PR #299. This is the execution plan for the 1.0.3 target of [Pi parity](pi-1-parity-plan.md), preserving that plan's historical implementation evidence.
+Status: active, 2026-10-05. Plan committed as `9a5d67d7`; foundation reconciliation and local validation complete on #299's branch. Stack propagation and the 1.0.3 pin/migration remain pending. This is the execution plan for the 1.0.3 target of [Pi parity](pi-1-parity-plan.md), preserving that plan's historical implementation evidence.
 
 ## Verified baseline
 
@@ -22,10 +22,10 @@ Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-l
 
 - [x] Fetch main and all stack refs; inspect worktrees and preserve unrelated work.
 - [x] Commit this plan, update the inventory and project memory.
-- [ ] Merge `origin/main` into `codex/pi-1-runtime` without rebasing or force-pushing.
-- [ ] Resolve by retaining both current-main behavior and the legacy harness boundary. Pay special attention to chat forks, provider aliases, runtime context, CLI direct shared-source imports and worker packaging.
-- [ ] Union root test scripts and CI registry entries; preserve the newer main test runner. Keep root and CLI lockfiles reproducible.
-- [ ] Run root/CLI types, focused replay/compaction/session, provider, MCP, subagent and CLI tests before publishing or requesting review.
+- [x] Merge `origin/main` into `codex/pi-1-runtime` without rebasing or force-pushing.
+- [x] Resolve by retaining both current-main behavior and the legacy harness boundary. Pay special attention to chat forks, provider aliases, runtime context, CLI direct shared-source imports and worker packaging.
+- [x] Union root test scripts and CI registry entries; preserve the newer main test runner. Keep root and CLI lockfiles reproducible.
+- [x] Run root/CLI types, focused replay/compaction/session, provider, MCP, subagent and CLI tests before publishing or requesting review.
 - [ ] Propagate predecessor merges upward in stack order after foundation acceptance. Inspect any occupied worktree for local/unpushed work; do not overwrite it. Retarget successors only after predecessors merge.
 
 ### 2. Upgrade the integrated stack to 1.0.3
@@ -65,3 +65,6 @@ Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-l
 ## Progress log
 
 - 2026-10-05: reviewed the proposed brief against current main, upstream tag/source, npm and GitHub. Corrected Azure migration coverage, desktop/CLI ownership of upstream changes, lockfile commands and replay receipt prerequisites. Beginning foundation reconciliation in this task's existing checkout; other task worktrees remain untouched.
+- Foundation merge resolutions preserve main's lazy CLI entry and command dispatch, move native Pi MCP routing/migration into cli-runtime, and place the codemode worker and new OAuth providers into the single shared chunk graph. NewEntry and fork summary generation cross the frozen harness adapter; provider requests still use current Models. Existing behavioral suites caught and verified both the fork-summary import incompatibility and the moved OAuth bundle location.
+- Main's new production-dependency graph test found the foundation's unused desktop pi-codemode dependency. Removed it and its premature unpack entries from #299. **When propagating to #302, explicitly restore exact pi-codemode plus codemode/QuickJS unpack entries with the desktop consumer**; a clean Git merge alone will not restore a dependency unchanged on the successor.
+- Local checks passed: root/CLI/e2e types, lint, clean root/CLI installs, production desktop/CLI builds, compaction (22 VCC + 411 cases), MCP (130), provider/chat-copy checks (117), complete subagent script, CLI (74), CI policy (55), and real Electron chat-fork test (1). Initial broad unit run had one deterministic production-dependency failure, corrected above; no flaky rerun. All preserved modes (browser, generative UI Chromium, terminal coverage, iOS release policy, native helpers, Rust and CLI) passed. Final clean-install npm test passed end to end: all three unit lanes (6,820 cases, 6,818 passed, 2 skipped) plus all preserved modes, including the 74-test CLI suite. Hosted/signed/mobile-device/paid-provider/installed-rollout acceptance not claimed.

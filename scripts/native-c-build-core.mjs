@@ -1,6 +1,64 @@
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+const QUOTED_INCLUDE = /^\s*#\s*include\s+"([^"]+)"/gmu;
+
+async function sourceClosure(source, seen = new Map()) {
+  const resolved = path.resolve(source);
+  if (seen.has(resolved)) return seen;
+  const contents = await readFile(resolved);
+  seen.set(resolved, contents);
+  for (const [, include] of contents.toString("utf8").matchAll(QUOTED_INCLUDE)) {
+    const header = path.resolve(path.dirname(resolved), include);
+    try {
+      await sourceClosure(header, seen);
+    } catch (error) {
+      // A quoted include the compiler finds on its search path is not ours.
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return seen;
+}
+
+/**
+ * Fingerprints everything that determines a helper binary: the source and the
+ * local headers it includes (transitively), the compiler, its arguments and
+ * environment, and the host platform and architecture.
+ */
+export async function nativeCBuildFingerprint({ source, executable, args, env, cwd }) {
+  const hash = createHash("sha256");
+  const add = (value) => hash.update(`${value.length}:`).update(value);
+  add(JSON.stringify({ executable, args, env, platform: globalThis.process.platform, arch: globalThis.process.arch }));
+  const closure = await sourceClosure(source);
+  for (const file of [...closure.keys()].sort()) {
+    add(path.relative(cwd, file));
+    add(closure.get(file));
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * Runs a native C compile unless `<output>.stamp` records the same
+ * fingerprint and the output still exists. Returns whether it compiled.
+ */
+export async function compileNativeC({ executeFile, executable, args, env, cwd, source, output }) {
+  const stamp = `${output}.stamp`;
+  const fingerprint = await nativeCBuildFingerprint({ source, executable, args, env, cwd });
+  try {
+    const [recorded] = await Promise.all([readFile(stamp, "utf8"), access(output, fsConstants.X_OK)]);
+    if (recorded.trim() === fingerprint) return false;
+  } catch {
+    // No usable stamp or output: build.
+  }
+  await mkdir(path.dirname(output), { recursive: true });
+  // Never let a stale stamp vouch for a half-written output.
+  await rm(stamp, { force: true });
+  await executeFile(executable, args, { cwd, env, maxBuffer: 1024 * 1024, timeout: 120_000 });
+  await writeFile(stamp, `${fingerprint}\n`);
+  return true;
+}
 
 const BUILD_ENVIRONMENT = Object.freeze({
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -103,12 +161,14 @@ export async function buildNativeCExecutable({
     universalMac,
   });
   if (!invocation) return false;
-  await mkdir(path.dirname(output), { recursive: true });
-  await executeFile(invocation.executable, invocation.args, {
-    cwd: repositoryRoot,
+  await compileNativeC({
+    executeFile,
+    executable: invocation.executable,
+    args: invocation.args,
     env: invocation.env,
-    maxBuffer: 1024 * 1024,
-    timeout: 120_000,
+    cwd: repositoryRoot,
+    source,
+    output,
   });
   return true;
 }

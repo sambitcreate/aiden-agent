@@ -59,6 +59,7 @@ import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
+import { forkSummaryService } from "../services/fork-summary-service-main.js";
 import {
   cancelDesktopCompaction,
   compactDesktopChat,
@@ -297,6 +298,18 @@ export function registerChatHistoryHandlers(): void {
       chatTitleService.renameWithFoundationModels(asString(id, "id")),
   );
 
+  ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
+    chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
+  );
+
+  ipcMain.handle("chats:cancelForkSummary", async (_event, input: unknown) =>
+    forkSummaryService.cancel(parseChatOnlyRequest(input).chatId),
+  );
+
+  ipcMain.handle("chats:skipForkSummary", async (_event, input: unknown) =>
+    chatForRenderer(await forkSummaryService.skip(parseChatOnlyRequest(input).chatId)),
+  );
+
   ipcMain.handle("chats:copyVisibleHistory", async (event, input: unknown) => {
     const owner = rendererDocumentOwner(
       event,
@@ -342,10 +355,16 @@ export function registerChatHistoryHandlers(): void {
               throw new Error(appendReconciliationFailureMessage("blocked"));
             }
           };
+          if (parsed.forkAt?.position === "before") {
+            throw new Error("Bot chats can only be forked after a reply.");
+          }
+          if (parsed.summary) {
+            throw new Error("Bot chat forks cannot carry a summary.");
+          }
           const copied = await botApplicationService.copyChat({
             botId: source.botId,
             sourceChatId: parsed.chatId,
-            throughAssistantMessageId: parsed.throughMessageId,
+            throughAssistantMessageId: parsed.forkAt?.messageId,
             assertCurrent,
           });
           ipcMain.broadcast("chats:metadata-updated", {
@@ -385,39 +404,66 @@ export function registerChatHistoryHandlers(): void {
           if (!(await configStore.getWorkspace(workspaceId))) {
             throw new Error("The chat workspace is no longer available.");
           }
-          const htmlMediaIds = selectedHtmlArtifactMediaIds(
-            source.messages,
-            parsed.throughMessageId,
-          );
+          const htmlMediaIds = selectedHtmlArtifactMediaIds(source.messages, parsed.forkAt);
           const targetChatId = randomUUID();
           let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+          let journalForked = false;
           const copied = await (async () => {
             try {
               return await chatStore.copyVisibleHistory({
                 sourceChatId: parsed.chatId,
                 targetChatId,
                 expectedWorkspaceId: workspaceId,
-                throughAssistantMessageId: parsed.throughMessageId,
+                forkAt: parsed.forkAt,
+                ...(parsed.summary ? { forkSummary: parsed.summary } : {}),
                 assertCurrent,
-                beforeInstall: async () => {
-                  if (htmlMediaIds.length === 0) return;
-                  preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
-                    source.id,
-                    targetChatId,
-                    htmlMediaIds,
-                  );
+                beforeInstall: async (chat, sourceMessageIds) => {
+                  if (htmlMediaIds.length > 0) {
+                    preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
+                      source.id,
+                      targetChatId,
+                      htmlMediaIds,
+                    );
+                  }
+                  // Carry the source's model-side journal (tool results and
+                  // compactions) up to the cut. Without it the fork still
+                  // works; it rebuilds model context from visible history.
+                  try {
+                    journalForked = await piCompactionSessionStore.forkChat({
+                      sourceChatId: source.id,
+                      targetChatId,
+                      targetCreatedAt: chat.createdAt,
+                      messages: chat.messages.map((message, index) => ({
+                        sourceId: sourceMessageIds[index]!,
+                        id: message.id,
+                      })),
+                    });
+                  } catch {
+                    writeDiagnosticEvent({
+                      level: "warn",
+                      area: "chat",
+                      event: "chat-degraded",
+                      outcome: "degraded",
+                      code: "internal-error",
+                    });
+                  }
                 },
               });
             } catch (error) {
-              if (
-                preparedHtmlArtifacts.length > 0 &&
-                !isChatCreateReconciliationRequiredError(error)
-              ) {
-                await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+              if (!isChatCreateReconciliationRequiredError(error)) {
+                if (preparedHtmlArtifacts.length > 0) {
+                  await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+                }
+                if (journalForked) {
+                  await piCompactionSessionStore.deleteChat(targetChatId).catch(() => undefined);
+                }
               }
               throw error;
             }
           })();
+          if (copied.forkedFrom?.summary?.state === "pending") {
+            void forkSummaryService.run(copied.id);
+          }
           if (preparedHtmlArtifacts.length > 0) {
             await generativeUiArtifactStore.commit(
               copied.id,

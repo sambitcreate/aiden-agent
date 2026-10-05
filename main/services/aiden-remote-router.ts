@@ -1,7 +1,8 @@
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createGzip } from "node:zlib";
 import {
   parseToolApprovalScope,
   type ToolApprovalScope,
@@ -13,6 +14,7 @@ import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
@@ -25,6 +27,14 @@ import {
   AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
+  AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT,
+  AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE,
+  AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
+  AIDEN_REMOTE_CONTRACT_REVISION,
+  AIDEN_REMOTE_HOST_EVENTS_FEATURE,
+  AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE,
+  AIDEN_REMOTE_RUN_CONTROL_FEATURE,
+  AIDEN_REMOTE_RUN_STREAMS_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
@@ -35,12 +45,18 @@ import {
   type AidenRemoteChatAgentRoster,
   type AidenRemoteChatTaskProgress,
   type AidenRemoteErrorEnvelope,
+  type AidenRemoteHostCapability,
+  type AidenRemoteHostPlatform,
 } from "./aiden-remote-protocol.js";
+import type { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import type { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import {
   AidenRemoteServiceError,
   asAidenRemoteServiceError,
 } from "./aiden-remote-errors.js";
 import type { AidenRemotePairingService } from "./aiden-remote-pairing.js";
+import type { AidenRemotePairingRequestService } from "./aiden-remote-pairing-requests.js";
+import { AIDEN_PAIRING_REQUEST_ID_PATTERN } from "./aiden-remote-sealed-envelope.js";
 import type {
   AidenRemoteAuthenticatedDevice,
   AidenRemoteConnectionMode,
@@ -126,6 +142,15 @@ export interface AidenRemoteRouterDependencies {
   devices: AidenRemoteRouterDeviceRegistry;
   pairing: Pick<AidenRemotePairingService, "exchange">
     & Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
+  /**
+   * Unauthenticated desktop connection requests (`pairing-requests-v1`).
+   * Absent: `/pairing/requests*` is `not_found`, `/health?detail=host`
+   * reports `pairingRequests: false` and `/server` omits the feature.
+   */
+  pairingRequests?: Pick<
+    AidenRemotePairingRequestService,
+    "accepting" | "create" | "reveal" | "poll" | "cancel"
+  >;
   workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
@@ -134,7 +159,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -229,6 +254,28 @@ export interface AidenRemoteRouterDependencies {
    * when the feature is off; `/simulators` routes then return `not_found`.
    */
   simulators?: AidenRemoteSimulatorRelay;
+  /**
+   * Host-wide feed for paired desktop controllers (`host:events`, contract
+   * revision 19). Absent: `/host/events` is `not_found` and the grant and
+   * `host-events-v1` are never advertised.
+   */
+  hostFeed?: Pick<AidenRemoteHostFeedService, "open">;
+  /**
+   * Host-wide run streams (`runs:observe`) and controls (`runs:control`).
+   * Absent: `/runs/*` is `not_found` and neither grant is advertised.
+   */
+  hostRuns?: Pick<
+    AidenRemoteHostRunService,
+    | "chatIdForRun"
+    | "currentRunId"
+    | "openRunEvents"
+    | "cancel"
+    | "respondApproval"
+    | "respondQuestion"
+    | "submitInput"
+  >;
+  /** The host platform published by the opt-in `/health?detail=host` descriptor. */
+  platform?: AidenRemoteHostPlatform;
   connectionMode(): AidenRemoteConnectionMode;
   now(): number;
   /** Tailscale Serve strips the public API prefix before loopback proxying. */
@@ -255,6 +302,9 @@ export type AidenRemoteRouteLabel =
   | "health"
   | "pairingManualBootstrap"
   | "pairingExchange"
+  | "pairingRequests"
+  | "pairingRequest"
+  | "pairingRequestReveal"
   | "server"
   | "deviceIdentity"
   | "deviceCapabilities"
@@ -304,6 +354,14 @@ export type AidenRemoteRouteLabel =
   | "questionRespond"
   | "simulators"
   | "simulatorHub"
+  | "hostEvents"
+  | "chatMessages"
+  | "runEvents"
+  | "chatCurrentRunEvents"
+  | "runCancel"
+  | "runApprovalRespond"
+  | "runQuestionRespond"
+  | "runInputs"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
@@ -311,6 +369,9 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   health: ["/health"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
+  pairingRequests: ["/pairing/requests"],
+  pairingRequest: ["/pairing/requests/:requestId"],
+  pairingRequestReveal: ["/pairing/requests/:requestId/reveal"],
   server: ["/server"],
   deviceIdentity: ["/device/identity"],
   deviceCapabilities: ["/device/capabilities"],
@@ -373,6 +434,14 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   questionRespond: ["/questions/:promptId/respond"],
   simulators: ["/simulators", "/simulators/:action"],
   simulatorHub: ["/simulators/hub/:path"],
+  hostEvents: ["/host/events"],
+  chatMessages: ["/chats/:id/messages"],
+  runEvents: ["/runs/:runId/events"],
+  chatCurrentRunEvents: ["/chats/:id/runs/current/events"],
+  runCancel: ["/runs/:runId/cancel"],
+  runApprovalRespond: ["/runs/:runId/approvals/:approvalId/respond"],
+  runQuestionRespond: ["/runs/:runId/questions/:promptId/respond"],
+  runInputs: ["/runs/:runId/inputs"],
   unknown: [],
 };
 
@@ -465,22 +534,89 @@ function responseHeaders(contentType = "application/json; charset=utf-8") {
   };
 }
 
+/**
+ * The request behind each in-flight response, so successful JSON reads can
+ * negotiate compression and conditional revalidation without threading the
+ * request through every route.
+ */
+const negotiatedRequests = new WeakMap<ServerResponse, IncomingMessage>();
+/** Smaller bodies gain little from gzip and pay its fixed framing cost. */
+const GZIP_MIN_RESPONSE_BYTES = 1024;
+
+/** Members of a comma-separated header list such as `Accept-Encoding` or `If-None-Match`. */
+function listMembers(header: string | string[] | undefined): string[] {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  return value ? value.split(",").map((member) => member.trim()).filter(Boolean) : [];
+}
+
+/** True only when the client explicitly accepts gzip (or `*`) with a non-zero weight. */
+function acceptsGzipEncoding(header: string | string[] | undefined): boolean {
+  let gzip: number | undefined;
+  let wildcard: number | undefined;
+  for (const member of listMembers(header)) {
+    const [coding = "", ...params] = member.split(";").map((part) => part.trim());
+    const qParam = params.find((param) => /^q=/iu.test(param));
+    const q = qParam === undefined ? 1 : Number(qParam.slice(2));
+    const weight = Number.isFinite(q) ? q : 0;
+    const name = coding.toLowerCase();
+    if (name === "gzip" || name === "x-gzip") gzip = weight;
+    else if (name === "*") wildcard = weight;
+  }
+  return (gzip ?? wildcard ?? 0) > 0;
+}
+
+/** Weak comparison (RFC 9110 §13.1.2) of `If-None-Match` against the response ETag. */
+function ifNoneMatchSatisfied(header: string | string[] | undefined, etag: string): boolean {
+  const opaque = etag.replace(/^W\//u, "");
+  return listMembers(header).some(
+    (member) => member === "*" || member.replace(/^W\//u, "") === opaque,
+  );
+}
+
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   const body = JSON.stringify(value);
-  if (
-    body === undefined ||
-    Buffer.byteLength(body, "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES
-  ) {
+  const length = body === undefined ? 0 : Buffer.byteLength(body, "utf8");
+  if (body === undefined || length > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
     throw new AidenRemoteServiceError(
       "payload_too_large",
       "This response exceeds the Aiden Remote JSON limit.",
       413,
     );
   }
-  response.writeHead(status, {
-    ...responseHeaders(),
-    "content-length": String(Buffer.byteLength(body, "utf8")),
-  });
+  const request = status === 200 ? negotiatedRequests.get(response) : undefined;
+  if (request?.method !== "GET") {
+    response.writeHead(status, {
+      ...responseHeaders(),
+      "content-length": String(length),
+    });
+    response.end(body);
+    return;
+  }
+  // Successful reads are revalidatable and compressible. Both are opt-in:
+  // a client that sends neither `If-None-Match` nor a gzip-accepting
+  // `Accept-Encoding` receives the same identity body as before.
+  const etag = `W/"${createHash("sha256").update(body).digest("base64url")}"`;
+  if (ifNoneMatchSatisfied(request.headers["if-none-match"], etag)) {
+    const { "content-type": _contentType, ...headers } = responseHeaders();
+    response.writeHead(304, { ...headers, etag, vary: "accept-encoding" });
+    response.end();
+    return;
+  }
+  const headers = { ...responseHeaders(), etag, vary: "accept-encoding" };
+  if (
+    length >= GZIP_MIN_RESPONSE_BYTES &&
+    acceptsGzipEncoding(request.headers["accept-encoding"])
+  ) {
+    // Stream through zlib's thread pool rather than blocking main on a
+    // multi-megabyte transcript; the body is chunked without a length.
+    response.writeHead(200, { ...headers, "content-encoding": "gzip" });
+    const gzip = createGzip();
+    gzip.on("error", () => response.destroy());
+    gzip.pipe(response);
+    gzip.end(body);
+    return;
+  }
+  response.writeHead(200, { ...headers, "content-length": String(length) });
   response.end(body);
 }
 
@@ -597,7 +733,8 @@ function negotiatedDeviceCapabilities(
         device.acceptsBotCapabilities === true) &&
       (!(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
         device.acceptsProgressCapabilities === true) &&
-      (capability !== "simulators:control" ||
+      (capability !== "simulators:control" &&
+        !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) ||
         device.type === "mac" || device.type === "linux"),
     ),
   );
@@ -714,6 +851,11 @@ async function requireChatAccess(
         chatId,
         botId: classification.botId,
         access,
+        // A desktop controller reading host-wide sees Bot chats as the host
+        // owner does. Writes and every other caller keep the device audience.
+        ...(access === "read" && device.capabilities.has("host:events")
+          ? { audience: "host-owner" as const }
+          : {}),
       });
     } catch {
       authorized = false;
@@ -1000,6 +1142,11 @@ function approvalDecision(value: unknown): {
   return scope ? { decision: record.decision, scope } : { decision: record.decision };
 }
 
+function pairingSecretHeader(request: IncomingMessage): string | undefined {
+  const value = request.headers["aiden-pairing-secret"];
+  return typeof value === "string" ? value : undefined;
+}
+
 function requiredHeader(
   request: IncomingMessage,
   name: "if-match" | "idempotency-key",
@@ -1107,6 +1254,85 @@ function progressCapabilitySupported(
     : Boolean(dependencies.chatProgress.agentRoster);
 }
 
+function hostCapabilitySupported(
+  dependencies: AidenRemoteRouterDependencies,
+  capability: AidenRemoteHostCapability,
+): boolean {
+  return capability === "host:events"
+    ? Boolean(dependencies.hostFeed)
+    : Boolean(dependencies.hostRuns && dependencies.chats);
+}
+
+function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "type">): boolean {
+  return device.type === "mac" || device.type === "linux";
+}
+
+/** `/health` takes no query, or exactly `detail=host` for the desktop descriptor. */
+function healthDetailQuery(query: string): boolean {
+  if (!query) return false;
+  if (query === "detail=host") return true;
+  throw new AidenRemoteServiceError("invalid_request", "The health query is invalid.", 400);
+}
+
+function chatMessagesQuery(query: string): { before?: string; limit: number } {
+  let before: string | undefined;
+  let limit: number | undefined;
+  for (const component of query ? query.split("&") : []) {
+    const separator = component.indexOf("=");
+    const name = separator < 0 ? component : component.slice(0, separator);
+    const value = separator < 0 ? "" : component.slice(separator + 1);
+    if (name === "before" && before === undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(value)) {
+      before = value;
+    } else if (name === "limit" && limit === undefined && /^[1-9]\d{0,3}$/u.test(value)) {
+      limit = Number(value);
+      if (limit > AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT) {
+        throw new AidenRemoteServiceError(
+          "invalid_request",
+          `The message window limit must be between 1 and ${AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT}.`,
+          400,
+        );
+      }
+    } else {
+      throw new AidenRemoteServiceError("invalid_request", "The message window query is invalid.", 400);
+    }
+  }
+  return {
+    ...(before === undefined ? {} : { before }),
+    limit: limit ?? AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT,
+  };
+}
+
+/**
+ * The host-feed cursor from `?after=` or `Last-Event-ID`. The value is opaque
+ * here; the feed answers anything it does not recognise with a snapshot.
+ */
+function hostFeedCursor(request: IncomingMessage, query: string): string | undefined {
+  let after: string | undefined;
+  if (query) {
+    if (!query.startsWith("after=") || query.includes("&")) {
+      throw new AidenRemoteServiceError("invalid_request", "The host feed cursor is invalid.", 400);
+    }
+    after = decodeURIComponent(query.slice("after=".length));
+  }
+  const lastEventId = request.headers["last-event-id"];
+  if (Array.isArray(lastEventId)) {
+    throw new AidenRemoteServiceError("invalid_request", "Last-Event-ID is invalid.", 400);
+  }
+  if (after !== undefined && lastEventId !== undefined && after !== lastEventId) {
+    throw new AidenRemoteServiceError("invalid_request", "Stream cursors disagree.", 400);
+  }
+  const value = after ?? lastEventId;
+  if (value === undefined || value === "") return undefined;
+  if (!/^[\x21-\x7e]{1,128}$/u.test(value)) {
+    throw new AidenRemoteServiceError("invalid_request", "The host feed cursor is invalid.", 400);
+  }
+  return value;
+}
+
+function hostRunsUnavailable(): AidenRemoteServiceError {
+  return new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+}
+
 function agentInterruptSupported(dependencies: AidenRemoteRouterDependencies): boolean {
   return (
     progressCapabilitySupported(dependencies, "agents:read") &&
@@ -1133,6 +1359,11 @@ function advertisedServerCapabilities(
     ...((device.type === "mac" || device.type === "linux") &&
     dependencies.simulators?.host()
       ? AIDEN_REMOTE_SIMULATOR_CAPABILITIES
+      : []),
+    ...(isDesktopDevice(device) && device.acceptsProgressCapabilities === true
+      ? AIDEN_REMOTE_HOST_CAPABILITIES.filter((capability) =>
+          hostCapabilitySupported(dependencies, capability),
+        )
       : []),
   ];
 }
@@ -1220,7 +1451,17 @@ function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
 export function createAidenRemoteRequestHandler(
   dependencies: AidenRemoteRouterDependencies,
 ): (request: IncomingMessage, response: ServerResponse) => void {
+  /**
+   * Revocation fence for a long-lived subscription, crossed synchronously at
+   * registration. Like the simulator relay, it does not join the mutation
+   * drain: revocation closes registered subscriptions through `revokeDevice`,
+   * and this check refuses one whose admission was still awaiting.
+   */
+  const admitDevice = (deviceId: string) => () => {
+    dependencies.devices.acquireDeviceAuthorization(deviceId, false)();
+  };
   return (request, response) => {
+    negotiatedRequests.set(response, request);
     const id = requestId();
     const startedAt = dependencies.now();
     let route: Parameters<AidenRemoteRouterDependencies["log"]>[0]["route"] = "unknown";
@@ -1276,11 +1517,22 @@ export function createAidenRemoteRequestHandler(
         return device;
       };
       if (request.method === "GET" && path === "/health") {
-        requireNoQuery(query);
         route = "health";
+        const detail = healthDetailQuery(query);
+        // The default body stays exactly `{ok, protocolVersion}`; the
+        // non-secret host descriptor is opt-in so strict decoders are unaffected.
         writeJson(response, 200, {
           ok: true,
           protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+          ...(detail
+            ? {
+                instanceId: dependencies.instanceId,
+                displayName: dependencies.displayName(),
+                ...(dependencies.platform ? { platform: dependencies.platform } : {}),
+                contractRevision: AIDEN_REMOTE_CONTRACT_REVISION,
+                pairingRequests: dependencies.pairingRequests?.accepting() === true,
+              }
+            : {}),
         });
         return;
       }
@@ -1293,6 +1545,56 @@ export function createAidenRemoteRequestHandler(
         );
         writeJson(response, 200, result);
         return;
+      }
+      const pairingRequestMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})$/u.exec(path);
+      const pairingRequestRevealMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})\/reveal$/u.exec(path);
+      if (path === "/pairing/requests" || pairingRequestMatch || pairingRequestRevealMatch) {
+        const requestIdSegment = pairingRequestMatch?.[1] ?? pairingRequestRevealMatch?.[1];
+        route = pairingRequestMatch
+          ? "pairingRequest"
+          : pairingRequestRevealMatch
+            ? "pairingRequestReveal"
+            : "pairingRequests";
+        const service = dependencies.pairingRequests;
+        if (
+          !service ||
+          (requestIdSegment !== undefined && !AIDEN_PAIRING_REQUEST_ID_PATTERN.test(requestIdSegment))
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireNoQuery(query);
+        // The poll secret travels only in a header so it never reaches a URL.
+        const secret = pairingSecretHeader(request);
+        if (route === "pairingRequests" && request.method === "POST") {
+          const created = await service.create(await readJsonBody(request, 2_048), {
+            source: sourceIdentity(request),
+            transport: dependencies.acceptStrippedBasePath === true ? "tailscale" : "lan",
+          });
+          writeJson(response, 201, created);
+          return;
+        }
+        if (route === "pairingRequestReveal" && request.method === "POST") {
+          writeJson(response, 200, service.reveal(requestIdSegment!, secret, await readJsonBody(request, 256)));
+          return;
+        }
+        if (route === "pairingRequest" && request.method === "GET") {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          response.once("close", abort);
+          try {
+            const status = await service.poll(requestIdSegment!, secret, controller.signal);
+            if (controller.signal.aborted) return;
+            writeJson(response, 200, status);
+          } finally {
+            response.off("close", abort);
+          }
+          return;
+        }
+        if (route === "pairingRequest" && request.method === "DELETE") {
+          writeJson(response, 200, await service.cancel(requestIdSegment!, secret));
+          return;
+        }
+        throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
       }
       if (request.method === "POST" && path === "/pairing/manual-bootstrap") {
         requireNoQuery(query);
@@ -1355,6 +1657,19 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(progressCapabilitySupported(dependencies, "skills:invoke")
               ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
+              : []),
+            ...(dependencies.chats?.messagesWindow
+              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE]
+              : []),
+            // Host-wide features are announced to desktops only.
+            ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "host:events")
+              ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE]
+              : []),
+            ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
+              ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE]
+              : []),
+            ...(isDesktopDevice(device) && dependencies.pairingRequests
+              ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -1420,7 +1735,23 @@ export function createAidenRemoteRequestHandler(
               );
             }
             if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
-          } else if (!progressCapabilitySupported(dependencies, capability)) {
+          } else if ((AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Refuse non-desktops first so they never learn whether host control exists.
+            if (!isDesktopDevice(device)) {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "Only paired desktops may observe or control this host's runs.",
+                403,
+              );
+            }
+            if (!hostCapabilitySupported(dependencies, capability as AidenRemoteHostCapability)) {
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Host control is unavailable on this Aiden installation.",
+                404,
+              );
+            }
+          } else if (!progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)) {
             throw new AidenRemoteServiceError(
               "not_found",
               "This progress capability is unavailable on this Aiden installation.",
@@ -2899,6 +3230,129 @@ export function createAidenRemoteRequestHandler(
             scope,
           ),
         );
+        return;
+      }
+      if (path === "/host/events" && request.method === "GET") {
+        route = "hostEvents";
+        const cursor = hostFeedCursor(request, query);
+        const device = await authenticate(request, dependencies.devices, "host:events");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.hostFeed) throw hostRunsUnavailable();
+        await dependencies.hostFeed.open(device, cursor, response, admitDevice(device.id));
+        return;
+      }
+      const chatMessagesMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/messages$/u.exec(path);
+      if (chatMessagesMatch && request.method === "GET") {
+        route = "chatMessages";
+        const input = chatMessagesQuery(query);
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.messagesWindow) throw hostRunsUnavailable();
+        await requireChatAccess(dependencies.chats, device, chatMessagesMatch[1]!, "read");
+        writeJson(
+          response,
+          200,
+          await dependencies.chats.messagesWindow(chatMessagesMatch[1]!, input),
+        );
+        return;
+      }
+      const currentRunMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/runs\/current\/events$/u.exec(path);
+      if (currentRunMatch && request.method === "GET") {
+        route = "chatCurrentRunEvents";
+        const after = streamAfter(request, query);
+        const device = await authenticate(request, dependencies.devices, "runs:observe");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
+        if (after !== 0) {
+          // A cursor names a run; resume it through /runs/{runId}/events.
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "Resume a run through its run ID.",
+            400,
+          );
+        }
+        await requireChatAccess(dependencies.chats, device, currentRunMatch[1]!, "read", "stream");
+        const runId = dependencies.hostRuns.currentRunId(currentRunMatch[1]!);
+        dependencies.hostRuns.openRunEvents(device, runId, 0, response, admitDevice(device.id));
+        return;
+      }
+      const runEventsMatch = /^\/runs\/([A-Za-z0-9._:-]{1,128})\/events$/u.exec(path);
+      if (runEventsMatch && request.method === "GET") {
+        route = "runEvents";
+        const after = streamAfter(request, query);
+        const device = await authenticate(request, dependencies.devices, "runs:observe");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
+        const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
+        await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
+        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response, admitDevice(device.id));
+        return;
+      }
+      const runControlMatch =
+        /^\/runs\/([A-Za-z0-9._:-]{1,128})\/(cancel|inputs|approvals\/([A-Za-z0-9._:-]{1,128})\/respond|questions\/([A-Za-z0-9._:-]{1,128})\/respond)$/u
+          .exec(path);
+      if (runControlMatch && request.method === "POST") {
+        requireNoQuery(query);
+        const runId = runControlMatch[1]!;
+        const action = runControlMatch[2]!;
+        route = action === "cancel"
+          ? "runCancel"
+          : action === "inputs"
+            ? "runInputs"
+            : runControlMatch[3] !== undefined
+              ? "runApprovalRespond"
+              : "runQuestionRespond";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "runs:control");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const hostRuns = dependencies.hostRuns;
+        const chats = dependencies.chats;
+        if (!hostRuns || !chats) throw hostRunsUnavailable();
+        // Chat-level write access is still required, so a Bot chat's run
+        // needs bot:write and the device's own Bot audience.
+        const access = (resource: BotChatResource) =>
+          async <T>(chatId: string, effect: () => Promise<T>): Promise<T> => {
+            await requireChatAccess(chats, device, chatId, "write", resource);
+            return effect();
+          };
+        if (route === "runCancel") {
+          requireEmptyObject(body);
+          writeJson(response, 202, await hostRuns.cancel(device.id, runId, key, access("stream")));
+        } else if (route === "runInputs") {
+          writeJson(
+            response,
+            200,
+            await hostRuns.submitInput(device.id, runId, body, key, (chatId, effect) =>
+              runChatMutation(chats, device, chatId, "stream", effect)),
+          );
+        } else if (route === "runApprovalRespond") {
+          writeJson(
+            response,
+            200,
+            await hostRuns.respondApproval(
+              device.id,
+              runId,
+              runControlMatch[3]!,
+              body,
+              key,
+              access("approval"),
+            ),
+          );
+        } else {
+          writeJson(
+            response,
+            200,
+            await hostRuns.respondQuestion(
+              device.id,
+              runId,
+              runControlMatch[4]!,
+              body,
+              key,
+              access("question"),
+            ),
+          );
+        }
         return;
       }
       if (path === "/simulators" || path.startsWith("/simulators/")) {

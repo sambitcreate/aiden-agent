@@ -76,9 +76,9 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "remoteAccess",
-    title: "Aiden On The Go",
+    title: "Connections",
     group: "Agent",
-    keywords: ["remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+    keywords: ["aiden on the go", "control other computers", "other devices", "multiple computers", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
   },
   {
     id: "scheduledTasks",
@@ -171,7 +171,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "about",
     title: "About",
     group: "App",
-    keywords: ["version", "build", "github", "repository", "app information"],
+    keywords: ["version", "build", "github", "repository", "app information", "update", "diagnostics", "logs", "reset", "onboarding", "restart"],
   },
 ];
 
@@ -184,6 +184,25 @@ export function availableSettingsDestinations(capabilities: {
       (destination.id !== "computerUse" || capabilities.computerUse) &&
       (destination.id !== "simulator" || capabilities.devices),
   );
+}
+
+/**
+ * Settings search matches when every whitespace-separated term appears somewhere in the
+ * destination's title, keywords, or description, in any order ("phone connect").
+ */
+export function matchesSettingsSearch(
+  destination: { title: string; keywords: string | readonly string[] },
+  search: string,
+  description = "",
+): boolean {
+  const terms = search.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+  if (terms.length === 0) return true;
+  const keywords =
+    typeof destination.keywords === "string" ? [destination.keywords] : destination.keywords;
+  const haystack = [destination.title, ...keywords, description]
+    .join(" ")
+    .toLocaleLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 export function parseSettingsSection(value: unknown): SettingsSection | undefined {

@@ -1,6 +1,6 @@
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1961,6 +1961,49 @@ test("startup reconciliation removes indexed orphan journals", async (t) => {
 
   await store.reconcileChats(new Set());
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+test("a torn journal index is set aside intact and indexed journals are still deleted", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-torn-index-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const doomed = await store.openChat("chat-torn-index-a");
+  const doomedPath = (await doomed.getMetadata()).path;
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  const torn = (await readFile(indexPath, "utf8")).slice(0, 12);
+  await writeFile(indexPath, torn);
+
+  // A later mutation must not discard the unreadable bytes it replaces.
+  await store.openChat("chat-torn-index-b");
+  const preserved = (await readdir(root)).filter((name) => name.startsWith(".aiden-journal-index.json.") && name.endsWith(".corrupt"));
+  assert.equal(preserved.length, 1);
+  assert.equal(await readFile(path.join(root, preserved[0]!), "utf8"), torn);
+  assert.equal(typeof JSON.parse(await readFile(indexPath, "utf8")).chats, "object");
+
+  await store.deleteChat("chat-torn-index-a");
+  await assert.rejects(stat(doomedPath), { code: "ENOENT" });
+});
+
+test("an unreadable journal index fails closed instead of being replaced", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-unreadable-index-"));
+  t.after(async () => {
+    await chmod(path.join(temporary, "sessions", "aiden-journal-index.json"), 0o600).catch(() => undefined);
+    await rm(temporary, { recursive: true, force: true });
+  });
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  await store.openChat("chat-unreadable-a");
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  const before = await readFile(indexPath, "utf8");
+  await chmod(indexPath, 0o000);
+
+  await assert.rejects(store.reconcileChats(new Set()), { code: "EACCES" });
+  await assert.rejects(store.openChat("chat-unreadable-b"), { code: "EACCES" });
+  await chmod(indexPath, 0o600);
+  assert.equal(await readFile(indexPath, "utf8"), before);
 });
 
 

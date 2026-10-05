@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { createConnection, createServer, type Socket } from "node:net";
 import * as fs from "node:fs/promises";
@@ -23,6 +24,11 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity, AidenRemoteTlsEndpointError } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
+import {
+  generatePairingRequestKeyPair,
+  pairingRequestMatchCode,
+} from "./aiden-remote-sealed-envelope.js";
+import { openPeerPairingRequestGrant } from "./peer-pairing.js";
 
 test("Remote discovery selects the Node Bonjour backend on Linux", () => {
   assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
@@ -141,6 +147,8 @@ interface FixtureOptions {
   }) => Promise<void>;
   connectFailsWith?: string;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
+  /** Wire the persisted "Accept connection requests" setting (in memory). */
+  pairingRequests?: { accept?: boolean };
 }
 
 async function fixture(
@@ -279,6 +287,8 @@ async function fixture(
       : {}),
   };
   let identityLoads = 0;
+  let acceptPairingRequests = options.pairingRequests?.accept ?? true;
+  let pairingRequestNotifications = 0;
   const service = new AidenRemoteService({
     state,
     appVersion: "0.30.0",
@@ -300,8 +310,23 @@ async function fixture(
     ...(options.afterListenerBound === undefined
       ? {}
       : { afterListenerBound: options.afterListenerBound }),
+    ...(options.pairingRequests
+      ? {
+          pairingRequestSettings: {
+            load: async () => acceptPairingRequests,
+            save: async (accept: boolean) => {
+              acceptPairingRequests = accept;
+            },
+          },
+          notifyPairingRequestsChanged: () => {
+            pairingRequestNotifications += 1;
+          },
+        }
+      : {}),
   });
   return {
+    acceptPairingRequests: () => acceptPairingRequests,
+    pairingRequestNotifications: () => pairingRequestNotifications,
     service,
     state,
     bonjour,
@@ -1922,4 +1947,261 @@ test("guided Tailscale TLS failure stays classified while rolling back the new r
     assert.equal(f.service.pairingStatus(), undefined);
     assert.equal(f.tailscale.disconnects, 1);
   } finally { await f.cleanup(); }
+});
+
+async function plainJson<T>(
+  port: number,
+  requestPath: string,
+  options: { method?: string; headers?: Record<string, string>; body?: unknown } = {},
+): Promise<{ status: number; body: T }> {
+  const encodedBody = options.body === undefined
+    ? undefined
+    : Buffer.from(JSON.stringify(options.body));
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port,
+      path: requestPath,
+      method: options.method ?? "GET",
+      timeout: 3_000,
+      headers: {
+        ...options.headers,
+        ...(encodedBody === undefined ? {} : {
+          "content-type": "application/json",
+          "content-length": String(encodedBody.length),
+        }),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        try {
+          resolve({
+            status: response.statusCode ?? 0,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as T,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.once("error", reject);
+    if (encodedBody !== undefined) request.write(encodedBody);
+    request.end();
+  });
+}
+
+interface CreatedPairingRequest {
+  requestId: string;
+  pollSecret: string;
+  expiresAt: string;
+  hostCommitment: string;
+}
+
+async function requestConnection(
+  send: typeof insecureJson,
+  port: number,
+  deviceName: string,
+): Promise<{
+  created: CreatedPairingRequest;
+  keys: ReturnType<typeof generatePairingRequestKeyPair>;
+  requesterNonce: Buffer;
+  hostNonce: string;
+  secret: Record<string, string>;
+}> {
+  const keys = generatePairingRequestKeyPair();
+  const created = await send<CreatedPairingRequest>(port, "/api/aiden/v1/pairing/requests", {
+    method: "POST",
+    body: { deviceName, deviceType: "mac", publicKey: keys.publicKey },
+  });
+  assert.equal(created.status, 201);
+  const secret = { "aiden-pairing-secret": created.body.pollSecret };
+  const requesterNonce = randomBytes(32);
+  const revealed = await send<{ hostNonce: string }>(
+    port,
+    `/api/aiden/v1/pairing/requests/${created.body.requestId}/reveal`,
+    { method: "POST", headers: secret, body: { requesterNonce: requesterNonce.toString("base64url") } },
+  );
+  assert.equal(revealed.status, 200);
+  return { created: created.body, keys, requesterNonce, hostNonce: revealed.body.hostNonce, secret };
+}
+
+test("an approved LAN connection request seals a pinned credential that authenticates /server", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    assert.equal((await app.service.status()).acceptPairingRequests, true);
+    const port = app.persisted().lanPort;
+    const identity = await loadOrCreateAidenRemoteTlsIdentity({
+      directory: path.join(app.directory, "identity"),
+      hostnames: ["aiden-test", "aiden-test.local"],
+    });
+    const request = await requestConnection(insecureJson, port, "Travel MacBook");
+    const [prompt] = app.service.listPairingRequests();
+    assert.equal(prompt?.deviceName, "Travel MacBook");
+    assert.equal(prompt?.transport, "lan");
+    // The requester derives the same code from the certificate it observed.
+    assert.equal(
+      prompt?.matchCode,
+      pairingRequestMatchCode({
+        requesterPublicKey: request.keys.publicKey,
+        serverSpkiSha256: identity.serverSpkiSha256,
+        requestId: request.created.requestId,
+        requesterNonce: request.requesterNonce,
+        hostNonce: request.hostNonce,
+      }),
+    );
+    assert.ok(app.pairingRequestNotifications() > 0);
+
+    assert.equal(
+      (await app.service.respondPairingRequest(request.created.requestId, "allow"))?.state,
+      "approved",
+    );
+    const polled = await insecureJson<{ state: string; envelope: unknown }>(
+      port,
+      `/api/aiden/v1/pairing/requests/${request.created.requestId}`,
+      { headers: request.secret },
+    );
+    assert.equal(polled.body.state, "approved");
+    const grant = openPeerPairingRequestGrant(polled.body.envelope, {
+      requestId: request.created.requestId,
+      publicKey: request.keys.publicKey,
+      privateKey: request.keys.privateKey,
+      endpoint: `https://aiden-test.local:${port}/api/aiden/v1`,
+      serverSpkiSha256: identity.serverSpkiSha256,
+    });
+    assert.equal(grant.instanceId, app.persisted().instanceId);
+    assert.equal(
+      grant.caCertificateDerBase64,
+      new X509Certificate(identity.caCertificate).raw.toString("base64"),
+    );
+    const server = await insecureJson<{ instanceId: string; features?: string[] }>(
+      port,
+      "/api/aiden/v1/server",
+      { headers: { authorization: `Bearer ${grant.credential}`, "aiden-protocol-version": "1" } },
+    );
+    assert.equal(server.status, 200);
+    assert.equal(server.body.instanceId, app.persisted().instanceId);
+    assert.ok(server.body.features?.includes("pairing-requests-v1"));
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("turning connection requests off persists, cancels open requests and refuses new ones", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const port = app.persisted().lanPort;
+    const open = await requestConnection(insecureJson, port, "Desk Mac");
+    assert.equal(app.service.listPairingRequests().length, 1);
+
+    await app.service.setAcceptPairingRequests(false);
+    assert.equal(app.acceptPairingRequests(), false);
+    assert.equal((await app.service.status()).acceptPairingRequests, false);
+    assert.deepEqual(app.service.listPairingRequests(), []);
+    const cancelled = await insecureJson<{ state: string }>(
+      port,
+      `/api/aiden/v1/pairing/requests/${open.created.requestId}`,
+      { headers: open.secret },
+    );
+    assert.equal(cancelled.body.state, "cancelled");
+    const refused = await insecureJson<{ error: { code: string } }>(port, "/api/aiden/v1/pairing/requests", {
+      method: "POST",
+      body: { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+    });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error.code, "pairing_closed");
+    const health = await insecureJson<{ pairingRequests: boolean }>(port, "/api/aiden/v1/health?detail=host");
+    assert.equal(health.body.pairingRequests, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("a persisted off setting is honoured from the first request after startup", async () => {
+  const app = await fixture({ pairingRequests: { accept: false } });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const refused = await insecureJson<{ error: { code: string } }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/pairing/requests",
+      {
+        method: "POST",
+        body: { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      },
+    );
+    assert.equal(refused.body.error.code, "pairing_closed");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("turning Remote access off revokes an approval nobody collected", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const request = await requestConnection(insecureJson, app.persisted().lanPort, "Desk Mac");
+    await app.service.respondPairingRequest(request.created.requestId, "allow");
+    const [issued] = await app.state.listDevices();
+    assert.equal(issued?.revokedAt, undefined);
+    await app.service.setEnabled(false);
+    const [after] = await app.state.listDevices();
+    assert.equal(after?.id, issued?.id);
+    assert.equal(typeof after?.revokedAt, "number");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale connection requests seal the Serve identity and reuse a recent pin probe", async () => {
+  let probes = 0;
+  const pin = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
+  const app = await fixture({
+    mode: "both",
+    pairingRequests: {},
+    tailscaleAssessment: { state: "owned" },
+    resolveTlsEndpointPin: async () => {
+      probes += 1;
+      return pin;
+    },
+    initial: (state) => {
+      state.tailscaleOwnership = {
+        path: "/api/aiden/v1",
+        target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1`,
+      };
+    },
+  });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const loopback = app.persisted().lanPort + 1;
+    const first = await requestConnection(plainJson, loopback, "Travel MacBook");
+    await requestConnection(plainJson, loopback, "Travel MacBook");
+    assert.equal(probes, 1);
+    assert.deepEqual(
+      app.service.listPairingRequests().map((prompt) => prompt.transport),
+      ["tailscale", "tailscale"],
+    );
+    await app.service.respondPairingRequest(first.created.requestId, "allow");
+    const polled = await plainJson<{ envelope: unknown }>(
+      loopback,
+      `/api/aiden/v1/pairing/requests/${first.created.requestId}`,
+      { headers: first.secret },
+    );
+    const grant = openPeerPairingRequestGrant(polled.body.envelope, {
+      requestId: first.created.requestId,
+      publicKey: first.keys.publicKey,
+      privateKey: first.keys.privateKey,
+      endpoint: "https://aiden.tailnet.ts.net/api/aiden/v1",
+      serverSpkiSha256: pin,
+    });
+    assert.equal(grant.caCertificateDerBase64, undefined);
+  } finally {
+    await app.cleanup();
+  }
 });

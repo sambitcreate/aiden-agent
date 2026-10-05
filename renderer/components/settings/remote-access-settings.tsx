@@ -43,6 +43,7 @@ import {
   toast,
 } from "../ui";
 import { CopyButton } from "../copy-button";
+import { AcceptConnectionRequestsField } from "./remote-connection-requests-field";
 import { aidenRemoteApi } from "../../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../../lib/queries";
 import type {
@@ -246,7 +247,7 @@ export function RemoteAccessSettings() {
   const capabilities = useAppCapabilities();
   const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
   const queryClient = useQueryClient();
-  const settingsQuery = useAidenRemoteSettings();
+  const settingsQuery = useAidenRemoteSettings(true);
   const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
   const [setupReview, setSetupReview] = React.useState<{
     transport: "lan" | "tailscale"; instanceId: string; enabled: boolean;
@@ -614,6 +615,18 @@ export function RemoteAccessSettings() {
             />
           </div>
         </Field>
+        {status.acceptPairingRequests !== undefined ? (
+          <AcceptConnectionRequestsField
+            accept={status.acceptPairingRequests}
+            hostLabel={hostLabel}
+            busy={busy === "pairingRequests"}
+            disabled={busy !== null}
+            onChange={(accept) => void mutate(
+              "pairingRequests",
+              () => aidenRemoteApi.setAcceptPairingRequests(accept),
+            )}
+          />
+        ) : null}
         <Field
           label="Desktop name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}

@@ -16,7 +16,8 @@ import {
 
 const MAX_RESPONSE_BYTES = 725_000;
 const MAX_COMMAND_BYTES = 275_000;
-const MAX_HTML_CONTENT_BYTES = 512 * 1024;
+/** The native read-html cap; larger files are refused before reading. */
+export const MAX_HTML_CONTENT_BYTES = 512 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const RECOVERY_NAME =
   /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;

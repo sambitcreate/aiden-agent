@@ -4,9 +4,11 @@
 
 import type * as React from "react";
 import { CopyButton } from "./copy-button";
+import { ForkMessageButton, type MessageForkAction } from "./fork-message-button";
 import { ReadAloudButton, type ReadAloudActionProps } from "./read-aloud-button";
 
 interface MessageActionsProps {
+  /** Empty for replies with no prose; the copy action is then omitted. */
   copyText: string;
   /** Present only on the tail of an eligible whole response. */
   readAloud?: ReadAloudActionProps;
@@ -14,19 +16,30 @@ interface MessageActionsProps {
   hidden?: boolean;
   /** Always-visible trailing turn facts; they share the row so it never grows. */
   footer?: React.ReactNode;
+  /** Present on settled replies that can start a fork. */
+  fork?: MessageForkAction;
 }
 
-export function MessageActions({ copyText, readAloud, hidden, footer }: MessageActionsProps) {
+export function MessageActions({ copyText, readAloud, hidden, footer, fork }: MessageActionsProps) {
   return (
     <div
       className={`group/actions mt-1 flex items-center gap-0.5 ${hidden ? "invisible" : ""}`}
       aria-hidden={hidden}
     >
-      <CopyButton
-        text={copyText}
-        label="Copy message"
-        className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-      />
+      {copyText ? (
+        <CopyButton
+          text={copyText}
+          label="Copy message"
+          className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+        />
+      ) : null}
+      {fork ? (
+        <ForkMessageButton
+          action={fork}
+          kind="fork"
+          className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+        />
+      ) : null}
       {readAloud ? (
         <ReadAloudButton
           {...readAloud}

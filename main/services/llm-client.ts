@@ -84,6 +84,13 @@ import {
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import {
+  hostRunRegistry,
+  recordRunAttentionResolved,
+  recordRunBegin,
+  recordRunNotification,
+  recordRunSettled,
+} from "./host-runs-main.js";
+import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
   resolveBotRuntimeSkills,
@@ -191,6 +198,7 @@ import {
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
   projectVisibleHistoryWithoutSkills,
+  ensurePiForkSummary,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
@@ -373,6 +381,7 @@ import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
+import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -562,6 +571,7 @@ function broadcastChatSettled(
   fallbackWorkspaceId: string | undefined,
 ): void {
   chatActivityRegistry.settle(streamId);
+  recordRunSettled(hostRunRegistry, streamId);
   chatProgressEvents.settle(chatId, streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
@@ -609,6 +619,8 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
 
+const deltaCoalescer = new GenerationDeltaCoalescer();
+
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
   if (chatId && channel === "chat:todo") {
@@ -619,8 +631,23 @@ function sendGeneration(streamId: string, channel: NotificationChannel, payload:
   } else if (chatId && channel === "chat:subagents") {
     chatProgressEvents.changed(chatId);
   }
+  // Journal before delivery so a run whose window went away stays observable.
+  // Prompts are journaled by their coordinators only once delivery succeeds.
+  if (channel !== "chat:approval" && channel !== "chat:questionnaire") {
+    recordRunNotification(hostRunRegistry, streamId, channel, payload);
+  }
   const owner = ownerForStream(streamId);
-  if (!owner || owner.isDestroyed()) return false;
+  if (!owner || owner.isDestroyed()) {
+    deltaCoalescer.discard(streamId);
+    return false;
+  }
+  // Renderer documents receive text and reasoning deltas in short batches;
+  // paired devices and headless owners keep per-delta delivery.
+  if (owner.kind !== "remote" && owner.id !== 0) {
+    if (deltaCoalescer.push(streamId, channel, payload, owner)) return true;
+  }
+  // Every other notification follows the deltas that preceded it.
+  deltaCoalescer.flush(streamId);
   try {
     owner.send(channel, payload);
     return true;
@@ -654,8 +681,15 @@ const approvals = new ToolApprovalCoordinator(
       throw new Error("The generation's renderer document is no longer active.");
     }
     chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
+    recordRunNotification(hostRunRegistry, prompt.streamId, "chat:approval", prompt);
   },
-  (approvalId) => chatActivityRegistry.resolveAttention(approvalId),
+  (approvalId, outcome) => {
+    chatActivityRegistry.resolveAttention(approvalId);
+    recordRunAttentionResolved(hostRunRegistry, approvalId, {
+      kind: "approval",
+      decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
+    });
+  },
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -663,8 +697,15 @@ const questionnaires = new AskUserQuestionCoordinator(
       throw new Error("The generation's renderer document is no longer active.");
     }
     chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
+    recordRunNotification(hostRunRegistry, prompt.streamId, "chat:questionnaire", prompt);
   },
-  (promptId) => chatActivityRegistry.resolveAttention(promptId),
+  (promptId, response) => {
+    chatActivityRegistry.resolveAttention(promptId);
+    recordRunAttentionResolved(hostRunRegistry, promptId, {
+      kind: "question",
+      outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
+    });
+  },
 );
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
@@ -778,6 +819,9 @@ async function prepareGeneration(
   const agentsInstructions = agentsInstructionRoots
     ? await createAgentsInstructionRefresher({
         ...agentsInstructionRoots,
+        onNotices: (notices) => {
+          sendGeneration(streamId, "chat:status", { streamId, phase: "agents_instructions_limited", notices });
+        },
         revalidate: async (requestSignal) => {
           signal.throwIfAborted();
           requestSignal?.throwIfAborted();
@@ -1662,6 +1706,7 @@ export const llmClient = {
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
+            recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
             chatProgressEvents.begin(params.chatId, streamId);
           },
         );
@@ -2424,12 +2469,18 @@ export const llmClient = {
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      // A forked chat's summary of where its source went after the fork
+      // point sits right after the last copied message.
+      const forkSummary = generationChat.forkedFrom?.summary;
       if (!skillsEnabledForTurn) {
         piSession = await projectVisibleHistoryWithoutSkills(
           piSession,
           priorVisibleMessages,
           model,
+          forkSummary,
         );
+      } else {
+        await ensurePiForkSummary(piSession, priorVisibleMessages, forkSummary, model, supportsImages);
       }
       const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
@@ -3798,6 +3849,24 @@ export const llmClient = {
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload);
+  },
+
+  /**
+   * Host-authority approval for a paired controller holding `runs:control`.
+   * No owner-document check; the decision is still one-shot, so this returns
+   * false when the host UI, a phone or another controller already answered.
+   */
+  approveAsHost(
+    approvalId: string,
+    decision: ApprovalDecision,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
+    return approvals.decideAsHost(approvalId, decision === "allow", payload);
+  },
+
+  /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */
+  answerQuestionnaireAsHost(promptId: string, response: unknown): AskUserQuestionRespondOutcome {
+    return questionnaires.respondAsHost(promptId, response);
   },
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {

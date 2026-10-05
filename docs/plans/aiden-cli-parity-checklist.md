@@ -20,7 +20,7 @@ autocomplete, themes, hidden `/debug`.
 | Feature | Desktop cores (portable) | CLI vehicle |
 | --- | --- | --- |
 | Auto session titles | `chat-title-policy.ts`, `chat-title-routing.ts` (pure); `chat-store-core.ts:1139` | extension: first user message → background title via model-runtime adapter → pi session name |
-| Cross-session title/preview search | `chat-store-core.ts:723` (`listSummaryMetadata`), `sidebar-workspace-groups.ts` (pure) | `/search <query>` extension command |
+| Cross-session title/preview search | `chat-store-core.ts:723` (`listSummaryMetadata`), `sidebar-organization.ts` (pure) | `/search <query>` extension command |
 | Portable `.aiden-chat.json` export | `chat-export.ts` (pure, schema v1, atomic) | `/export --aiden` writing to cwd (Phase 3 interop format) |
 | Workspace registry + scratch workspaces | `workspace-application-service.ts` (pure DI), `scratch-workspace.ts` (pure) | `aiden workspace` / `/scratch` commands |
 | Per-workspace access tiers (full/ask/none) | enforced in `llm-client.ts:572-908` (portable logic) | extension mapping persisted tier → tool approval |

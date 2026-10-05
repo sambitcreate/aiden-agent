@@ -7,7 +7,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
-import { PeerTransport, PeerEventFrames } from "./peer-transport.js";
+import {
+  PeerTransport,
+  PeerEventFrames,
+  PeerTransportError,
+  MAX_PEER_UPLOAD_BYTES,
+} from "./peer-transport.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
@@ -38,7 +43,7 @@ test("desktop manual pairing consumes the native clients' canonical cryptographi
   );
 });
 
-test("closed peer operations reject injected routes and require mutation identity", () => {
+test("closed peer operations reject injected routes and require mutation identity", async () => {
   for (const operation of ["cancel", "respondApproval"]) {
     assert.throws(() =>
       peerOperationRequest({ operation, resourceId: "resource" }),
@@ -67,15 +72,14 @@ test("closed peer operations reject injected routes and require mutation identit
     }),
     { method: "GET", path: "/workspaces/work/files/file_handle" },
   );
-  assert.throws(
-    () =>
-      peerOperationResult(
-        { operation: "server" },
-        { nested: { credential: "secret" } },
-      ),
+  await assert.rejects(
+    peerOperationResult(
+      { operation: "server" },
+      { nested: { credential: "secret" } },
+    ),
     /response contract/,
   );
-  assert.throws(() =>
+  await assert.rejects(
     peerOperationResult({ operation: "chat" }, { id: "missing-fields" }),
   );
 });
@@ -83,20 +87,32 @@ test("closed peer operations reject injected routes and require mutation identit
 test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and parses chunked SSE", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-test-"));
   const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
-  const pairingService = new AidenRemotePairingService("host_tls", {
-    issueDevice: async (input) => ({
-      credential: "a".repeat(43),
-      device: {
-        id: "device_tls",
-        name: input.name,
-        type: input.type,
-        clientVersion: input.clientVersion,
-        capabilities: [...input.capabilities!],
-        createdAt: Date.now(),
-        lastSeenAt: 0,
+  const issuedCapabilities: string[][] = [];
+  const pairingService = new AidenRemotePairingService(
+    "host_tls",
+    {
+      issueDevice: async (input) => {
+        issuedCapabilities.push([...input.capabilities!]);
+        return {
+          credential: "a".repeat(43),
+          device: {
+            id: "device_tls",
+            name: input.name,
+            type: input.type,
+            clientVersion: input.clientVersion,
+            capabilities: [...input.capabilities!],
+            createdAt: Date.now(),
+            lastSeenAt: 0,
+          },
+        };
       },
-    }),
-  });
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => true,
+  );
   const actualRouter = createAidenRemoteRequestHandler({
     instanceId: "host_tls",
     displayName: () => "TLS fixture",
@@ -121,6 +137,11 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   });
   let redirected = 0;
   let liveResponse: ServerResponse | undefined;
+  let slowResponse: ServerResponse | undefined;
+  let slowArrived!: () => void;
+  const slowRequested = new Promise<void>((resolve) => {
+    slowArrived = resolve;
+  });
   const server = https.createServer(
     { key: identity.privateKey, cert: identity.certificateChain },
     (request, response) => {
@@ -137,10 +158,58 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return;
       }
       if (request.url === "/target") redirected++;
+      if (request.url?.endsWith("/slow-open")) {
+        // Headers wait until the test sends them.
+        slowResponse = response;
+        slowArrived();
+        return;
+      }
       if (request.url?.endsWith("/live")) {
         liveResponse = response;
         response.writeHead(200, { "Content-Type": "text/event-stream" });
         response.write("data: start\n\n");
+        return;
+      }
+      if (request.url?.endsWith("/denied")) {
+        response.writeHead(403, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              code: "capability_denied",
+              message: "No.",
+              retryable: false,
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url?.endsWith("/revoked")) {
+        response.writeHead(403, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              code: "credential_revoked",
+              message: "No.",
+              retryable: false,
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url?.endsWith("/resume")) {
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(`data: ${request.headers["last-event-id"] ?? "none"}\n\n`);
+        return;
+      }
+      if (request.url?.endsWith("/upload")) {
+        let received = 0;
+        request.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+        });
+        request.on("end", () => {
+          response.writeHead(201, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ received }));
+        });
         return;
       }
       if (request.url?.endsWith("/events")) {
@@ -196,18 +265,87 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     assert.equal(view.id, "host_tls");
     assert.equal(savedHosts.length, 1);
     assert.equal(view.state, "connected");
+    // A desktop controller opts into the host-wide run vocabulary at pairing.
+    for (const capability of ["host:events", "runs:observe", "runs:control"]) {
+      assert.ok(issuedCapabilities[0]!.includes(capability), capability);
+    }
     registry.close();
+    // A pin mismatch is an identity change, never mere unavailability.
     await assert.rejects(
       new PeerTransport({
         ...trust,
         serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
       }).json({ path: "/server" }),
+      (error: unknown) =>
+        error instanceof PeerTransportError && error.code === "identity_changed",
+    );
+    // Envelope codes separate an answered per-operation refusal from a revoked credential.
+    await assert.rejects(
+      client.json({ path: "/denied", credential: "a".repeat(43) }),
+      (error: unknown) =>
+        error instanceof PeerTransportError &&
+        error.code === "request_failed" &&
+        error.status === 403 &&
+        error.remote?.code === "capability_denied",
+    );
+    await assert.rejects(
+      client.json({ path: "/revoked", credential: "a".repeat(43) }),
+      (error: unknown) =>
+        error instanceof PeerTransportError &&
+        error.code === "authentication_required" &&
+        error.remote?.code === "credential_revoked",
+    );
+    const resumed: string[] = [];
+    const openedAt: number[] = [];
+    assert.deepEqual(
+      await client.events(
+        {
+          path: "/resume",
+          lastEventId: "epoch_1:41",
+          onOpen: () => openedAt.push(resumed.length),
+        },
+        (frame) => resumed.push(frame),
+      ),
+      { reason: "eof" },
+    );
+    assert.deepEqual(resumed, ["data: epoch_1:41"]);
+    // The accepted-stream signal precedes every frame; a refused stream never opens.
+    assert.deepEqual(openedAt, [0]);
+    await assert.rejects(
+      client.events({ path: "/denied", onOpen: () => openedAt.push(-1) }, () => {}),
+    );
+    assert.deepEqual(openedAt, [0]);
+    await assert.rejects(
+      client.events({ path: "/resume", lastEventId: "bad\nid" }, () => {}),
     );
     await assert.rejects(
       client.json({ path: "/redirect", credential: "a".repeat(43) }),
     );
     assert.equal(redirected, 0);
     await assert.rejects(client.json({ path: "/large" }));
+    // A request body over 1 MiB leaves only where the operation allows an
+    // upload, and never past the upload ceiling, whatever the caller asks for.
+    const upload = { data: "a".repeat(2 * 1_048_576) };
+    await assert.rejects(
+      client.json({ method: "POST", path: "/upload", body: upload }),
+      /too large/u,
+    );
+    const accepted = (await client.json({
+      method: "POST",
+      path: "/upload",
+      body: upload,
+      maxBodyBytes: MAX_PEER_UPLOAD_BYTES,
+    })) as { received: number };
+    assert.equal(accepted.received, Buffer.byteLength(JSON.stringify(upload)));
+    await assert.rejects(
+      client.json({
+        method: "POST",
+        path: "/upload",
+        body: { data: "a".repeat(MAX_PEER_UPLOAD_BYTES) },
+        maxBodyBytes: Number.MAX_SAFE_INTEGER,
+      }),
+      /too large/u,
+    );
     const frames: string[] = [];
     await client.events({ path: "/events" }, (frame) => frames.push(frame));
     assert.deepEqual(frames, ['id: 1\ndata: {"text":"hello"}']);
@@ -217,9 +355,9 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       received = resolve;
     });
     const live = client.events({ path: "/live" }, () => received());
-    const rejected = assert.rejects(live);
     await nextFrame;
-    // Completed frames keep the frame deadline alive, but cannot extend the session cap.
+    // Completed frames keep the frame deadline alive, but cannot extend the session cap;
+    // reaching the cap is a resumable outcome, not an error.
     for (let i = 0; i < 14; i++) {
       t.mock.timers.tick(20_000);
       nextFrame = new Promise<void>((resolve) => {
@@ -229,7 +367,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       await nextFrame;
     }
     t.mock.timers.tick(20_000);
-    await rejected;
+    assert.deepEqual(await live, { reason: "capped" });
     // Even a peer that has sent headers and one valid frame must finish its next frame.
     nextFrame = new Promise<void>((resolve) => {
       received = resolve;
@@ -240,6 +378,27 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     liveResponse!.write("data: partial");
     t.mock.timers.tick(30_000);
     await stalledRejected;
+    // A slow connect does not eat into the quiet time allowed before the first frame.
+    let slowOpened!: () => void;
+    const openedNow = new Promise<void>((resolve) => {
+      slowOpened = resolve;
+    });
+    nextFrame = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const slow = client.events({ path: "/slow-open", onOpen: () => slowOpened() }, () => received());
+    // An early abort surfaces as the stream's rejection rather than a hang.
+    const unlessEnded = (step: Promise<void>) => Promise.race([step, slow.then(() => {})]);
+    await slowRequested;
+    t.mock.timers.tick(25_000);
+    slowResponse!.writeHead(200, { "Content-Type": "text/event-stream" });
+    slowResponse!.flushHeaders();
+    await unlessEnded(openedNow);
+    t.mock.timers.tick(20_000);
+    slowResponse!.write("data: first\n\n");
+    await unlessEnded(nextFrame);
+    slowResponse!.end();
+    assert.deepEqual(await slow, { reason: "eof" });
     t.mock.timers.reset();
   } finally {
     server.closeAllConnections();
@@ -285,6 +444,29 @@ test(
       /budget/,
     );
     assert.equal(boundaries, 16_384);
+    // A long-lived feed keeps going: committed frames release the rolling budget.
+    const feed = new PeerEventFrames();
+    const committed = Buffer.from(
+      `id: e:1\ndata: ${"x".repeat(1000)}\n\n`.repeat(1024),
+    );
+    let delivered = 0;
+    for (let round = 0; round < 24; round++)
+      feed.push(
+        committed,
+        () => delivered++,
+        () => {},
+      );
+    assert.equal(delivered, 24 * 1024);
+    const uncommitted = new PeerEventFrames();
+    assert.throws(
+      () =>
+        uncommitted.push(
+          Buffer.from(`data: ${"x".repeat(1000)}\n\n`.repeat(17 * 1024)),
+          () => {},
+          () => {},
+        ),
+      /budget/,
+    );
     const split = new PeerEventFrames();
     const frames: string[] = [];
     for (const byte of Buffer.from("data: ☃\r\n\r\n"))
@@ -309,7 +491,7 @@ test("pairing tolerates bounded skew but rejects nonsense expiry", () => {
   assert.throws(() => assertPeerPairingExpiry("nonsense", now));
 });
 
-test("every exposed operation rejects malformed DTOs and preserves legitimate content", () => {
+test("every exposed operation rejects malformed DTOs and preserves legitimate content", async () => {
   const operations = [
     "server",
     "summaries",
@@ -333,27 +515,27 @@ test("every exposed operation rejects malformed DTOs and preserves legitimate co
     "createWorkspace",
   ];
   for (const operation of operations)
-    assert.throws(() => peerOperationResult({ operation }, {}), operation);
+    await assert.rejects(peerOperationResult({ operation }, {}), operation);
   const models = {
     providers: [],
     defaults: { secret: "model-id", headers: "another-model" },
   };
   assert.deepEqual(
-    peerOperationResult({ operation: "models" }, models),
+    await peerOperationResult({ operation: "models" }, models),
     models,
   );
   assert.deepEqual(
-    peerOperationResult({ operation: "approval" }, { approval: null }),
+    await peerOperationResult({ operation: "approval" }, { approval: null }),
     { approval: null },
   );
-  assert.throws(() =>
+  await assert.rejects(
     peerOperationResult(
       { operation: "approval" },
       { approval: null, credential: "private" },
     ),
   );
   assert.equal(
-    peerOperationResult({ operation: "deleteChat" }, undefined),
+    await peerOperationResult({ operation: "deleteChat" }, undefined),
     undefined,
   );
 });

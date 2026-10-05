@@ -20,10 +20,20 @@ import { TerminalDrawer } from "../components/terminal-drawer";
 import { EnvironmentWorkbench } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { withForkLineage } from "../lib/chat-copy-view";
+import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
 
 export function ChatLayout() {
-  const params = useParams({ strict: false }) as { chatId?: string };
+  const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  // A paired host's chat is selected separately so its ID never matches a local chat.
+  const activeRemoteChat = React.useMemo(
+    () =>
+      params.hostId && params.chatId ? { hostId: params.hostId, chatId: params.chatId } : null,
+    [params.chatId, params.hostId],
+  );
+  // Every `/host/...` route works on a paired host, never on this Mac's environment.
+  const onRemoteHost = Boolean(params.hostId);
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -67,19 +77,38 @@ export function ChatLayout() {
     };
   }, [qc]);
 
+  // A fork's summary settles in the background; patch its lineage in place so
+  // the summary card and held sends follow without a title reveal or refetch.
+  React.useEffect(
+    () =>
+      onNotification<ChatForkSummaryChanged>("chats:fork-summary-changed", (update) => {
+        qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) =>
+          current ? withForkLineage(current, update.forkedFrom) : current,
+        );
+      }),
+    [qc],
+  );
+
   return (
     <SplitView
       storageKey="aiden-agent"
-      sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
+      sidebar={
+        <ChatSidebar
+          activeChatId={activeRemoteChat ? undefined : params.chatId}
+          activeRemoteChat={activeRemoteChat}
+          titleReveal={titleReveal}
+        />
+      }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench>
+      <EnvironmentWorkbench suppressed={onRemoteHost}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
           </div>
           {pathname === "/profile" ||
           pathname === "/scheduled" ||
+          onRemoteHost ||
           (pathname.startsWith("/bots") && !params.chatId) ? null : (
             <TerminalDrawer />
           )}

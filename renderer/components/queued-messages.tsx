@@ -45,7 +45,9 @@ export function QueuedMessages({
             ? " · Paused"
             : state.holdReason === "compaction"
               ? " · Sends after compaction"
-              : ""}
+              : state.forkSummaryHeld
+                ? " · Sends after the summary"
+                : ""}
         </span>
         <Button
           variant="transparent"

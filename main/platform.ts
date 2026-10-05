@@ -58,7 +58,26 @@ export const logger = {
   error: (scope: string, ...values: LogValue[]) => writeLog("error", scope, values),
 };
 
+const broadcastObservers = new Set<(channel: NotificationChannel) => void>();
+
+/**
+ * Observe renderer notifications in the main process (the Remote host feed
+ * uses this to learn that chats, workspaces or Bots changed). Payloads are
+ * deliberately not forwarded.
+ */
+export function onBroadcast(observer: (channel: NotificationChannel) => void): () => void {
+  broadcastObservers.add(observer);
+  return () => broadcastObservers.delete(observer);
+}
+
 function broadcast(channel: NotificationChannel, payload: unknown): void {
+  for (const observer of [...broadcastObservers]) {
+    try {
+      observer(channel);
+    } catch (error) {
+      logger.warn("ipc", `A ${channel} observer failed.`, error);
+    }
+  }
   for (const window of BrowserWindow.getAllWindows()) {
     try {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {

@@ -20,7 +20,7 @@ test("bundled app package.json carries the Aiden rebrand", () => {
 	assert.equal(appPackageJson.version, outerPackageJson.version);
 });
 
-test("bundle entry is executable and lazy loaders are emitted beside it", () => {
+test("bundle entry is executable and lazy loaders are emitted beside the shared chunks", () => {
 	accessSync(join(appDir, "cli.js"), constants.X_OK);
 	for (const lazy of [
 		"anthropic.js",
@@ -36,7 +36,8 @@ test("bundle entry is executable and lazy loaders are emitted beside it", () => 
 		"radius.js",
 		"xai.js",
 	]) {
-		assert.ok(existsSync(join(appDir, lazy)), `missing lazy loader ${lazy}`);
+		// The resolving modules import these relative to their own chunk.
+		assert.ok(existsSync(join(appDir, "chunks", lazy)), `missing lazy loader ${lazy}`);
 	}
 });
 

@@ -1,4 +1,6 @@
 import type { CompactionEngine } from "../shared/compaction";
+import { parseAgentsInstructionNotices, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
+import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
   TtsJobSnapshot,
   TtsSafeError,
@@ -122,9 +124,6 @@ export interface BotAccessState {
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
 }
-import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
-import type { GoogleThinkingLevel } from "../shared/google-thinking";
-import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import type {
   ChatRunInputAdmissionResult,
@@ -162,7 +161,6 @@ import {
   rememberDetachedLifecycleStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
-import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
 import {
@@ -211,12 +209,25 @@ import {
   type DeviceStreamGrant,
   type DeviceToolchainState,
 } from "../shared/devices";
-import type { PeerHostView } from "../shared/peer-host";
+import type {
+  PeerDiscoveryState,
+  PeerHostFeedMessage,
+  PeerHostFeedSnapshot,
+  PeerHostStatus,
+  PeerHostView,
+  PeerOperationOutcome,
+  PeerPairingProgress,
+  PeerPairingResult,
+  PeerRepositoryIdentity,
+  PeerRunFrameMessage,
+  PeerRunSubscription,
+  PeerRunTarget,
+} from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import { invoke, onNotification } from "./ipc-bridge";
 
-function bridge() {
-  return window.aidenAPI.ipc;
-}
+export { invoke, onNotification } from "./ipc-bridge";
+export { dictationApi, settingsApi, voiceApi } from "./ipc-voice";
 
 export interface AppInfo {
   name: string;
@@ -225,22 +236,56 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
-export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-  return bridge().invoke(channel, ...args) as Promise<T>;
-}
-
-export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
-  return bridge().onNotification(method, handler as (params: unknown) => void);
-}
 
 export const peerHostsApi = {
   list: () => invoke<PeerHostView[]>("remote:peersList"),
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
   remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  /**
+   * Retries a host now: one backing off, or one blocked by a version
+   * mismatch. A connected host is left alone; an auth or identity block
+   * clears only by re-pairing.
+   */
+  reconnect: (id: string) => invoke<void>("remote:peerReconnect", id),
   operation: (hostId: string, operation: PeerOperation) =>
     invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+  /** Like `operation`, but failures come back as typed outcomes instead of throwing. */
+  call: (hostId: string, operation: PeerOperation) =>
+    invoke<PeerOperationOutcome>("remote:peerCall", hostId, operation),
+  statuses: () => invoke<PeerHostStatus[]>("remote:peerHostStatuses"),
+  /** Last-known rows; null when the host is disabled or unknown. */
+  feed: (hostId: string) => invoke<PeerHostFeedSnapshot | null>("remote:peerHostFeed", hostId),
+  runSubscribe: (hostId: string, target: PeerRunTarget, afterSequence = 0) =>
+    invoke<PeerRunSubscription>("remote:peerRunSubscribe", hostId, target, afterSequence),
+  runUnsubscribe: (subscriptionId: string) =>
+    invoke<boolean>("remote:peerRunUnsubscribe", subscriptionId),
+  onHostFeed: (handler: (message: PeerHostFeedMessage) => void) =>
+    onNotification<PeerHostFeedMessage>("remote:host-feed", handler),
+  onRunFrame: (handler: (message: PeerRunFrameMessage) => void) =>
+    onNotification<PeerRunFrameMessage>("remote:peer-run-frame", handler),
+  onHostState: (handler: (status: PeerHostStatus) => void) =>
+    onNotification<PeerHostStatus>("remote:peer-host-state", handler),
+  rename: (id: string, name: string) => invoke<PeerHostView>("remote:peersRename", id, name),
+  /** Search for other desktops while the Add device sheet is open. */
+  discoveryStart: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryStart"),
+  discoveryRefresh: () => invoke<PeerDiscoveryState>("remote:peerDiscoveryRefresh"),
+  discoveryStop: () => invoke<void>("remote:peerDiscoveryStop"),
+  onDiscovery: (handler: (state: PeerDiscoveryState) => void) =>
+    onNotification<PeerDiscoveryState>("remote:peer-discovery", handler),
+  pairRequest: (attemptId: string, deviceId: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairRequest", attemptId, deviceId, replaceHostId),
+  pairSetupCode: (
+    attemptId: string,
+    input: { deviceId: string; code: string } | { address: string; code: string },
+    replaceHostId?: string,
+  ) => invoke<PeerPairingResult>("remote:peerPairSetupCode", attemptId, input, replaceHostId),
+  pairLink: (attemptId: string, link: string, replaceHostId?: string) =>
+    invoke<PeerPairingResult>("remote:peerPairLink", attemptId, link, replaceHostId),
+  pairCancel: (attemptId: string) => invoke<boolean>("remote:peerPairCancel", attemptId),
+  onPairingProgress: (handler: (progress: PeerPairingProgress) => void) =>
+    onNotification<PeerPairingProgress>("remote:peer-pairing-progress", handler),
 };
 
 export const appApi = {
@@ -325,35 +370,6 @@ export const providersApi = {
     onNotification("providers:auth:status-changed", handler),
 };
 
-export const settingsApi = {
-  get: () => invoke<AppSettings>("settings:get"),
-  getAppearance: () => invoke<AppearanceConfig>("settings:getAppearance"),
-  getAppearanceState: () => invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
-  previewAppearance: (appearance: AppearanceConfig) =>
-    invoke<AppearanceConfig>("settings:previewAppearance", appearance),
-  set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
-  setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
-    invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
-  setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>
-    invoke<AppSettings>("settings:setGeminiUsageScope", scope),
-  setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
-    invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
-  setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
-    invoke<AppSettings>("settings:setCodexThinking", modelId, level),
-  setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
-    invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
-  setProviderThinking: (
-    providerId: string,
-    modelId: string,
-    level: import("../shared/generation-thinking").GenerationThinkingLevel,
-  ) => invoke<AppSettings>("settings:setProviderThinking", providerId, modelId, level),
-  setModelVisibility: (providerId: string, modelId: string, hidden: boolean) =>
-    invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
-  showAllProviderModels: (providerId: string) =>
-    invoke<AppSettings>("settings:showAllProviderModels", providerId),
-  hideAllProviderModels: (providerId: string) =>
-    invoke<AppSettings>("settings:hideAllProviderModels", providerId),
-};
 
 export const assistantApi = {
   config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
@@ -635,27 +651,23 @@ export const aidenRemoteApi = {
   onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
     onNotification("remote:approval-changed", handler),
+  setAcceptPairingRequests: (accept: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setAcceptPairingRequests", accept),
+  listPairingRequests: () =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestPrompt[]>(
+      "remote:listPairingRequests",
+    ),
+  respondPairingRequest: (requestId: string, decision: "allow" | "deny") =>
+    invoke<import("../shared/aiden-remote").AidenRemotePairingRequestDecisionView>(
+      "remote:respondPairingRequest",
+      requestId,
+      decision,
+    ),
+  onPairingRequestsChanged: (handler: () => void) =>
+    onNotification("remote:pairing-requests-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
-export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string, model?: string, operationId?: string) =>
-    invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId),
-  cancelTranscription: (operationId: string) => invoke<void>("voice:transcribeCancel", operationId),
-  /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
-  transcribeLocal: (pcmBase64: string, modelId: string, operationId: string) =>
-    invoke<string>("voice:transcribeLocal", pcmBase64, modelId, operationId),
-  cancelLocalTranscription: (operationId: string) =>
-    invoke<void>("voice:transcribeLocalCancel", operationId),
-  streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),
-  streamPush: (sessionId: string, pcmBase64: string) =>
-    invoke<void>("voice:streamPush", sessionId, pcmBase64),
-  streamFinish: (sessionId: string) => invoke<string>("voice:streamFinish", sessionId),
-  streamCancel: (sessionId: string) => invoke<void>("voice:streamCancel", sessionId),
-  onStreamText: (
-    handler: (payload: { sessionId: string; committed: string; tentative: string }) => void,
-  ) => onNotification("voice:stream-text", handler),
-};
 
 /** On-device (sherpa-onnx / Parakeet) engine + model management. */
 export const localVoiceApi = {
@@ -685,24 +697,6 @@ export const shortcutApi = {
     onNotification("shortcut:changed", handler),
 };
 
-// ── Global dictation (pill + auto-paste) ──────────────────────────────
-export const dictationApi = {
-  /** Pill reports the finished transcript to the main-process coordinator. */
-  reportResult: (operationId: string, text: string) =>
-    invoke<void>("dictation:result", operationId, text),
-  /** Pill reports a capture/transcription failure. */
-  reportError: (operationId: string, message: string) =>
-    invoke<void>("dictation:error", operationId, message),
-  /** Pill reports finalization/consent/fallback progress for accurate UI and diagnostics. */
-  reportProgress: (operationId: string, progress: "finalizing" | "fallback-consent" | "fallback") =>
-    invoke<void>("dictation:progress", operationId, progress),
-  /** Pill cancel button: discard the in-flight recording/transcription. */
-  cancel: () => invoke<void>("dictation:cancel"),
-  /** Pill renderer is mounted and subscribed to dictation state broadcasts. */
-  ready: () => invoke<void>("dictation:ready"),
-  /** Silence detector or UI asked to end capture without cancelling. */
-  stopRecording: () => invoke<void>("dictation:stop"),
-};
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
@@ -761,6 +755,9 @@ export const workspacesApi = {
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
+  /** Credential-free repository identity, or null outside a repository with a network remote. */
+  repositoryIdentity: (workspaceId: string) =>
+    invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
@@ -1085,11 +1082,23 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
-  copyVisibleHistory: (chatId: string, throughMessageId?: string) =>
+  /**
+   * Clone the whole visible chat, or fork it at `forkAt`. A fork with
+   * `summary` also summarizes what the source did after the fork point.
+   */
+  copyVisibleHistory: (
+    chatId: string,
+    forkAt?: { messageId: string; position: ChatForkPosition },
+    summary?: { instructions?: string },
+  ) =>
     invokeChatMutation<Chat>("chats:copyVisibleHistory", {
       chatId,
-      ...(throughMessageId ? { throughMessageId } : {}),
+      ...(forkAt ? { messageId: forkAt.messageId, position: forkAt.position } : {}),
+      ...(summary ? { summary } : {}),
     }),
+  retryForkSummary: (chatId: string) => invoke<Chat>("chats:retryForkSummary", { chatId }),
+  cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
+  skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
@@ -1261,7 +1270,8 @@ interface ChatArtifactNotification {
 export type ChatStatusPhase = "model_loading" | "model_ready";
 interface ChatStatus {
   streamId: string;
-  phase: ChatStatusPhase;
+  phase: ChatStatusPhase | "agents_instructions_limited";
+  notices?: unknown;
 }
 interface ChatDone {
   streamId: string;
@@ -1376,6 +1386,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
+  onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 
@@ -1431,7 +1443,13 @@ export function startGeneration(
   );
   unsubs.push(
     onNotification<ChatStatus>("chat:status", (p) => {
-      if (p.streamId === streamId) callbacks.onStatus?.(p.phase);
+      if (p.streamId !== streamId) return;
+      if (p.phase === "agents_instructions_limited") {
+        const notices = parseAgentsInstructionNotices(p.notices);
+        if (notices) callbacks.onAgentsInstructionNotices?.(notices);
+      } else {
+        callbacks.onStatus?.(p.phase);
+      }
     }),
   );
   unsubs.push(
