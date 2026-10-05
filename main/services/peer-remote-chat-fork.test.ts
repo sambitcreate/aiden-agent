@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteChatService } from "./aiden-remote-chats.js";
-import { ChatForkError } from "./chat-fork-error.js";
+import { ChatForkError, ForkSummaryStateError } from "./chat-fork-error.js";
 import { FakeHost, FEATURES, UNHANDLED, setup } from "./peer-remote-chat-test-host.js";
 import { PeerTransportError, type PeerRequest } from "./peer-transport.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
@@ -107,7 +107,7 @@ function forkingHost(features = FORK_FEATURES) {
         skip: async (chatId) => settle(chatId, "failed", ({ summary: _summary, ...lineage }) => lineage),
         cancel: (chatId) => {
           if (forks.get(chatId)?.forkedFrom?.summary?.state !== "pending") return false;
-          void settle(chatId, "pending", (lineage) => ({ ...lineage, summary: { ...lineage.summary!, state: "failed", error: "Stopped." } }));
+          void settle(chatId, "pending", (lineage) => ({ ...lineage, summary: { ...lineage.summary!, state: "failed", error: "Summary cancelled." } }));
           return true;
         },
       },
@@ -117,7 +117,7 @@ function forkingHost(features = FORK_FEATURES) {
   /** Moves a fork's summary on from `from`, or refuses like the real summarizer. */
   async function settle(chatId: string, from: "pending" | "failed", next: (lineage: NonNullable<Chat["forkedFrom"]>) => Chat["forkedFrom"]) {
     const fork = forks.get(chatId);
-    if (fork?.forkedFrom?.summary?.state !== from) throw new Error("The fork summary changed.");
+    if (fork?.forkedFrom?.summary?.state !== from) throw new ForkSummaryStateError("The fork summary changed.");
     const updated = { ...fork, forkedFrom: next(fork.forkedFrom), updatedAt: fork.updatedAt + 1 };
     forks.set(chatId, updated);
     return updated;
@@ -280,7 +280,7 @@ test("a fork with a summary can be cancelled, retried and skipped from the paire
     // The fork's own read carries the summary the feed leaves out.
     const read = hostResultValue(await harness.adapter.forkLineage(forked.id));
     assert.equal(read.forkedFrom?.summary?.state, "failed");
-    assert.equal(read.forkedFrom?.summary?.error, "Stopped.");
+    assert.equal(read.forkedFrom?.summary?.error, "Summary cancelled.");
 
     const retried = await fork.forkSummary("retry");
     assert.equal(retried.forkedFrom?.summary?.state, "pending");

@@ -131,11 +131,22 @@ function failure(error: unknown): HostChatError {
   return { code: "failed", message: error instanceof Error ? error.message : "The host request failed." };
 }
 
-/** A host's lineage carries an RFC 3339 time; the chat UI reads epoch milliseconds. */
+/**
+ * A host's lineage carries an RFC 3339 time and calls the summary's focus
+ * `focus`; the chat UI reads epoch milliseconds and `instructions`.
+ */
 export function mapHostForkLineage(value: unknown): ChatForkLineageV1 {
   const lineage = record(value);
   const at = typeof lineage.at === "string" ? Date.parse(lineage.at) : Number.NaN;
-  const parsed = Number.isFinite(at) ? parseChatForkLineageV1({ ...lineage, at }) : undefined;
+  let summary: Record<string, unknown> | undefined;
+  if (lineage.summary !== undefined) {
+    const { focus, ...rest } = record(lineage.summary);
+    if ("instructions" in rest) throw new Error("The host's fork lineage was malformed.");
+    summary = focus === undefined ? rest : { ...rest, instructions: focus };
+  }
+  const parsed = Number.isFinite(at)
+    ? parseChatForkLineageV1({ ...lineage, at, ...(summary ? { summary } : {}) })
+    : undefined;
   if (!parsed) throw new Error("The host's fork lineage was malformed.");
   return parsed;
 }
@@ -445,7 +456,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   async fork(chatId: string, input: HostChatForkInput): Promise<HostForkedChat> {
     const summary = input.summary
-      ? { summary: input.summary.instructions ? { instructions: input.summary.instructions } : {} }
+      ? { summary: input.summary.instructions ? { focus: input.summary.instructions } : {} }
       : {};
     // A summary fork needs the summary feature too; a plain fork does not.
     const value = await this.guarded(chatId, () =>

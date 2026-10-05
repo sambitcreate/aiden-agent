@@ -253,15 +253,16 @@ test("a fork without its key, revision or a well-formed cut point never leaves t
     { ...valid, body: { messageId: "m1", position: "middle" } },
     { ...valid, body: { messageId: "../m1", position: "after" } },
     { ...valid, body: { messageId: "m1", position: "after", extra: true } },
-    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "x" } } },
-    { ...valid, body: { messageId: "m1", position: "after", summary: { instructions: "   " } } },
-    { ...valid, body: { messageId: "m1", position: "after", summary: { instructions: "x".repeat(1001) } } },
+    // The desktop's internal name for the focus is not part of the wire.
+    { ...valid, body: { messageId: "m1", position: "after", summary: { instructions: "x" } } },
+    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "   " } } },
+    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "x".repeat(1001) } } },
     { ...valid, resourceId: "../server" },
     { operation: "forkSummaryRetry", resourceId: "chat_1", body: { force: true } },
   ])
     assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
   // At the bound, and with no focus at all, a summary request is accepted.
-  for (const summary of [{}, { instructions: "x".repeat(1000) }])
+  for (const summary of [{}, { focus: "x".repeat(1000) }])
     assert.deepEqual(
       peerOperationRequest({ ...valid, body: { messageId: "m1", position: "after", summary } }).body,
       { messageId: "m1", position: "after", summary },

@@ -75,19 +75,17 @@ function forkBody(value: unknown): Record<string, unknown> {
     throw new Error("Invalid peer fork request.");
   if (body.summary === undefined) return { messageId: body.messageId, position: body.position };
   const summary = peerRecord(body.summary);
-  const instructions = summary.instructions;
+  const focus = summary.focus;
   if (
-    Object.keys(summary).some((key) => key !== "instructions") ||
-    (instructions !== undefined &&
-      (typeof instructions !== "string" ||
-        !instructions.trim() ||
-        instructions.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
+    Object.keys(summary).some((key) => key !== "focus") ||
+    (focus !== undefined &&
+      (typeof focus !== "string" || !focus.trim() || focus.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
   )
     throw new Error("Invalid peer fork request.");
   return {
     messageId: body.messageId,
     position: body.position,
-    summary: instructions === undefined ? {} : { instructions },
+    summary: focus === undefined ? {} : { focus },
   };
 }
 
