@@ -9,7 +9,9 @@ import {
   agentsInstructionFingerprint,
   createAgentsInstructionRefresher,
   AGENTS_INSTRUCTION_BYTES,
+  AGENTS_INSTRUCTION_READ_BYTES,
   createAgentsInstructionTracker,
+  truncateAgentsInstructions,
   withAgentsInstructionsEstimate,
   withoutAgentsInstructions,
 } from "./agents-instructions.js";
@@ -64,18 +66,79 @@ test("missing, blank and unselected workspace instructions never disclose bodies
   assert.equal(await refresher.apply(initial), initial);
 });
 
-test("root replacement and symlinked, oversized or nonregular instruction files fail closed", async (t) => {
-  for (const attack of ["symlink", "hardlink", "directory", "oversize", "root-replace"] as const) {
+test("root replacement and symlinked, hard-linked or nonregular instruction files fail closed", async (t) => {
+  for (const attack of ["symlink", "hardlink", "directory", "root-replace"] as const) {
     const f = await fixture(t);
     const refresher = await createAgentsInstructionRefresher(f);
     const file = path.join(f.workspaceRoot, "AGENTS.md");
     if (attack === "symlink") { await fs.writeFile(path.join(f.root, "secret"), "SECRET"); await fs.symlink(path.join(f.root, "secret"), file); }
     if (attack === "hardlink") { await fs.writeFile(path.join(f.root, "secret"), "SECRET"); await fs.link(path.join(f.root, "secret"), file); }
     if (attack === "directory") await fs.mkdir(file);
-    if (attack === "oversize") await fs.writeFile(file, "é".repeat(AGENTS_INSTRUCTION_BYTES));
     if (attack === "root-replace") { await fs.rename(f.workspaceRoot, f.workspaceRoot + "-old"); await fs.mkdir(f.workspaceRoot); }
     await assert.rejects(refresher.apply(context()));
   }
+});
+
+test("an oversized AGENTS.md sends its beginning, marks it truncated and reports it once", async (t) => {
+  const f = await fixture(t);
+  const line = "Rule: keep the build green.\n";
+  const body = line.repeat(Math.ceil((AGENTS_INSTRUCTION_BYTES * 3) / line.length));
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), body);
+  const notices: unknown[] = [];
+  const refresher = await createAgentsInstructionRefresher({ ...f, onNotice: (notice) => notices.push(notice) });
+  const first = prompt(await refresher.apply(context()));
+  const records = JSON.parse(first.slice(first.indexOf("[{"), first.lastIndexOf("}]") + 2)) as {
+    scope: string; instructions: string; truncated?: boolean;
+  }[];
+  assert.equal(records.length, 1);
+  assert.equal(records[0].truncated, true);
+  assert.ok(Buffer.byteLength(records[0].instructions) <= AGENTS_INSTRUCTION_BYTES);
+  assert.ok(body.startsWith(records[0].instructions));
+  assert.ok(records[0].instructions.endsWith("\n"), "cut at a line break");
+  assert.match(first, /holds only the beginning of a longer file/);
+  assert.deepEqual(notices, [{
+    scope: "workspace", kind: "truncated", sizeBytes: Buffer.byteLength(body), limitBytes: AGENTS_INSTRUCTION_BYTES,
+  }]);
+  // A later turn with the same file does not repeat the notice; an edit does.
+  await refresher.apply(context());
+  assert.equal(notices.length, 1);
+  await fs.appendFile(path.join(f.workspaceRoot, "AGENTS.md"), line);
+  await refresher.apply(context());
+  assert.equal(notices.length, 2);
+  // Back under the limit: no notice, no truncation marker.
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "SHORT");
+  const short = prompt(await refresher.apply(context()));
+  assert.ok(!short.includes("truncated"));
+  assert.equal(notices.length, 2);
+});
+
+test("an AGENTS.md past the reader's cap is skipped with a notice instead of failing the response", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.globalRoot, "AGENTS.md"), "GLOBAL");
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "x".repeat(AGENTS_INSTRUCTION_READ_BYTES + 1));
+  const notices: unknown[] = [];
+  let reads = 0;
+  const refresher = await createAgentsInstructionRefresher({
+    ...f,
+    read: async (root) => { reads += 1; return f.read(root); },
+    onNotice: (notice) => notices.push(notice),
+  });
+  const current = prompt(await refresher.apply(context()));
+  assert.match(current, /GLOBAL/);
+  assert.ok(!current.includes("xxxx"));
+  assert.equal(reads, 1, "only the global file is read");
+  assert.deepEqual(notices, [{
+    scope: "workspace", kind: "skipped", sizeBytes: AGENTS_INSTRUCTION_READ_BYTES + 1, limitBytes: AGENTS_INSTRUCTION_BYTES,
+  }]);
+});
+
+test("truncation never splits a UTF-8 character and prefers a line break in the second half", () => {
+  assert.equal(truncateAgentsInstructions("short", 16), "short");
+  // "é" is two bytes: a 5-byte budget fits two of them, not two and a half.
+  assert.equal(truncateAgentsInstructions("ééé", 5), "éé");
+  assert.equal(truncateAgentsInstructions("aaaa\nbbbbbbbb", 8), "aaaa\n");
+  // A break in the first half would throw away most of the budget, so it is ignored.
+  assert.equal(truncateAgentsInstructions("a\nbbbbbbbbbb", 8), "a\nbbbbbb");
 });
 
 test("permission revocation, root replacement and cancellation during read never publish stale content", async (t) => {

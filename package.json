@@ -143,7 +143,7 @@
     "test:subagent-file-mutator:native": "node scripts/build-subagent-file-mutator.mjs && node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/subagent-file-mutator.test.mjs",
     "test:native": "CLANG_MODULE_CACHE_PATH=build/native-test-module-cache SWIFT_MODULECACHE_PATH=build/native-test-module-cache node scripts/run-with-apple-developer-tools.mjs swift test --disable-sandbox --package-path native/apple-foundation-models --scratch-path build/native-swift-tests",
     "pretest:agents-instructions": "npm run build:subagent-file-mutator",
-    "test:agents-instructions": "tsx --test main/services/agents-instructions.test.ts",
+    "test:agents-instructions": "tsx --test main/services/agents-instructions.test.ts renderer/shared/agents-instructions-notice.test.ts",
     "type-check": "tsc --noEmit",
     "type-check:e2e": "tsc --noEmit --project tests/e2e/tsconfig.json",
     "format": "oxfmt .",
