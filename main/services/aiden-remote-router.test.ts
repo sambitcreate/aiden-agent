@@ -56,6 +56,8 @@ async function fixture(options: {
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
   hostRuns?: boolean;
   messagesWindow?: boolean;
+  /** "plain" forks; "summary" also forks with a summary. */
+  forks?: "plain" | "summary";
   platform?: "mac" | "linux" | "windows";
 } = {}) {
   const logs: unknown[] = [];
@@ -378,6 +380,28 @@ async function fixture(options: {
             messagesWindow: async (id: string, input: { before?: string; limit: number }) => {
               calls.push(`messages-window:${id}:${input.before ?? ""}:${input.limit}`);
               return { chatId: id, revision: chat.revision, messages: [], hasOlder: false };
+            },
+          }
+        : {}),
+      ...(options.forks
+        ? {
+            supportsForks: true,
+            supportsForkSummaries: options.forks === "summary",
+            fork: async (deviceId: string, id: string, revision: string, key: string, body: unknown) => {
+              calls.push(`chat-fork:${deviceId}:${id}:${revision}:${key}:${JSON.stringify(body)}`);
+              return { chat: { ...chat, id: "fork-1" } } as never;
+            },
+            retryForkSummary: async (id: string) => {
+              calls.push(`fork-summary-retry:${id}`);
+              return chat as never;
+            },
+            skipForkSummary: async (id: string) => {
+              calls.push(`fork-summary-skip:${id}`);
+              return chat as never;
+            },
+            cancelForkSummary: async (id: string) => {
+              calls.push(`fork-summary-cancel:${id}`);
+              return { cancelled: true };
             },
           }
         : {}),
@@ -3484,7 +3508,8 @@ function concreteRequestPath(template: string): string {
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
-          return template.includes("/git/") ? "review" : "run";
+          if (template.includes("/git/")) return "review";
+          return template.includes("/fork-summary/") ? "retry" : "run";
         default:
           return `x${parameterIndex}`;
       }
@@ -3999,7 +4024,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 20,
+      contractRevision: 21,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4237,5 +4262,71 @@ test("a revocation that wins while the host feed is opening refuses the subscrip
   } finally {
     hostFeed.close();
     await mac.close();
+  }
+});
+
+test("forking is advertised with the host wiring and needs a revision and an idempotency key", async () => {
+  const headers = { ...HOST_HEADERS, "content-type": "application/json" };
+  const forkBody = JSON.stringify({ messageId: "message-1", position: "after" });
+  const fork = (base: string, extra: Record<string, string> = {}) =>
+    fetch(`${base}/chats/chat-1/fork`, { method: "POST", headers: { ...headers, ...extra }, body: forkBody });
+  const keyed = { "if-match": `rev_${"c".repeat(43)}`, "idempotency-key": "fork-key-000000000001" };
+
+  const none = await fixture({ capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${none.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-v1"), false);
+    assert.equal(server.features.includes("chat-fork-summary-v1"), false);
+    assert.equal((await fork(none.base, keyed)).status, 404);
+  } finally {
+    await none.close();
+  }
+
+  const plain = await fixture({ forks: "plain", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${plain.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-v1"), true);
+    assert.equal(server.features.includes("chat-fork-summary-v1"), false);
+    for (const missing of [{ "if-match": keyed["if-match"] }, { "idempotency-key": keyed["idempotency-key"] }] as Record<string, string>[]) {
+      assert.equal((await fork(plain.base, missing)).status, 400);
+    }
+    const created = await fork(plain.base, keyed);
+    assert.equal(created.status, 201);
+    assert.equal((await created.json()).chat.id, "fork-1");
+    assert.deepEqual(
+      plain.calls.filter((call) => call.startsWith("chat-fork:")),
+      [`chat-fork:device-authorized-12345678:chat-1:${keyed["if-match"]}:${keyed["idempotency-key"]}:${forkBody}`],
+    );
+    // Summary actions exist only where summaries do.
+    const retry = await fetch(`${plain.base}/chats/chat-1/fork-summary/retry`, { method: "POST", headers });
+    assert.equal(retry.status, 404);
+  } finally {
+    await plain.close();
+  }
+
+  const readOnly = await fixture({ forks: "summary", capabilities: ["server:read", "chat:read"] });
+  try {
+    assert.equal((await fork(readOnly.base, keyed)).status, 403);
+    assert.equal(readOnly.calls.some((call) => call.startsWith("chat-fork:")), false);
+  } finally {
+    await readOnly.close();
+  }
+
+  const summary = await fixture({ forks: "summary", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${summary.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-summary-v1"), true);
+    for (const action of ["retry", "skip", "cancel"]) {
+      const response = await fetch(`${summary.base}/chats/chat-1/fork-summary/${action}`, { method: "POST", headers });
+      assert.equal(response.status, 200, action);
+    }
+    assert.deepEqual(await (await fetch(`${summary.base}/chats/chat-1/fork-summary/cancel`, { method: "POST", headers })).json(), { cancelled: true });
+    assert.equal((await fetch(`${summary.base}/chats/chat-1/fork-summary/restart`, { method: "POST", headers })).status, 404);
+    assert.deepEqual(
+      summary.calls.filter((call) => call.startsWith("fork-summary-")),
+      ["fork-summary-retry:chat-1", "fork-summary-skip:chat-1", "fork-summary-cancel:chat-1", "fork-summary-cancel:chat-1"],
+    );
+  } finally {
+    await summary.close();
   }
 });

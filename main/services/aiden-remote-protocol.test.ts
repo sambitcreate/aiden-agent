@@ -32,6 +32,8 @@ import {
   parseAidenRemoteContractFixture,
   parseAidenRemoteStreamInputRequest,
   parseAidenRemoteStreamInputResult,
+  parseAidenRemoteChatForkResult,
+  parseAidenRemoteChatSummaryProjection,
 } from "./aiden-remote-protocol.js";
 
 const protocolRoot = path.resolve(process.cwd(), "protocol/aiden-remote/v1");
@@ -108,7 +110,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 20);
+  assert.equal(fixture.contractRevision, 21);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -371,6 +373,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const revision19 = structuredClone(raw);
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
+  delete revision19.chatFork;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
   delete revision19.pairingRequests;
   assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
@@ -435,6 +438,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}",
     "/chats/{chatId}/read",
     "/chats/{chatId}/move",
+    "/chats/{chatId}/fork",
+    "/chats/{chatId}/fork-summary/{action}",
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
     "/chats/{chatId}/agents/{agentId}/interrupt",
@@ -1222,6 +1227,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/workspaces", "post"],
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
+    ["/chats/{chatId}/fork", "post"],
     ["/chats/{chatId}/turns", "post"],
     ["/bots", "post"],
     ["/bots/{botId}/restore", "post"],
@@ -1251,6 +1257,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/workspaces/{workspaceId}", "delete"],
     ["/chats/{chatId}", "patch"],
     ["/chats/{chatId}", "delete"],
+    ["/chats/{chatId}/fork", "post"],
     ["/bots/{botId}", "patch"],
     ["/bots/{botId}", "delete"],
     ["/bots/{botId}/restore", "post"],
@@ -1974,4 +1981,79 @@ test("stream input contracts reject unknown modes, oversized text, and unknown r
     }),
     /queue/u,
   );
+});
+
+test("fork lineage parses on chats and rows, and a prefill only follows a fork before a prompt", async () => {
+  const fixture = record(await json("fixtures/contract.json"), "fixture");
+  const chatFork = record(fixture.chatFork, "chatFork");
+  const fork = record(record(chatFork.fork, "fork").response, "fork response");
+  const editFork = record(record(chatFork.editFork, "editFork").response, "editFork response");
+  const clone = <T>(value: T): T => structuredClone(value);
+  const forkChat = () => clone(record(fork.chat, "chat"));
+  const lineage = () => record(forkChat().forkedFrom, "forkedFrom");
+
+  const parsed = parseAidenRemoteChatForkResult(clone(fork));
+  assert.equal(parsed.chat.forkedFrom?.chatId, "chat_fixture_source_01");
+  assert.equal(parsed.chat.forkedFrom?.summary?.state, "pending");
+  assert.equal(parsed.prefill, undefined);
+  const edit = parseAidenRemoteChatForkResult(clone(editFork));
+  assert.equal(edit.prefill?.text, "Now check the error codes.");
+  assert.equal(edit.prefill?.attachments?.[0]?.name, "codes.txt");
+
+  // A prompt to edit exists only when the fork cut before it.
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({ ...clone(fork), prefill: { text: "x" } }),
+    /prefill belongs to a fork before a prompt/u,
+  );
+  // A fork response always names its source.
+  const { forkedFrom: _lineage, ...plainChat } = forkChat();
+  assert.throws(() => parseAidenRemoteChatForkResult({ chat: plainChat }), /must carry forkedFrom/u);
+  // A prefill is one turn, which holds at most ten attachments.
+  const prefill = clone(record(editFork.prefill, "prefill"));
+  const attachment = (prefill.attachments as unknown[])[0];
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({
+      ...clone(editFork),
+      prefill: { ...prefill, attachments: Array.from({ length: 11 }, () => attachment) },
+    }),
+    /at most 10/u,
+  );
+  // The next turn redeems restaged attachments by their upload ID.
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({
+      ...clone(editFork),
+      prefill: { ...prefill, attachments: [{ ...record(attachment, "attachment"), id: "attachment_1" }] },
+    }),
+    /uploaded attachment ID/u,
+  );
+  for (const change of [
+    { position: "middle" },
+    { chatId: "../other" },
+    { at: "yesterday" },
+    { summary: { state: "pending" } },
+    { extra: true },
+    // The desktop keeps the files a summary saw, and calls the focus instructions; neither crosses the wire.
+    { summary: { state: "pending", afterMessageId: "m1", files: { read: [], modified: [] } } },
+    { summary: { state: "pending", afterMessageId: "m1", instructions: "the parser" } },
+    { summary: { state: "ready", afterMessageId: "m1" } },
+    { summary: { state: "pending", afterMessageId: "m1", error: "Summary cancelled." } },
+  ]) {
+    const chat = forkChat();
+    chat.forkedFrom = { ...lineage(), ...change };
+    assert.throws(() => parseAidenRemoteChatForkResult({ chat }), Error, JSON.stringify(change));
+  }
+
+  // A Chat read carries every settled summary state.
+  for (const summary of chatFork.summaryStates as unknown[]) {
+    const chat = forkChat();
+    chat.forkedFrom = { ...lineage(), summary };
+    assert.deepEqual(parseAidenRemoteChatForkResult({ chat }).chat.forkedFrom?.summary, summary);
+  }
+
+  // Rows show lineage for the sidebar glyph but never carry the summary.
+  const row = clone(record((record(fixture.chatSummaries, "chatSummaries").summaries as unknown[])[0], "row"));
+  const { summary: _summary, ...rowLineage } = lineage();
+  assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
+  assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
 });

@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 20)
+        XCTAssertEqual(fixture.contractRevision, 21)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
