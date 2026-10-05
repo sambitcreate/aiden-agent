@@ -6,6 +6,8 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Active and partial
 
+- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); plan verified against main `43d8adb02`. Reconcile foundation #299 with main, propagate the existing stack, then upgrade live desktop/CLI pins with complete Azure identity migration and exact-head acceptance. Frozen 0.87.1 journal helpers remain; no release or rollout advancement claimed.
+
 - [Pi 1.0 parity upgrade](pi-1-parity-plan.md) — Active; upstream/release audit and three-worktree execution plan complete. Runtime compatibility, CLI stable features, provider/MCP integration and desktop capability acceptance tracked explicitly.
 
 - [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; the Linux branch merged to main in PR #71 (2026-09-26) and shipped in 0.50.0. Linux runtime smoke, Linux CI burn-in, Gemini Live orb and managed-worktree checks on real Linux remain. Enforcing Fedora GNOME VM validated the SELinux file-descriptor probes, Electron role transitions, protected-socket transfer, payload inventory, root-managed generation staging, and fail-closed security-label preservation. Release provenance and cross-platform installer delivery are implemented. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. Computer Use remains disabled on Linux.

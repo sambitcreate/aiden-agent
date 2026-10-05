@@ -1,4 +1,6 @@
-# Pi 1.0 parity upgrade
+# Pi 1.0.3 parity upgrade
+
+Current execution target (2026-10-05): exact Pi **1.0.3**. Follow [the upgrade and reconciliation plan](pi-1.0.3-upgrade-plan.md) for current baseline, migration requirements and acceptance. The 1.0.0 implementation notes below are historical evidence for the existing PR stack, not a claim of 1.0.3 acceptance.
 
 Status: implementation active; runtime and CLI 1.0 foundation is implemented in PR #299, with the remaining feature lanes in progress (2026-10-02).
 
