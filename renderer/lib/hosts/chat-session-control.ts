@@ -166,8 +166,6 @@ export class ChatSessionControl {
   private offStatus: (() => void) | null = null;
   private offLedger: (() => void) | null = null;
   private attached = false;
-  /** The key of a fork whose answer was lost, reused when the same fork is asked for again. */
-  private pendingFork: { signature: string; key: string } | null = null;
 
   constructor(adapter: HostChatAdapter, ref: ChatSessionRef, ledger: ChatIntentLedger = chatIntentLedger) {
     if (adapter.hostId !== ref.hostId) throw new Error("The adapter belongs to another host.");
@@ -458,7 +456,8 @@ export class ChatSessionControl {
 
   /**
    * Forks this chat on its host. When the host's answer is lost, the key is
-   * kept: asking for the same fork again returns the one the host already
+   * kept in the window's ledger: asking for the same fork again, from this
+   * pane or one reopened on the same chat, returns the fork the host already
    * made instead of a second copy.
    */
   async fork(input: Omit<HostChatForkInput, "idempotencyKey" | "revision">, revision?: string): Promise<HostForkedChat> {
@@ -467,14 +466,15 @@ export class ChatSessionControl {
     if (!revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before forking it." });
     // The host fingerprints the body and the revision together with the key.
     const signature = JSON.stringify([input.messageId, input.position, input.summary ?? null, revision]);
-    const key = this.pendingFork?.signature === signature ? this.pendingFork.key : mintPeerIdempotencyKey();
-    this.pendingFork = { signature, key };
+    const key = this.ledger.forkKey(this.ref, signature) ?? mintPeerIdempotencyKey();
+    this.ledger.beginFork(this.ref, { signature, idempotencyKey: key });
     try {
       const forked = await this.adapter.fork(this.ref.chatId, { ...input, revision, idempotencyKey: key });
-      if (this.pendingFork?.key === key) this.pendingFork = null;
+      this.ledger.settleFork(this.ref, key);
       return forked;
     } catch (error) {
-      if (!isOutcomeUnknown(error) && this.pendingFork?.key === key) this.pendingFork = null;
+      // Only a lost answer keeps the key; a refusal means the host made no fork.
+      if (!isOutcomeUnknown(error)) this.ledger.settleFork(this.ref, key);
       throw error;
     }
   }

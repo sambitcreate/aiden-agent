@@ -82,13 +82,13 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - `RemoteHostAdapter` grants `fork` when the host advertises `chat-fork-v1` and `forkSummary` when it also advertises `chat-fork-summary-v1`. Both also need `chat:write`.
   - `LocalHostAdapter` never grants either: the local pane forks through `chatsApi`.
   - `forkLineage(chatId)` reads the full chat, because feed rows leave the summary out.
-- **Keys.** `ChatSessionControl.fork` keeps the idempotency key for an identical request (same message, position, summary and revision) after an `outcome_unknown`. A retry therefore replays the first fork instead of making a second copy.
+- **Keys.** The key of a fork whose answer was lost lives in the window's `chatIntentLedger` (`forkKey`/`beginFork`/`settleFork`, scoped to host + chat), not on the `ChatSessionControl`. Asking for the identical fork (same message, position, summary and revision) from this pane or one reopened on the same chat reuses the original key, so the host replays the first fork instead of making a second copy. The key is cleared on success or a definite refusal and kept only on `outcome_unknown`. A fork entry raises no ledger notification, so it never shows the unresolved banner or holds sending.
 - **Pane** (`remote-chat-view.tsx`).
   - Fork is offered only for chats the feed lists (`forkable`). That excludes Bot chats, and also chats beyond the 2000-row feed cap.
   - Edit in fork is hidden on the first prompt while no older page exists (`MessageList forkBeforeFirstPrompt`).
   - Forks are disabled while a run has started or a send is in flight.
   - After a fork the pane opens the new chat. A `before` fork seeds the composer draft with only `prefill.text`. The composer can't show uploads staged on the host, so those are released and the user is told to attach them again.
-  - The lineage row and `ForkSummaryCard` come from `useRemoteForkLineage`. It runs one full-chat read (best-effort, under the 1 MiB GET cap), and reads again only while a pending summary's feed revision moves.
+  - The lineage row and `ForkSummaryCard` come from `useRemoteForkLineage`. It runs one full-chat read (best-effort, under the 1 MiB GET cap) and caches `{lineage, feedRevision}`, where `feedRevision` is the feed row revision when the read started. While the summary is pending or failed it reads again whenever the row revision differs from that cached one; it never compares the feed token with the content-hash revision. A retry, skip or ready result from another device therefore replaces a stale failed card and releases the composer hold.
   - Summary actions write the returned lineage into that query.
   - A pending or failed summary holds the composer with `FORK_SUMMARY_HOLD_MESSAGE`.
 - **Tests.**

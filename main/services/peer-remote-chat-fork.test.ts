@@ -165,8 +165,10 @@ async function open(features?: string[]) {
   const fixture = forkingHost(features);
   const harness = await setup(fixture.host);
   await harness.open();
+  // One window: every pane opened on a chat shares its intent ledger.
+  const ledger = new ChatIntentLedger();
   const control = (chatId = "chat-1") => {
-    const next = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId }, new ChatIntentLedger());
+    const next = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId }, ledger);
     next.attach();
     return next;
   };
@@ -186,11 +188,14 @@ function remote(expected: string) {
 test("a fork whose answer is lost is retried under the same key and makes one copy on the host", async () => {
   const { host, forks, forkRequests, dropNextForkAck, harness, control, revision } = await open();
   try {
-    const pane = control();
+    const first = control();
     dropNextForkAck();
-    await assert.rejects(pane.fork({ messageId: "a1", position: "after" }, revision), isOutcomeUnknown);
+    await assert.rejects(first.fork({ messageId: "a1", position: "after" }, revision), isOutcomeUnknown);
     assert.equal(forks.size, 1, "the host made the fork before its answer was lost");
 
+    // The user leaves the chat and comes back: the reopened pane gets a new control.
+    first.attach()();
+    const pane = control();
     const forked = await pane.fork({ messageId: "a1", position: "after" }, revision);
     assert.equal(forks.size, 1, "the retry replayed the first fork instead of copying again");
     assert.equal(forked.id, "fork-1");
@@ -205,6 +210,10 @@ test("a fork whose answer is lost is retried under the same key and makes one co
     await pane.fork({ messageId: "a2", position: "after" }, revision);
     assert.equal(forks.size, 2);
     assert.notEqual(forkRequests[2]!.idempotencyKey, forkRequests[0]!.idempotencyKey);
+    // Once the host answered, the same fork asked for again is a deliberate second copy.
+    await pane.fork({ messageId: "a1", position: "after" }, revision);
+    assert.equal(forks.size, 3);
+    assert.notEqual(forkRequests[3]!.idempotencyKey, forkRequests[0]!.idempotencyKey);
     assert.deepEqual(host.chat.messages.map((message) => message.id), ["u1", "a1", "u2", "a2"], "the source is untouched");
   } finally {
     harness.close();

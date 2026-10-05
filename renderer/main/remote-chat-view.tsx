@@ -929,14 +929,22 @@ export function useHostSkills(adapter: RemoteHostAdapter, chatId: string): Compo
   };
 }
 
+/** A fork's lineage, with the feed revision its row had when the read started. */
+interface ForkLineageRead {
+  lineage: HostChatLineage;
+  feedRevision: string | undefined;
+}
+
 /**
  * A fork's lineage with its summary. Feed rows carry the lineage without the
- * summary, so a listed fork reads its chat once, and again only while a
- * pending summary's row moves to a new revision. A chat too large for one
- * read keeps the feed's lineage and shows no summary card.
+ * summary, so a listed fork reads its chat once. While the summary is pending
+ * or failed it can still change elsewhere (it settles, or another device
+ * retries or skips it), and each such change moves the row's revision, so the
+ * chat is read again whenever the row moved since the last read. A chat too
+ * large for one read keeps the feed's lineage and shows no summary card.
  */
-function useRemoteForkLineage(
-  adapter: RemoteHostAdapter,
+export function useRemoteForkLineage(
+  adapter: Pick<RemoteHostAdapter, "hostId" | "capabilities" | "forkLineage">,
   chatId: string,
   listed: ChatForkLineageV1 | undefined,
   rowRevision: string | undefined,
@@ -944,22 +952,33 @@ function useRemoteForkLineage(
   const qc = useQueryClient();
   const key = hostQueryKeys.forkLineage(adapter.hostId, chatId);
   const enabled = Boolean(listed) && adapter.capabilities().has("messagesWindow");
+  // Read when a request starts, so a row that moves during the read triggers another.
+  const currentRevision = React.useRef(rowRevision);
+  currentRevision.current = rowRevision;
   const query = useQuery({
     queryKey: key,
-    queryFn: async () => hostResultValue(await adapter.forkLineage(chatId)),
+    queryFn: async (): Promise<ForkLineageRead> => {
+      const feedRevision = currentRevision.current;
+      return { lineage: hostResultValue(await adapter.forkLineage(chatId)), feedRevision };
+    },
     enabled,
     staleTime: Infinity,
     retry: false,
   });
-  const read = query.data;
-  const pendingElsewhere =
-    read?.forkedFrom?.summary?.state === "pending" && rowRevision !== undefined && rowRevision !== read.revision;
+  const read = query.data?.lineage;
+  // Only the feed's own revisions are compared; the lineage's revision is a different token.
+  const movedElsewhere =
+    forkSummaryHoldsSend(read?.forkedFrom) && rowRevision !== undefined && rowRevision !== query.data?.feedRevision;
   React.useEffect(() => {
-    if (pendingElsewhere) void qc.invalidateQueries({ queryKey: key, exact: true });
+    if (movedElsewhere) void qc.invalidateQueries({ queryKey: key, exact: true });
     // `key` is rebuilt every render, so its parts are the dependencies.
-  }, [qc, pendingElsewhere, adapter.hostId, chatId, rowRevision]);
+  }, [qc, movedElsewhere, adapter.hostId, chatId, rowRevision]);
   const update = React.useCallback(
-    (lineage: HostChatLineage) => qc.setQueryData(hostQueryKeys.forkLineage(adapter.hostId, chatId), lineage),
+    (lineage: HostChatLineage) =>
+      qc.setQueryData<ForkLineageRead>(hostQueryKeys.forkLineage(adapter.hostId, chatId), {
+        lineage,
+        feedRevision: currentRevision.current,
+      }),
     [qc, adapter.hostId, chatId],
   );
   const forkedFrom = enabled && read?.forkedFrom ? read.forkedFrom : listed;

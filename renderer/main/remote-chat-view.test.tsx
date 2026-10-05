@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DOMParser } from "@xmldom/xmldom";
+import { DOMImplementation, DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../lib/command-system";
 import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger";
@@ -12,6 +12,7 @@ import {
   type HostChatApprovalResult,
   type HostChatCapability,
   type HostChatInput,
+  type HostChatLineage,
   type HostChatStatus,
 } from "../lib/hosts/host-chat-adapter";
 import type { ChatSession } from "../lib/hosts/use-chat-session";
@@ -22,11 +23,13 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
+import type { ChatForkLineageV1, ChatForkSummaryV1 } from "../shared/chat-copy-contract";
 import {
   RemoteChatPane,
   RemoteChatRoute,
   remoteComposerActions,
   remoteForkErrorMessage,
+  useRemoteForkLineage,
   type RemoteChatPaneProps,
 } from "./remote-chat-view";
 
@@ -648,4 +651,139 @@ test("a failed remote fork says what to do next", () => {
     remoteForkErrorMessage(new HostChatControlError({ code: "failed", message: "x", remoteCode: "revision_conflict" }), "Studio"),
     /This chat changed on Studio\./,
   );
+});
+
+/** A minimal document for react-dom; the lineage harness renders nothing itself. */
+function installDocument() {
+  const document = new DOMImplementation().createDocument(null, "html", null) as unknown as Document;
+  const container = document.createElement("div");
+  document.documentElement.appendChild(container);
+  const elementPrototype = Object.getPrototypeOf(container) as Record<string, unknown>;
+  elementPrototype.addEventListener = noop;
+  elementPrototype.removeEventListener = noop;
+  Object.defineProperty(elementPrototype, "style", { configurable: true, get: () => ({}) });
+  const documentPrototype = Object.getPrototypeOf(document) as Record<string, unknown>;
+  documentPrototype.addEventListener = noop;
+  documentPrototype.removeEventListener = noop;
+  const windowValue = {
+    document,
+    event: undefined,
+    HTMLIFrameElement: class HTMLIFrameElement {},
+    addEventListener: noop,
+    removeEventListener: noop,
+  };
+  Object.defineProperty(document, "defaultView", { configurable: true, value: windowValue });
+  const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
+  const previous = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
+  Object.defineProperties(globalThis, {
+    window: { configurable: true, value: windowValue },
+    document: { configurable: true, value: document },
+    navigator: { configurable: true, value: { userAgent: "remote-chat-view-test" } },
+    Node: { configurable: true, value: ElementConstructor },
+    Element: { configurable: true, value: ElementConstructor },
+    HTMLElement: { configurable: true, value: ElementConstructor },
+  });
+  return {
+    container,
+    restore() {
+      for (const key of keys) {
+        const descriptor = previous.get(key);
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+    },
+  };
+}
+
+/** Lets the read, the query cache's batched notifications and React's renders land. */
+async function settle(): Promise<void> {
+  for (let step = 0; step < 10; step += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+test("a fork's summary changed on another device reaches the open pane when its feed row moves", async () => {
+  const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
+  const failed: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  // The host's copy of the fork; each read returns its lineage under a content revision.
+  let summary: ChatForkSummaryV1 | undefined = failed;
+  let reads = 0;
+  const host = {
+    hostId: "host-b",
+    capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
+    async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
+      reads += 1;
+      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, ...(summary ? { summary } : {}) } } };
+    },
+  };
+  let latest: ReturnType<typeof useRemoteForkLineage> = { update: noop };
+  function Harness({ rowRevision }: { rowRevision: string }) {
+    latest = useRemoteForkLineage(host, "chat-1", listed, rowRevision);
+    return null;
+  }
+
+  const dom = installDocument();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(dom.container);
+  const show = async (rowRevision: string) => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <Harness rowRevision={rowRevision} />
+      </QueryClientProvider>,
+    );
+    await settle();
+    return latest.forkedFrom;
+  };
+  const seen: Array<ChatForkLineageV1 | undefined> = [];
+  try {
+    seen.push(await show("rev_1"));
+    assert.equal(reads, 1);
+    assert.equal(seen[0]?.summary?.state, "failed");
+    await show("rev_1");
+    assert.equal(reads, 1, "a render without a feed change reads nothing");
+
+    // Another device retries the summary: the host's row moves.
+    summary = { state: "pending", afterMessageId: "m2" };
+    seen.push(await show("rev_2"));
+    assert.equal(seen[1]?.summary?.state, "pending");
+    assert.equal(reads, 2);
+
+    // The retry fails again, then another device continues without the summary.
+    summary = failed;
+    seen.push(await show("rev_3"));
+    assert.equal(seen[2]?.summary?.state, "failed");
+    summary = undefined;
+    seen.push(await show("rev_4"));
+    assert.equal(seen[3]?.summary, undefined, "the skipped summary is gone from the lineage");
+    assert.equal(reads, 4);
+
+    // With nothing left to settle, later row changes don't read the chat again.
+    await show("rev_5");
+    assert.equal(reads, 4);
+  } finally {
+    flushSync(() => root.unmount());
+    client.clear();
+    await settle();
+    dom.restore();
+  }
+
+  const pane = (forkedFrom: ChatForkLineageV1 | undefined) =>
+    render({
+      host: online,
+      snapshot: snapshot(online),
+      chat: session(online, FORKING).chat(),
+      ...(forkedFrom ? { lineage: { forkedFrom } } : {}),
+    });
+  const [stale, retried, , skipped] = seen.map(pane);
+  assert.ok(stale!.button(/^Retry$/), "the failed summary offers Retry");
+  assert.match(stale!.text, /This fork is waiting for its summary\./);
+  assert.match(retried!.text, /Summarizing the original chat…/);
+  assert.equal(retried!.button(/^Retry$/), undefined, "the stale Retry is gone once the summary is pending again");
+  assert.match(retried!.text, /This fork is waiting for its summary\./);
+  assert.doesNotMatch(skipped!.markup, /data-fork-summary/);
+  assert.doesNotMatch(skipped!.text, /waiting for its summary/, "the composer is no longer held");
 });
