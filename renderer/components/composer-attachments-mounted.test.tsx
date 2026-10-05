@@ -45,6 +45,7 @@ async function loadComposer() {
     "./workspace-picker": "export const WorkspacePicker=()=>null;",
     "./composer-context-bar": "export const ComposerContextBar=()=>null;",
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
+    "./busy-send-button": "export const BusySendButton=()=>null;",
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],
