@@ -339,8 +339,9 @@ class AidenChatViewModel(
     /**
      * Forks this chat at [messageId]. Once the Mac created the fork, this
      * caches it, seeds its composer from any `prefill`, and publishes it to
-     * [forkNavigation]. Retrying the same failed fork reuses its idempotency
-     * key, so a lost response cannot create a second copy.
+     * [forkNavigation]. Retrying a fork whose outcome is unknown (the response
+     * was lost) reuses its idempotency key, so it cannot create a second copy;
+     * any error response the Mac settled starts the next try with a new key.
      */
     fun fork(
         messageId: String,
@@ -361,6 +362,13 @@ class AidenChatViewModel(
                 !withSummary && AidenChatForkEligibility.canEditInFork(source.messages, messageId)
         }
         if (!eligible) return
+        // Persistence authority is fixed before the request, like send(): an
+        // unpair (or a re-pair of the same Mac) while it is in flight retires
+        // it, so the handoff cannot recreate the removed pairing's fork,
+        // draft or staged attachments.
+        val pairingCreatedAt = pairingCreatedAt() ?: return
+        val writeToken = chatCache.reserveChatWrite()
+        val draftAuthority = draftStore.purgeAuthority(instanceId)
         val focus = summaryFocus?.trim()
             ?.takeIf { withSummary && it.isNotEmpty() }
             ?.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH)
@@ -377,32 +385,45 @@ class AidenChatViewModel(
                     summaryFocus = focus,
                     idempotencyKey = idempotencyKey
                 )
-                if (activeClient() !== client) return@launch
                 forkAttempt = null
                 val fork = result.chat
-                if (instanceId.isNotEmpty()) {
-                    withContext(ioDispatcher) {
-                        runCatching { chatCache.saveChat(fork, instanceId) }
-                        result.prefill?.let { prefill ->
-                            if (prefill.text.isNotEmpty()) draftStore.setDraft(instanceId, fork.id, prefill.text)
-                            draftStore.stageAttachments(instanceId, fork.id, prefill.attachments)
+                fun handoffRetained() = activeClient() === client &&
+                    isPairingRetained(pairingCreatedAt) &&
+                    chatCache.isChatWriteRetained(instanceId, fork.id, writeToken) &&
+                    draftStore.isCurrent(draftAuthority)
+                if (!handoffRetained()) return@launch
+                withContext(ioDispatcher) {
+                    runCatching { chatCache.saveChat(fork, instanceId, writeToken) }
+                    result.prefill?.let { prefill ->
+                        runCatching {
+                            if (prefill.text.isNotEmpty()) draftStore.setDraft(fork.id, prefill.text, draftAuthority)
+                            draftStore.stageAttachments(fork.id, prefill.attachments, draftAuthority)
                         }
                     }
                 }
+                // The pairing may have been removed while the writes ran.
+                if (!handoffRetained()) return@launch
                 _forkNavigation.value = fork.id
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                if (!AidenChatForkErrors.isOutcomeUnknown(e)) forkAttempt = null
                 if (activeClient() !== client) return@launch
                 _presentedError.value = AidenChatForkErrors.forkMessage(e)
-                if (AidenChatForkErrors.isRevisionConflict(e)) {
-                    forkAttempt = null
-                    loadChat()
-                }
+                if (AidenChatForkErrors.isRevisionConflict(e)) loadChat()
             } finally {
                 _isForking.value = false
             }
         }
     }
+
+    /** When this view's pairing was created; a re-pair of the same Mac has a new one. */
+    private fun pairingCreatedAt(): Instant? = coordinator.installationStore.installations.value
+        .firstOrNull { it.instanceId == instanceId && it.deviceId == deviceId }?.createdAt
+
+    private fun isPairingRetained(createdAt: Instant): Boolean =
+        coordinator.installationStore.installations.value.any {
+            it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == createdAt
+        }
 
     fun consumeForkNavigation(forkChatId: String) {
         if (_forkNavigation.value == forkChatId) _forkNavigation.value = null
@@ -1190,8 +1211,7 @@ class AidenChatViewModel(
 
         val idempotencyKey = turnAttempts.key(request)
         val requestToken = chatCache.reserveChatWrite()
-        val pairingCreatedAt = coordinator.installationStore.installations.value
-            .firstOrNull { it.instanceId == instanceId && it.deviceId == deviceId }?.createdAt
+        val pairingCreatedAt = pairingCreatedAt()
 
         viewModelScope.launch {
             try {
@@ -1207,9 +1227,7 @@ class AidenChatViewModel(
 
                 turnAttempts.reset()
                 _selectedSkill.value = null
-                val retainedInstallation = coordinator.installationStore.installations.value.any {
-                    it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == pairingCreatedAt
-                }
+                val retainedInstallation = pairingCreatedAt?.let(::isPairingRetained) == true
                 if (!retainedInstallation) {
                     _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null

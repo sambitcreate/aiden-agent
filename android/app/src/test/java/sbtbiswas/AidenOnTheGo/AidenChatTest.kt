@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
@@ -38,6 +39,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
@@ -2159,6 +2161,168 @@ class AidenChatTest {
         }
     }
 
+    @Test
+    fun unpairingDuringTheForkHandoffLeavesNothingOfTheFork() {
+        val attachment = AidenAttachmentReference(
+            id = "att_" + "C".repeat(43), name = "notes.txt", mimeType = "text/plain",
+            kind = AidenAttachmentKind.TEXT, size = 12, expiresAt = Instant.now().plusSeconds(600)
+        )
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "user-2", position = AidenChatForkPosition.BEFORE, at = Instant.EPOCH
+        ))
+        val io = HoldableDispatcher()
+        try {
+            withForkHarness(listOf("chat-fork-v1"), { request ->
+                when (request.requestUrl!!.encodedPath) {
+                    "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                        // Hold the view model's IO from the moment the Mac answers.
+                        io.hold()
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(
+                            AidenChatForkResult(fork, AidenChatForkPrefill("Try the streaming parser.", listOf(attachment)))
+                        ))
+                    }
+                    "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                    else -> null
+                }
+            }) { harness ->
+                val model = harness.open(forkSource.id, forkSource, ioDispatcher = io)
+                model.fork("user-2", AidenChatForkPosition.BEFORE)
+                assertTrue(
+                    "The fork handoff reached its IO",
+                    withContext(Dispatchers.IO) { io.awaitHeld(5, TimeUnit.SECONDS) }
+                )
+
+                harness.unpair()
+                io.release()
+                withTimeout(5_000) { model.isForking.first { !it } }
+
+                assertNull("A removed pairing opens no fork", model.forkNavigation.value)
+                assertNull(harness.cache.loadChat("instance-fork", fork.id))
+                assertNull(harness.cache.admittedChat("instance-fork", fork.id))
+                assertNull(harness.drafts.getDraft("instance-fork", fork.id))
+                assertTrue(harness.drafts.takeStagedAttachments("instance-fork", fork.id).isEmpty())
+            }
+        } finally {
+            io.close()
+        }
+    }
+
+    @Test
+    fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH
+        ))
+        val forkRequests = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        withForkHarness(listOf("chat-fork-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkRequests.add(request)
+                    if (forkRequests.size == 1) {
+                        MockResponse().setResponseCode(409).setBody(
+                            """{"error":{"code":"operation_in_progress","message":"Busy","requestId":"request-busy","retryable":true}}"""
+                        )
+                    } else {
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(AidenChatForkResult(fork)))
+                    }
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            withTimeout(5_000) { model.isForking.first { !it } }
+            assertEquals("This chat is busy on your Mac. Try forking again in a moment.", model.presentedError.value)
+            assertNull(model.forkNavigation.value)
+
+            // Same source revision, same cut: only the key may differ.
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+
+            val first = forkRequests.poll()!!
+            val second = forkRequests.poll()!!
+            assertEquals(first.getHeader("If-Match"), second.getHeader("If-Match"))
+            assertNotEquals(
+                "The Mac settled the busy key as a rejection, so replaying it can never succeed",
+                first.getHeader("Idempotency-Key"), second.getHeader("Idempotency-Key")
+            )
+        }
+    }
+
+    @Test
+    fun aForkWhoseResponseWasLostReplaysItsIdempotencyKey() {
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH
+        ))
+        val dropResponses = java.util.concurrent.atomic.AtomicBoolean(true)
+        val forkKeys = java.util.concurrent.LinkedBlockingQueue<String>()
+        withForkHarness(listOf("chat-fork-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkKeys.add(request.getHeader("Idempotency-Key")!!)
+                    if (dropResponses.get()) {
+                        MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                    } else {
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(AidenChatForkResult(fork)))
+                    }
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            withTimeout(5_000) { model.isForking.first { !it } }
+            assertNull(model.forkNavigation.value)
+            assertNotNull("The lost response is reported", model.presentedError.value)
+
+            dropResponses.set(false)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+
+            val keys = forkKeys.toList()
+            assertTrue("The retry reached the Mac", keys.size >= 2)
+            assertEquals(
+                "The Mac may have created the first fork, so the retry replays its key",
+                setOf(keys.first()), keys.toSet()
+            )
+        }
+    }
+
+    /** Runs IO normally until [hold]; held work waits for [release]. */
+    private class HoldableDispatcher : CoroutineDispatcher() {
+        private val executor = Executors.newCachedThreadPool()
+        private val held = java.util.concurrent.LinkedBlockingQueue<Runnable>()
+        private val firstHeld = CountDownLatch(1)
+        @Volatile private var holding = false
+
+        fun hold() {
+            holding = true
+        }
+
+        fun awaitHeld(timeout: Long, unit: TimeUnit): Boolean = firstHeld.await(timeout, unit)
+
+        @Synchronized
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            if (holding) {
+                held.add(block)
+                firstHeld.countDown()
+            } else {
+                executor.execute(block)
+            }
+        }
+
+        @Synchronized
+        fun release() {
+            holding = false
+            while (true) executor.execute(held.poll() ?: break)
+        }
+
+        fun close() {
+            executor.shutdown()
+        }
+    }
+
     private val forkWireJson = Json(json) { explicitNulls = false }
 
     private val forkSource = AidenChat(
@@ -2185,16 +2349,23 @@ class AidenChatTest {
         val server: MockWebServer,
         private val requests: java.util.concurrent.ConcurrentLinkedQueue<String>,
         private val coordinator: AidenRemoteCoordinator,
-        private val cache: AidenChatCache,
-        private val drafts: AidenChatDraftStore,
+        val cache: AidenChatCache,
+        val drafts: AidenChatDraftStore,
         private val viewModels: ViewModelStore
     ) {
         private var opened = 0
 
         fun paths(): List<String> = requests.toList()
 
-        suspend fun open(chatId: String, initial: AidenChat? = null): AidenChatViewModel {
-            val model = AidenChatViewModel(chatId, coordinator, cache, drafts, initial)
+        /** Removes the pairing the way Settings and credential revocation do. */
+        fun unpair() = coordinator.removeInstallation(coordinator.installationStore.activeInstallation!!.id)
+
+        suspend fun open(
+            chatId: String,
+            initial: AidenChat? = null,
+            ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+        ): AidenChatViewModel {
+            val model = AidenChatViewModel(chatId, coordinator, cache, drafts, initial, ioDispatcher = ioDispatcher)
             viewModels.put("fork-${opened++}", model)
             withTimeout(5_000) { model.isLoading.first { !it } }
             withTimeout(5_000) { model.chat.first { it != null } }

@@ -74,6 +74,17 @@ object AidenChatForkErrors {
     fun isNotFound(error: Throwable): Boolean =
         serverError(error)?.let { it.statusCode == 404 || it.body.code == AidenRemoteErrorCode.NOT_FOUND } == true
 
+    /**
+     * Whether a failed fork may still have been created, so a retry must
+     * replay the same idempotency key. That holds only when no error response
+     * arrived (a lost connection or timeout) or the Mac is still running the
+     * first request. The Mac's idempotency ledger settles every other error
+     * response as a rejection, and replaying its key would only return
+     * `internal_error`, so the next attempt needs a fresh key.
+     */
+    fun isOutcomeUnknown(error: Throwable): Boolean =
+        serverError(error)?.let { it.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT } ?: true
+
     /** A summary route's 404 or 409 means the summary already changed elsewhere. */
     fun isSummaryMovedOn(error: Throwable): Boolean = isNotFound(error) || isRevisionConflict(error)
 
