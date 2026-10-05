@@ -43,3 +43,5 @@ export { createBotSubagentTool } from "./bot-subagents.ts";
 export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 
 export { createCliMcpRevision } from "./subagent-hosts.ts";
+
+export { migrateCliAzureConfig } from "./azure-config-migration.ts";

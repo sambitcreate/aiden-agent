@@ -4129,6 +4129,7 @@ final class AidenChatTests: XCTestCase {
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "azure"), "azure-openai-responses")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "tailscale"), "tailscale")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")

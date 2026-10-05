@@ -265,3 +265,8 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     6,
   );
 });
+
+ test("Azure retains its provider artwork after the Pi identity rename", () => {
+  assert.equal(resolveProviderIconSlug("azure"), "azure-openai-responses");
+  assert.equal(resolveProviderIconSlug("azure-openai-responses"), "azure-openai-responses");
+});

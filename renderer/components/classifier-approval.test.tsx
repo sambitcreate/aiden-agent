@@ -27,3 +27,15 @@ test("missing, incomplete, oversized or altered classifier payloads cannot use s
   }
   assert.equal(classifierApprovalState("run_command", undefined).invalid, false);
 });
+
+test("the shared chat approval card inspects classifier state and fails closed on a missing payload", async () => {
+  const { ChatApprovalCard } = await import("./chat-approval-card.js");
+  const pending = { approvalId: "classifier", toolCallId: "call", toolName: "classify", summary: "Classify", scopes: ["once", "chat", "always"] as const };
+  const html = renderToStaticMarkup(<ChatApprovalCard pending={{ ...pending, scopes: [...pending.scopes], details: classifierApprovalFor(request) }} deciding={false} onDecide={() => undefined} />);
+  assert.match(html, /PRIVATE-LATE-FIELD/);
+  assert.match(html, /Allow once/);
+  assert.doesNotMatch(html, /Remember this exact action/);
+  const invalid = renderToStaticMarkup(<ChatApprovalCard pending={{ ...pending, scopes: [...pending.scopes] }} deciding={false} onDecide={() => undefined} />);
+  assert.doesNotMatch(invalid, /Allow once/);
+  assert.match(invalid, /Deny/);
+});

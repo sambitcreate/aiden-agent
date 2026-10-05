@@ -364,7 +364,6 @@ mkdirSync(appDir, { recursive: true });
 // instead of once per worker.
 const lazyChunkDir = "chunks";
 const lazyEntryPoints = {
-	"codemode-worker": join(piAgentPkg, "dist", "extensions", "codemode", "worker.js"),
 	meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
 	"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
 	anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
@@ -394,6 +393,17 @@ const mainResult = await build({
 	chunkNames: `${lazyChunkDir}/[name]-[hash]`,
 	splitting: true,
 });
+
+// Pi 1.0.3 snapshots this worker into a data: URL so running sessions survive
+// an update. It must be self-contained and cannot use createRequire(import.meta.url).
+const codemodeWorkerResult = await build({
+  ...commonBuildOptions(),
+  banner: {},
+  entryPoints: [join(piAgentPkg, "dist", "extensions", "codemode", "worker.js")],
+  outfile: join(appDir, lazyChunkDir, "codemode-worker.js"),
+  splitting: false,
+});
+validateExternalImports([codemodeWorkerResult.metafile]);
 
 // Every output that carries one of the resolving modules must sit in the
 // lazy entries' directory, or a variable import resolves to a missing file.

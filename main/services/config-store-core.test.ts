@@ -3038,3 +3038,25 @@ test("per-model compaction budgets merge atomically and clear without disturbing
     "openai/gpt-5": { reserveTokens: -1 },
   });
 });
+
+test("Azure preferences migrate durably with current-model precedence and custom alias priority", async (t) => {
+  for (const custom of [false, true]) {
+    const h = await harness(t, { providers: custom ? [{ id: "azure-openai-responses", label: "My Azure", kind: "openai", baseUrl: "https://private.example/v1", models: ["deployment"], needsKey: true }] : [], settings: {
+      lastProviderId: "azure-openai-responses", hiddenModelsByProvider: { "azure-openai-responses": ["hidden"] },
+      providerThinkingByModel: { "azure-openai-responses": { deployment: "high", other: "low" }, azure: { deployment: "medium" } },
+      compactionModelOverrides: { "azure-openai-responses/deployment": { reserveTokens: 1234 }, "azure/deployment": { reserveTokens: 5678 } },
+    } });
+    const settings = await h.store.getSettings();
+    const target = custom ? "custom:azure-openai-responses" : "azure";
+    assert.equal(settings.lastProviderId, target);
+    assert.deepEqual(settings.hiddenModelsByProvider?.[target], { defaultVisibility: "shown", exceptions: ["hidden"] });
+    assert.equal(settings.providerThinkingByModel?.[target]?.deployment, custom ? "high" : "medium");
+    assert.equal(settings.providerThinkingByModel?.[target]?.other, "low");
+    assert.equal(settings.compactionModelOverrides?.[`${target}/deployment`]?.reserveTokens, custom ? 1234 : 5678);
+    assert.equal(await h.store.resolveProviderId("azure-openai-responses"), target);
+    const persisted = await readJson<{ settings: typeof settings }>(h.settingsFile);
+    assert.equal(persisted.settings.providerThinkingByModel?.["azure-openai-responses"], undefined);
+    assert.equal(persisted.settings.compactionModelOverrides?.["azure-openai-responses/deployment"], undefined);
+    assert.deepEqual(await createConfigStore(h.stores, h.secrets.port).getSettings(), settings);
+  }
+});

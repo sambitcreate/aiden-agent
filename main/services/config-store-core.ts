@@ -494,14 +494,28 @@ export function createConfigStore(
             activeProviderIds.has(targetId),
         );
         secretMigrationAliases = cacheAliasEntries;
-        for (const [legacyId, targetId] of cacheAliasEntries) {
-          hiddenModelsByProvider = remapHiddenModelProvider(
-            hiddenModelsByProvider,
-            legacyId,
-            targetId,
-          );
+        // Apply identity changes to provider/model keyed preferences too. Custom
+        // aliases retain precedence over the built-in Azure rename.
+        const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
+        const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
+        const preferenceRoutes = new Map(cacheAliasEntries);
+        if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
+        for (const [legacyId, targetId] of preferenceRoutes) {
+          hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
+          if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
+            providerThinkingByModel[targetId] = { ...providerThinkingByModel[legacyId], ...providerThinkingByModel[targetId] };
+            delete providerThinkingByModel[legacyId];
+          }
+          for (const key of Object.keys(compactionModelOverrides)) {
+            if (!key.startsWith(`${legacyId}/`)) continue;
+            const target = `${targetId}/${key.slice(legacyId.length + 1)}`;
+            if (!Object.prototype.hasOwnProperty.call(compactionModelOverrides, target)) compactionModelOverrides[target] = compactionModelOverrides[key]!;
+            delete compactionModelOverrides[key];
+          }
         }
         if (
+          JSON.stringify(providerThinkingByModel) !== JSON.stringify(currentSettings.providerThinkingByModel ?? {}) ||
+          JSON.stringify(compactionModelOverrides) !== JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
             JSON.stringify(currentSettings.hiddenModelsByProvider)
@@ -509,6 +523,8 @@ export function createConfigStore(
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
+            if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
+            if (Object.keys(compactionModelOverrides).length) config.settings.compactionModelOverrides = compactionModelOverrides;
           });
         }
         secretMigrationTargets = [

@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PI_AI_VERSION = "1.0.0";
+const PI_AI_VERSION = "1.0.3";
 const PI_PACKAGE_PATH = path.join("node_modules", "@earendil-works", "pi-ai");
 const PI_LOGO_PREFIX = "const LOGO_SVG = `<svg";
 const AIDEN_LOGO_PREFIX = 'const LOGO_SVG = `<img src="data:image/png;base64,';

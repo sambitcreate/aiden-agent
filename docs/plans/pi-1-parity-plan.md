@@ -1,6 +1,6 @@
 # Pi 1.0.3 parity upgrade
 
-Current execution target (2026-10-05): exact Pi **1.0.3**. Follow [the upgrade and reconciliation plan](pi-1.0.3-upgrade-plan.md) for current baseline, migration requirements and acceptance. The 1.0.0 implementation notes below are historical evidence for the existing PR stack, not a claim of 1.0.3 acceptance.
+Current execution target (2026-10-05): exact Pi **1.0.3**. Follow [the upgrade and reconciliation plan](pi-1.0.3-upgrade-plan.md) for current baseline, migration requirements and acceptance. The 1.0.0 implementation notes below are historical evidence for the existing PR stack, not a claim of 1.0.3 acceptance. The complete stack is now integrated on `feature/pi-1.0.3-upgrade` with [1.0.3 release notes](../pi-1.0.3-release-notes.md), exact pins, Azure migrations, sampling support and current-main reconciliation. Final acceptance is tracked in the execution plan.
 
 Status: implementation and local validation complete; review follow-up and exact-head CI acceptance active (2026-10-02). Eight open PRs cover the stable Pi 1.0 integration. No PR has been merged; documented client differences remain intentional.
 

@@ -879,3 +879,42 @@ test("MCP migration retains writes through a source descriptor opened before ret
     assert.equal(existsSync(legacy), false);
   } finally { closeSync(fd); }
 });
+
+test("Azure config migration preserves deployments, API ids, preferences and current collisions", (t) => {
+  const dir = temporary(t), project = join(dir, "project");
+  api.atomicJson(join(dir, "models.json"), { providers: { "azure-openai-responses": { api: "azure-openai-responses", baseUrl: "https://deployment.example", models: [{ id: "deployment" }] }, "custom:azure": { baseUrl: "https://custom.example" } } });
+  api.atomicJson(join(dir, "settings.json"), { defaultProvider: "azure-openai-responses", modelThinkingLevels: { "azure-openai-responses/deployment": "high", "azure/deployment": "low" }, enabledModels: ["azure-openai-responses/*"], compaction: { modelOverrides: { "azure-openai-responses/deployment": { contextWindow: 12345 } } } });
+  api.atomicJson(join(project, ".aiden/settings.json"), { defaultProvider: "azure-openai-responses", theme: "dark" });
+  api.migrateCliAzureConfig(dir, project);
+  const models = JSON.parse(readFileSync(join(dir, "models.json"), "utf8"));
+  assert.equal(models.providers.azure.api, "azure-openai-responses");
+  assert.equal(models.providers.azure.baseUrl, "https://deployment.example");
+  assert.equal(models.providers["custom:azure"].baseUrl, "https://custom.example");
+  assert.equal(models.providers["azure-openai-responses"], undefined);
+  const settings = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+  assert.equal(settings.defaultProvider, "azure");
+  assert.deepEqual(settings.modelThinkingLevels, { "azure/deployment": "low" });
+  assert.deepEqual(settings.enabledModels, ["azure/*"]);
+  assert.deepEqual(settings.compaction.modelOverrides, { "azure/deployment": { contextWindow: 12345 } });
+  assert.deepEqual(JSON.parse(readFileSync(join(project, ".aiden/settings.json"), "utf8")), { defaultProvider: "azure", theme: "dark" });
+  api.migrateCliAzureConfig(dir, project);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "models.json"), "utf8")), models);
+  const conflict = { providers: { azure: { baseUrl: "https://new.example" }, "azure-openai-responses": { baseUrl: "https://old.example" } } };
+  api.atomicJson(join(dir, "models.json"), conflict);
+  assert.throws(() => api.migrateCliAzureConfig(dir, project), /different configuration/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "models.json"), "utf8")), conflict);
+});
+
+test("CLI Azure credentials migrate from plaintext without losing a colliding credential", async (t) => {
+  const file = join(temporary(t), "auth.json");
+  api.atomicJson(file, { "azure-openai-responses": { type: "api_key", key: "old-secret" }, azure: { type: "api_key", key: "new-secret" } });
+  const store = api.createCliProviderCredentials(file);
+  assert.deepEqual(await store.read("azure"), { type: "api_key", key: "new-secret" });
+  const saved = readFileSync(file, "utf8");
+  assert.equal(saved.includes("old-secret"), false);
+  assert.equal(saved.includes("new-secret"), false);
+  assert.ok(JSON.parse(saved).retiredAzureCredential);
+  assert.deepEqual(await store.list(), [{ providerId: "azure", type: "api_key" }]);
+  await store.delete("azure");
+  assert.equal(await api.createCliProviderCredentials(file).read("azure"), undefined);
+});

@@ -270,3 +270,30 @@ test("disabled tools skip deferred browser discovery without altering context", 
   assert.equal(calls, 1);
   assert.equal(await prepareCustomModelToolContext(context, undefined, undefined), context);
 });
+
+test("per-thinking-level sampling survives portable storage and reaches the provider request", async () => {
+  const { normalizeContext } = await import("@earendil-works/pi-ai");
+  const { buildModel } = await import("./model-runtime-core.js");
+  const { streamSimple: streamSimpleOpenAICompletions } = await import("@earendil-works/pi-ai/api/openai-completions");
+  const options = parseCustomModelOptions({ reasoning: true, samplingParamsByThinkingLevel: { off: { temperature: 0.2 }, high: { temperature: 0.7, top_p: 0.9 } } })!;
+  const configured = { ...provider, modelMetadata: { "custom-model": { source: "provider" as const, overrides: options } } };
+  const { intent } = splitStoredProvider(configured);
+  const restored = composeStoredProvider(intent, undefined);
+  const model = { ...buildModel(restored, "custom-model", resolveProviderRuntimeLimits({}, restored, "custom-model")), api: "openai-completions" as const };
+  for (const reasoning of ["off", "high"] as const) {
+    let payload: Record<string, unknown> | undefined;
+    const result = streamSimpleOpenAICompletions(model, normalizeContext({ messages: [{ role: "user", content: "sampling fixture", timestamp: 0 }] }), {
+      reasoning, apiKey: "synthetic", maxRetries: 0,
+      fetch: async (_url, init) => {
+        payload = JSON.parse(String(init?.body));
+        return new Response('data: {"id":"fixture","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    await result.result();
+    assert.equal(payload?.temperature, reasoning === "high" ? 0.7 : 0.2);
+    assert.equal(payload?.top_p, reasoning === "high" ? 0.9 : undefined);
+    assert.equal(payload?.model, "custom-model");
+  }
+  assert.throws(() => parseCustomModelOptions({ samplingParamsByThinkingLevel: { high: { messages: [] } } }), /sampling parameter/);
+  assert.throws(() => parseCustomModelOptions({ samplingParamsByThinkingLevel: { imaginary: { temperature: 0.5 } } }), /thinking level/);
+});

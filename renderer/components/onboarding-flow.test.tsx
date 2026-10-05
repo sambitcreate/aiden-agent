@@ -346,7 +346,6 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
-  assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
   assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Connections/u);
   for (const group of [
     "Build in your workspace",

@@ -174,3 +174,12 @@ test("sandbox discovery exposes fresh admitted schemas and treats server instruc
   assert.equal(removed.isError, false);
   assert.deepEqual(JSON.parse((removed.content[0] as { text: string }).text).tools, []);
 });
+
+test("runaway sandbox output fails even when the script catches the output limit", async () => {
+  const { tool } = fixture();
+  const result = await tool.execute("bounded", { code: 'try { for (let i=0;i<110000;i++) text("x"); } catch {} text("continued"); store("overflowed",true);' });
+  assert.equal(result.isError, true);
+  assert.ok(result.content.some((item) => item.type === "text" && /output exceeded the limit/.test(item.text)));
+  const next = await tool.execute("next", { code: 'text(load("overflowed") === undefined);' });
+  assert.equal(next.content[0]?.type === "text" && next.content[0].text, "true", "failed executions must not commit store writes");
+});

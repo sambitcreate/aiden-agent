@@ -6,7 +6,7 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Active and partial
 
-- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); plan committed, foundation #299 reconciled locally with main `43d8adb02`; clean-install full npm test, focused suites, types/lint, builds and Electron chat-fork smoke pass. Next: propagate the existing stack, then upgrade live desktop/CLI pins with complete Azure identity migration and exact-head acceptance. Frozen 0.87.1 journal helpers remain; no release or rollout advancement claimed.
+- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); integrated replacement preserves #299–#307 ancestry on `feature/pi-1.0.3-upgrade`. Exact 1.0.3 pins, Azure state migration and sampling support implemented; final local/hosted acceptance and authorized auto-merge in progress. Frozen 0.87.1 journal adapter remains. Release/rollout gates are separate.
 
 - [Pi 1.0.3 parity upgrade](pi-1-parity-plan.md) — Active; historical 1.0.0 stack implementation evidence retained. Current target, reconciliation and remaining acceptance are tracked in the [1.0.3 execution plan](pi-1.0.3-upgrade-plan.md).
 

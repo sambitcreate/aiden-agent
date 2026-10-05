@@ -1489,3 +1489,19 @@ test("persisted Pi catalog normalization strips unsafe entries and validators", 
   assert.deepEqual(Object.keys(normalized.entries), ["opencode-go"]);
   assert.equal((normalized.entries["opencode-go"] as { etag?: string }).etag, '"safe"');
 });
+
+test("Azure cached catalogs migrate on disk and deletion cannot resurrect the old identity", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-azure-catalog-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const makeDisk = () => new DataStore<{ version: 1; entries: Record<string, ModelsStoreEntry> }>("catalog.json", { version: 1, entries: {} }, () => root);
+  const disk = makeDisk();
+  await disk.update((draft) => { draft.entries["azure-openai-responses"] = { models: [{ ...builtinModels().getModels("azure")[0]!, provider: "azure-openai-responses" }], checkedAt: 1234 }; });
+  const backing = createPiModelsBackingStore(disk);
+  const entry = await backing.read("azure");
+  assert.equal(entry?.models[0]?.provider, "azure");
+  assert.equal(entry?.models[0]?.api, "azure-openai-responses");
+  assert.equal(entry?.checkedAt, 1234);
+  assert.equal((await makeDisk().load()).entries["azure-openai-responses"], undefined);
+  await backing.delete("azure");
+  assert.equal(await createPiModelsBackingStore(makeDisk()).read("azure"), undefined);
+});

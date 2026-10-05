@@ -77,6 +77,7 @@ const CUSTOM_OLLAMA_PROVIDER_ID = /^custom:ollama(?:-(?:[2-9]|[1-9]\d+))?$/u;
 
 const PROVIDER_ICON_ALIASES: Readonly<Record<string, ProviderIconSlug>> = {
   gemini: "google",
+  azure: "azure-openai-responses",
   "lm-studio": "lmstudio",
   moonshot: "moonshotai",
 };

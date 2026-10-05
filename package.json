@@ -204,8 +204,8 @@
   },
   "dependencies": {
     "@aiden/pi-legacy-harness": "npm:@earendil-works/pi-agent-core@0.87.1",
-    "@earendil-works/pi-agent-core": "1.0.0",
-    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-agent-core": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
     "@google/genai": "2.24.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "acorn": "8.17.0",
@@ -228,7 +228,7 @@
     "sherpa-onnx-node": "^1.12.0",
     "unified": "11.0.5",
     "yaml": "2.9.0",
-    "@earendil-works/pi-codemode": "1.0.0"
+    "@earendil-works/pi-codemode": "1.0.3"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",

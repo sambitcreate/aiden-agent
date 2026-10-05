@@ -1,3 +1,4 @@
+import { parseSamplingParamsByThinkingLevel } from "../../renderer/shared/custom-model-options.js";
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
 import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
 import { readBoundedBody } from "../shared/bounded-body.js";
@@ -13,8 +14,8 @@ const UNKNOWN_COST_SENTINEL = -1_000_000;
 const MAX_CATALOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /** Keep synchronized with the deliberately pinned @earendil-works/pi-ai dependency. */
-export const AIDEN_PI_CATALOG_VERSION = "1.0.0";
-export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-10-01T18:57:11.882Z");
+export const AIDEN_PI_CATALOG_VERSION = "1.0.3";
+export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-10-05T08:25:18.129Z");
 export const AIDEN_PI_CATALOG_USER_AGENT = `Aiden-Agent pi-ai/${AIDEN_PI_CATALOG_VERSION}`;
 export const PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -171,6 +172,7 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,
     ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: structuredClone(model.thinkingLevelMap) }),
+    ...(model.samplingParamsByThinkingLevel === undefined ? {} : { samplingParamsByThinkingLevel: parseSamplingParamsByThinkingLevel(model.samplingParamsByThinkingLevel) }),
     input: [...input],
     cost: structuredClone(model.cost),
     contextWindow: model.contextWindow,
