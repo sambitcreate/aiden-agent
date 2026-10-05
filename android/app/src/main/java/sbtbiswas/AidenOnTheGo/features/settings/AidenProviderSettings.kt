@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +19,8 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.util.UUID
 
 @Composable
@@ -43,7 +46,7 @@ private fun ProviderSettingsContent(client: AidenRemoteClient?) {
         catch (_: Exception) { error = "Providers are unavailable. Connect to an updated Mac and refresh." }
     }
     LaunchedEffect(client) { refresh() }
-    Card(Modifier.fillMaxWidth()) {
+    Surface(color = AidenTheme.palette.raised, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Providers", style = MaterialTheme.typography.titleMedium)
             Text("Connections and API keys are stored on your paired Mac.", style = MaterialTheme.typography.bodySmall)
@@ -89,10 +92,10 @@ private fun ProviderCreationDialog(client: AidenRemoteClient, onDismiss: () -> U
         title = { Text("Add provider") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                TextField(label, { label = it }, label = { Text("Name") }, singleLine = true, enabled = !saving)
-                TextField(baseUrl, { baseUrl = it }, label = { Text("Base URL") }, singleLine = true, enabled = !saving)
-                if (needsKey) TextField(apiKey, { apiKey = it }, label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), singleLine = true, enabled = !saving)
-                TextField(modelIds, { modelIds = it }, label = { Text("Model IDs, separated by commas") }, enabled = !saving)
+                TextField(label, { label = it }, colors = aidenTextFieldColors(), label = { Text("Name") }, singleLine = true, enabled = !saving)
+                TextField(baseUrl, { baseUrl = it }, colors = aidenTextFieldColors(), label = { Text("Base URL") }, singleLine = true, enabled = !saving)
+                if (needsKey) TextField(apiKey, { apiKey = it }, colors = aidenTextFieldColors(), label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), singleLine = true, enabled = !saving)
+                TextField(modelIds, { modelIds = it }, colors = aidenTextFieldColors(), label = { Text("Model IDs, separated by commas") }, enabled = !saving)
                 Text("Use exact server model IDs. The first model is the default. Saving does not contact the provider.", style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { options = !options }, enabled = !saving) { Text(if (options) "Hide options" else "Connection and model options") }
                 if (options) {
