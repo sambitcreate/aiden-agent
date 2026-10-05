@@ -283,7 +283,7 @@ test("per-thinking-level sampling survives portable storage and reaches the prov
   for (const reasoning of ["off", "high"] as const) {
     let payload: Record<string, unknown> | undefined;
     const result = streamSimpleOpenAICompletions(model, normalizeContext({ messages: [{ role: "user", content: "sampling fixture", timestamp: 0 }] }), {
-      reasoning, apiKey: "synthetic", maxRetries: 0,
+      reasoning: reasoning === "off" ? undefined : reasoning, apiKey: "synthetic", maxRetries: 0,
       fetch: async (_url, init) => {
         payload = JSON.parse(String(init?.body));
         return new Response('data: {"id":"fixture","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
