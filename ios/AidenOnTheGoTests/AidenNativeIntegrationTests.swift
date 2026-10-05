@@ -344,6 +344,75 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(roundTripped.toolCallCount, 1)
     }
 
+    func testStaleLiveActivityKeepsWaitingForApprovalAskAndOtherStatusesShowLatestStatus() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        for status in AgentRunActivityStatus.allCases {
+            let fresh = AgentRunActivityAttributes.ContentState(
+                sessionID: "chat-1",
+                sessionTitle: "Chat",
+                status: status,
+                currentActivity: "Running bash",
+                responseExcerpt: "Earlier reply",
+                startedAt: start,
+                updatedAt: start + 5,
+                errorSummary: status == .failed ? "Provider error" : nil
+            )
+            // A fresh run, whichever way it is checked, has no stale override.
+            XCTAssertNil(AgentRunStalePresentation.copy(for: fresh, systemMarkedStale: false), "\(status)")
+
+            let reducerStale = AgentRunActivityStateReducer.stale(state: fresh)
+            for (label, state, systemMarkedStale) in [
+                ("reducer", reducerStale, false),
+                ("system", fresh, true),
+            ] {
+                let copy = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale)
+                if status == .waitingForApproval {
+                    XCTAssertEqual(copy?.lead, "Waiting for approval", label)
+                    XCTAssertEqual(copy?.action, "Open to answer", label)
+                    // Stale styling still applies to the waiting state.
+                    XCTAssertTrue(AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale), label)
+                } else {
+                    XCTAssertEqual(copy?.lead, "Latest status shown", "\(status) \(label)")
+                    XCTAssertNil(copy?.action, "\(status) \(label)")
+                }
+            }
+        }
+    }
+
+    func testFinishedLiveActivityIsNeverPresentedAsStaleWaiting() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let done = AgentRunActivityStateReducer.final(
+            status: .cancelled,
+            activity: "Cancelled",
+            state: AgentRunActivityStateReducer.stale(state: waiting),
+            now: start + 2
+        )
+        XCTAssertNil(AgentRunStalePresentation.copy(for: done, systemMarkedStale: true))
+    }
+
+    func testStaleWaitingStateWithoutActivityLineFallsBackToWaitingTitle() throws {
+        // State persisted by an older build: no `toolCallCount`, empty activity line.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":true,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(
+            AgentRunStalePresentation.copy(for: decoded, systemMarkedStale: false),
+            AgentRunStalePresentation.Copy(lead: "Waiting for approval", action: "Open to answer")
+        )
+
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: decoded).currentActivity, "Waiting for approval")
+        var thinking = decoded
+        thinking.status = .thinking
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: thinking).currentActivity, "Latest status shown")
+    }
+
     @MainActor
     func testLiveActivityStateIsBoundedAndResponseExcerptDefaultsOff() throws {
         let longTitle = String(repeating: "Title ", count: 30)

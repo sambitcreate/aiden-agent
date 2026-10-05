@@ -284,6 +284,35 @@ enum AgentRunFreshness {
     }
 }
 
+/// Lock Screen and expanded Dynamic Island copy for a stale activity.
+/// Staleness normally replaces the activity line with "Latest status shown",
+/// but a run waiting for approval is still blocked on the user after the
+/// phone stops receiving updates, so it keeps its ask and offers an action.
+/// Fresh and finished runs return `nil`, so each surface keeps its own lead.
+enum AgentRunStalePresentation {
+    struct Copy: Equatable {
+        var lead: String
+        /// Present only when the user can unblock the run by opening the app.
+        var action: String?
+    }
+
+    static func copy(
+        for state: AgentRunActivityAttributes.ContentState,
+        systemMarkedStale: Bool
+    ) -> Copy? {
+        guard AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale) else { return nil }
+        return Copy(lead: lead(for: state.status), action: action(for: state.status))
+    }
+
+    static func lead(for status: AgentRunActivityStatus) -> String {
+        status == .waitingForApproval ? status.title : String(localized: "Latest status shown")
+    }
+
+    static func action(for status: AgentRunActivityStatus) -> String? {
+        status == .waitingForApproval ? String(localized: "Open to answer") : nil
+    }
+}
+
 enum AgentRunElapsedTimeFormatter {
     static func label(startedAt: Date, updatedAt: Date) -> String {
         let elapsedSeconds = max(0, Int(updatedAt.timeIntervalSince(startedAt).rounded(.down)))
@@ -484,7 +513,7 @@ enum AgentRunActivityStateReducer {
             sessionID: state.sessionID,
             sessionTitle: state.sessionTitle,
             status: state.status,
-            currentActivity: state.currentActivity.isEmpty ? String(localized: "Latest status shown") : state.currentActivity,
+            currentActivity: state.currentActivity.isEmpty ? AgentRunStalePresentation.lead(for: state.status) : state.currentActivity,
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
             // Keep the last real agent update: marking stale is not progress,
