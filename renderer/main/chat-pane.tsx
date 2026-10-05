@@ -36,6 +36,10 @@ import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import {
+  agentsInstructionNoticeMessage,
+  createAgentsInstructionNoticeLog,
+} from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
 import { BotAvatar } from "../components/bot-avatar";
 import { GitFork, TerminalSquare } from "lucide-react";
@@ -194,6 +198,8 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+// AGENTS.md size notices are shown once per chat until the file changes.
+const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
@@ -1265,6 +1271,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
+          },
+          onAgentsInstructionNotices: (notices) => {
+            for (const notice of agentsInstructionNotices.update(chatId, notices)) {
+              toast.info(agentsInstructionNoticeMessage(notice));
+            }
           },
           onContextPressure: (pressure) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {

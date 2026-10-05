@@ -116,13 +116,17 @@ jobs:
     if: github.ref == 'refs/heads/main' && needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # Pushes use the CATALOG_DEPLOY_KEY deploy key, which the main ruleset
-    # allows to bypass required checks; the job token stays read-only. The key
-    # is a model-catalog environment secret, and that environment only accepts
+    # The snapshot reaches main through a pull request, so CI checks it first.
+    # The CATALOG_DEPLOY_KEY deploy key pushes it to an automation branch: a
+    # deploy-key push starts CI, a job-token push would not. The key is a
+    # model-catalog environment secret, and that environment only accepts
     # deployments from main, so branch-edited workflow YAML cannot read it.
+    # The job token opens the pull request and turns on auto-merge; it never
+    # pushes, and main's required-checks ruleset still gates the merge.
     environment: model-catalog
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     steps:
       - name: Check out verified base revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -162,15 +166,15 @@ jobs:
           git add -- resources/model-capabilities.json
           git commit -m "chore: refresh models.dev catalog"
 
-      - name: Push verified snapshot
+      - name: Push snapshot branch
+        id: push
         shell: bash
         env:
           BASE_SHA: ${{ needs.refresh.outputs.base-sha }}
           CATALOG_DEPLOY_KEY: ${{ secrets.CATALOG_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          # The deploy key bypasses required checks, so it may only append the
-          # snapshot commit to history that is already on main.
+          # Only a snapshot built on history that is already on main is offered.
           git fetch --quiet "https://github.com/${GITHUB_REPOSITORY}.git" main
           if ! git merge-base --is-ancestor "$BASE_SHA" FETCH_HEAD; then
             echo "Base $BASE_SHA is not on main; refusing to publish the catalog." >&2
@@ -180,10 +184,31 @@ jobs:
             echo "CATALOG_DEPLOY_KEY secret is missing; cannot publish the catalog." >&2
             exit 1
           fi
+          # A fresh branch per run: nothing is ever force-pushed.
+          branch="automation/models-dev-catalog-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           key_file="$RUNNER_TEMP/catalog-deploy-key"
           known_hosts="$RUNNER_TEMP/github-known-hosts"
           trap 'rm -f "$key_file"' EXIT
           (umask 077 && printf '%s\n' "$CATALOG_DEPLOY_KEY" > "$key_file")
           echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$known_hosts"
           export GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts"
-          git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main
+          git push "git@github.com:${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${branch}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request with auto-merge
+        shell: bash
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "chore: refresh models.dev catalog" \
+            --body "Automated refresh of \`resources/model-capabilities.json\` from models.dev. CI runs the catalog contracts and the desktop unit tests; GitHub merges this once they pass.")"
+          gh pr merge --repo "$GITHUB_REPOSITORY" --auto --merge "$pr_url"
+          # An older catalog pull request still open is superseded by this one.
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("automation/models-dev-catalog-")) | select(.headRefName != env.BRANCH) | .number' |
+            while read -r number; do
+              gh pr close --repo "$GITHUB_REPOSITORY" "$number" --delete-branch --comment "Superseded by $pr_url."
+            done

@@ -11,8 +11,9 @@ import { resolve } from "node:path";
 // - ios / android: the native mobile clients
 // - cli: the headless CLI container and the CLI appearance playground
 // - linux: Linux packaging, Fedora RPM, and the Linux E2E gate (not required)
-// - catalog: model catalog contracts. Implied by desktop, and the only area a
-//   bundled models.dev catalog refresh selects.
+// - catalog: model catalog contracts plus the desktop unit lanes (the runtime
+//   reads model limits from the catalog). Implied by desktop, and the only area
+//   a bundled models.dev catalog refresh selects.
 export const AREA_NAMES = Object.freeze(["desktop", "apple", "ios", "android", "cli", "linux", "catalog"]);
 
 export const MODEL_CATALOG_PATHS = Object.freeze(["resources/model-capabilities.json"]);
@@ -332,7 +333,7 @@ function fullDetection(reason, changedCount = 0) {
 export function detectChangedAreas(options = {}) {
   const environment = options.env ?? process.env;
   const eventName = envValue(environment, options.eventName, "GITHUB_EVENT_NAME") ?? "push";
-  const baseSha = envValue(
+  let baseSha = envValue(
     environment,
     options.baseSha,
     "BASE_SHA",
@@ -340,6 +341,15 @@ export function detectChangedAreas(options = {}) {
   const headSha = envValue(environment, options.headSha, "HEAD_SHA");
   const cwd = options.cwd ?? process.cwd();
   const spawn = options.spawn ?? defaultSpawnSync;
+  // A push that creates a branch (the catalog bot's automation branches) has no
+  // previous tip. Classify it by everything it adds over main instead.
+  if (eventName === "push" && typeof baseSha === "string" && /^0+$/u.test(baseSha) && validGitRef(headSha)) {
+    const mergeBase = invokeGit(spawn, ["merge-base", "origin/main", headSha], cwd);
+    const resolved = typeof mergeBase?.stdout === "string" ? mergeBase.stdout.trim() : "";
+    if (mergeBase && !mergeBase.error && mergeBase.status === 0 && /^[0-9a-f]{40}$/u.test(resolved)) {
+      baseSha = resolved;
+    }
+  }
   const forceFull = eventName === "push" && forceFullEnabled(envValue(environment, options.forceFull, "FORCE_FULL"));
 
   // Main pushes still read the diff so a catalog-only refresh commit can skip
