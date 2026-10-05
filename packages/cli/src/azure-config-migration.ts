@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import lockfile from "proper-lockfile";
-import { atomicJson } from "./state.ts";
+import { acquireLease, atomicJson, readJson } from "./state.ts";
 
 const LEGACY = "azure-openai-responses";
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -44,6 +44,7 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
   for (const [file, kind] of files) {
     if (!existsSync(file) || !readFileSync(file, "utf8").includes(LEGACY)) continue;
     const release = lockfile.lockSync(file, { realpath: false });
+    let releaseCredentials: (() => void) | undefined;
     try {
       const source = readFileSync(file, "utf8");
       const data = record(JSON.parse(source.replace(/^\uFEFF/u, "")));
@@ -51,6 +52,17 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
       const before = JSON.stringify(data);
       if (kind === "models") {
         const providers = record(data.providers);
+        if (providers && Object.hasOwn(providers, LEGACY) && !Object.hasOwn(providers, "azure")) {
+          // Keep endpoint and credential ownership together. A newer credential
+          // must not silently inherit the older identity's custom endpoint.
+          const authFile = join(agentDir, "auth.json");
+          releaseCredentials = acquireLease(`${authFile}.writer`);
+          const auth = record(readJson<unknown>(authFile, {}));
+          const credentials = auth?.version === 1 ? record(auth.entries) : auth;
+          if (credentials && Object.hasOwn(credentials, "azure") && (Object.hasOwn(credentials, LEGACY) || auth?.retiredAzureCredential !== undefined)) {
+            throw new Error("Both Azure credential identities exist for a legacy endpoint. Reconcile the Azure credentials and model configuration before continuing; the endpoint was not changed.");
+          }
+        }
         if (providers) renameProvider(providers);
       } else if (kind === "cache") {
         // Prefer a current cache, without merging endpoints or deployments.
@@ -70,6 +82,6 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
         if (Array.isArray(data.enabledModels)) data.enabledModels = [...new Set(data.enabledModels.map((value: unknown) => typeof value === "string" ? modelKey(value) : value))];
       }
       if (JSON.stringify(data) !== before) atomicJson(file, data);
-    } finally { release(); }
+    } finally { releaseCredentials?.(); release(); }
   }
 }

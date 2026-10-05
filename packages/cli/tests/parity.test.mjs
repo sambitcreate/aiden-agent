@@ -918,3 +918,20 @@ test("CLI Azure credentials migrate from plaintext without losing a colliding cr
   await store.delete("azure");
   assert.equal(await api.createCliProviderCredentials(file).read("azure"), undefined);
 });
+
+
+test("Azure endpoint migration cannot pair a legacy deployment with a different current credential", (t) => {
+  const dir = temporary(t);
+  const models = { providers: { "azure-openai-responses": { api: "azure-openai-responses", baseUrl: "https://old-deployment.example" } } };
+  for (const auth of [
+    { azure: { type: "api_key", key: "current" }, "azure-openai-responses": { type: "api_key", key: "legacy" } },
+    { version: 1, entries: { azure: { type: "api_key", ciphertext: "current" }, "azure-openai-responses": { type: "api_key", ciphertext: "legacy" } } },
+    { version: 1, entries: { azure: { type: "api_key", ciphertext: "current" } }, retiredAzureCredential: { type: "api_key", ciphertext: "legacy" } },
+  ]) {
+    api.atomicJson(join(dir, "models.json"), models);
+    api.atomicJson(join(dir, "auth.json"), auth);
+    assert.throws(() => api.migrateCliAzureConfig(dir), /legacy endpoint/);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "models.json"), "utf8")), models);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "auth.json"), "utf8")), auth);
+  }
+});
