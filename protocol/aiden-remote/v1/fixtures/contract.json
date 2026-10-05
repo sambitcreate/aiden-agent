@@ -1,5 +1,7 @@
 {
-  "contractRevision": 20,
+  "contractRevision": 21,
+  "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
+  "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -1102,7 +1104,7 @@
     "nextOffset": 2,
     "complete": true
   },
-  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 20, "pairingRequests": true },
+  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 21, "pairingRequests": true },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },

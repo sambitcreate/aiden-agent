@@ -1,3 +1,5 @@
+import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
+import { saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
@@ -413,6 +415,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        providers: AidenRemoteProviderService;
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
@@ -920,6 +923,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           detachHostFeed = () => {
             for (const detach of detachers) detach();
           };
+          const providers = new AidenRemoteProviderService({
+            get: (id) => configStore.getProvider(id),
+            save: saveProviderWithCredentialRotation,
+            changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
+          });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
@@ -935,6 +943,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             files,
             git,
             schedules,
+            providers,
             memorySettings,
             usage: usageStore,
             speech,

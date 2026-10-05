@@ -559,3 +559,11 @@ reclamation. Reservations are reference-counted: one rejected concurrent start
 cannot erase another pending or accepted start's protection. Ledger exhaustion
 fails closed for new intents; it never forgets a billed attempt merely to admit
 another one.
+
+## Custom provider creation, revision 21
+
+`POST /providers` is available only when `/server.features` advertises `providers-create-v1`. It requires `workspace:manage`, `server:read`, `Idempotency-Key`, and explicit `confirmedForeground: true`. The request has `{label, baseUrl, kind, deployment, needsKey, apiKey?, models, confirmedForeground}`. Each of 1–32 unique model IDs declares `vision`, `reasoning`, and `toolCall`; optional positive `contextLength` and `outputLimit`, and nonnegative `maxImages` follow the desktop override rules. Models are manually entered; creating a provider makes no provider or catalog network request.
+
+The optional API key is a write-only credential submitted over the existing pinned authenticated transport. It is bounded to 4096 characters, required for `needsKey: true`, forbidden otherwise, stored through the host's existing encrypted credential-rotation transaction, and never returned or logged. Endpoints follow the desktop HTTP(S) URL policy and cannot embed credentials, query strings, fragments, or metadata-service destinations. Loopback endpoints refer to the Mac, not the phone.
+
+The response is `201 {id, label, models}`. The host derives a custom-only ID from authenticated device identity and creation key. A retry with the same key and connection recovers that receipt, including after restart, without altering its stored credential. A different connection under the same key is `409 idempotency_conflict`. To change a key or endpoint, use the desktop editor; this route cannot overwrite an existing provider. Native clients keep one key for a submitted draft, replace it only when the draft changes, and never automatically retry a mutation. Read-only devices and legacy hosts cannot create providers. Switching installations or revoking the device fences late UI results and host writes.

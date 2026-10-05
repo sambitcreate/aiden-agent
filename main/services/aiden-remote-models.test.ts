@@ -222,3 +222,48 @@ test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking cho
     thinkingCanDisable: false,
   }]);
 });
+
+test("remote provider creation saves explicit image options and recovers a lost receipt without key rotation", async () => {
+  const { AidenRemoteProviderService } = await import("./aiden-remote-providers.js");
+  const { splitStoredProvider, composeStoredProvider } = await import("./portable-config-core.js");
+  let saved: import("./types.js").StoredProvider | undefined;
+  let writes = 0; let receivedKey: string | null = null;
+  const dependencies = {
+    get: async () => saved,
+    save: async (value: import("./types.js").StoredProvider, key: string | null) => {
+      writes++; receivedKey = key;
+      const { intent, cache } = splitStoredProvider(value);
+      saved = composeStoredProvider(JSON.parse(JSON.stringify(intent)), JSON.parse(JSON.stringify(cache)));
+      return saved;
+    },
+    changed: () => {},
+  };
+  const input = { label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "fixture-key", confirmedForeground: true, models: [{ id: "private-vision", vision: true, reasoning: false, toolCall: true }] };
+  const service = new AidenRemoteProviderService(dependencies);
+  const [first, repeated] = await Promise.all([service.create("device-one", "fixture-request-key", input), service.create("device-one", "fixture-request-key", input)]);
+  assert.deepEqual(repeated, first);
+  assert.equal(writes, 1); assert.equal(receivedKey, "fixture-key");
+  assert.deepEqual(Object.keys(first).sort(), ["id", "label", "models"]);
+  assert.equal(saved?.modelMetadata?.["private-vision"]?.overrides?.vision, true);
+  const restarted = new AidenRemoteProviderService(dependencies);
+  assert.deepEqual(await restarted.create("device-one", "fixture-request-key", input), first);
+  assert.equal(writes, 1);
+  await assert.rejects(restarted.create("device-one", "fixture-request-key", { ...input, baseUrl: "https://other.example.test/v1" }), (error: unknown) => (error as { code: string }).code === "idempotency_conflict");
+  await assert.rejects(service.create("device-one", "fixture-other-request", input, () => false), (error: unknown) => (error as { code: string }).code === "credential_revoked");
+  assert.equal(writes, 1);
+  const catalog = new AidenRemoteModelService({listProviders: async () => [{ ...saved!, hasKey: true }], getSettings: async () => ({})});
+  assert.equal((await catalog.list()).providers[0]?.models[0]?.supportsImages, true);
+});
+
+test("remote provider creation rejects malformed credentials, endpoint redirects, and ambiguous model declarations", async () => {
+  const { parseRemoteProviderCreation } = await import("./aiden-remote-providers.js");
+  const input = {label: "Local", baseUrl: "http://localhost:1234/v1", kind: "openai", deployment: "local", needsKey: false, confirmedForeground: true, models: [{id: "local", vision: false, reasoning: false, toolCall: true}]};
+  assert.equal(parseRemoteProviderCreation(input).baseUrl, "http://localhost:1234/v1");
+  for (const invalid of [
+    {...input, confirmedForeground: false}, {...input, needsKey: true}, {...input, apiKey: "unneeded-secret"},
+    {...input, baseUrl: "https://user:password@example.test/v1"}, {...input, baseUrl: "http://169.254.169.254/"},
+    {...input, models: []}, {...input, models: [input.models[0], input.models[0]]},
+    {...input, models: [{...input.models[0], vision: "true"}]}, {...input, isBuiltin: true},
+    {...input, models: [{...input.models[0], contextLength: 100, outputLimit: 101}]},
+  ]) assert.throws(() => parseRemoteProviderCreation(invalid), (error: unknown) => (error as {code: string}).code === "invalid_request");
+});

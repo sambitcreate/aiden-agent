@@ -127,6 +127,8 @@ fun AidenAppearanceSettingsScreen(
             color = palette.foreground
         )
 
+        AidenProviderSettings(remoteClient)
+
         Spacer(modifier = Modifier.height(16.dp))
 
         if (onOpenInstallations != null) {

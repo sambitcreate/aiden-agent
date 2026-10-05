@@ -122,7 +122,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(20, fixture.contractRevision)
+        assertEquals(21, fixture.contractRevision)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         val runControlError = requireNotNull(fixture.runControlError).error
