@@ -264,6 +264,7 @@ test("remote provider creation rejects malformed credentials, endpoint redirects
     {...input, baseUrl: "https://user:password@example.test/v1"}, {...input, baseUrl: "http://169.254.169.254/"},
     {...input, models: []}, {...input, models: [input.models[0], input.models[0]]},
     {...input, models: [{...input.models[0], vision: "true"}]}, {...input, isBuiltin: true},
+    {...input, kind: { toString: null }}, {...input, deployment: ["local"]},
     {...input, models: [{...input.models[0], contextLength: 100, outputLimit: 101}]},
   ]) assert.throws(() => parseRemoteProviderCreation(invalid), (error: unknown) => (error as {code: string}).code === "invalid_request");
 });

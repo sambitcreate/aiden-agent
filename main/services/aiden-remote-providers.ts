@@ -25,7 +25,7 @@ export function parseRemoteProviderCreation(input: unknown): RemoteProviderCreat
   const required = ["label", "baseUrl", "kind", "deployment", "needsKey", "models", "confirmedForeground"];
   if (required.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) || Object.keys(value).some((key) => ![...required, "apiKey"].includes(key))) return fail();
   const bounded = (text: unknown, max: number): text is string => typeof text === "string" && text.trim().length > 0 && text.length <= max && !Array.from(text).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
-  if (!bounded(value.label, 120) || !bounded(value.baseUrl, 2048) || !["openai", "anthropic"].includes(String(value.kind)) || !["local", "hosted"].includes(String(value.deployment)) || typeof value.needsKey !== "boolean" || value.confirmedForeground !== true) return fail();
+  if (!bounded(value.label, 120) || !bounded(value.baseUrl, 2048) || (value.kind !== "openai" && value.kind !== "anthropic") || (value.deployment !== "local" && value.deployment !== "hosted") || typeof value.needsKey !== "boolean" || value.confirmedForeground !== true) return fail();
   if (value.needsKey ? !bounded(value.apiKey, 4096) : value.apiKey !== undefined) return fail();
   if (!Array.isArray(value.models) || value.models.length < 1 || value.models.length > 32) return fail();
   const models = value.models.map((raw) => {
