@@ -7125,32 +7125,37 @@ private struct AidenComposerView: View {
 
                 Spacer(minLength: 0)
 
-                Button {
-                    Task {
-                        guard !model.isReadOnlyPresentation else { return }
-                        model.readAloud.stop()
-                        await voiceInput.toggle(
-                            currentDraft: model.draft,
-                            updateDraft: { model.draft = $0 },
-                            macTranscriber: model.transcribeMacSpeech
-                        )
-                    }
-                } label: {
-                    Group {
-                        if voiceInput.isListening {
-                            AidenListeningWaveform(isAnimated: !reduceMotion)
-                        } else {
-                            Image(systemName: "mic")
-                                .font(.body.weight(.medium))
+                // Dictation is off while a response streams, so the busy
+                // Steer/Queue pill takes the mic's place (as on Android); a
+                // dictation already running keeps its stop control.
+                if !(model.isStreaming && model.showsRunInputOptions) || voiceInput.isListening {
+                    Button {
+                        Task {
+                            guard !model.isReadOnlyPresentation else { return }
+                            model.readAloud.stop()
+                            await voiceInput.toggle(
+                                currentDraft: model.draft,
+                                updateDraft: { model.draft = $0 },
+                                macTranscriber: model.transcribeMacSpeech
+                            )
                         }
+                    } label: {
+                        Group {
+                            if voiceInput.isListening {
+                                AidenListeningWaveform(isAnimated: !reduceMotion)
+                            } else {
+                                Image(systemName: "mic")
+                                    .font(.body.weight(.medium))
+                            }
+                        }
+                        .frame(width: 44, height: 44)
                     }
-                    .frame(width: 44, height: 44)
+                    .disabled(
+                        model.isReadOnlyPresentation || model.isStreaming
+                            || (voiceInput.isBusy && !voiceInput.isListening)
+                    )
+                    .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
                 }
-                .disabled(
-                    model.isReadOnlyPresentation || model.isStreaming
-                        || (voiceInput.isBusy && !voiceInput.isListening)
-                )
-                .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
                     if model.showsRunInputOptions {

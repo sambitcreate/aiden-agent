@@ -201,7 +201,13 @@ class AidenComposerUiTest {
             assertTrue("$description is $height tall", height >= 44.dp)
             assertTrue("$description stays inside the row", bounds.right <= rowRight)
         }
-        compose.onNodeWithContentDescription("Select model").assertIsDisplayed()
+        // The picker stays a recognizable control: a usable target with its chevron whole.
+        val picker = compose.onNodeWithContentDescription("Select model").assertIsDisplayed().getBoundsInRoot()
+        assertTrue("model picker is ${picker.right - picker.left} wide", picker.right - picker.left >= 48.dp)
+        val chevron = compose.onNodeWithContentDescription("Select model", useUnmergedTree = true).getBoundsInRoot()
+        assertTrue("model chevron is ${chevron.right - chevron.left} wide", chevron.right - chevron.left >= 13.dp)
+        // Dictation is off while the response streams, so its button gives way to the pill.
+        compose.onNodeWithContentDescription("Start voice input").assertDoesNotExist()
     }
 
     @Test

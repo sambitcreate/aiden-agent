@@ -32,7 +32,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -349,8 +352,18 @@ fun AidenComposerView(
                                         )
                                         Spacer(modifier = Modifier.width(5.dp))
                                     }
+                                    // One label so a narrow picker shortens the name and
+                                    // thinking level together, keeping the provider icon
+                                    // and chevron visible.
                                     Text(
-                                        text = selectedModel?.label ?: "Model",
+                                        text = buildAnnotatedString {
+                                            append(selectedModel?.label ?: "Model")
+                                            if (selectedThinkingLevel != null) {
+                                                withStyle(SpanStyle(fontWeight = FontWeight.Normal, color = palette.secondary.copy(alpha = 0.8f))) {
+                                                    append(" · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}")
+                                                }
+                                            }
+                                        },
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Medium,
                                         color = palette.secondary,
@@ -358,15 +371,6 @@ fun AidenComposerView(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
-                                    if (selectedThinkingLevel != null) {
-                                        Text(
-                                            text = " · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = palette.secondary.copy(alpha = 0.8f),
-                                            maxLines = 1,
-                                            softWrap = false
-                                        )
-                                    }
                                     Spacer(modifier = Modifier.width(3.dp))
                                     Icon(
                                         imageVector = Icons.Default.KeyboardArrowDown,
@@ -469,40 +473,45 @@ fun AidenComposerView(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
-                // Voice Mic / Waveform Button
-                IconButton(
-                    onClick = onToggleVoice,
-                    enabled = !isReadOnly && !isStreaming && (!isVoiceBusy || isVoiceListening),
-                    modifier = Modifier
-                        .size(AidenUi.MinimumTouchTarget)
-                        .clip(CircleShape)
-                        .background(
-                            if (isVoiceListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
-                        )
-                ) {
-                    if (isVoiceListening) {
-                        AidenHarmonicWaveform(
-                            amplitude = 0.8f,
-                            palette = palette,
-                            modifier = Modifier
-                                .size(24.dp, 16.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Start voice input",
-                            tint = if (isVoiceListening) palette.accent else palette.secondary,
-                            modifier = Modifier.size(20.dp)
-                        )
+                // Voice Mic / Waveform Button. Dictation is off while a response
+                // streams, so the busy Queue/Steer pill takes its place (a
+                // dictation already running keeps its stop control).
+                val showsBusyPill = isStreaming && showsRunInputOptions
+                if (!showsBusyPill || isVoiceListening) {
+                    IconButton(
+                        onClick = onToggleVoice,
+                        enabled = !isReadOnly && !isStreaming && (!isVoiceBusy || isVoiceListening),
+                        modifier = Modifier
+                            .size(AidenUi.MinimumTouchTarget)
+                            .clip(CircleShape)
+                            .background(
+                                if (isVoiceListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                            )
+                    ) {
+                        if (isVoiceListening) {
+                            AidenHarmonicWaveform(
+                                amplitude = 0.8f,
+                                palette = palette,
+                                modifier = Modifier
+                                    .size(24.dp, 16.dp)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Start voice input",
+                                tint = if (isVoiceListening) palette.accent else palette.secondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                }
 
-                Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
 
                 // Busy composer: negotiated servers get one Queue/Steer pill
                 // next to its own Stop control; older servers keep the single
                 // morphing button.
-                if (isStreaming && showsRunInputOptions) {
+                if (showsBusyPill) {
                     val canSubmitNow = canSubmitRunInput && !isReadOnly && draft.isNotBlank()
                     AidenRunInputPill(
                         mode = runInputMode,
