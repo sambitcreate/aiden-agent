@@ -23836,6 +23836,48 @@
         },
         "canonical_model_id": "zhipuai/glm-4.5"
       },
+      "z-ai/glm-5.3-flash-apex-abliterated": {
+        "id": "z-ai/glm-5.3-flash-apex-abliterated",
+        "name": "Apex Flash 1 Abliterated",
+        "description": "Apex Flash 1 Abliterated is an experimental derivative of Cantina Security and Yeta's Apex Flash 1 with modified refusal behavior.",
+        "family": "glm",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "input": 1048576,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.075
+        }
+      },
       "z-ai/glm-5v-turbo": {
         "id": "z-ai/glm-5v-turbo",
         "name": "GLM 5V Turbo",
@@ -24034,6 +24076,48 @@
           "cache_read": 0.035
         },
         "canonical_model_id": "zhipuai/glm-4.7-flash"
+      },
+      "z-ai/glm-5.3-flash-apex": {
+        "id": "z-ai/glm-5.3-flash-apex",
+        "name": "Apex Flash 1",
+        "description": "Apex Flash 1 is Cantina Security and Yeta's cybersecurity-focused post-train of GLM 5.3 Flash for code investigation and tool use.",
+        "family": "glm",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "input": 1048576,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.075
+        }
       },
       "z-ai/glm-5-original:thinking": {
         "id": "z-ai/glm-5-original:thinking",
@@ -33442,6 +33526,39 @@
         },
         "canonical_model_id": "alibaba/qwen3-vl-235b-a22b-thinking"
       },
+      "qwen/qwen3.8-27b-kiwen": {
+        "id": "qwen/qwen3.8-27b-kiwen",
+        "name": "Qwen 3.8 27B Kiwen",
+        "description": "Qwen 3.8 27B Kiwen is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
       "qwen/qwen3.5-27b": {
         "id": "qwen/qwen3.5-27b",
         "name": "Qwen3.5 27B",
@@ -33826,6 +33943,72 @@
         },
         "canonical_model_id": "alibaba/qwen3.5-plus"
       },
+      "qwen/qwen3.8-27b-swift": {
+        "id": "qwen/qwen3.8-27b-swift",
+        "name": "Qwen 3.8 27B Swift",
+        "description": "Qwen 3.8 27B Swift is a finetune for fast responses, served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
+      "qwen/qwen3.8-27b-fimi": {
+        "id": "qwen/qwen3.8-27b-fimi",
+        "name": "Qwen 3.8 27B Fimi",
+        "description": "Qwen 3.8 27B Fimi is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
       "qwen/qwen3-32b": {
         "id": "qwen/qwen3-32b",
         "name": "Qwen 3 32b",
@@ -33860,6 +34043,39 @@
           "cache_read": 0.05
         },
         "canonical_model_id": "alibaba/qwen3-32b"
+      },
+      "qwen/qwen3.8-27b-kimiko": {
+        "id": "qwen/qwen3.8-27b-kimiko",
+        "name": "Qwen 3.8 27B Kimiko",
+        "description": "Qwen 3.8 27B Kimiko is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
       },
       "qwen/qwen-plus": {
         "id": "qwen/qwen-plus",
@@ -34006,6 +34222,39 @@
           "input": 0.25,
           "output": 1.5,
           "cache_read": 0.2
+        }
+      },
+      "qwen/qwen3.8-27b-antislop": {
+        "id": "qwen/qwen3.8-27b-antislop",
+        "name": "Qwen 3.8 27B Antislop",
+        "description": "Qwen 3.8 27B Antislop is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
         }
       },
       "qwen/qwen-turbo": {
@@ -34668,6 +34917,39 @@
         },
         "canonical_model_id": "alibaba/qwen3.5-plus"
       },
+      "qwen/qwen3.8-27b-darkidol": {
+        "id": "qwen/qwen3.8-27b-darkidol",
+        "name": "Qwen 3.8 27B DarkIdol",
+        "description": "Qwen 3.8 27B DarkIdol is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
       "qwen/qwen3-coder-plus": {
         "id": "qwen/qwen3-coder-plus",
         "name": "Qwen3 Coder Plus",
@@ -34941,6 +35223,39 @@
           "cache_read": 0.05
         }
       },
+      "qwen/qwen3.8-27b-novelist": {
+        "id": "qwen/qwen3.8-27b-novelist",
+        "name": "Qwen 3.8 27B Novelist",
+        "description": "Qwen 3.8 27B Novelist is a creative finetune served by Aoru in NVFP4 with a 262,144-token context window. It supports image understanding, tool calling, and optional reasoning.",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
       "qwen/qwen-long": {
         "id": "qwen/qwen-long",
         "name": "Qwen Long 10M",
@@ -35202,6 +35517,37 @@
         "limit": {
           "context": 524288,
           "input": 524288,
+          "output": 32768
+        },
+        "cost": {
+          "input": 0.25,
+          "output": 1.5,
+          "cache_read": 0.125
+        }
+      },
+      "qwen/qwen3.8-27b-synthia": {
+        "id": "qwen/qwen3.8-27b-synthia",
+        "name": "Qwen 3.8 27B Synthia",
+        "description": "Qwen 3.8 27B Synthia is a text-only roleplay finetune served by Aoru in NVFP4 with a 262,144-token context window.",
+        "family": "qwen",
+        "attachment": false,
+        "reasoning": false,
+        "tool_call": false,
+        "structured_output": false,
+        "release_date": "2026-10-05",
+        "last_updated": "2026-10-05",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "input": 262144,
           "output": 32768
         },
         "cost": {
@@ -55030,19 +55376,33 @@
         },
         "canonical_model_id": "zhipuai/glm-5.3"
       },
-      "luminal/deepseek-ai/DeepSeek-V4.1-Flash": {
-        "id": "luminal/deepseek-ai/DeepSeek-V4.1-Flash",
-        "name": "luminal/DeepSeek-V4.1-Flash (luminal)",
-        "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
-        "family": "deepseek",
+      "luminal/deepseek-v4.1-flash": {
+        "id": "luminal/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash (luminal)",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
         "attachment": true,
         "reasoning": true,
-        "reasoning_options": [],
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
         "tool_call": true,
         "structured_output": false,
         "temperature": true,
-        "release_date": "2026-10-04",
-        "last_updated": "2026-10-04",
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
         "modalities": {
           "input": [
             "text",
@@ -55052,16 +55412,17 @@
             "text"
           ]
         },
-        "open_weights": false,
+        "open_weights": true,
         "limit": {
           "context": 1000000,
-          "output": 1000000
+          "output": 384000
         },
         "cost": {
           "input": 0.135,
           "output": 0.54,
           "cache_read": 0.0027
-        }
+        },
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
       "aws-bedrock/claude-haiku-4-5": {
         "id": "aws-bedrock/claude-haiku-4-5",
@@ -72843,50 +73204,6 @@
           "cache_write": 5
         }
       },
-      "stealth/space-bunny-alpha": {
-        "id": "stealth/space-bunny-alpha",
-        "name": "Space Bunny Alpha (retires Oct 5)",
-        "description": "Space Bunny Alpha is an anonymous large model with blazing-fast inference, strong coding capabilities and native multimodal input support. It delivers adjustable reasoning effort, and a 1M-token context window. Space...",
-        "family": "alpha",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": false,
-        "temperature": true,
-        "release_date": "2026-09-23",
-        "last_updated": "2026-09-23",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 1000000,
-          "output": 524288
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        }
-      },
       "stealth/claude-sonnet-4.6": {
         "id": "stealth/claude-sonnet-4.6",
         "name": "Stealth: Claude Sonnet 4.6 (20% off)",
@@ -73277,7 +73594,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6566,
+          "input": 0.66,
           "output": 13,
           "cache_read": 0.45
         }
@@ -74826,12 +75143,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 163840,
-          "output": 147456
+          "context": 128000,
+          "output": 115200
         },
         "cost": {
-          "input": 0.25,
-          "output": 1
+          "input": 0.29,
+          "output": 1.14,
+          "cache_read": 0.11
         }
       },
       "deepseek/deepseek-r1": {
@@ -76481,7 +76799,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
           "input": 1.4,
@@ -77488,12 +77806,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
-          "input": 0.08,
-          "output": 5,
-          "cache_read": 0.07
+          "input": 0.03,
+          "output": 12,
+          "cache_read": 0.03
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -81838,7 +82156,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 131072
+          "output": 32768
         },
         "cost": {
           "input": 0.039,
@@ -85286,7 +85604,7 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 81920
+          "output": 262140
         },
         "cost": {
           "input": 0.45,
@@ -85459,50 +85777,6 @@
           "cache_write": 0.4
         },
         "canonical_model_id": "alibaba/qwen3.7-plus"
-      },
-      "qwen/qwen3.8-27b:free": {
-        "id": "qwen/qwen3.8-27b:free",
-        "name": "Qwen: Qwen3.8 27B (free)",
-        "description": "Qwen3.8 27B is an open-weight dense vision-language model from Qwen. It is suited for coding, professional workflows, research, multimodal interaction, and long-running agent tasks, with flexible thinking that can be...",
-        "family": "qwen",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-08-14",
-        "last_updated": "2026-08-14",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 235929
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        },
-        "canonical_model_id": "alibaba/qwen3.8-27b"
       },
       "qwen/qwen3.8-max-0902": {
         "id": "qwen/qwen3.8-max-0902",
@@ -89808,7 +90082,17 @@
         "family": "kimi-k2",
         "attachment": true,
         "reasoning": true,
-        "reasoning_options": [],
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
         "tool_call": true,
         "interleaved": {
           "field": "reasoning_content"
@@ -110204,50 +110488,6 @@
           "cache_read": 0.15
         }
       },
-      "stealth/space-bunny-alpha": {
-        "id": "stealth/space-bunny-alpha",
-        "name": "Space Bunny Alpha",
-        "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
-        "family": "alpha",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": false,
-        "temperature": true,
-        "release_date": "2026-09-23",
-        "last_updated": "2026-09-23",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 1000000,
-          "output": 524288
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        }
-      },
       "bytedance-seed/seed-1.6-flash": {
         "id": "bytedance-seed/seed-1.6-flash",
         "name": "Seed 1.6 Flash",
@@ -110590,7 +110830,7 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.6566,
+          "input": 0.66,
           "output": 13,
           "cache_read": 0.45
         }
@@ -111982,9 +112222,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.003,
-          "output": 2.4,
-          "cache_read": 0.003
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.006
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -112141,9 +112381,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.55,
-          "output": 4.2,
-          "cache_read": 0.45
+          "input": 0.4,
+          "output": 5,
+          "cache_read": 0.36
         },
         "canonical_model_id": "deepseek/deepseek-v4-pro-0813"
       },
@@ -112207,11 +112447,12 @@
         "open_weights": true,
         "limit": {
           "context": 163840,
-          "output": 147456
+          "output": 115200
         },
         "cost": {
-          "input": 0.25,
-          "output": 1
+          "input": 0.29,
+          "output": 1.14,
+          "cache_read": 0.11
         }
       },
       "deepseek/deepseek-r1": {
@@ -112408,9 +112649,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.0224,
+          "input": 0.03,
           "output": 1.28,
-          "cache_read": 0.0224
+          "cache_read": 0.03
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash"
       },
@@ -113692,9 +113933,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.0792,
-          "output": 8,
-          "cache_read": 0.0792
+          "input": 0.0192,
+          "output": 16,
+          "cache_read": 0.0192
         },
         "canonical_model_id": "zhipuai/glm-5.2"
       },
@@ -113849,12 +114090,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
-          "input": 1.4,
-          "output": 4.4,
-          "cache_read": 0.14
+          "input": 0.05,
+          "output": 7,
+          "cache_read": 0.045
         },
         "canonical_model_id": "zhipuai/glm-5.3"
       },
@@ -114902,12 +115143,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 131072
         },
         "cost": {
-          "input": 0.08,
-          "output": 5,
-          "cache_read": 0.07
+          "input": 0.03,
+          "output": 12,
+          "cache_read": 0.03
         }
       },
       "arcee-ai/trinity-large-thinking": {
@@ -116767,9 +117008,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.0675,
-          "output": 0.225,
-          "cache_read": 0.0375
+          "input": 0.09,
+          "output": 0.3,
+          "cache_read": 0.05
         },
         "canonical_model_id": "google/gemma-4-26b-a4b-it"
       },
@@ -118959,9 +119200,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.72,
+          "input": 0.99,
           "output": 14,
-          "cache_read": 0.7
+          "cache_read": 0.33
         },
         "canonical_model_id": "moonshotai/kimi-k3"
       },
@@ -119382,12 +119623,12 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 131072
+          "output": 32768
         },
         "cost": {
-          "input": 0.0595,
-          "output": 0.17,
-          "cache_read": 0.02975
+          "input": 0.06,
+          "output": 0.16,
+          "cache_read": 0.03
         },
         "canonical_model_id": "nvidia/nemotron-3.5-lightning"
       },
@@ -122798,11 +123039,12 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 81920
+          "output": 262140
         },
         "cost": {
           "input": 0.32,
-          "output": 3.2
+          "output": 3.25,
+          "cache_read": 0.03
         },
         "canonical_model_id": "alibaba/qwen3.6-27b"
       },
@@ -122987,52 +123229,6 @@
           }
         },
         "canonical_model_id": "alibaba/qwen3.7-plus"
-      },
-      "qwen/qwen3.8-27b:free": {
-        "id": "qwen/qwen3.8-27b:free",
-        "name": "Qwen3.8 27B (free)",
-        "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
-        "family": "qwen",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          },
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-08-14",
-        "last_updated": "2026-08-14",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "output": 235929
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        },
-        "canonical_model_id": "alibaba/qwen3.8-27b"
       },
       "qwen/qwen3.8-max-0902": {
         "id": "qwen/qwen3.8-max-0902",
@@ -123847,16 +124043,16 @@
           "output": 128000
         },
         "cost": {
-          "input": 4,
-          "output": 20,
-          "cache_read": 0.4,
-          "cache_write": 5,
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5,
           "tiers": [
             {
-              "input": 8,
-              "output": 30,
-              "cache_read": 0.8,
-              "cache_write": 10,
+              "input": 4,
+              "output": 15,
+              "cache_read": 0.4,
+              "cache_write": 5,
               "tier": {
                 "type": "context",
                 "size": 272000
@@ -123864,10 +124060,10 @@
             }
           ],
           "context_over_200k": {
-            "input": 8,
-            "output": 30,
-            "cache_read": 0.8,
-            "cache_write": 10
+            "input": 4,
+            "output": 15,
+            "cache_read": 0.4,
+            "cache_write": 5
           }
         },
         "canonical_model_id": "openai/gpt-5.6-sol"
@@ -172344,7 +172540,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "pdf"
           ],
           "output": [
             "text"
@@ -172576,7 +172773,8 @@
           "input": [
             "text",
             "image",
-            "video"
+            "video",
+            "pdf"
           ],
           "output": [
             "text"
@@ -185415,9 +185613,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.1,
-          "output": 0.2,
-          "cache_read": 0.01
+          "input": 0.09,
+          "output": 0.18,
+          "cache_read": 0.009
         },
         "canonical_model_id": "poolside/laguna-s-2.1"
       },
@@ -188288,7 +188486,7 @@
         },
         "cost": {
           "input": 0.25,
-          "output": 0.9
+          "output": 0.8
         },
         "canonical_model_id": "arcee-ai/trinity-large-thinking"
       },
@@ -192400,8 +192598,9 @@
           "output": 32000
         },
         "cost": {
-          "input": 0,
-          "output": 0
+          "input": 0.075,
+          "output": 0.22,
+          "cache_read": 0.015
         }
       },
       "inclusionai/ling-3.0-flash-vl": {
@@ -192473,45 +192672,6 @@
           "cache_read": 0.015
         },
         "canonical_model_id": "inclusionai/ling-3.0-flash-fin"
-      },
-      "inclusionai/ling-3.0-flash-sante-free": {
-        "id": "inclusionai/ling-3.0-flash-sante-free",
-        "name": "Ling 3.0 Flash Sante (Free)",
-        "description": "Efficient model for low-latency assistance, extraction, and routine automation",
-        "family": "ling",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "low",
-              "medium",
-              "high"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "release_date": "2026-09-04",
-        "last_updated": "2026-09-04",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 256000,
-          "output": 32000
-        },
-        "cost": {
-          "input": 0,
-          "output": 0
-        }
       },
       "moonshotai/kimi-k3": {
         "id": "moonshotai/kimi-k3",
@@ -262363,9 +262523,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.449,
-          "output": 0.898,
-          "cache_read": 0.0898
+          "input": 0.44816,
+          "output": 0.89632,
+          "cache_read": 0.089632
         },
         "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
       },
@@ -262396,8 +262556,8 @@
           "output": 4096
         },
         "cost": {
-          "input": 1.01025,
-          "output": 1.01025
+          "input": 1.00836,
+          "output": 1.00836
         },
         "canonical_model_id": "meta/llama-3.3-70b-instruct"
       },
@@ -262437,8 +262597,8 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.168375,
-          "output": 0.6735
+          "input": 0.16806,
+          "output": 0.67224
         },
         "canonical_model_id": "openai/gpt-oss-120b"
       },
@@ -262469,8 +262629,8 @@
           "output": 4096
         },
         "cost": {
-          "input": 0.729625,
-          "output": 0.729625
+          "input": 0.72826,
+          "output": 0.72826
         },
         "canonical_model_id": "meta/llama-3.3-70b-instruct"
       },
@@ -262510,8 +262670,8 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.168375,
-          "output": 0.729625
+          "input": 0.16806,
+          "output": 0.72826
         },
         "canonical_model_id": "openai/gpt-oss-120b"
       },
@@ -263831,6 +263991,50 @@
           "input_audio": 0.5
         },
         "canonical_model_id": "google/gemini-3.1-flash-lite"
+      },
+      "greenference/deepseek-v4.1-flash": {
+        "id": "greenference/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash (Greenference)",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.0015,
+          "output": 0.09,
+          "cache_read": 0.00075
+        },
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
       "greenference/gpt-oss-20b": {
         "id": "greenference/gpt-oss-20b",
@@ -269084,8 +269288,8 @@
           "output": 262144
         },
         "cost": {
-          "input": 0.33675,
-          "output": 0.449
+          "input": 0.33612,
+          "output": 0.44816
         },
         "canonical_model_id": "mistral/ministral-3-14b-instruct-2512"
       },
@@ -305578,9 +305782,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.15,
-          "output": 0.55,
-          "cache_read": 0.005
+          "input": 0.135,
+          "output": 0.54,
+          "cache_read": 0.0027
         },
         "canonical_model_id": "deepseek/deepseek-v4.1-flash"
       },
@@ -312322,39 +312526,6 @@
           "cache_write": 0.08333
         },
         "canonical_model_id": "google/gemini-3.1-flash-lite"
-      },
-      "deepseek-ai/DeepSeek-V4.1-Flash": {
-        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
-        "name": "luminal/DeepSeek-V4.1-Flash",
-        "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
-        "family": "deepseek",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": false,
-        "temperature": true,
-        "release_date": "2026-10-04",
-        "last_updated": "2026-10-04",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 1000000,
-          "output": 1000000
-        },
-        "cost": {
-          "input": 0.135,
-          "output": 0.54,
-          "cache_read": 0.0027
-        }
       }
     }
   },

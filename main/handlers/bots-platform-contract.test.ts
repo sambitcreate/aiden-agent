@@ -18,7 +18,7 @@ test("ordinary chat paths cannot activate Bot services on unsupported hosts", ()
   );
   assert.match(
     chatHandlers,
-    /if \(source\.botId\) \{\s+if \(!hostPlatformCapabilities\(\)\.bots\)/u,
+    /copyBotChat: async \(source\) => \{\s+if \(!hostPlatformCapabilities\(\)\.bots\)/u,
   );
   assert.match(
     chatHandlers,

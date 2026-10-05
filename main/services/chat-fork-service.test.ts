@@ -118,6 +118,25 @@ test("only one copy runs at a time and a busy source is refused", async (t) => {
   await forks.fork({ chatId: source.id }, caller);
 });
 
+test("a chat with unrecovered artifacts is not copied until they are resolved", async (t) => {
+  const { store, source } = await fixture(t);
+  let blocked: string | undefined = "Recover the visual artifact first.";
+  const forks = service(store, { blockedReason: async () => blocked });
+
+  await assert.rejects(
+    forks.fork({ chatId: source.id }, caller),
+    (error) =>
+      error instanceof ChatForkError &&
+      error.code === "unavailable" &&
+      error.message === "Recover the visual artifact first.",
+  );
+  assert.equal((await store.list()).length, 1);
+
+  blocked = undefined;
+  await forks.fork({ chatId: source.id }, caller);
+  assert.equal((await store.list()).length, 2);
+});
+
 test("a source that changed since the caller saw it is not forked", async (t) => {
   const { store, source, ids } = await fixture(t);
   const forks = service(store);
