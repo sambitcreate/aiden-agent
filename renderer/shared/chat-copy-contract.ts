@@ -141,6 +141,12 @@ export function forkSummaryHoldsSend(lineage: ChatForkLineageV1 | undefined): bo
   return state === "pending" || state === "failed";
 }
 
+/** `chats:fork-summary-changed`: a fork's summary state changed in main. */
+export interface ChatForkSummaryChanged {
+  chatId: string;
+  forkedFrom?: ChatForkLineageV1;
+}
+
 const FORK_SUFFIX = / \(fork(?: (\d{1,6}))?\)$/u;
 
 /** The title a fork suffix was appended to, so forks of forks don't stack suffixes. */

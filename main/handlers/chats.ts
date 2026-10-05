@@ -302,9 +302,9 @@ export function registerChatHistoryHandlers(): void {
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
   );
 
-  ipcMain.handle("chats:cancelForkSummary", async (_event, input: unknown) => {
-    forkSummaryService.cancel(parseChatOnlyRequest(input).chatId);
-  });
+  ipcMain.handle("chats:cancelForkSummary", async (_event, input: unknown) =>
+    forkSummaryService.cancel(parseChatOnlyRequest(input).chatId),
+  );
 
   ipcMain.handle("chats:skipForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.skip(parseChatOnlyRequest(input).chatId)),

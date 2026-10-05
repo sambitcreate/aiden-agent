@@ -42,3 +42,32 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
 - **Fallback.** No source journal, the rollout gate, or no provable boundary → returns false and creates nothing; the fork rebuilds model context from visible history like before. A thrown journal error in the IPC handler is logged as a `chat-degraded` diagnostic and never fails the fork.
 - **Cleanup.** `copyVisibleHistory`'s `beforeInstall(chat, sourceMessageIds)` runs the journal fork. If the chat install then fails, the handler deletes the target journal unless the error requires reconciliation (startup `reconcileChats` also removes orphans).
 - **Tests.** `main/services/pi-journal-fork.test.ts` (in `test:compaction`): context through the cut survives a reopen, no duplicate sync, the no-boundary fallbacks, and the `importBranch` guards. `chat-session-copy.test.ts` checks the source-id pairing.
+
+## PR 3 — Fork with summary (branch `feat/chat-fork-summary`)
+
+- **State.** `ChatForkLineageV1.summary` is a `ChatForkSummaryV1 { state: pending | ready | failed, afterMessageId, instructions?, text?, files?, error? }`. `afterMessageId` is the fork's own last copied message. The chat index keeps only `state` and `afterMessageId`; the full text lives on the chat.
+- **Main.**
+  - `ForkSummaryService` (`main/services/fork-summary-service.ts`) runs pi's `generateBranchSummary` on the *source's* provider and model. It uses the source journal after the cut when skills are on and the boundary is provable, and otherwise the visible messages.
+  - pi's "explored a different branch" preamble and its file sections are stripped; the files are kept separately.
+  - One attempt runs per fork. Cancel and failure both settle to `failed`. Retry keeps the instructions. Skip removes the summary.
+  - At startup, `initializeForkSummaries` marks summaries left `pending` by a quit as failed.
+  - Every change is broadcast as `chats:fork-summary-changed { chatId, forkedFrom? }`.
+- **Hold.**
+  - `appendMessage` refuses sends while a summary is pending or failed (`forkSummaryHoldsSend`).
+  - The renderer mirrors this with `ChatMessageQueue.holdForForkSummary`, a separate flag from compaction's `holdReason`, so a compaction release cannot clear it. Follow-ups queue without pausing and send in order once the summary is ready or skipped.
+  - The composer shows a status strip and queues instead of sending.
+- **Model context.** `projectVisibleHistoryWithoutSkills` and `ensurePiForkSummary` place a ready summary as a branch-summary entry right after `afterMessageId`.
+- **UI.**
+  - `ForkSummaryCard` renders after `afterMessageId` in `MessageList`: pending (spinner, Cancel), failed (Retry, Continue without summary), and ready (a collapsed disclosure with Markdown and file lists).
+  - Entry points:
+    - a right-click `MessageForkContextMenu` on settled rows (Copy for a selection inside the row, the plain fork, and "Fork with summary…");
+    - "With summary…" in the `/fork` picker.
+
+    Both open `ForkSummaryDialog`, which has an optional focus textarea.
+  - `forkSummaryRows` offers the summary only where messages follow the cut. A reply needs a later message; a prompt needs an earlier prompt, otherwise Edit in fork opens a draft.
+- **Tests.**
+  - `fork-summary-service.test.ts` (in `test:compaction`) and `chat-session-copy.test.ts`.
+  - Queue hold cases in `chat-message-queue.test.ts`.
+  - `fork-summary-card.test.tsx`: the card states.
+  - `chat-copy-view.test.ts`: `withForkLineage` and `forkSummaryRows`.
+  - `message-bubble.test.tsx`: the card's placement.

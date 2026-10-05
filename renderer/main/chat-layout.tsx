@@ -20,6 +20,8 @@ import { TerminalDrawer } from "../components/terminal-drawer";
 import { EnvironmentWorkbench } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { withForkLineage } from "../lib/chat-copy-view";
+import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
@@ -74,6 +76,18 @@ export function ChatLayout() {
       clearTimeout(clearReveal);
     };
   }, [qc]);
+
+  // A fork's summary settles in the background; patch its lineage in place so
+  // the summary card and held sends follow without a title reveal or refetch.
+  React.useEffect(
+    () =>
+      onNotification<ChatForkSummaryChanged>("chats:fork-summary-changed", (update) => {
+        qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) =>
+          current ? withForkLineage(current, update.forkedFrom) : current,
+        );
+      }),
+    [qc],
+  );
 
   return (
     <SplitView

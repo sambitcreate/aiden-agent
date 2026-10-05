@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types.js";
+import type { ChatForkLineageV1 } from "../shared/chat-copy-contract.js";
 import {
   MAX_FORK_PREVIEW_CODE_UNITS,
   MAX_FORK_QUERY_CODE_UNITS,
@@ -79,4 +80,32 @@ export function filterForkTurnChoices(
 export function forkedFromLabel(sourceTitle: string | undefined): string {
   const title = sourceTitle?.trim();
   return title ? `Forked from “${title}”` : "Forked from a deleted chat";
+}
+
+/** The chat with its fork lineage replaced, or removed when `forkedFrom` is absent. */
+export function withForkLineage<T extends { forkedFrom?: ChatForkLineageV1 }>(
+  chat: T,
+  forkedFrom: ChatForkLineageV1 | undefined,
+): T {
+  const { forkedFrom: _previous, ...rest } = chat;
+  return (forkedFrom ? { ...rest, forkedFrom } : rest) as T;
+}
+
+/**
+ * Settled messages whose fork leaves something in the source to summarize.
+ * A reply forks after itself, so a later message must exist. A prompt forks
+ * before itself, so it is always followed, but only a prompt with an earlier
+ * one makes a fork rather than a fresh draft.
+ */
+export function forkSummaryRows(messages: readonly ChatMessage[]): Set<string> {
+  const eligible = new Set<string>();
+  let earlierPrompt = false;
+  messages.forEach((message, index) => {
+    if (message.role === "assistant" && index < messages.length - 1) eligible.add(message.id);
+    if (message.role === "user") {
+      if (earlierPrompt) eligible.add(message.id);
+      earlierPrompt = true;
+    }
+  });
+  return eligible;
 }

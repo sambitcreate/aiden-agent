@@ -958,3 +958,29 @@ test("settled replies without prose still offer Fork from here", () => {
   // With no prose there is nothing to copy; only the two prompts keep Copy.
   assert.equal((markup.match(/aria-label="Copy message"/gu) ?? []).length, 2);
 });
+
+test("a fork's summary card sits after its last copied message", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="fork-1"
+      messages={[
+        { id: "user-1", role: "user", content: "Copied question", createdAt: 1 },
+        { id: "assistant-1", role: "assistant", content: "Copied answer", createdAt: 2 },
+        { id: "user-2", role: "user", content: "New question in the fork", createdAt: 3 },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+      forkSummary={{ afterMessageId: "assistant-1", node: <aside data-testid="fork-summary">Summary</aside> }}
+    />,
+  );
+  const card = markup.indexOf('data-testid="fork-summary"');
+  assert.ok(card > markup.indexOf("Copied answer"));
+  assert.ok(card < markup.indexOf("New question in the fork"));
+  assert.equal((markup.match(/data-testid="fork-summary"/gu) ?? []).length, 1);
+});

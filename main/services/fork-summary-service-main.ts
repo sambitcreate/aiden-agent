@@ -6,12 +6,7 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
-import type { Chat } from "./types.js";
-
-export interface ForkSummaryChanged {
-  chatId: string;
-  forkedFrom: Chat["forkedFrom"];
-}
+import type { ChatForkSummaryChanged } from "../../renderer/shared/chat-copy-contract.js";
 
 export const forkSummaryService = new ForkSummaryService({
   getChat: (chatId) => chatStore.get(chatId),
@@ -30,9 +25,9 @@ export const forkSummaryService = new ForkSummaryService({
       }),
     ),
   published: (chat) => {
-    const update: ForkSummaryChanged = {
+    const update: ChatForkSummaryChanged = {
       chatId: chat.id,
-      forkedFrom: chat.forkedFrom,
+      ...(chat.forkedFrom ? { forkedFrom: chat.forkedFrom } : {}),
     };
     ipcMain.broadcast("chats:fork-summary-changed", update);
   },
