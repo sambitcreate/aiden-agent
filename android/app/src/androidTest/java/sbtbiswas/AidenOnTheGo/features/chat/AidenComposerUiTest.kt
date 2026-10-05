@@ -1,17 +1,24 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
+import sbtbiswas.AidenOnTheGo.models.AidenModel
+import sbtbiswas.AidenOnTheGo.models.AidenProvider
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillCatalogEntry
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillSource
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
@@ -148,6 +155,53 @@ class AidenComposerUiTest {
         compose.onNodeWithText("Run after this response").assertExists()
         compose.onNodeWithText("Add guidance without stopping").assertExists()
         compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+    }
+
+    @Test
+    fun onAPhoneWidthWorkspaceChatTheModelPickerShrinksBeforeThePillAndStop() {
+        val model = AidenModel(
+            id = "long",
+            label = "A very long model name that would fill the whole row",
+            thinkingLevels = listOf("high")
+        )
+        val provider = AidenProvider(id = "custom", label = "Custom", models = listOf(model))
+        compose.setContent {
+            AidenTheme {
+                Box(Modifier.width(360.dp)) {
+                    AidenComposerView(
+                        draft = "hold on",
+                        onDraftChange = {},
+                        onSend = {},
+                        onStop = {},
+                        canStop = true,
+                        canSend = false,
+                        isStreaming = true,
+                        showsRunInputOptions = true,
+                        canSubmitRunInput = true,
+                        runInputMode = AidenStreamInputMode.QUEUE,
+                        selectedProvider = provider,
+                        selectedModel = model,
+                        selectedThinkingLevel = "high",
+                        availableProviders = listOf(provider),
+                        onSelectModel = { _, _, _ -> },
+                        isVoiceListening = false,
+                        onToggleVoice = {}
+                    )
+                }
+            }
+        }
+
+        val rowRight = compose.onRoot().getBoundsInRoot().right
+        for (description in listOf("Queue message", "Choose message action", "Stop generation")) {
+            val node = compose.onNodeWithContentDescription(description).assertIsDisplayed()
+            val bounds = node.getBoundsInRoot()
+            val width = bounds.right - bounds.left
+            val height = bounds.bottom - bounds.top
+            assertTrue("$description is $width wide", width >= 44.dp)
+            assertTrue("$description is $height tall", height >= 44.dp)
+            assertTrue("$description stays inside the row", bounds.right <= rowRight)
+        }
+        compose.onNodeWithContentDescription("Select model").assertIsDisplayed()
     }
 
     @Test

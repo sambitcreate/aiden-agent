@@ -318,144 +318,156 @@ fun AidenComposerView(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Model & Thinking Level Selector Pill (for Workspace Chats)
+                // Model & Thinking Level Selector Pill (for Workspace Chats).
+                // It takes the flexible space and shortens first, so the mic,
+                // the busy Queue/Steer pill and Stop always keep their width.
                 if (availableProviders.isNotEmpty() && onSelectModel != null) {
-                    Box {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .heightIn(min = AidenUi.MinimumTouchTarget)
-                                .clickable { showModelMenu = true }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    Box(
+                        contentAlignment = Alignment.CenterStart,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    ) {
+                        Box {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier
+                                    .heightIn(min = AidenUi.MinimumTouchTarget)
+                                    .clickable { showModelMenu = true }
                             ) {
-                                if (selectedProvider != null) {
-                                    AidenProviderIcon(
-                                        providerId = selectedProvider.id,
-                                        providerLabel = selectedProvider.label,
-                                        artwork = selectedProvider.artwork,
-                                        size = 14.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                }
-                                Text(
-                                    text = selectedModel?.label ?: "Model",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = palette.secondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (selectedThinkingLevel != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    if (selectedProvider != null) {
+                                        AidenProviderIcon(
+                                            providerId = selectedProvider.id,
+                                            providerLabel = selectedProvider.label,
+                                            artwork = selectedProvider.artwork,
+                                            size = 14.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                    }
                                     Text(
-                                        text = " · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}",
+                                        text = selectedModel?.label ?: "Model",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = palette.secondary.copy(alpha = 0.8f)
+                                        fontWeight = FontWeight.Medium,
+                                        color = palette.secondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (selectedThinkingLevel != null) {
+                                        Text(
+                                            text = " · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = palette.secondary.copy(alpha = 0.8f),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Select model",
+                                        tint = palette.secondary,
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Select model",
-                                    tint = palette.secondary,
-                                    modifier = Modifier.size(14.dp)
-                                )
                             }
-                        }
 
-                        DropdownMenu(
-                            expanded = showModelMenu,
-                            onDismissRequest = { showModelMenu = false }
-                        ) {
-                            val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
-                            if (selectedProvider != null && selectedModel != null && thinkingLevels.isNotEmpty()) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "THINKING",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent
-                                        )
-                                    },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                thinkingLevels.forEach { level ->
-                                    val isCurrentLevel = selectedThinkingLevel == level
+                            DropdownMenu(
+                                expanded = showModelMenu,
+                                onDismissRequest = { showModelMenu = false }
+                            ) {
+                                val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
+                                if (selectedProvider != null && selectedModel != null && thinkingLevels.isNotEmpty()) {
                                     DropdownMenuItem(
                                         text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = selectedModel.thinkingLabel(level),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = if (isCurrentLevel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrentLevel) palette.accent else palette.foreground
-                                                )
-                                                if (isCurrentLevel) {
-                                                    Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
-                                                }
-                                            }
+                                            Text(
+                                                text = "THINKING",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.accent
+                                            )
                                         },
-                                        onClick = {
-                                            onSelectModel(selectedProvider, selectedModel, level)
-                                            showModelMenu = false
-                                        }
+                                        onClick = {},
+                                        enabled = false
                                     )
+                                    thinkingLevels.forEach { level ->
+                                        val isCurrentLevel = selectedThinkingLevel == level
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text(
+                                                        text = selectedModel.thinkingLabel(level),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontWeight = if (isCurrentLevel) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isCurrentLevel) palette.accent else palette.foreground
+                                                    )
+                                                    if (isCurrentLevel) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                onSelectModel(selectedProvider, selectedModel, level)
+                                                showModelMenu = false
+                                            }
+                                        )
+                                    }
                                 }
-                            }
-                            availableProviders.forEach { provider ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = provider.label.uppercase(),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent
-                                        )
-                                    },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                provider.models.forEach { model ->
-                                    val isCurrentModel = selectedModel?.id == model.id && selectedProvider?.id == provider.id
+                                availableProviders.forEach { provider ->
                                     DropdownMenuItem(
                                         text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = model.label,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = if (isCurrentModel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrentModel) palette.accent else palette.foreground
-                                                )
-                                                if (isCurrentModel) {
-                                                    Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
-                                                }
-                                            }
+                                            Text(
+                                                text = provider.label.uppercase(),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.accent
+                                            )
                                         },
-                                        onClick = {
-                                            onSelectModel(provider, model, null)
-                                            showModelMenu = false
-                                        }
+                                        onClick = {},
+                                        enabled = false
                                     )
+                                    provider.models.forEach { model ->
+                                        val isCurrentModel = selectedModel?.id == model.id && selectedProvider?.id == provider.id
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text(
+                                                        text = model.label,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontWeight = if (isCurrentModel) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isCurrentModel) palette.accent else palette.foreground
+                                                    )
+                                                    if (isCurrentModel) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                onSelectModel(provider, model, null)
+                                                showModelMenu = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
-
-                Spacer(modifier = Modifier.weight(1f))
 
                 // Voice Mic / Waveform Button
                 IconButton(
