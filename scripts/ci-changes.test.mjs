@@ -167,12 +167,21 @@ test("pull requests use the actual triple-dot range and pushes use a two-dot ran
   ]);
 });
 
-function fakeGit({ diffStatus = 0, diffOutput = "renderer/app.tsx\0", catFileStatus = 0 } = {}) {
+function fakeGit({
+  diffStatus = 0,
+  diffOutput = "renderer/app.tsx\0",
+  catFileStatus = 0,
+  mergeBaseStatus = 0,
+  mergeBaseOutput = `${"a".repeat(40)}\n`,
+} = {}) {
   const calls = [];
   const spawn = (command, args, options) => {
     calls.push({ command, args, options });
     if (args[0] === "cat-file") {
       return { status: catFileStatus, stdout: "", stderr: "" };
+    }
+    if (args[0] === "merge-base") {
+      return { status: mergeBaseStatus, stdout: mergeBaseOutput, stderr: "" };
     }
     return { status: diffStatus, stdout: diffOutput, stderr: "" };
   };
@@ -206,7 +215,8 @@ test("git-backed detection reads only NUL-safe output and fails open", () => {
 
   for (const invalid of [
     { baseSha: "", headSha: "head" },
-    { baseSha: "0".repeat(40), headSha: "head" },
+    // A created branch whose merge base with main cannot be found.
+    { baseSha: "0".repeat(40), headSha: "head", mergeBaseStatus: 1 },
     { baseSha: "base", headSha: "head", catFileStatus: 1 },
     { baseSha: "base", headSha: "head", diffStatus: 1 },
   ]) {
@@ -261,7 +271,7 @@ test("FORCE_FULL applies to main pushes while pull requests keep path selection"
   assert.equal(selected.reason, "documentation-only");
 });
 
-test("a catalog-only main push runs only the model catalog contracts", () => {
+test("a catalog-only push selects only the model catalog area", () => {
   const refresh = fakeGit({ diffOutput: "resources/model-capabilities.json\0" });
   const catalog = detectChangedAreas({
     baseSha: "base",
@@ -286,6 +296,32 @@ test("a catalog-only main push runs only the model catalog contracts", () => {
     });
     assert.deepEqual(areasOf(result), allTrue, extra);
     assert.equal(result.reason, "forced-full", extra);
+  }
+
+  // A push that creates the catalog bot's branch has no previous tip; it is
+  // classified by what it adds over main, so a snapshot-only branch stays catalog-only.
+  const created = fakeGit({ diffOutput: "resources/model-capabilities.json\0" });
+  const createdResult = detectChangedAreas({
+    baseSha: "0".repeat(40),
+    env: { FORCE_FULL: "true" },
+    eventName: "push",
+    headSha: "head",
+    spawn: created.spawn,
+  });
+  assert.deepEqual(areasOf(createdResult), select("catalog"));
+  assert.deepEqual(created.calls[0].args, ["merge-base", "origin/main", "head"]);
+  assert.equal(created.calls.at(-1).args.at(-1), `${"a".repeat(40)}..head`);
+  // Without a merge base the new branch keeps full validation.
+  for (const failure of [{ mergeBaseStatus: 1 }, { mergeBaseOutput: "not-a-sha\n" }]) {
+    const orphan = fakeGit({ diffOutput: "resources/model-capabilities.json\0", ...failure });
+    const result = detectChangedAreas({
+      baseSha: "0".repeat(40),
+      env: { FORCE_FULL: "true" },
+      eventName: "push",
+      headSha: "head",
+      spawn: orphan.spawn,
+    });
+    assert.deepEqual(areasOf(result), allTrue);
   }
 
   // A main push whose diff cannot be read stays full rather than catalog-only.
