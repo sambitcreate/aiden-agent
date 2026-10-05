@@ -52,6 +52,7 @@ export class AidenRemoteProviderService {
   constructor(private readonly dependencies: {
     get(id: string): Promise<StoredProvider | undefined>;
     save(provider: StoredProvider, key: string | null, isCurrent: () => boolean): Promise<StoredProvider>;
+    recoverCredential(provider: StoredProvider): Promise<boolean>;
     changed(): void;
   }) {}
 
@@ -71,6 +72,16 @@ export class AidenRemoteProviderService {
         const fields = (value: StoredProvider) => [value.id, value.label, value.baseUrl, value.kind, value.deployment, value.needsKey, value.models, value.defaultModel, value.modelMetadata];
         if (!isDeepStrictEqual(fields(existing), fields(provider))) throw new AidenRemoteServiceError("idempotency_conflict", "This creation key already belongs to a different provider. Refresh your providers before trying again.", 409);
         // A lost receipt can be recovered after a restart. Never rotate a key on replay.
+        // Config publication precedes key installation. A matching config alone
+        // does not prove the original encrypted transaction has completed.
+        if (existing.needsKey && !await this.dependencies.recoverCredential(existing)) {
+          throw new AidenRemoteServiceError("internal_error", "Provider credentials are not ready. Try saving again after the Mac's credential storage is available.", 503);
+        }
+        if (!isCurrent()) throw new AidenRemoteServiceError("credential_revoked", "This device is no longer authorized.", 403);
+        const recovered = await this.dependencies.get(id);
+        if (!recovered || !isDeepStrictEqual(fields(recovered), fields(provider))) throw new AidenRemoteServiceError("idempotency_conflict", "This provider changed during recovery. Refresh your providers before trying again.", 409);
+        if (!isCurrent()) throw new AidenRemoteServiceError("credential_revoked", "This device is no longer authorized.", 403);
+        this.dependencies.changed();
         return { id: existing.id, label: existing.label, models: existing.models };
       }
       const saved = await this.dependencies.save(provider, request.apiKey ?? null, isCurrent);

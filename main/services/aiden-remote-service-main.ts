@@ -1,5 +1,7 @@
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
-import { saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
+import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
+import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
+import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
@@ -926,6 +928,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const providers = new AidenRemoteProviderService({
             get: (id) => configStore.getProvider(id),
             save: saveProviderWithCredentialRotation,
+            recoverCredential: async (provider) => {
+              await reconcilePendingProviderCredentialRotation();
+              return Boolean(await secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))));
+            },
             changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
           });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
