@@ -815,6 +815,105 @@ class AidenChatTest {
     fun approvalSnapshotHeldAcrossUnpairCannotRestoreCard() = exerciseRunControl("approval-snapshot-revoked")
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun approvalResolvedOnMacHandsTheWaitToTheSurvivingQuestion() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-question-handoff-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val approvalResolved = java.util.concurrent.atomic.AtomicBoolean(false)
+        val eventConnections = java.util.concurrent.atomic.AtomicInteger()
+        val resolve = CountDownLatch(1)
+        val eventsOpened = CountDownLatch(1)
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val grants = listOf(
+            AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
+            AidenRemoteCapability.APPROVAL_RESPOND, AidenRemoteCapability.QUESTIONS_RESPOND
+        )
+        val chat = AidenChat(id = "chat-control", workspaceId = "workspace-control", title = "Controls",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "revision-control")
+        val questions = """[{"question":"Which branch?","header":"Branch","multiSelect":false,"options":[{"label":"main","description":"Default"},{"label":"dev","description":"Work"}]}]"""
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                return when {
+                    path == "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-control","name":"Control Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-question-prompts-v1"],"connectionMode":"lan","serverTime":"2026-09-22T12:00:00Z"}""")
+                    path == "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                    path == "/api/aiden/v1/chats/chat-control" -> MockResponse().setBody(json.encodeToString(chat))
+                    path.startsWith("/api/aiden/v1/streams/stream-control/events") -> {
+                        // The first connection ends so the status read restores
+                        // both prompts. On the next live connection the Mac
+                        // resolves the approval itself and journals only the
+                        // surviving question: no running status, no reconnect.
+                        val connection = eventConnections.incrementAndGet()
+                        if (connection == 1) {
+                            return MockResponse().setHeader("Content-Type", "text/event-stream").setBody("")
+                        }
+                        val first = connection == 2
+                        if (first) {
+                            eventsOpened.countDown()
+                            check(resolve.await(10, TimeUnit.SECONDS))
+                        }
+                        val event = if (first) {
+                            "id: 1\nevent: question_required\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"question_required\",\"terminal\":false,\"payload\":{\"promptId\":\"question-current\",\"questions\":$questions,\"expiresAt\":\"2099-01-01T00:00:00Z\"}}\n\n"
+                        } else ": keepalive\n\n"
+                        // Throttled padding holds the stream open for the test
+                        // without blocking shutdown once the client disconnects.
+                        val chunk = maxOf(event.toByteArray().size, 256)
+                        MockResponse().setHeader("Content-Type", "text/event-stream")
+                            .setBody(event + ": open\n\n".repeat(chunk * 20 / 8))
+                            .throttleBody(chunk.toLong(), 500, TimeUnit.MILLISECONDS)
+                    }
+                    path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody("""{"streamId":"stream-control","chatId":"chat-control","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}""")
+                    path == "/api/aiden/v1/streams/stream-control/approval" -> MockResponse().setBody(
+                        if (approvalResolved.get()) """{"approval":null}"""
+                        else """{"approval":{"approvalId":"approval-current","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}"""
+                    )
+                    path == "/api/aiden/v1/streams/stream-control/question" -> MockResponse().setBody(
+                        """{"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-control","toolCallId":"tool-question","questions":$questions,"expiresAt":"2099-01-01T00:00:00Z"}}"""
+                    )
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        val scopeJob = Job()
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-control", deviceId = "device-control", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic-credential", capabilities = grants), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
+                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
+                viewModels.put("control", model)
+                // Both prompts pending: the approval gates the tool and wins.
+                withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
+                withTimeout(5_000) { model.pendingQuestion.first { it?.id == "question-current" } }
+
+                withContext(Dispatchers.IO) { assertTrue(eventsOpened.await(5, TimeUnit.SECONDS)) }
+                approvalResolved.set(true)
+                resolve.countDown()
+                withTimeout(5_000) { model.pendingApproval.first { it == null } }
+                assertEquals("question-current", model.pendingQuestion.value?.id)
+                assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+            }
+        } finally {
+            resolve.countDown()
+            runBlocking(dispatcher) { viewModels.clearAndJoin(); scopeJob.cancelAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
         val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()

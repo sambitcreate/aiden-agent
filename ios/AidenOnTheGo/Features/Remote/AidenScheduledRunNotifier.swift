@@ -11,8 +11,22 @@ final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationC
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        if notification.request.identifier.hasPrefix("aiden.schedule.") {
+        let appState = await MainActor.run { AidenRunAlertNotifier.currentAppState() }
+        return Self.presentationOptions(identifier: notification.request.identifier, appState: appState)
+    }
+
+    /// Scheduled runs alert in the foreground. A run alert that lands after
+    /// the user returned to the active app stays quiet: the app already shows
+    /// the prompt or result, whichever side of `add` the transition fell on.
+    static func presentationOptions(
+        identifier: String,
+        appState: AidenRunAlertAppState
+    ) -> UNNotificationPresentationOptions {
+        if identifier.hasPrefix("aiden.schedule.") {
             return [.banner, .sound, .list]
+        }
+        if identifier.hasPrefix(AidenRunAlertNotifier.identifierPrefix), appState == .active {
+            return []
         }
         return [.banner, .list]
     }
@@ -245,7 +259,7 @@ final class AidenRunAlertNotifier {
         isEnabled: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
     )
 
-    static let identifierPrefix = "aiden.run."
+    nonisolated static let identifierPrefix = "aiden.run."
     nonisolated static let deepLinkUserInfoKey = "aidenURL"
     static let permissionRequestedKey = "aiden.runAlerts.permissionRequested"
     static let alertedKeysKey = "aiden.runAlerts.alerted"
@@ -287,11 +301,12 @@ final class AidenRunAlertNotifier {
         isChatOnScreen: Bool
     ) async {
         guard isEnabled else { return }
-        let state = appState()
         var status = await center.currentAuthorizationStatus()
+        // App state is sampled after each notification-center await: the user
+        // may have left or returned to the app while the lookup was suspended.
         if AidenRunAlertPolicy.shouldRequestAuthorization(
             kind: kind,
-            appState: state,
+            appState: appState(),
             hasRequestedBefore: defaults.bool(forKey: Self.permissionRequestedKey),
             authorizationStatus: status
         ) {
@@ -301,7 +316,7 @@ final class AidenRunAlertNotifier {
         let key = AidenRunAlertPolicy.dedupeKey(kind: kind, instanceID: instanceID, id: id)
         var alerted = defaults.stringArray(forKey: Self.alertedKeysKey) ?? []
         guard AidenRunAlertPolicy.shouldPost(
-            appState: state,
+            appState: appState(),
             isChatOnScreen: isChatOnScreen,
             alreadyAlerted: alerted.contains(key),
             isAuthorized: AidenRunAlertPolicy.isAuthorized(status)

@@ -17,6 +17,10 @@ Branch `feat/ios-blocking-alerts-needs-answer`.
   - A tapped alert opens `userInfo["aidenURL"]` from the `didReceive` handler, after validating it with
     `AidenDeepLink.request(from:)`.
   - `AidenRunAlertNotifier.shared` is disabled under the XCTest host.
+  - `notify` samples app state after each notification-center await, not before: a user returning to (or leaving)
+    the app during the authorization lookup must not get an active-app alert (or a background permission prompt).
+    `AidenNotificationPresentationDelegate.presentationOptions` also returns `[]` for `aiden.run.` alerts that land
+    while the app is active; scheduled-run (`aiden.schedule.`) alerts keep their foreground banner.
 - **Question state.** The Remote wire projects a question as `waiting_for_approval`. Both clients derive the question
   state on the phone through `AgentRunBlockingStatus.status(hasPendingApproval:hasPendingQuestion:)`, where an
   approval takes precedence. The derived state is `AgentRunActivityStatus.waitingForAnswer` (iOS) or
@@ -24,9 +28,14 @@ Branch `feat/ios-blocking-alerts-needs-answer`.
   - Activity lines read "Needs your approval" and "Needs your answer".
   - `isAwaitingUser` covers both waits. Stale handling (PR #351's `AgentRunStalePresentation`) should use it so a
     question wait stays a question when stale.
+  - Resolving an approval on the Mac emits `question_required` with no running status in between. On a
+    `question_required` event, both clients re-read the approval snapshot first when one is cached
+    (`restorePendingApproval`), so a stale approval cannot keep precedence over the surviving question.
   - iOS `refreshedWaiting(state:)` keeps an existing `.waitingForAnswer` when a server snapshot reports
     `waiting_for_approval`.
 - **Tests.**
   - iOS: `AidenRunAlertTests` in `AidenChatTests.swift`, plus three status tests at the end of
     `AidenNativeIntegrationTests`.
-  - Android: `AidenQuietOpenChatTest`.
+  - Android: `AidenQuietOpenChatTest`, plus `approvalResolvedOnMacHandsTheWaitToTheSurvivingQuestion` in
+    `AidenChatTest` (iOS twin: `testApprovalResolvedOnMacHandsTheWaitToTheSurvivingQuestion`, which uses the
+    `.questions` mode of `AidenChatProgressLifecycleURLProtocol` to push frames into a live event stream).

@@ -571,6 +571,29 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalResolvedOnMacHandsTheWaitToTheSurvivingQuestion() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-handoff-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .questions, cache: cache)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        // Both prompts pending: the approval gates the tool and wins.
+        try await waitUntil { model.pendingApproval?.id == "approval-current" && model.pendingQuestion?.id == "question-current" }
+        try await waitUntil { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+
+        // The Mac resolves the approval itself and journals only the surviving
+        // question on the open stream: no running status, no reconnect.
+        AidenChatProgressLifecycleURLProtocol.resolveApproval()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            "id: 1\nevent: question_required\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"question_required\",\"terminal\":false,\"payload\":{\"promptId\":\"question-current\",\"questions\":\(AidenChatProgressLifecycleURLProtocol.questionList),\"expiresAt\":\"2099-01-01T00:00:00Z\"}}\n\n"
+        )
+        try await waitUntil { model.pendingApproval == nil }
+        XCTAssertEqual(model.pendingQuestion?.id, "question-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
     func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
     }
@@ -3210,6 +3233,19 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
         // Cancel the debounce before removing this test's temporary directory.
         model.setAllowsMutations(false)
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for condition.", file: file, line: line)
     }
 
     @MainActor
@@ -6832,6 +6868,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case revokedControls
         case unsupportedControls
         case agentInterrupt
+        /// Controls plus question prompts, with a live event stream the test
+        /// can push frames into.
+        case questions
     }
 
     typealias Override = @Sendable (URLRequest) -> (Int, String, Data)?
@@ -6849,6 +6888,13 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     static var approvalReadCount: Int { lock.withLock { _approvalReadCount } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
     static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
+    nonisolated(unsafe) private static var approvalResolved = false
+    /// The Mac resolved the approval: later approval reads return none.
+    static func resolveApproval() { lock.withLock { approvalResolved = true } }
+    nonisolated(unsafe) private static var eventSink: (@Sendable (Data) -> Void)?
+    static var hasOpenEventStream: Bool { lock.withLock { eventSink != nil } }
+    /// Delivers one frame on the open (unfinished) stream-control event stream.
+    static func pushEvent(_ frame: String) { lock.withLock { eventSink }?(Data(frame.utf8)) }
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
@@ -6900,6 +6946,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _controlWriteCount = 0
         approvalID = "approval-current"
         approvalReadFails = false
+        approvalResolved = false
+        eventSink = nil
         responseOverride = nil
         _approvalReadCount = 0
         _progressRequestCount = 0
@@ -6943,6 +6991,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             if Self.lock.withLock({ Self.mode == .agentInterrupt }) {
                 body["features"] = ["chat-tasks-v1", "chat-agents-v1", "chat-agent-interrupt-v1"]
             }
+            if Self.lock.withLock({ Self.mode == .questions }) {
+                body["features"] = ["chat-tasks-v1", "chat-agents-v1", "chat-question-prompts-v1"]
+            }
             if Self.lock.withLock({ Self.mode == .legacyControls }) {
                 body.removeValue(forKey: "serverCapabilities")
                 body["features"] = [String]()
@@ -6953,7 +7004,16 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
         case "/api/aiden/v1/streams/stream-control/events":
             shouldFinish = false
+            if Self.lock.withLock({ Self.mode == .questions }) {
+                Self.lock.withLock {
+                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
+                }
+            }
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
+        case "/api/aiden/v1/streams/stream-control/question" where Self.lock.withLock({ Self.mode == .questions }):
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
+                {"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","toolCallId":"tool-question","questions":\(Self.questionList),"expiresAt":"2099-01-01T00:00:00Z"}}
+                """.utf8))
         case "/api/aiden/v1/streams/stream-control/approval":
             Self.lock.withLock { Self._approvalReadCount += 1 }
             if Self.lock.withLock({ Self.approvalReadFails }) {
@@ -6961,6 +7021,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 return
             }
             let id = Self.lock.withLock { Self.approvalID }
+            if Self.lock.withLock({ Self.approvalResolved }) {
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approval":null}"#.utf8))
+                break
+            }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
                 """.utf8))
@@ -7133,6 +7197,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 
     override func stopLoading() {}
+
+    static let questionList = #"[{"question":"Which branch?","header":"Branch","multiSelect":false,"options":[{"label":"main","description":"Default"},{"label":"dev","description":"Work"}]}]"#
 
     private static let taskSnapshot = Data(
         """
@@ -8677,7 +8743,14 @@ private final class FakeRunAlertCenter: AidenRunAlertCenter {
         self.grantsAuthorization = grantsAuthorization
     }
 
-    func currentAuthorizationStatus() async -> UNAuthorizationStatus { status }
+    /// Runs while the authorization lookup is suspended, so a test can move
+    /// the app between foreground and background across the await.
+    var duringStatusLookup: (@MainActor () -> Void)?
+
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus {
+        if let duringStatusLookup { await duringStatusLookup() }
+        return status
+    }
 
     func requestAlertAuthorization() async -> Bool {
         authorizationRequests += 1
@@ -8831,6 +8904,51 @@ final class AidenRunAlertTests: XCTestCase {
         appState = .background
         await notify(notifier, .needsApproval, id: "a-1")
         XCTAssertEqual(center.posted.count, 1)
+    }
+
+    func testReturningToTheAppDuringTheAuthorizationLookupKeepsTheAlertQuiet() async {
+        let center = FakeRunAlertCenter()
+        center.duringStatusLookup = { [unowned self] in self.appState = .active }
+        appState = .background
+        await notify(notifier(center), .needsAnswer, id: "q-returning")
+        XCTAssertTrue(center.posted.isEmpty, "the user is back in the app before the alert could post")
+
+        // The prompt was not consumed: leaving again still alerts once.
+        center.duringStatusLookup = nil
+        appState = .background
+        await notify(notifier(center), .needsAnswer, id: "q-returning")
+        XCTAssertEqual(center.posted.count, 1)
+    }
+
+    func testLeavingTheAppDuringTheAuthorizationLookupNeverPromptsForPermission() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: true)
+        center.duringStatusLookup = { [unowned self] in self.appState = .background }
+        appState = .active
+        await notify(notifier(center), .completed, id: "stream-leaving")
+        XCTAssertEqual(center.authorizationRequests, 0, "the system prompt needs the user in the app")
+
+        // The one-time request is still available for a later in-app completion.
+        center.duringStatusLookup = nil
+        appState = .active
+        await notify(notifier(center), .completed, id: "stream-in-app")
+        XCTAssertEqual(center.authorizationRequests, 1)
+    }
+
+    func testRunAlertsArrivingInTheActiveAppPresentNothingWhileScheduledRunsStillShow() {
+        let run = "\(AidenRunAlertNotifier.identifierPrefix)completed.mac-a.stream-1"
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: run, appState: .active),
+            []
+        )
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: run, appState: .inactive),
+            [.banner, .list],
+            "an overlay over another chat still surfaces the alert"
+        )
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: "aiden.schedule.run-1", appState: .active),
+            [.banner, .sound, .list]
+        )
     }
 
     func testDisabledNotifierNeverAsksOrPosts() async {

@@ -1322,7 +1322,16 @@ class AidenChatViewModel(
                 restorePendingApproval(event.streamId)
             }
             AidenRemoteEventType.QUESTION_REQUIRED -> {
-                restorePendingQuestion(event.streamId)
+                // Resolving an approval on the Mac emits the surviving question
+                // with no running status in between, so a cached approval may
+                // already be gone. Re-read approval authority first: its null
+                // path restores the question, and a still-pending approval
+                // keeps precedence while the question card refreshes with it.
+                if (_pendingApproval.value != null) {
+                    restorePendingApproval(event.streamId)
+                } else {
+                    restorePendingQuestion(event.streamId)
+                }
             }
             AidenRemoteEventType.ERROR -> {
                 _pendingApproval.value = null

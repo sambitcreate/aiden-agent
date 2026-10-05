@@ -3381,6 +3381,19 @@ final class AidenChatViewModel {
               activeStreamID == event.streamId,
               event.shouldApply else { return }
         if event.type == .questionRequired {
+            // Resolving an approval on the Mac emits the surviving question
+            // with no running status in between, so a cached approval may
+            // already be gone. Re-read approval authority first: its nil path
+            // restores the question, and a still-pending approval keeps
+            // precedence while the question card refreshes alongside it.
+            if pendingApproval != nil {
+                await restorePendingApproval(
+                    streamID: event.streamId,
+                    context: context,
+                    announce: feedbackPolicy.allowsFeedback
+                )
+                return
+            }
             await restorePendingQuestion(
                 streamID: event.streamId,
                 context: context,
