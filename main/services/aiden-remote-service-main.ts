@@ -4,6 +4,9 @@ import { providerConnectionSnapshot } from "./provider-credential-rotation-core.
 import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
+import { chatForkService } from "./chat-fork-service-main.js";
+import { forkSummaryService } from "./fork-summary-service-main.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
@@ -631,6 +634,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               snapshot: () => chatReadMarkers.snapshot(),
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
+            forks: {
+              service: chatForkService,
+              admitWorkspace: (workspaceId) => {
+                const admission = workspaceMutationGate.admit(workspaceId);
+                return {
+                  isAborted: () => admission.signal.aborted,
+                  release: () => admission.release(),
+                };
+              },
+              summaries: {
+                retry: (chatId) => forkSummaryService.retry(chatId),
+                skip: (chatId) => forkSummaryService.skip(chatId),
+                cancel: (chatId) => forkSummaryService.cancel(chatId),
+              },
+            },
           });
           activeChats = chats;
           activeProgress?.close();
@@ -911,6 +929,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:metadata-updated",
             "chats:activity-changed",
             "chats:read-markers-changed",
+            "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
           ]);

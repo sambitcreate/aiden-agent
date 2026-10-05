@@ -30,6 +30,8 @@ import {
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE,
+  AIDEN_REMOTE_CHAT_FORK_FEATURE,
+  AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -160,7 +162,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -338,6 +340,8 @@ export type AidenRemoteRouteLabel =
   | "chatSummaries"
   | "chat"
   | "chatMove"
+  | "chatFork"
+  | "chatForkSummary"
   | "chatRead"
   | "chatTasks"
   | "chatAgents"
@@ -415,6 +419,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatSummaries: ["/chat-summaries"],
   chat: ["/chats/:id"],
   chatMove: ["/chats/:id/move"],
+  chatFork: ["/chats/:id/fork"],
+  chatForkSummary: ["/chats/:id/fork-summary/:action"],
   chatRead: ["/chats/:id/read"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
@@ -1666,6 +1672,12 @@ export function createAidenRemoteRequestHandler(
             ...(dependencies.chats?.messagesWindow
               ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE]
               : []),
+            ...(dependencies.chats?.fork && dependencies.chats.supportsForks === true
+              ? [AIDEN_REMOTE_CHAT_FORK_FEATURE]
+              : []),
+            ...(dependencies.chats?.fork && dependencies.chats.supportsForkSummaries === true
+              ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE]
+              : []),
             // Host-wide features are announced to desktops only.
             ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "host:events")
               ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE]
@@ -2855,6 +2867,56 @@ export function createAidenRemoteRequestHandler(
           200,
           await runChatMutation(dependencies.chats, device, moveMatch[1]!, "chat", () =>
             dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const forkMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork$/u.exec(path);
+      if (forkMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatFork";
+        const body = await readJsonBody(request, 4_096);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.fork || chats.supportsForks !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          201,
+          await runChatMutation(chats, device, forkMatch[1]!, "chat", () =>
+            chats.fork!(device.id, forkMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const forkSummaryMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork-summary\/(retry|skip|cancel)$/u.exec(path);
+      if (forkSummaryMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatForkSummary";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (
+          !chats?.retryForkSummary ||
+          !chats.skipForkSummary ||
+          !chats.cancelForkSummary ||
+          chats.supportsForkSummaries !== true
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = forkSummaryMatch[1]!;
+        const action = forkSummaryMatch[2] as "retry" | "skip" | "cancel";
+        writeJson(
+          response,
+          200,
+          await runChatMutation<unknown>(chats, device, chatId, "chat", () =>
+            action === "retry"
+              ? chats.retryForkSummary!(chatId)
+              : action === "skip"
+                ? chats.skipForkSummary!(chatId)
+                : chats.cancelForkSummary!(chatId)),
         );
         return;
       }
