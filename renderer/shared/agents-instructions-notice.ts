@@ -7,6 +7,8 @@ export interface AgentsInstructionNotice {
   kind: "truncated" | "skipped";
   sizeBytes: number;
   limitBytes: number;
+  /** Changes whenever the file's contents (or, for a skipped file, its size or mtime) do. */
+  fingerprint: string;
 }
 
 const kib = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -27,7 +29,9 @@ export function parseAgentsInstructionNotice(value: unknown): AgentsInstructionN
     !Number.isSafeInteger(notice.sizeBytes) ||
     !Number.isSafeInteger(notice.limitBytes) ||
     (notice.sizeBytes as number) < 0 ||
-    (notice.limitBytes as number) < 1
+    (notice.limitBytes as number) < 1 ||
+    typeof notice.fingerprint !== "string" ||
+    !/^[0-9a-f]{16}$/u.test(notice.fingerprint)
   ) {
     return undefined;
   }
@@ -36,18 +40,38 @@ export function parseAgentsInstructionNotice(value: unknown): AgentsInstructionN
     kind: notice.kind,
     sizeBytes: notice.sizeBytes as number,
     limitBytes: notice.limitBytes as number,
+    fingerprint: notice.fingerprint,
   };
 }
 
-/** Announces a chat's notice once per app session, and again only after it changes. */
+/** The full set for one response; an empty list means every AGENTS.md now fits. */
+export function parseAgentsInstructionNotices(value: unknown): AgentsInstructionNotice[] | undefined {
+  if (!Array.isArray(value) || value.length > 2) return undefined;
+  const notices = value.map(parseAgentsInstructionNotice);
+  return notices.every((notice): notice is AgentsInstructionNotice => notice !== undefined) ? notices : undefined;
+}
+
+/**
+ * Announces each chat's notices once per app session, and again after the file
+ * changes. A scope that drops out (the file now fits, or was removed) is
+ * forgotten, so a later oversized version is announced even if identical.
+ */
 export function createAgentsInstructionNoticeLog() {
-  const announced = new Map<string, string>();
+  const announced = new Map<string, Map<AgentsInstructionNotice["scope"], string>>();
   return {
-    shouldAnnounce(chatId: string, notice: AgentsInstructionNotice): boolean {
-      const key = `${notice.scope}:${notice.kind}:${notice.sizeBytes}:${notice.limitBytes}`;
-      if (announced.get(`${chatId}\u0000${notice.scope}`) === key) return false;
-      announced.set(`${chatId}\u0000${notice.scope}`, key);
-      return true;
+    /** Records the current set and returns the notices to show now. */
+    update(chatId: string, notices: readonly AgentsInstructionNotice[]): AgentsInstructionNotice[] {
+      const previous = announced.get(chatId) ?? new Map<AgentsInstructionNotice["scope"], string>();
+      const current = new Map<AgentsInstructionNotice["scope"], string>();
+      const fresh: AgentsInstructionNotice[] = [];
+      for (const notice of notices) {
+        const key = `${notice.kind}:${notice.fingerprint}`;
+        current.set(notice.scope, key);
+        if (previous.get(notice.scope) !== key) fresh.push(notice);
+      }
+      if (current.size) announced.set(chatId, current);
+      else announced.delete(chatId);
+      return fresh;
     },
   };
 }

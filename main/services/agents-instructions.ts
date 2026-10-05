@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentContext } from "@earendil-works/pi-agent-core";
@@ -18,8 +18,16 @@ export interface AgentsInstructionOptions {
   revalidate(signal?: AbortSignal): Promise<void>;
   /** Test seam retains descriptor-relative production reading by default. */
   read?: (root: SubagentWorkspaceRootIdentity, signal?: AbortSignal) => Promise<string>;
-  /** Called when a file was cut short or skipped; again only after that changes. */
-  onNotice?: (notice: AgentsInstructionNotice) => void;
+  /**
+   * The files cut short or skipped for this request. Called on the first request
+   * and again whenever the set or a file's contents change (an empty list means
+   * every file now fits).
+   */
+  onNotices?: (notices: AgentsInstructionNotice[]) => void;
+}
+
+function noticeFingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 /**
@@ -107,7 +115,13 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
         }
         const sizeBytes = Number(stat.size);
         if (sizeBytes > AGENTS_INSTRUCTION_READ_BYTES) {
-          notices.push({ scope: root.scope, kind: "skipped", sizeBytes, limitBytes: AGENTS_INSTRUCTION_BYTES });
+          notices.push({
+            scope: root.scope,
+            kind: "skipped",
+            sizeBytes,
+            limitBytes: AGENTS_INSTRUCTION_BYTES,
+            fingerprint: noticeFingerprint(`${sizeBytes}:${stat.mtimeMs}`),
+          });
           await assertRoot(root);
           continue;
         }
@@ -115,7 +129,13 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
         const instructions = truncateAgentsInstructions(full, AGENTS_INSTRUCTION_BYTES);
         const truncated = instructions !== full;
         if (truncated) {
-          notices.push({ scope: root.scope, kind: "truncated", sizeBytes: Buffer.byteLength(full), limitBytes: AGENTS_INSTRUCTION_BYTES });
+          notices.push({
+            scope: root.scope,
+            kind: "truncated",
+            sizeBytes: Buffer.byteLength(full),
+            limitBytes: AGENTS_INSTRUCTION_BYTES,
+            fingerprint: noticeFingerprint(full),
+          });
         }
         await assertRoot(root);
         signal?.throwIfAborted();
@@ -127,7 +147,7 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
       const noticeKey = JSON.stringify(notices);
       if (noticeKey !== previousNotices) {
         previousNotices = noticeKey;
-        for (const notice of notices) options.onNotice?.(notice);
+        options.onNotices?.(notices);
       }
       const truncationNote = records.some((record) => record.truncated)
         ? " A record marked truncated holds only the beginning of a longer file."

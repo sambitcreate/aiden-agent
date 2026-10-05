@@ -1,5 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
-import { parseAgentsInstructionNotice, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
+import { parseAgentsInstructionNotices, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
   TtsJobSnapshot,
@@ -1263,7 +1263,7 @@ export type ChatStatusPhase = "model_loading" | "model_ready";
 interface ChatStatus {
   streamId: string;
   phase: ChatStatusPhase | "agents_instructions_limited";
-  notice?: unknown;
+  notices?: unknown;
 }
 interface ChatDone {
   streamId: string;
@@ -1378,8 +1378,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
-  /** An AGENTS.md was cut short or skipped for this response. */
-  onAgentsInstructionNotice?: (notice: AgentsInstructionNotice) => void;
+  /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
+  onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 
@@ -1437,8 +1437,8 @@ export function startGeneration(
     onNotification<ChatStatus>("chat:status", (p) => {
       if (p.streamId !== streamId) return;
       if (p.phase === "agents_instructions_limited") {
-        const notice = parseAgentsInstructionNotice(p.notice);
-        if (notice) callbacks.onAgentsInstructionNotice?.(notice);
+        const notices = parseAgentsInstructionNotices(p.notices);
+        if (notices) callbacks.onAgentsInstructionNotices?.(notices);
       } else {
         callbacks.onStatus?.(p.phase);
       }

@@ -439,6 +439,7 @@
         "main/services/workspace-application-service.test.ts",
         "main/services/workspace-environment-application-service.test.ts",
         "main/services/workspace-worktree-application-service.test.ts",
+        "renderer/shared/agents-instructions-notice.test.ts",
         "scripts/bot-inbox-writer.test.mjs",
         "scripts/subagent-run-store.test.mjs"
       ],

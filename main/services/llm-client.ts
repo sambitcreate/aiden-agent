@@ -821,8 +821,8 @@ async function prepareGeneration(
   const agentsInstructions = agentsInstructionRoots
     ? await createAgentsInstructionRefresher({
         ...agentsInstructionRoots,
-        onNotice: (notice) => {
-          sendGeneration(streamId, "chat:status", { streamId, phase: "agents_instructions_limited", notice });
+        onNotices: (notices) => {
+          sendGeneration(streamId, "chat:status", { streamId, phase: "agents_instructions_limited", notices });
         },
         revalidate: async (requestSignal) => {
           signal.throwIfAborted();

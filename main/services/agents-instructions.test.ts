@@ -16,6 +16,7 @@ import {
   withoutAgentsInstructions,
 } from "./agents-instructions.js";
 import { assertGenerationContextCapacity, projectChatContextPressure } from "./generation-context.js";
+import type { AgentsInstructionNotice } from "../../renderer/shared/agents-instructions-notice.js";
 import {
   createGenerationContextProfile,
   nextRequestContextOptions,
@@ -84,8 +85,8 @@ test("an oversized AGENTS.md sends its beginning, marks it truncated and reports
   const line = "Rule: keep the build green.\n";
   const body = line.repeat(Math.ceil((AGENTS_INSTRUCTION_BYTES * 3) / line.length));
   await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), body);
-  const notices: unknown[] = [];
-  const refresher = await createAgentsInstructionRefresher({ ...f, onNotice: (notice) => notices.push(notice) });
+  const notices: AgentsInstructionNotice[][] = [];
+  const refresher = await createAgentsInstructionRefresher({ ...f, onNotices: (current) => notices.push(current) });
   const first = prompt(await refresher.apply(context()));
   const records = JSON.parse(first.slice(first.indexOf("[{"), first.lastIndexOf("}]") + 2)) as {
     scope: string; instructions: string; truncated?: boolean;
@@ -96,40 +97,46 @@ test("an oversized AGENTS.md sends its beginning, marks it truncated and reports
   assert.ok(body.startsWith(records[0].instructions));
   assert.ok(records[0].instructions.endsWith("\n"), "cut at a line break");
   assert.match(first, /holds only the beginning of a longer file/);
-  assert.deepEqual(notices, [{
-    scope: "workspace", kind: "truncated", sizeBytes: Buffer.byteLength(body), limitBytes: AGENTS_INSTRUCTION_BYTES,
-  }]);
-  // A later turn with the same file does not repeat the notice; an edit does.
+  assert.equal(notices.length, 1);
+  assert.deepEqual({ ...notices[0][0], fingerprint: "" }, {
+    scope: "workspace", kind: "truncated", sizeBytes: Buffer.byteLength(body), limitBytes: AGENTS_INSTRUCTION_BYTES, fingerprint: "",
+  });
+  // A later turn with the same file does not repeat the notice.
   await refresher.apply(context());
   assert.equal(notices.length, 1);
-  await fs.appendFile(path.join(f.workspaceRoot, "AGENTS.md"), line);
+  // An edit that keeps the byte count still counts as a change.
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), body.replace("Rule", "Note"));
   await refresher.apply(context());
   assert.equal(notices.length, 2);
-  // Back under the limit: no notice, no truncation marker.
+  assert.equal(notices[1][0].sizeBytes, notices[0][0].sizeBytes);
+  assert.notEqual(notices[1][0].fingerprint, notices[0][0].fingerprint);
+  // Back under the limit: an empty set clears it, and the prompt has no marker.
   await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "SHORT");
   const short = prompt(await refresher.apply(context()));
   assert.ok(!short.includes("truncated"));
-  assert.equal(notices.length, 2);
+  assert.deepEqual(notices[notices.length - 1], []);
 });
 
 test("an AGENTS.md past the reader's cap is skipped with a notice instead of failing the response", async (t) => {
   const f = await fixture(t);
   await fs.writeFile(path.join(f.globalRoot, "AGENTS.md"), "GLOBAL");
   await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "x".repeat(AGENTS_INSTRUCTION_READ_BYTES + 1));
-  const notices: unknown[] = [];
+  const notices: AgentsInstructionNotice[][] = [];
   let reads = 0;
   const refresher = await createAgentsInstructionRefresher({
     ...f,
     read: async (root) => { reads += 1; return f.read(root); },
-    onNotice: (notice) => notices.push(notice),
+    onNotices: (current) => notices.push(current),
   });
   const current = prompt(await refresher.apply(context()));
   assert.match(current, /GLOBAL/);
   assert.ok(!current.includes("xxxx"));
   assert.equal(reads, 1, "only the global file is read");
-  assert.deepEqual(notices, [{
-    scope: "workspace", kind: "skipped", sizeBytes: AGENTS_INSTRUCTION_READ_BYTES + 1, limitBytes: AGENTS_INSTRUCTION_BYTES,
-  }]);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].length, 1);
+  assert.equal(notices[0][0].kind, "skipped");
+  assert.equal(notices[0][0].sizeBytes, AGENTS_INSTRUCTION_READ_BYTES + 1);
+  assert.match(notices[0][0].fingerprint, /^[0-9a-f]{16}$/u);
 });
 
 test("truncation never splits a UTF-8 character and prefers a line break in the second half", () => {

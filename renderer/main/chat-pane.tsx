@@ -1217,8 +1217,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
           },
-          onAgentsInstructionNotice: (notice) => {
-            if (agentsInstructionNotices.shouldAnnounce(chatId, notice)) {
+          onAgentsInstructionNotices: (notices) => {
+            for (const notice of agentsInstructionNotices.update(chatId, notices)) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
           },
