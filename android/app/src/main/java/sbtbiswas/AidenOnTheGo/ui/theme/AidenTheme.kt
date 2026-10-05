@@ -155,7 +155,7 @@ fun AidenTheme(
         bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = (16 * scale).sp, lineHeight = (25 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
         bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.25.sp, color = palette.foreground),
         bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.3.sp, color = palette.secondary),
-        labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
+        labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp),
         labelMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.4.sp, color = palette.foreground),
         labelSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.5.sp, color = palette.secondary)
     )
