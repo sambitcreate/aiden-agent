@@ -5,6 +5,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
@@ -152,7 +153,7 @@ fun AidenTheme(
         titleLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = (20 * scale).sp, lineHeight = (26 * scale).sp, letterSpacing = (-0.1).sp, color = palette.foreground),
         titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (16 * scale).sp, lineHeight = (22 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
         titleSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp, color = palette.secondary),
-        bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = (16 * scale).sp, lineHeight = (25 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
+        bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = (16 * scale).sp, lineHeight = (25 * scale).sp, letterSpacing = 0.1.sp),
         bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.25.sp, color = palette.foreground),
         bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.3.sp, color = palette.secondary),
         labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp),
@@ -167,9 +168,13 @@ fun AidenTheme(
         MaterialTheme(
             colorScheme = colorScheme,
             typography = typography,
-            shapes = AidenShapes,
-            content = content
-        )
+            shapes = AidenShapes
+        ) {
+            // bodyLarge (the default text style) and labelLarge carry no colour so
+            // Text inherits LocalContentColor: foreground here, onSurface in
+            // surfaces, and onPrimary (palette.onAccent) inside accent buttons.
+            CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
+        }
     }
 }
 
