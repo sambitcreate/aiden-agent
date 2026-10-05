@@ -2283,7 +2283,7 @@ async function admittedInputFixture(responses: Parameters<typeof managedTestHarn
   const { tool, atTool, release } = steerWaitTool();
   const visibleChat: Array<{ id: string; role: string; content: string }> = [];
   let projectedIds = 0;
-  const { harness, session } = await managedTestHarness(responses, {
+  const { core, harness, session } = await managedTestHarness(responses, {
     tools: [tool],
     beforeQueuedUser: async (message) => {
       const id = `projected-${++projectedIds}`;
@@ -2307,7 +2307,7 @@ async function admittedInputFixture(responses: Parameters<typeof managedTestHarn
     readChat: async () => null,
     newMessageId: () => "committed-steer",
   });
-  return { harness, session, admission, visibleChat, atTool, release };
+  return { core, harness, session, admission, visibleChat, atTool, release };
 }
 
 test("admitted steering appears once in the visible chat and journals its committed id", async () => {
@@ -2363,6 +2363,48 @@ test("Stop before Pi reads admitted steering keeps it as history, not undelivere
   assert.equal((await running).kind, "app_cancelled");
   assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
   assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+test("Stop after a queued follow-up is admitted keeps it as history and never runs it", async () => {
+  // Remote "Queue to run next" enters Pi's follow-up queue through the shared
+  // admission. Stop must not run it later, return it to a draft, or duplicate it.
+  const fixture = await admittedInputFixture([
+    fauxAssistantMessage([fauxToolCall("wait_for_steer", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("answered the next turn"),
+  ]);
+  const running = fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await fixture.atTool;
+  assert.deepEqual(
+    await fixture.admission.admit({ streamId: "stream-1", mode: "queue", text: "then do this" }),
+    { admitted: true, queue: "follow-up", committed: true, messageId: "committed-steer" },
+  );
+  await fixture.harness.cancelAndSettle();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.equal(fixture.core.state.callCount, 1);
+  assert.deepEqual(fixture.visibleChat, [
+    { id: "committed-steer", role: "user", content: "then do this" },
+  ]);
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+
+  // The next deliberate turn runs only what the user sends: the stopped
+  // follow-up is not replayed to the model ahead of it.
+  fixture.harness.reset();
+  const next = await fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "new request", timestamp: 3 },
+  });
+  assert.equal(next.kind, "completed");
+  assert.equal(fixture.core.state.callCount, 2);
+  assert.deepEqual(
+    (await fixture.session.buildContext()).messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content),
+    ["start", "new request"],
+  );
+  assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
 });
 
 test("a failed visible projection of queued input is a managed session failure with recovery", async () => {

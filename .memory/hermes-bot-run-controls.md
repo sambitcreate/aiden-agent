@@ -218,3 +218,13 @@ compaction-store marker change (flushDurableMessages already writes it),
 and the Telegram afterPersist offset barrier (a crash ends the run, so a
 redelivered /steer is rejected as run_not_active). Edited /steer is never
 sent.
+
+October 5 (`docs/stop-semantics-phone-queued-input`): verified that an
+admitted Queue follow-up (phone "Queue to run next") behaves like admitted
+Steer on Stop: it stays as transcript history once, is not returned as
+undelivered, never runs after Stop, and is not replayed into the next turn's
+Pi context (harness test "Stop after a queued follow-up is admitted…"). No
+host change was needed. Desktop's committed-but-not-admitted toasts now use
+`committedRunInputNotice`, the same three strings as iOS/Android
+`AidenRunInputPresentation.receipt`. Documented in
+`docs/chat-composer-busy-controls.md` ("Stop and admitted input").
