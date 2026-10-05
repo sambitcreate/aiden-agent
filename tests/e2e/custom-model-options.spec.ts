@@ -18,14 +18,14 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     .click();
   const configure = page
     .getByText("LM Studio (local)", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
-    .getByRole("button", { name: "Configure", exact: true });
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]")
+    .getByRole("button", { name: "Manage", exact: true });
   const dialog = page.getByRole("dialog", {
     name: "Configure LM Studio (local)",
   });
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .locator("summary")
@@ -35,6 +35,15 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     name: `${E2E_MODEL_ID}: Vision`,
     exact: true,
   });
+  await expect(vision).toHaveAttribute("data-state", "checked");
+  const imageLimit = dialog.getByRole("spinbutton", {
+    name: `${E2E_MODEL_ID}: Maximum images per message`, exact: true,
+  });
+  await imageLimit.fill("0");
+  await expect(vision).toHaveAttribute("data-state", "unchecked");
+  await expect(dialog.getByText("Text only for this connection", { exact: false })).toBeVisible();
+  await vision.click();
+  await expect(imageLimit).toHaveValue("");
   await expect(vision).toHaveAttribute("data-state", "checked");
   await vision.click();
   await dialog
@@ -56,7 +65,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .locator("summary")
@@ -110,7 +119,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .getByRole("button", { name: "Discover models", exact: true })
@@ -133,7 +142,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await dialog
     .getByRole("group", { name: "Base URL", exact: true })
@@ -147,7 +156,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await expect(dialog).toBeHidden();
   await configure.click();
   await dialog
-    .getByRole("button", { name: "More options", exact: true })
+    .getByRole("button", { name: "Model options", exact: true })
     .click();
   await expect(
     dialog.locator("summary").filter({ hasText: "manual-without-discovery" }),

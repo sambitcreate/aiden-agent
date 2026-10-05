@@ -107,6 +107,34 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun providerCreationSendsExplicitVisionAndWriteOnlyKey() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"""))
+        val key = UUID.fromString("10000000-0000-4000-8000-000000000001")
+        val input = AidenProviderCreation("Private", "https://models.example.test/v1", needsKey = true,
+            apiKey = "synthetic-provider-key", models = listOf(AidenProviderCreationModel("vision", vision = true)))
+        assertTrue(input.isValid)
+        assertFalse(input.toString().contains("synthetic-provider-key"))
+        val receipt = client.createProvider(input, key)
+        assertEquals(listOf("vision"), receipt.models)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/providers", request.path)
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("true", body.getValue("confirmedForeground").jsonPrimitive.content)
+        assertEquals("synthetic-provider-key", body.getValue("apiKey").jsonPrimitive.content)
+        assertEquals("true", body.getValue("models").jsonArray[0].jsonObject.getValue("vision").jsonPrimitive.content)
+        assertFalse(input.copy(baseUrl = "https://user:secret@example.test/v1").isValid)
+        assertFalse(input.copy(models = emptyList()).isValid)
+        assertFalse(input.copy(apiKey = "a".repeat(4097)).isValid)
+        assertFalse(input.copy(baseUrl = "https://models.example.test/" + "a".repeat(2048)).isValid)
+        assertFalse(input.copy(models = listOf(AidenProviderCreationModel("model\nnext"))).isValid)
+        assertFalse(input.copy(label = "private\tname").isValid)
+        assertTrue(input.copy(apiKey = "a".repeat(4096)).isValid)
+        assertTrue(input.copy(needsKey = false, apiKey = null).isValid)
+    }
+
+    @Test
     fun testMemorySettingsUseRevisionCheckedForegroundMutation() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"enabled":true,"revision":"rev_memory_1"}""").setResponseCode(200))
         server.enqueue(MockResponse().setBody("""{"enabled":false,"revision":"rev_memory_2"}""").setResponseCode(200))

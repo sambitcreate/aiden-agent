@@ -1,3 +1,4 @@
+import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -218,6 +219,7 @@ export interface AidenRemoteRouterDependencies {
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
@@ -329,6 +331,7 @@ export type AidenRemoteRouteLabel =
   | "workspaceFile"
   | "workspaceGit"
   | "scheduledTasks"
+  | "providers"
   | "memorySettings"
   | "usage"
   | "readAloud"
@@ -407,6 +410,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/scheduled-tasks/:id/:action",
     "/scheduled-tasks/:id",
   ],
+  providers: ["/providers"],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
   readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
@@ -1639,6 +1643,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
@@ -2625,6 +2630,23 @@ export function createAidenRemoteRequestHandler(
             selectionLocation(body),
           ),
         );
+        return;
+      }
+      if (path === "/providers" && request.method === "POST") {
+        requireNoQuery(query);
+        route = "providers";
+        const device = await authenticate(request, dependencies.devices, "workspace:manage");
+        requireDeviceCapabilities(device, ["server:read"]);
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.providers) throw new AidenRemoteServiceError("not_found", "Provider creation requires an updated desktop app.", 404);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const body = await readJsonBody(request);
+        const release = dependencies.devices.acquireDeviceAuthorization(device.id, true);
+        try {
+          writeJson(response, 201, await dependencies.providers.create(device.id, key, body, () => {
+            try { admitDevice(device.id)(); return true; } catch { return false; }
+          }));
+        } finally { release(); }
         return;
       }
       if (path === "/models" && request.method === "GET") {

@@ -4738,6 +4738,51 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertNil(page.summaries[1].forkedFrom, "An incomplete lineage is dropped, not the row.")
     }
 
+    func testProviderCreationUsesForegroundWriteOnlyCredentialAndStableKey() async throws {
+        let client = makeClient()
+        let key = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/providers")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any])
+            XCTAssertEqual(payload["confirmedForeground"] as? Bool, true)
+            XCTAssertEqual(payload["apiKey"] as? String, "synthetic-provider-key")
+            let models = try XCTUnwrap(payload["models"] as? [[String: Any]])
+            XCTAssertEqual(models.first?["vision"] as? Bool, true)
+            return Self.response(for: request, status: 201, json: #"{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"#)
+        }
+        let input = AidenProviderCreation(label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "synthetic-provider-key", models: [.init(id: "vision", vision: true, reasoning: false, toolCall: true)])
+        XCTAssertTrue(input.isValid)
+        let receipt = try await client.createProvider(input, idempotencyKey: key)
+        XCTAssertEqual(receipt.models, ["vision"])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"google","label":"Private","models":["vision"]}"#.utf8)))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"custom:remote-fixture","label":"Private","models":[]}"#.utf8)))
+    }
+
+    func testProviderCreationValidationRejectsControlCharactersAndOversizedFields() {
+        func input(label: String = "Private", url: String = "https://models.example.test/v1", key: String = "synthetic-key", id: String = "vision") -> AidenProviderCreation {
+            AidenProviderCreation(label: label, baseUrl: url, kind: "openai", deployment: "hosted", needsKey: true, apiKey: key, models: [.init(id: id, vision: true, reasoning: false, toolCall: true)])
+        }
+        XCTAssertTrue(input(key: String(repeating: "a", count: 4096)).isValid)
+        XCTAssertFalse(input(key: String(repeating: "a", count: 4097)).isValid)
+        XCTAssertFalse(input(url: "https://models.example.test/" + String(repeating: "a", count: 2048)).isValid)
+        XCTAssertFalse(input(label: "private\tname").isValid)
+        XCTAssertFalse(input(id: "model\nnext").isValid)
+        XCTAssertFalse(input(id: " ").isValid)
+        XCTAssertTrue(input().isValid)
+        XCTAssertNotNil(input(id: "model\nnext").validationMessage)
+    }
+
+    func testProviderCreationSharedFixtureOmitsCredentialsForKeylessConnections() throws {
+        let input = try botFixtureData(at: ["providerCreation"])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: input) as? [String: Any])
+        XCTAssertNil(payload["apiKey"])
+        XCTAssertEqual(payload["needsKey"] as? Bool, false)
+        let receipt: AidenProviderCreationReceipt = try botFixtureValue(at: ["providerCreationReceipt"])
+        XCTAssertEqual(receipt.models, ["fixture-vision"])
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
