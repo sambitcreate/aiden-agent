@@ -138,6 +138,42 @@ test("a fork carries model context through the cut and nothing after it", async 
   assert.ok(source.includes("POST_CUT_ANSWER"));
 });
 
+test("a fork of a fork can cut at an earlier inherited reply", async (t) => {
+  const { root, store } = await storeFixture(t);
+  await sourceWithTurns(store);
+  const fork = (sourceChatId: string, targetChatId: string, sourceIds: string[], prefix: string) =>
+    store.forkChat({
+      sourceChatId, targetChatId, targetCreatedAt: Date.now(),
+      messages: sourceIds.map((sourceId) => ({ sourceId, id: `${prefix}${sourceId}` })),
+    });
+  assert.equal(await fork("source", "fork", ["u0", "a0", "u1", "a1"], "f-"), true);
+
+  // Reopen so the nested fork reads the copied journal from disk.
+  const reopened = new PiCompactionSessionStore({ root: async () => root });
+  assert.equal(await reopened.forkChat({
+    sourceChatId: "fork", targetChatId: "nested", targetCreatedAt: Date.now(),
+    messages: [{ sourceId: "f-u0", id: "g-u0" }, { sourceId: "f-a0", id: "g-a0" }],
+  }), true);
+  // The same cut taken in the original chat is the oracle.
+  assert.equal(await fork("source", "direct", ["u0", "a0"], "d-"), true);
+
+  const nested = await reopened.openChat("nested");
+  const direct = await reopened.openChat("direct");
+  assert.deepEqual(
+    texts((await nested.buildContext()).messages),
+    texts((await direct.buildContext()).messages),
+  );
+  assert.deepEqual(texts((await nested.buildContext()).messages), ["hello", "hi"]);
+
+  // The nested fork's next turn appends only its new prompt.
+  await syncChatMessagesToPiSession(nested, [
+    visible("g-u0", "user", "hello"),
+    visible("g-a0", "assistant", "hi"),
+    visible("g-u1", "user", "another question"),
+  ], model, true);
+  assert.deepEqual(texts((await nested.buildContext()).messages), ["hello", "hi", "another question"]);
+});
+
 test("a fork without a provable journal boundary creates no journal", async (t) => {
   const { store } = await storeFixture(t);
   const fork = (sourceChatId: string, targetChatId: string, sourceId: string) =>
