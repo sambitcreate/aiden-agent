@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { convertToLlm, type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
-import { appendPiMessages } from "./pi-compaction-session-store.js";
+import { appendPiMessages, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
@@ -2389,20 +2389,39 @@ test("Stop after a queued follow-up is admitted keeps it as history and never ru
   ]);
   assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
 
-  // The next deliberate turn runs only what the user sends: the stopped
-  // follow-up is not replayed to the model ahead of it.
+  // Production starts the next turn by syncing the persisted chat into Pi.
+  // Pi never read the stopped follow-up, so it has no journal marker and
+  // enters the model's context once, as earlier history. It is never run as
+  // its own turn: the next request costs exactly one more model call, and the
+  // only new answer responds to that request.
   fixture.harness.reset();
+  await syncChatMessagesToPiSession(
+    fixture.session,
+    fixture.visibleChat.map((message) => ({
+      id: message.id,
+      role: "user" as const,
+      content: message.content,
+      createdAt: 2,
+    })),
+    fixture.core.getModel(),
+    true,
+  );
   const next = await fixture.harness.runManaged({
     kind: "append-and-run",
     message: { role: "user", content: "new request", timestamp: 3 },
   });
   assert.equal(next.kind, "completed");
   assert.equal(fixture.core.state.callCount, 2);
+  const context = (await fixture.session.buildContext()).messages;
   assert.deepEqual(
-    (await fixture.session.buildContext()).messages
-      .filter((message) => message.role === "user")
-      .map((message) => message.content),
-    ["start", "new request"],
+    context.filter((message) => message.role === "user").map((message) => message.content),
+    ["start", "then do this", "new request"],
+  );
+  const last = context[context.length - 1];
+  assert.equal(last?.role, "assistant");
+  assert.deepEqual(
+    last?.role === "assistant" ? last.content.filter((part) => part.type === "text").map((part) => part.text) : [],
+    ["answered the next turn"],
   );
   assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
 });

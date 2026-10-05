@@ -20,8 +20,8 @@ Desktop Steer, Telegram `/steer`, and the Remote inputs route all enter Pi throu
 
 Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Telegram `/steer`, and the phone's Steer now and Queue to run next) is saved to the transcript before Pi accepts it. Pi holds it only for the current run. Stop ends that run, and Pi does not drain its steer or follow-up queues after an aborted terminal, so:
 
-- The saved message stays in the chat as history, once. It is not returned to a draft, not resent, and not run after Stop.
-- The next turn runs only what the user sends next. The stopped input is not replayed to the model ahead of it. To act on it, send it again.
+- The saved message stays in the chat as history, once. It is not returned to a draft, not resent automatically, and not run after Stop.
+- The next turn runs only what the user sends next. The stopped input does not run as its own turn and gets no answer of its own. Like every other message in the chat, it is part of the history the model sees on later turns: the next turn syncs the saved transcript into Pi, so the model reads the stopped input as an earlier user message, once, before the new request. Aiden does not hide it from the model, because the model's context would then differ from the chat the user can see. To act on it, send it again.
 - Nothing is left to resume on the Mac. This matches desktop Stop, which pauses its local queue so nothing queued runs until the user chooses Resume queue. The difference is where the item lives: desktop queued rows are uncommitted drafts the user can still resume or edit, while admitted input is already history.
 
 If Stop lands while an input is being admitted, the receipt says the input was committed but not admitted. Desktop and both phones show the same copy for that receipt: "Saved to the chat — the run was cancelled before it could use it" (Stop), "Saved to the chat — the run ended before it could use it" (the run finished), or "Saved to the chat — the run queue was full" (capacity). The harness test "Stop after a queued follow-up is admitted keeps it as history and never runs it" covers this behavior.
