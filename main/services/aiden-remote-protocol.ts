@@ -2351,6 +2351,10 @@ export function parseAidenRemoteChatForkResult(
             attachments: parseChatMessageAttachments(prefill.attachments, `${label} prefill`).map(
               (attachment, index) => {
                 const entry = (prefill.attachments as Record<string, unknown>[])[index]!;
+                // A restaged attachment is sent back by ID with the fork's next turn.
+                if (!/^att_[A-Za-z0-9_-]{43}$/u.test(attachment.id)) {
+                  throw new Error(`${label} prefill attachment ${index} id must be an uploaded attachment ID.`);
+                }
                 return {
                   ...attachment,
                   expiresAt: dateTimeValue(entry.expiresAt, `${label} prefill attachment ${index} expiresAt`),

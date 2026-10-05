@@ -2018,6 +2018,14 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
     }),
     /at most 10/u,
   );
+  // The next turn redeems restaged attachments by their upload ID.
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({
+      ...clone(editFork),
+      prefill: { ...prefill, attachments: [{ ...record(attachment, "attachment"), id: "attachment_1" }] },
+    }),
+    /uploaded attachment ID/u,
+  );
   for (const change of [
     { position: "middle" },
     { chatId: "../other" },
