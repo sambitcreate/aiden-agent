@@ -13,7 +13,7 @@ export const REQUIRED_JOB_RULES = Object.freeze({
   build: Object.freeze({ areas: Object.freeze(["desktop"]) }),
   verify: Object.freeze({ areas: Object.freeze(["desktop"]) }),
   catalog: Object.freeze({ areas: Object.freeze(["catalog"]) }),
-  unit: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  unit: Object.freeze({ areas: Object.freeze(["desktop", "catalog"]) }),
   e2e: Object.freeze({ areas: Object.freeze(["desktop"]) }),
   apple: Object.freeze({ areas: Object.freeze(["apple"]) }),
   ios: Object.freeze({ areas: Object.freeze(["ios"]) }),
