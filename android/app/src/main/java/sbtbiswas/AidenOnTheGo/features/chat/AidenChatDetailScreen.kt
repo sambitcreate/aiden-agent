@@ -181,7 +181,6 @@ fun AidenChatDetailScreen(
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
@@ -872,27 +871,20 @@ fun AidenChatDetailScreen(
                     onSelectTurn = { turnId ->
                         viewModel.selectAgentRosterTurn(turnId)
                     },
-                    onAgentClick = { agent -> selectedAgent = agent },
+                    instanceId = coordinator.activeInstanceId.orEmpty(),
+                    deviceId = coordinator.installationStore.activeInstallation?.deviceId.orEmpty(),
+                    stopControl = { agent ->
+                        when {
+                            agent.agentId in interruptingAgentIds -> AidenAgentStopControl.STOPPING
+                            viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
+                            else -> AidenAgentStopControl.HIDDEN
+                        }
+                    },
+                    onStop = { viewModel.interruptAgent(it) },
                     onDismiss = { progressSheet = null }
                 )
             }
         }
-    }
-    selectedAgent?.let { opened ->
-        // Follow the live current-turn roster so a confirmed stop (or any other
-        // update) replaces the snapshot the sheet was opened with.
-        val agent = currentAgentRoster?.agents?.firstOrNull { it.agentId == opened.agentId } ?: opened
-        val isStopping = agent.agentId in interruptingAgentIds
-        AidenAgentDetailSheet(
-            agent = agent,
-            stopControl = when {
-                isStopping -> AidenAgentStopControl.STOPPING
-                viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
-                else -> AidenAgentStopControl.HIDDEN
-            },
-            onStop = { viewModel.interruptAgent(agent) },
-            onDismiss = { selectedAgent = null }
-        )
     }
     selectTextFor?.let { text ->
         AidenSelectTextDialog(

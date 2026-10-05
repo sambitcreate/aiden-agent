@@ -1,5 +1,9 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.test.espresso.Espresso
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -27,6 +31,52 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 class AidenChatProgressUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun nestedAgentBackRestoresParentThenRosterAfterRecreation() {
+        val restoration = StateRestorationTester(compose)
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val current = roster("turn-current", listOf(parent, child))
+        var dismissed = false
+        restoration.setContent {
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, listOf(current), {}, onDismiss = { dismissed = true })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        Espresso.pressBack()
+        compose.onNodeWithText("Sub-agents").assertExists()
+        compose.onNodeWithText("Back").assertExists()
+        Espresso.pressBack()
+        compose.onNodeWithText("Agents").assertExists()
+        compose.onNodeWithText("Back").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(false, dismissed) }
+        Espresso.pressBack()
+        compose.runOnIdle { assertEquals(true, dismissed) }
+    }
+
+    @Test
+    fun selectedDetailFollowsRemovalAndResetsOnTurnChange() {
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val current = mutableStateOf(roster("turn-current", listOf(parent, child)))
+        compose.setContent {
+            AidenTheme {
+                AidenAgentRosterSheet(current.value, current.value, listOf(current.value), {}, onDismiss = {})
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { current.value = current.value.copy(agents = listOf(parent)) }
+        compose.onNodeWithText("Parent").assertExists()
+        compose.onNodeWithText("Back").assertExists()
+        compose.runOnIdle { current.value = current.value.copy(turnId = "turn-next") }
+        compose.onNodeWithText("Agents").assertExists()
+        compose.onNodeWithText("Back").assertDoesNotExist()
+    }
 
     @Test
     fun currentAgentChipDoesNotUseHistoricalRosterCount() {

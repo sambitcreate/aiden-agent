@@ -4,10 +4,14 @@ Status: Active — read-only task progress and agent inspection merged in [PR #1
 Date: 2026-09-14
 
 Follow-up (2026-10-05): [peer/mobile reliability item 3](peer-mobile-reliability-plan.md)
-adds ancestry-aware detail navigation. The serializable Swift/Kotlin navigation
-foundation and behavioral tests are implemented; 235 iOS chat tests and 25 Android
-progress tests, Android lint and instrumentation-test compilation pass. Sheet wiring
-and UI restoration tests remain pending. No new child transcript surface or server contract is introduced.
+implements ancestry-aware navigation on both clients. Opening any agent builds its
+ancestor path; Back returns through parents to the roster, while sheet dismissal
+returns to the mounted chat. Started by and Sub-agents actions use only the selected
+public roster. Android restores the scoped path and handles Back in the sheet's
+own window. Removed agents, selected-turn/epoch changes, and pairing/access changes
+prune or clear the inspector. No child transcript surface or server contract changes.
+Simulator/emulator verification is recorded in the series plan; physical UI acceptance
+remains open.
 
 ## Outcome and scope
 

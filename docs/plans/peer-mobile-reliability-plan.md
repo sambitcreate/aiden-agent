@@ -32,9 +32,16 @@ Do not mark existing physical-device acceptance gates complete based on simulato
   (Xcode-beta, `CODE_SIGNING_ALLOWED=NO`). All 25 Android AidenChatProgressTest
   cases pass; Android `lintDebug` and `compileDebugAndroidTestKotlin` also pass.
   No physical-device or UI-restoration acceptance is claimed.
-- Item 3 UI wiring remains pending: iOS NavigationStack binding; Android single-sheet
-  saved state and system Back; parent/children actions; actual UI restoration tests.
-  The new navigation model is preparatory and not yet invoked by either sheet.
+- Item 3 UI wiring is implemented: iOS uses a bound NavigationStack and Android
+  uses one sheet with a saved, scoped navigation model and the dialog's system-Back
+  dispatcher. Both show Started by and Sub-agents actions, update from the selected
+  roster and prune vanished details. Pairing/read-access changes fence the inspector.
+  Scrim/drag dismissal closes the sheet; the parent chat stays mounted.
+  Verification: all 25 Android progress unit tests, `lintDebug`, instrumentation
+  compilation and all 7 `AidenChatProgressUiTest` cases pass on
+  `Medium_Phone_API_36.1` (Android 16). iOS test build and the final 235-test
+  chat suite pass on the simulator recorded above. `npm run test:ci-policy`
+  passes. Physical-device acceptance remains open.
 - Items 1, 2 and 4 are not implemented by this initial work. No background activation,
   Remote revision change, new network call, or onboarding capability is introduced.
 
@@ -599,7 +606,7 @@ cd android
 - [ ] Each PR is small and single-item, merges `origin/main` (no rebase), and is green on CI at the exact head. The narrow suites listed are run locally and named in the PR body.
 - [ ] **4a:** owed-delivery state, events and planner are covered by behavioral tests, including crash points. Old records parse. Production stays inert.
 - [ ] **4b:** owed or waking results keep the chat live (row state, HostRunRegistry, quit guard). An idle or closed parent wakes once through a fresh admitted turn with a rebuilt prompt and tools. A busy parent gets a boundary follow-up. No lost or duplicate results across restart. No model-facing background launch unless approved.
-- [ ] **3:** on iOS and Android, back from a child agent returns to its parent agent, then the roster, then the chat with its scroll preserved. "Started by" and "Sub-agents" navigation works. Android state survives recreation. No contract change.
+- [x] **3:** on iOS and Android, back from a child agent returns to its parent agent, then the roster, then the chat with its scroll preserved. "Started by" and "Sub-agents" navigation works. Android state survives recreation. No contract change.
 - [ ] **2:** send and run-input failures show an in-thread notice with a mapped reason, Retry (same idempotency key, reconcile first for ambiguous failures) and Dismiss on both clients. No modal alert or generic banner for these. VoiceOver and TalkBack announce it. No auto-retry. No contract change.
 - [ ] **1a:** authenticated `/server` advertises bounded https routes to desktop peers only. Doc, OpenAPI, fixture, TS, iOS and Android revision assertions are updated in one PR. The revision is main + 1 at merge.
 - [ ] **1b:** routes and IP hints are persisted (backward-compatible). LAN is preferred, with automatic failover and come-home, hysteresis and cooldown. Wrong-pin learned addresses are dropped without blocking the host, and no credential is ever sent to them. The wake budget is unchanged on the best route.
