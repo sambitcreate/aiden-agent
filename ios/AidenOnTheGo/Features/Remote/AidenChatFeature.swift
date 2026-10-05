@@ -3735,49 +3735,83 @@ final class AidenChatViewModel {
         }
     }
 
-    /// Read the newest transcript. With `chat-messages-window-v1` this is the
-    /// newest page, folded into earlier pages already on screen (or replacing
-    /// them when `replacing`); without it, the whole chat as before. The page
-    /// carries no chat metadata, so the current title and model are kept.
+    /// The newest transcript a refresh read, ready to publish.
+    private struct LatestTranscript {
+        var chat: AidenChat
+        var hasOlder: Bool
+        /// The newest page to fold into the transcript on screen when it is
+        /// published; nil when `chat` already replaces the transcript.
+        var mergeWindow: AidenChatMessagesWindow?
+    }
+
+    /// Read the newest transcript. With `chat-messages-window-v1` and its
+    /// revision-21 metadata this is the newest page, carrying the chat's
+    /// current title, timestamps and model like a whole-chat read; it is
+    /// folded into earlier pages already on screen when it is published (or
+    /// replaces them when `replacing`). Without the window, or from a page
+    /// that lacks metadata, it is the whole chat as before.
     private func fetchLatestTranscript(
         context: AidenRemoteRequestContext,
         replacing: Bool = false
-    ) async throws -> (chat: AidenChat, hasOlder: Bool) {
+    ) async throws -> LatestTranscript {
         let client = try coordinator.remoteClient(for: context)
         guard coordinator.server?.supportsChatMessagesWindow == true else {
-            return (try await client.chat(id: chat.id), false)
+            return LatestTranscript(chat: try await client.chat(id: chat.id), hasOlder: false)
         }
         let window = try await client.messagesWindow(
             chatId: chat.id,
             limit: AidenTranscriptWindowing.pageSize
         )
-        let presentation = replacing || !hasSettledTranscriptWindow
-            ? AidenTranscriptWindowing.latest(window)
-            : AidenTranscriptWindowing.mergingLatest(
-                window,
-                into: chat.messages,
-                currentHasOlder: hasOlderMessages
-            )
-        var assembled = chat
+        guard let windowChat = window.chat, windowChat.id == chat.id else {
+            return LatestTranscript(chat: try await client.chat(id: chat.id), hasOlder: false)
+        }
+        guard !replacing, hasSettledTranscriptWindow else {
+            return LatestTranscript(chat: windowChat, hasOlder: window.hasOlder)
+        }
+        // Cache the page folded into what is on screen now; publication folds
+        // it again into whatever is on screen by then.
+        let presentation = AidenTranscriptWindowing.mergingLatest(
+            window,
+            into: chat.messages,
+            currentHasOlder: hasOlderMessages
+        )
+        var assembled = windowChat
         assembled.messages = presentation.messages
-        assembled.revision = window.revision
-        return (assembled, presentation.hasOlder)
+        return LatestTranscript(chat: assembled, hasOlder: presentation.hasOlder, mergeWindow: window)
     }
 
     @discardableResult
     private func acceptLatestTranscript(
-        _ latest: (chat: AidenChat, hasOlder: Bool),
+        _ latest: LatestTranscript,
         context: AidenRemoteRequestContext,
         writeToken: UInt64,
         scheduleTitleRefresh: Bool = true
     ) async -> Bool {
+        var hasOlder = latest.hasOlder
         guard await acceptRemoteChat(
             latest.chat,
             context: context,
             writeToken: writeToken,
-            scheduleTitleRefresh: scheduleTitleRefresh
+            scheduleTitleRefresh: scheduleTitleRefresh,
+            beforePublishing: { presented in
+                // Merge against the transcript on screen now, not when the
+                // read began: an earlier page loaded while the cache write was
+                // pending stays in front of the newest page.
+                guard let window = latest.mergeWindow, presented.revision == window.revision else {
+                    return presented
+                }
+                let presentation = AidenTranscriptWindowing.mergingLatest(
+                    window,
+                    into: self.chat.messages,
+                    currentHasOlder: self.hasOlderMessages
+                )
+                hasOlder = presentation.hasOlder
+                var merged = presented
+                merged.messages = presentation.messages
+                return merged
+            }
         ) else { return false }
-        hasOlderMessages = latest.hasOlder
+        hasOlderMessages = hasOlder
         hasSettledTranscriptWindow = true
         return true
     }
@@ -3844,14 +3878,16 @@ final class AidenChatViewModel {
         _ remote: AidenChat,
         context: AidenRemoteRequestContext,
         writeToken: UInt64,
-        scheduleTitleRefresh: Bool = true
+        scheduleTitleRefresh: Bool = true,
+        beforePublishing: (AidenChat) -> AidenChat = { $0 }
     ) async -> Bool {
         guard !isRemoved, coordinator.isCurrent(context), !isStarting else { return false }
         let generation = transcriptGeneration
         _ = try? await cache.saveFetchedChat(remote, instanceId: instanceId, writeToken: writeToken)
         guard let canonical = await cache.admittedChat(instanceId: instanceId, chatId: remote.id) else { return false }
-        let presented = await cache.presenting(canonical, instanceId: instanceId)
+        let admitted = await cache.presenting(canonical, instanceId: instanceId)
         guard !isRemoved, coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
+        let presented = beforePublishing(admitted)
         chat = presented
         resolveModelSelection()
         onChatUpdated(presented)
@@ -3885,7 +3921,7 @@ final class AidenChatViewModel {
                     guard generation == transcriptGeneration, !isStarting else { continue }
                     // A whole-chat read carries the title and every message.
                     await acceptLatestTranscript(
-                        (remote, false),
+                        LatestTranscript(chat: remote, hasOlder: false),
                         context: context,
                         writeToken: writeToken,
                         scheduleTitleRefresh: false

@@ -1,12 +1,16 @@
 # Mobile transcript windowing
 
-iOS and Android read chats through `GET /chats/{chatId}/messages` when the Mac advertises `chat-messages-window-v1` (contract revision 19). Client-only; no contract change.
+iOS and Android read chats through `GET /chats/{chatId}/messages` only when the Mac advertises both `chat-messages-window-v1` (contract revision 19) and `chat-messages-window-metadata-v1` (contract revision 21). Revision 21 adds the chat metadata a whole-chat read returns to every window page: `workspaceId`, `botId?`, `title`, `titlePending` (only `true`), `providerId`/`modelId` (both or neither), `createdAt`, `updatedAt`.
 
-- Open, reconcile, and stream-finish reads fetch the newest 50-message window. The window has no chat metadata, so the client keeps the current title/model and takes the window's `revision`.
+- Why revision 21: a revision-19 page had no metadata, so a windowed refresh kept the stale title/model and a desktop rename or model change never reached the phone (PR #354 review, P1). Against a Mac that has only the v1 token, clients keep reading whole chats.
+- Window metadata is all-or-nothing on both clients; a partial or invalid set fails decode. `window.chat` (iOS) or `window.chat()` (Android) builds the `AidenChat`. If a page lacks metadata anyway, the refresh falls back to `GET /chats/{chatId}`. Bot privacy validation classifies a window as a Bot chat when it carries `botId`, so reasoning is refused there.
+- Open, reconcile, and stream-finish reads fetch the newest 50-message window. The window chat (title, model, timestamps, revision) replaces the chat metadata.
 - The first network read replaces the cached transcript. Later reads merge: when the new window overlaps the transcript on screen, earlier pages the reader loaded stay in front (`AidenTranscriptWindowing.mergingLatest`).
+- The merge runs again at publication time (`acceptRemoteChat(beforePublishing:)`), against the transcript on screen then, provided the admitted revision is the window's. This keeps a page loaded by Load earlier while the refresh was in flight or writing the cache (PR #354 review, P2). The cache saves the fetch-time merge.
 - "Load earlier messages" sits at the top of the transcript and pages with `before=<oldest server message id>` (local optimistic `local-` ids are skipped). Earlier pages live in memory and reach the cache only through a later merged save.
 - `409 revision_conflict` on a page reloads the newest window, replacing the transcript.
-- Without the feature, every read stays the whole-chat `GET /chats/{chatId}`. The title-pending refresh always uses the whole-chat read because the title is why it runs.
+- Without the features, every read stays the whole-chat `GET /chats/{chatId}`. The title-pending refresh always uses the whole-chat read because the title is why it runs.
 - `hasOlder` is not persisted, so a cached transcript shows no Load earlier control until the network window arrives.
-- Scroll: iOS re-anchors to the previous first row after a prepend; Android's reverse-layout `LazyColumn` keeps position because earlier pages join the end of the item list.
-- Code: iOS `AidenTranscriptWindowing` (Models/AidenChat.swift), `AidenChatViewModel.loadEarlierMessages`; Android `AidenTranscriptWindowing` (models/AidenChat.kt), `AidenChatViewModel.loadEarlierMessages`, `AidenLoadEarlierMessages.kt`. Tests: iOS `AidenChatTests` window cases, Android `AidenTranscriptWindowTest`.
+- Scroll: iOS re-anchors to the previous first row after a prepend. Android's reverse-layout `LazyColumn` keeps its position because earlier pages join the end of the item list.
+- Revision 21 is also claimed by other open PRs (#349, #352, #359). Reclaim the next free revision at merge time and update the iOS, Android, and fixture contracts together.
+- Code: iOS `AidenTranscriptWindowing` (Models/AidenChat.swift), `AidenChatMessagesWindow` (Networking/AidenRemoteContract.swift), `AidenChatViewModel.loadEarlierMessages`. Android `AidenTranscriptWindowing` and `AidenChatMessagesWindow` (models/AidenChat.kt), `AidenChatViewModel.loadEarlierMessages`, `AidenLoadEarlierMessages.kt`. Server `projectAidenRemoteChatMessagesWindow` in main/services/aiden-remote-chats.ts. Tests: iOS `AidenChatTests` window cases, Android `AidenTranscriptWindowTest`, desktop `aiden-remote-chats.test.ts` and `aiden-remote-protocol.test.ts`.

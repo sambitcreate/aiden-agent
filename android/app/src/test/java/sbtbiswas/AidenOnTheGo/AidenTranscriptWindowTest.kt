@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -28,6 +30,7 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
@@ -37,7 +40,10 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
+import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseValidator
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 
 class AidenTranscriptWindowTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -152,6 +158,102 @@ class AidenTranscriptWindowTest {
     }
 
     @Test
+    fun windowMetadataDecodesAsTheChatAndFailsClosedWhenPartial() {
+        val page = """{"chatId":"c","revision":"r","messages":[],"hasOlder":true,"workspaceId":"w","title":"Named",""" +
+            """"providerId":"p","modelId":"m","createdAt":"2026-09-27T12:00:00Z","updatedAt":"2026-09-27T13:00:00Z"}"""
+        val chat = json.decodeFromString<AidenChatMessagesWindow>(page).chat()!!
+        assertEquals("Named", chat.title)
+        assertEquals("m", chat.modelId)
+        assertEquals(Instant.parse("2026-09-27T13:00:00Z"), chat.updatedAt)
+        assertEquals("r", chat.revision)
+
+        assertNull(
+            json.decodeFromString<AidenChatMessagesWindow>("""{"chatId":"c","revision":"r","messages":[],"hasOlder":false}""").chat()
+        )
+        val partial = listOf(
+            page.replace(""""workspaceId":"w",""", ""),
+            page.replace(""""modelId":"m",""", ""),
+            page.replace("2026-09-27T13:00:00Z", "2026-09-27T11:00:00Z"),
+            page.replace(""""title":"Named",""", """"title":"Named","titlePending":false,""")
+        )
+        for (invalid in partial) {
+            assertThrows(invalid, Exception::class.java) { json.decodeFromString<AidenChatMessagesWindow>(invalid) }
+        }
+
+        // A Bot window keeps a Bot chat's privacy: reasoning is refused there,
+        // as it is on a whole Bot chat read, but stays readable on a regular one.
+        val reasoning = """{"chatId":"c","revision":"r","hasOlder":false,"workspaceId":"w","title":"t",""" +
+            """"createdAt":"2026-09-27T12:00:00Z","updatedAt":"2026-09-27T12:00:00Z",""" +
+            """"messages":[{"id":"a","role":"assistant","content":"x","reasoning":"thought"}]}"""
+        AidenBotPrivateResponseValidator.validate(reasoning, AidenBotPrivateResponseScope.MessagesWindowProjection)
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(
+                reasoning.replace(""""workspaceId":"w",""", """"workspaceId":"w","botId":"bot-1","""),
+                AidenBotPrivateResponseScope.MessagesWindowProjection
+            )
+        }
+    }
+
+    @Test
+    fun refreshingAWindowedChatAdoptsADesktopRenameAndModelChange() = withWindowedMac(advertisesWindow = true) { mac, model ->
+        withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }
+        model.loadEarlierMessages()
+        withTimeout(5_000) { model.isLoadingEarlierMessages.first { !it } }
+        assertNull(model.chat.value!!.modelId)
+
+        mac.changeMetadata("Renamed on the Mac", "provider-2", "model-2", Instant.parse("2026-09-27T13:00:00Z"), "window-r2")
+        model.loadChat()
+        val refreshed = withTimeout(5_000) { model.chat.first { it?.revision == "window-r2" } }!!
+
+        assertEquals("Renamed on the Mac", refreshed.title)
+        assertEquals("provider-2", refreshed.providerId)
+        assertEquals("model-2", refreshed.modelId)
+        assertEquals(Instant.parse("2026-09-27T13:00:00Z"), refreshed.updatedAt)
+        assertEquals("loaded pages survive the refresh", ids(21..120), refreshed.messages.map { it.id })
+        assertEquals("the newest page alone carries the metadata", 0, mac.fullReads.get())
+    }
+
+    @Test
+    fun aWindowWithoutMetadataKeepsTheWholeChatRead() =
+        withWindowedMac(advertisesWindow = true, advertisesMetadata = false) { mac, model ->
+            // A revision-19/20 Mac pages messages but cannot say the chat's
+            // title or model, so the phone keeps reading whole chats from it.
+            val opened = withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }!!
+            assertEquals(ids(1..120), opened.messages.map { it.id })
+            assertFalse(model.hasOlderMessages.value)
+
+            mac.changeMetadata("Renamed on the Mac", "provider-2", "model-2", Instant.parse("2026-09-27T13:00:00Z"), "window-r2")
+            model.loadChat()
+            val refreshed = withTimeout(5_000) { model.chat.first { it?.revision == "window-r2" } }!!
+            assertEquals("Renamed on the Mac", refreshed.title)
+            assertEquals("model-2", refreshed.modelId)
+            assertEquals(2, mac.fullReads.get())
+            assertTrue(mac.windowQueries.isEmpty())
+        }
+
+    @Test
+    fun anEarlierPageLoadedWhileARefreshIsInFlightIsKept() = withWindowedMac(advertisesWindow = true) { mac, model ->
+        withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }
+        assertEquals("m71", model.chat.value!!.messages.first().id)
+
+        // A refresh asks for the newest page; while its answer is in flight the
+        // reader loads the page before the one on screen.
+        mac.transcript.set(messages(1..121) to "window-r2")
+        val hold = CountDownLatch(1)
+        mac.holdNewestPage.set(hold)
+        model.loadChat()
+        assertTrue(withContext(Dispatchers.IO) { mac.newestPageHeld.await(5, TimeUnit.SECONDS) })
+        model.loadEarlierMessages()
+        withTimeout(5_000) { model.isLoadingEarlierMessages.first { !it } }
+        assertEquals("m21", model.chat.value!!.messages.first().id)
+
+        hold.countDown()
+        val refreshed = withTimeout(5_000) { model.chat.first { it?.revision == "window-r2" } }!!
+        assertEquals(ids(21..121), refreshed.messages.map { it.id })
+        assertTrue(model.hasOlderMessages.value)
+    }
+
+    @Test
     fun aMacWithoutTheWindowFeatureServesTheWholeTranscript() = withWindowedMac(advertisesWindow = false) { mac, model ->
         val opened = withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }!!
         assertEquals(ids(1..120), opened.messages.map { it.id })
@@ -168,11 +270,26 @@ class AidenTranscriptWindowTest {
         val windowQueries = ConcurrentLinkedQueue<Map<String, String>>()
         val fullReads = AtomicInteger(0)
         val advertises = AtomicBoolean(true)
+        val title = AtomicReference("Windowed")
+        val selection = AtomicReference<Pair<String, String>?>(null)
+        val updatedAt = AtomicReference(Instant.EPOCH)
+        /** When set, the next newest-page request waits for this latch. */
+        val holdNewestPage = AtomicReference<CountDownLatch?>(null)
+        val newestPageHeld = CountDownLatch(1)
+
+        /** The desktop renames the chat and picks another model; the messages stay. */
+        fun changeMetadata(title: String, providerId: String, modelId: String, updatedAt: Instant, revision: String) {
+            this.title.set(title)
+            selection.set(providerId to modelId)
+            this.updatedAt.set(updatedAt)
+            transcript.set(transcript.get().first to revision)
+        }
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun withWindowedMac(
         advertisesWindow: Boolean,
+        advertisesMetadata: Boolean = true,
         body: suspend (WindowedMac, AidenChatViewModel) -> Unit
     ) {
         val directory = kotlin.io.path.createTempDirectory("aiden-window-").toFile()
@@ -188,7 +305,11 @@ class AidenTranscriptWindowTest {
             messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "window-r0"
         )
         val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
-        val features = if (advertisesWindow) """["chat-messages-window-v1"]""" else "[]"
+        val features = when {
+            !advertisesWindow -> "[]"
+            advertisesMetadata -> """["chat-messages-window-v1","chat-messages-window-metadata-v1"]"""
+            else -> """["chat-messages-window-v1"]"""
+        }
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
                 "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-window","name":"Window Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":$features,"connectionMode":"lan","serverTime":"2026-09-27T12:00:00Z"}""")
@@ -196,7 +317,10 @@ class AidenTranscriptWindowTest {
                 "/api/aiden/v1/chats/chat-window" -> {
                     mac.fullReads.incrementAndGet()
                     val (all, revision) = mac.transcript.get()
-                    MockResponse().setBody(wireJson.encodeToString(initial.copy(messages = all, revision = revision)))
+                    MockResponse().setBody(wireJson.encodeToString(initial.copy(
+                        title = mac.title.get(), providerId = mac.selection.get()?.first, modelId = mac.selection.get()?.second,
+                        updatedAt = mac.updatedAt.get(), messages = all, revision = revision
+                    )))
                 }
                 "/api/aiden/v1/chats/chat-window/messages" -> if (!mac.advertises.get()) {
                     MockResponse().setResponseCode(404)
@@ -206,6 +330,10 @@ class AidenTranscriptWindowTest {
                     val (all, revision) = mac.transcript.get()
                     val limit = url.queryParameter("limit")?.toIntOrNull() ?: 50
                     val before = url.queryParameter("before")
+                    if (before == null) mac.holdNewestPage.getAndSet(null)?.let { hold ->
+                        mac.newestPageHeld.countDown()
+                        hold.await(5, TimeUnit.SECONDS)
+                    }
                     val end = if (before == null) all.size else all.indexOfFirst { it.id == before }
                     if (end < 0) {
                         MockResponse().setResponseCode(409).setBody(
@@ -213,9 +341,12 @@ class AidenTranscriptWindowTest {
                         )
                     } else {
                         val start = maxOf(0, end - limit)
-                        MockResponse().setBody(
-                            wireJson.encodeToString(AidenChatMessagesWindow("chat-window", revision, all.subList(start, end), start > 0))
-                        )
+                        val page = AidenChatMessagesWindow("chat-window", revision, all.subList(start, end), start > 0)
+                        MockResponse().setBody(wireJson.encodeToString(if (!advertisesMetadata) page else page.copy(
+                            workspaceId = initial.workspaceId, title = mac.title.get(),
+                            providerId = mac.selection.get()?.first, modelId = mac.selection.get()?.second,
+                            createdAt = initial.createdAt, updatedAt = mac.updatedAt.get()
+                        )))
                     }
                 }
                 else -> MockResponse().setResponseCode(404)

@@ -1988,3 +1988,32 @@ test("a messages window stays within the JSON budget and reports the trimmed his
   const older = projectAidenRemoteChatMessagesWindow(source, { before: page.messages[0]!.id, limit: 8 });
   assert.equal(older.messages[older.messages.length - 1]!.id, `message-${8 - page.messages.length - 1}`);
 });
+
+test("a messages window carries the chat metadata a whole-chat read would, so renames and model changes reach windowed readers", async () => {
+  const source = conversation(5);
+  const before = projectAidenRemoteChatMessagesWindow(source, { limit: 2 });
+  const { messages: _messages, id, ...wholeMetadata } = projectAidenRemoteChat(source);
+  const { messages: _page, chatId, hasOlder: _hasOlder, ...windowMetadata } = before;
+  assert.equal(chatId, id);
+  assert.deepEqual(windowMetadata, wholeMetadata);
+
+  // The desktop renames the chat and switches its model without touching history.
+  const changed = { ...source, title: "Renamed on the Mac", providerId: "provider-2", model: "model-2", updatedAt: 3_000 };
+  const after = projectAidenRemoteChatMessagesWindow(changed, { limit: 2 });
+  assert.deepEqual(after.messages, before.messages);
+  assert.equal(after.title, "Renamed on the Mac");
+  assert.equal(after.providerId, "provider-2");
+  assert.equal(after.modelId, "model-2");
+  assert.equal(after.updatedAt, new Date(3_000).toISOString());
+  assert.notEqual(after.revision, before.revision);
+
+  // A chat without a complete model selection omits both fields, as chat reads do.
+  const unselected = projectAidenRemoteChatMessagesWindow({ ...source, model: "" }, { limit: 2 });
+  assert.equal("providerId" in unselected || "modelId" in unselected, false);
+
+  let pending = true;
+  const app = fixture(source, { isTitlePending: () => pending });
+  assert.equal((await app.service.messagesWindow("chat-1", { limit: 2 })).titlePending, true);
+  pending = false;
+  assert.equal("titlePending" in (await app.service.messagesWindow("chat-1", { limit: 2 })), false);
+});

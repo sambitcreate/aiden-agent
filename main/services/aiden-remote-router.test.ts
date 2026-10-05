@@ -377,7 +377,8 @@ async function fixture(options: {
         ? {
             messagesWindow: async (id: string, input: { before?: string; limit: number }) => {
               calls.push(`messages-window:${id}:${input.before ?? ""}:${input.limit}`);
-              return { chatId: id, revision: chat.revision, messages: [], hasOlder: false };
+              const { id: _id, messages: _messages, revision, ...metadata } = chat;
+              return { chatId: id, revision, messages: [], hasOlder: false, ...metadata };
             },
           }
         : {}),
@@ -3999,7 +4000,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 20,
+      contractRevision: 21,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4158,6 +4159,7 @@ test("a host without the services offers no grant and answers not_found", async 
     assert.equal(server.serverCapabilities.includes("host:events"), false);
     assert.equal(server.features.includes("host-events-v1"), false);
     assert.equal(server.features.includes("chat-messages-window-v1"), false);
+    assert.equal(server.features.includes("chat-messages-window-metadata-v1"), false);
     const feed = await fetch(`${mac.base}/host/events`, { headers: HOST_HEADERS });
     assert.equal(feed.status, 404);
     const negotiate = await fetch(`${mac.base}/device/capabilities`, {
@@ -4176,6 +4178,7 @@ test("the messages window is offered to every device and validates its query", a
   try {
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
     assert.equal(server.features.includes("chat-messages-window-v1"), true);
+    assert.equal(server.features.includes("chat-messages-window-metadata-v1"), true);
 
     const page = await fetch(`${phone.base}/chats/chat-1/messages?before=message-9&limit=20`, { headers: HOST_HEADERS });
     assert.equal(page.status, 200);
@@ -4184,6 +4187,12 @@ test("the messages window is offered to every device and validates its query", a
       revision: `rev_${"c".repeat(43)}`,
       messages: [],
       hasOlder: false,
+      workspaceId: "workspace-1",
+      title: "Chat",
+      providerId: "provider-1",
+      modelId: "model-1",
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(2_000).toISOString(),
     });
     const defaults = await fetch(`${phone.base}/chats/chat-1/messages`, { headers: HOST_HEADERS });
     assert.equal(defaults.status, 200);

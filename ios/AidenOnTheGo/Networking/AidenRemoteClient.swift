@@ -91,6 +91,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
     static let chatMessagesWindowFeature = "chat-messages-window-v1"
+    static let chatMessagesWindowMetadataFeature = "chat-messages-window-metadata-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -247,10 +248,14 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatReadStateFeature)
     }
 
-    /// `GET /chats/{chatId}/messages` pages (revision 19). Without it the
-    /// client keeps reading whole transcripts through `GET /chats/{chatId}`.
+    /// `GET /chats/{chatId}/messages` pages that also carry the chat's
+    /// metadata (revisions 19 and 21). A revision-19/20 page has no title or
+    /// model, so refreshing from it would leave a desktop rename or model
+    /// change unseen; without both tokens the client keeps reading whole
+    /// transcripts through `GET /chats/{chatId}`.
     var supportsChatMessagesWindow: Bool {
         features.contains(Self.chatMessagesWindowFeature)
+            && features.contains(Self.chatMessagesWindowMetadataFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {

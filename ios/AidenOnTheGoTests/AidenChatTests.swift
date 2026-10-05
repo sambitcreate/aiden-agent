@@ -7271,14 +7271,35 @@ private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
     private var messages: [AidenChatMessage]
     private var revision: String
     private let advertisesWindow: Bool
+    private let advertisesWindowMetadata: Bool
     private var conflictsOnCursor = false
     private var windowQueries: [[String: String]] = []
     private var fullReadCount = 0
+    private var title = "Windowed"
+    private var selection: (providerId: String, modelId: String)?
+    private var updatedAt = "2026-09-27T12:00:00Z"
 
-    init(messages: [AidenChatMessage], revision: String, advertisesWindow: Bool) {
+    init(
+        messages: [AidenChatMessage],
+        revision: String,
+        advertisesWindow: Bool,
+        advertisesWindowMetadata: Bool = true
+    ) {
         self.messages = messages
         self.revision = revision
         self.advertisesWindow = advertisesWindow
+        self.advertisesWindowMetadata = advertisesWindowMetadata
+    }
+
+    /// The desktop renames the chat and picks another model; the transcript
+    /// is untouched, so only the revision and metadata move.
+    func changeMetadata(title: String, providerId: String, modelId: String, updatedAt: String, revision: String) {
+        lock.withLock {
+            self.title = title
+            self.selection = (providerId, modelId)
+            self.updatedAt = updatedAt
+            self.revision = revision
+        }
     }
 
     var windowRequests: [[String: String]] { lock.withLock { windowQueries } }
@@ -7308,7 +7329,9 @@ private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
                 "appVersion": "1.0",
                 "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
                 "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
-                "features": advertisesWindow ? ["chat-messages-window-v1"] : [],
+                "features": !advertisesWindow ? []
+                    : advertisesWindowMetadata ? ["chat-messages-window-v1", "chat-messages-window-metadata-v1"]
+                    : ["chat-messages-window-v1"],
                 "connectionMode": "lan",
                 "serverTime": "2026-09-27T12:00:00Z",
             ]
@@ -7320,9 +7343,9 @@ private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
                 fullReadCount += 1
                 let date = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
                 return AidenChat(
-                    id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: "Windowed",
-                    providerId: nil, modelId: nil, messages: messages,
-                    createdAt: date, updatedAt: date, revision: revision
+                    id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: title,
+                    providerId: selection?.providerId, modelId: selection?.modelId, messages: messages,
+                    createdAt: date, updatedAt: ISO8601DateFormatter().date(from: updatedAt)!, revision: revision
                 )
             }
             return (200, "application/json", try! encoder.encode(snapshot))
@@ -7343,12 +7366,22 @@ private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
                     end = index
                 }
                 let start = max(0, end - limit)
-                let page: [String: Any] = [
+                var page: [String: Any] = [
                     "chatId": "chat-progress-lifecycle",
                     "revision": revision,
                     "messages": try! JSONSerialization.jsonObject(with: encoder.encode(Array(messages[start..<end]))),
                     "hasOlder": start > 0,
                 ]
+                if advertisesWindowMetadata {
+                    page["workspaceId"] = "workspace-1"
+                    page["title"] = title
+                    page["createdAt"] = "2026-09-27T12:00:00Z"
+                    page["updatedAt"] = updatedAt
+                    if let selection {
+                        page["providerId"] = selection.providerId
+                        page["modelId"] = selection.modelId
+                    }
+                }
                 return (200, "application/json", try! JSONSerialization.data(withJSONObject: page))
             }
         default:
@@ -8924,7 +8957,8 @@ extension AidenChatTests {
 
     @MainActor
     private func windowedChatModel(
-        fixture: AidenChatMessagesWindowHTTPFixture
+        fixture: AidenChatMessagesWindowHTTPFixture,
+        cacheGate: AidenChatWriteTestGate? = nil
     ) async throws -> (AidenChatViewModel, URL) {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-window-\(UUID())")
         let initial = AidenChat(
@@ -8934,7 +8968,7 @@ extension AidenChatTests {
         )
         let model = try await makeProgressLifecycleModel(
             mode: .denied,
-            cache: AidenChatCache(root: root),
+            cache: AidenChatCache(root: root, beforeChatWrite: { await cacheGate?.waitIfArmed() }),
             initialChat: initial,
             responseOverride: { fixture.response($0) }
         )
@@ -9062,6 +9096,133 @@ extension AidenChatTests {
         await model.loadEarlierMessages()
         XCTAssertEqual(model.chat.messages.map(\.id), (1...80).map { "n\($0)" })
         XCTAssertFalse(model.hasOlderMessages)
+    }
+
+    func testWindowMetadataDecodesAsTheChatAndFailsClosedWhenPartial() throws {
+        func page(_ extra: String) -> Data {
+            Data(#"{"chatId":"chat-1","revision":"r1","messages":[],"hasOlder":false\#(extra)}"#.utf8)
+        }
+        let metadata = #","workspaceId":"workspace-1","title":"Renamed","providerId":"p","modelId":"m","createdAt":"2026-09-27T12:00:00Z","updatedAt":"2026-09-27T13:00:00Z""#
+        let chat = try XCTUnwrap(
+            try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page(metadata)).chat
+        )
+        XCTAssertEqual(chat.id, "chat-1")
+        XCTAssertEqual(chat.title, "Renamed")
+        XCTAssertEqual(chat.providerId, "p")
+        XCTAssertEqual(chat.modelId, "m")
+        XCTAssertEqual(chat.revision, "r1")
+        XCTAssertFalse(chat.isTitlePending)
+        XCTAssertNil(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page("")).chat)
+
+        let partial = [
+            #","title":"Renamed""#,
+            metadata.replacingOccurrences(of: #","modelId":"m""#, with: ""),
+            metadata.replacingOccurrences(of: "13:00:00Z", with: "11:00:00Z"),
+            metadata + #","titlePending":false"#,
+        ]
+        for extra in partial {
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page(extra)),
+                extra
+            )
+        }
+
+        // A Bot transcript never carries reasoning, on a page as in a chat read.
+        let botPage = Data(#"{"chatId":"chat-1","revision":"r1","hasOlder":false,"botId":"bot-1"\#(metadata),"messages":[{"id":"m1","role":"assistant","text":"Hi","createdAt":"2026-09-27T12:00:00Z","reasoning":"private"}]}"#.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: botPage))
+        let regularPage = Data(String(decoding: botPage, as: UTF8.self)
+            .replacingOccurrences(of: #","botId":"bot-1""#, with: "").utf8)
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: regularPage))
+    }
+
+    @MainActor
+    func testRefreshingAWindowedChatAdoptsADesktopRenameAndModelChange() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertNil(model.chat.modelId)
+
+        fixture.changeMetadata(
+            title: "Renamed on the Mac", providerId: "provider-2", modelId: "model-2",
+            updatedAt: "2026-09-27T13:00:00Z", revision: "window-r2"
+        )
+        await model.load(observeProgress: false)
+
+        XCTAssertEqual(model.chat.displayTitle, "Renamed on the Mac")
+        XCTAssertEqual(model.chat.providerId, "provider-2")
+        XCTAssertEqual(model.chat.modelId, "model-2")
+        XCTAssertEqual(model.chat.updatedAt, ISO8601DateFormatter().date(from: "2026-09-27T13:00:00Z"))
+        XCTAssertEqual(model.chat.revision, "window-r2")
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...120).map { "m\($0)" }, "loaded pages survive the refresh")
+        XCTAssertEqual(fixture.fullChatReads, 0, "the newest page alone carries the metadata")
+    }
+
+    @MainActor
+    func testAWindowWithoutMetadataKeepsTheWholeChatRead() async throws {
+        // A revision-19/20 Mac pages messages but cannot say the chat's title
+        // or model, so the phone keeps reading whole chats from it.
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1",
+            advertisesWindow: true, advertisesWindowMetadata: false
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+
+        fixture.changeMetadata(
+            title: "Renamed on the Mac", providerId: "provider-2", modelId: "model-2",
+            updatedAt: "2026-09-27T13:00:00Z", revision: "window-r2"
+        )
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.displayTitle, "Renamed on the Mac")
+        XCTAssertEqual(model.chat.modelId, "model-2")
+        XCTAssertEqual(fixture.fullChatReads, 2)
+        XCTAssertTrue(fixture.windowRequests.isEmpty)
+    }
+
+    @MainActor
+    func testAnEarlierPageLoadedWhileARefreshIsPublishingIsKept() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let gate = AidenChatWriteTestGate()
+        let (model, root) = try await windowedChatModel(fixture: fixture, cacheGate: gate)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.first?.id, "m71")
+
+        // A refresh reads the newest page, then waits on its cache write while
+        // the reader loads the page before the one on screen.
+        fixture.replaceTranscript(windowMessages(1...121), revision: "window-r2")
+        await gate.arm()
+        let refreshing = Task { await model.load(observeProgress: false) }
+        await waitForChatWrite(gate)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.first?.id, "m21")
+        await gate.release()
+        await refreshing.value
+
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...121).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertEqual(model.chat.revision, "window-r2")
     }
 
     @MainActor

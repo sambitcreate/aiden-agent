@@ -97,9 +97,15 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
-    /** `GET /chats/{chatId}/messages` pages (revision 19); without it, whole-chat reads. */
+    /**
+     * `GET /chats/{chatId}/messages` pages that also carry the chat's metadata
+     * (revisions 19 and 21). A revision-19/20 page has no title or model, so
+     * refreshing from it would leave a desktop rename or model change unseen;
+     * without both tokens the client keeps reading whole chats.
+     */
     val supportsChatMessagesWindow: Boolean
-        get() = features.contains(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE)
+        get() = features.contains(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE) &&
+            features.contains(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_METADATA_FEATURE)
 
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")

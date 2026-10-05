@@ -808,14 +808,25 @@ data class AidenChat(
 /**
  * One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
  * messages oldest first, ending just before the requested cursor (or at the
- * newest message), plus whether older visible messages exist.
+ * newest message), plus whether older visible messages exist. Since contract
+ * revision 21 (`chat-messages-window-metadata-v1`) a page also carries the
+ * chat metadata a whole-chat read returns, so a refresh from the newest page
+ * stays as authoritative for the title and model as `GET /chats/{chatId}`.
  */
 @Serializable
 data class AidenChatMessagesWindow(
     val chatId: String,
     val revision: String,
     val messages: List<AidenChatMessage>,
-    val hasOlder: Boolean
+    val hasOlder: Boolean,
+    val workspaceId: String? = null,
+    val botId: String? = null,
+    val title: String? = null,
+    val titlePending: Boolean? = null,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant? = null
 ) {
     init {
         if (chatId.isEmpty() || chatId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
@@ -826,6 +837,36 @@ data class AidenChatMessagesWindow(
         ) {
             throw AidenRemoteContractException.InvalidJson("Invalid messages window")
         }
+        // Revision-21 metadata is all-or-nothing and held to the chat
+        // projection's rules: a partial set fails closed rather than leaving a
+        // refresh to mix the page's title with a stale model.
+        val hasAnyMetadata = listOf(workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt)
+            .any { it != null }
+        if (hasAnyMetadata) chat() ?: throw AidenRemoteContractException.InvalidJson("Invalid messages window metadata")
+    }
+
+    /**
+     * The chat this page describes, with the page's messages, or null when the
+     * page carries no metadata and only a whole-chat read can say it.
+     */
+    fun chat(): AidenChat? {
+        val workspaceId = workspaceId ?: return null
+        val title = title ?: return null
+        val createdAt = createdAt ?: return null
+        val updatedAt = updatedAt ?: return null
+        return AidenChat(
+            id = chatId,
+            workspaceId = workspaceId,
+            botId = botId,
+            title = title,
+            providerId = providerId,
+            modelId = modelId,
+            messages = messages,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            revision = revision,
+            titlePending = titlePending
+        )
     }
 
     companion object {

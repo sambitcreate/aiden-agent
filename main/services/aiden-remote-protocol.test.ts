@@ -108,7 +108,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 20);
+  assert.equal(fixture.contractRevision, 21);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -303,6 +303,22 @@ test("revision 19 fixtures carry host health, host feed, run stream and run cont
     }),
     /decision is invalid/u,
   );
+
+  // Revision 21: the messages window carries the chat's metadata, held to the chat projection's rules.
+  assert.equal(fixture.messagesWindow?.title, "Fixture review chat");
+  assert.equal(fixture.messagesWindow?.modelId, "model_fixture");
+  const window = (copy: Record<string, unknown>) => record(copy.messagesWindow, "messagesWindow");
+  assert.throws(mutate((copy) => { delete window(copy).title; }));
+  assert.throws(mutate((copy) => { delete window(copy).modelId; }));
+  assert.throws(mutate((copy) => { window(copy).updatedAt = "2026-08-18T18:00:00.000Z"; }));
+  // A revision-20 window predates the metadata, so it may not carry it.
+  assert.throws(
+    mutate((copy) => {
+      copy.contractRevision = 20;
+      record(copy.hostHealth, "hostHealth").contractRevision = 20;
+    }),
+    /unsupported field/u,
+  );
 });
 
 test("pairing request fixtures only carry a sealed envelope for an approved request and fail closed", async () => {
@@ -371,6 +387,9 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const revision19 = structuredClone(raw);
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
+  // The messages window's metadata is revision 21, so the older fixture omits it.
+  const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
+  revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
   delete revision19.pairingRequests;
   assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);

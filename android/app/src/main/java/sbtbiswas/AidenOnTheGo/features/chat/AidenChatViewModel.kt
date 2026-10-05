@@ -2028,29 +2028,43 @@ class AidenChatViewModel(
         }
     }
 
-    private data class LatestTranscript(val chat: AidenChat, val hasOlder: Boolean)
+    /**
+     * The newest transcript a refresh read. [mergeWindow] is the newest page
+     * to fold into the transcript on screen when it is published; null when
+     * [chat] already replaces the transcript.
+     */
+    private data class LatestTranscript(
+        val chat: AidenChat,
+        val hasOlder: Boolean,
+        val mergeWindow: AidenChatMessagesWindow? = null
+    )
 
     /**
-     * Read the newest transcript. With `chat-messages-window-v1` this is the
-     * newest page, folded into earlier pages already on screen (or replacing
-     * them when [replacing]); without it, the whole chat as before. The page
-     * carries no chat metadata, so the current title and model are kept.
+     * Read the newest transcript. With `chat-messages-window-v1` and its
+     * revision-21 metadata this is the newest page, carrying the chat's
+     * current title, timestamps and model like a whole-chat read; it is folded
+     * into earlier pages already on screen when it is published (or replaces
+     * them when [replacing]). Without the window, or from a page that lacks
+     * metadata, it is the whole chat as before.
      */
     private suspend fun fetchLatestTranscript(client: AidenRemoteClient, replacing: Boolean = false): LatestTranscript {
-        val current = _chat.value
-        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true || current == null) {
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true || _chat.value == null) {
             return LatestTranscript(client.chat(chatId), hasOlder = false)
         }
         val window = client.messagesWindow(chatId, limit = AidenTranscriptWindowing.PAGE_SIZE)
-        val presentation = if (replacing || !hasSettledTranscriptWindow) {
-            AidenTranscriptWindowing.latest(window)
-        } else {
-            AidenTranscriptWindowing.mergingLatest(window, current.messages, _hasOlderMessages.value)
+        val windowChat = window.chat()?.takeIf { it.id == chatId }
+            ?: return LatestTranscript(client.chat(chatId), hasOlder = false)
+        if (replacing || !hasSettledTranscriptWindow) {
+            return LatestTranscript(windowChat, window.hasOlder)
         }
-        return LatestTranscript(
-            current.copy(messages = presentation.messages, revision = window.revision),
-            presentation.hasOlder
+        // Cache the page folded into what is on screen now; publication folds
+        // it again into whatever is on screen by then.
+        val presentation = AidenTranscriptWindowing.mergingLatest(
+            window,
+            _chat.value?.messages.orEmpty(),
+            _hasOlderMessages.value
         )
+        return LatestTranscript(windowChat.copy(messages = presentation.messages), presentation.hasOlder, window)
     }
 
     private suspend fun acceptLatestTranscript(
@@ -2058,8 +2072,23 @@ class AidenChatViewModel(
         writeToken: Long,
         scheduleTitleRefresh: Boolean = true
     ): Boolean {
-        if (!acceptRemoteChat(latest.chat, writeToken, scheduleTitleRefresh)) return false
-        _hasOlderMessages.value = latest.hasOlder
+        var hasOlder = latest.hasOlder
+        val accepted = acceptRemoteChat(latest.chat, writeToken, scheduleTitleRefresh) { admitted ->
+            // Merge against the transcript on screen now, not when the read
+            // began: an earlier page loaded while the cache write was pending
+            // stays in front of the newest page.
+            val window = latest.mergeWindow
+            if (window == null || admitted.revision != window.revision) return@acceptRemoteChat admitted
+            val presentation = AidenTranscriptWindowing.mergingLatest(
+                window,
+                _chat.value?.messages.orEmpty(),
+                _hasOlderMessages.value
+            )
+            hasOlder = presentation.hasOlder
+            admitted.copy(messages = presentation.messages)
+        }
+        if (!accepted) return false
+        _hasOlderMessages.value = hasOlder
         hasSettledTranscriptWindow = true
         return true
     }
@@ -2112,7 +2141,12 @@ class AidenChatViewModel(
         }
     }
 
-    private suspend fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
+    private suspend fun acceptRemoteChat(
+        remote: AidenChat,
+        writeToken: Long,
+        scheduleTitleRefresh: Boolean = true,
+        beforePublishing: (AidenChat) -> AidenChat = { it }
+    ): Boolean {
         if (_isStarting.value) return false
         val generation = transcriptGeneration
         val client = activeClient()
@@ -2127,12 +2161,13 @@ class AidenChatViewModel(
         if (admitted == null) return false
         // A send or newer reconcile may have started while the cache was on disk.
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
-        _chat.value = admitted
+        val presented = beforePublishing(admitted)
+        _chat.value = presented
         resolveModelSelection()
-        if (scheduleTitleRefresh && admitted.isTitlePending) {
+        if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
         }
-        reportChatViewed(admitted)
+        reportChatViewed(presented)
         return true
     }
 

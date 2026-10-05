@@ -1,7 +1,7 @@
 import Foundation
 import ImageIO
 
-private func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
+func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
     _ type: Value.Type,
     from values: KeyedDecodingContainer<Key>,
     forKey key: Key
@@ -1144,7 +1144,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         }
     }
 
-    private static func isPathSafeOpaqueIdentifier(_ value: String) -> Bool {
+    static func isPathSafeOpaqueIdentifier(_ value: String) -> Bool {
         value.unicodeScalars.allSatisfy { scalar in
             switch scalar.value {
             case 48...57, 65...90, 97...122, 45, 46, 58, 95:

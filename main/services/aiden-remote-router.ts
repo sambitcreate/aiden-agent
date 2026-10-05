@@ -29,6 +29,7 @@ import {
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE,
+  AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -1659,7 +1660,7 @@ export function createAidenRemoteRequestHandler(
               ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
               : []),
             ...(dependencies.chats?.messagesWindow
-              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE]
+              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
               : []),
             // Host-wide features are announced to desktops only.
             ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "host:events")

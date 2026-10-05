@@ -3279,9 +3279,12 @@ private enum AidenBotPrivateResponseValidator {
             }
         case .messagesWindow:
             // A window page carries the same message projection as a chat
-            // read, so it is held to the same private-field rules.
+            // read, so it is held to the same private-field rules, including
+            // the Bot classification its revision-21 metadata names.
             try validateChildProjectionFields(value)
-            try validate(value, root: "regularChat", path: [])
+            if let object = value as? [String: Any] {
+                try validate(value, root: object["botId"] is String ? "chat" : "regularChat", path: [])
+            }
         case .sharedFixture:
             guard let object = value as? [String: Any] else {
                 throw AidenRemoteContractError.invalidJSON
@@ -3399,21 +3402,64 @@ struct AidenChatListResponse: Decodable {
 
 /// One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
 /// messages oldest first, ending just before the requested cursor (or at the
-/// newest message), plus whether older visible messages exist.
+/// newest message), plus whether older visible messages exist. Since contract
+/// revision 21 (`chat-messages-window-metadata-v1`) a page also carries the
+/// chat metadata a whole-chat read returns, so a refresh from the newest page
+/// stays as authoritative for the title and model as `GET /chats/{chatId}`.
 struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
     static let defaultLimit = 50
     static let maximumLimit = 200
+
+    /// The chat metadata carried by a revision-21 page.
+    struct Metadata: Equatable, Sendable {
+        var workspaceId: String
+        var botId: String?
+        var title: String
+        var titlePending: Bool?
+        var providerId: String?
+        var modelId: String?
+        var createdAt: Date
+        var updatedAt: Date
+    }
 
     let chatId: String
     let revision: String
     let messages: [AidenChatMessage]
     let hasOlder: Bool
+    /// Nil from a Mac that predates `chat-messages-window-metadata-v1`.
+    let metadata: Metadata?
 
-    init(chatId: String, revision: String, messages: [AidenChatMessage], hasOlder: Bool) {
+    init(
+        chatId: String,
+        revision: String,
+        messages: [AidenChatMessage],
+        hasOlder: Bool,
+        metadata: Metadata? = nil
+    ) {
         self.chatId = chatId
         self.revision = revision
         self.messages = messages
         self.hasOlder = hasOlder
+        self.metadata = metadata
+    }
+
+    /// The chat this page describes, with the page's messages, or nil when the
+    /// page carries no metadata and only a whole-chat read can say it.
+    var chat: AidenChat? {
+        guard let metadata else { return nil }
+        return AidenChat(
+            id: chatId,
+            workspaceId: metadata.workspaceId,
+            botId: metadata.botId,
+            title: metadata.title,
+            providerId: metadata.providerId,
+            modelId: metadata.modelId,
+            messages: messages,
+            createdAt: metadata.createdAt,
+            updatedAt: metadata.updatedAt,
+            revision: revision,
+            titlePending: metadata.titlePending
+        )
     }
 
     init(from decoder: Decoder) throws {
@@ -3436,9 +3482,71 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
                 debugDescription: "A messages window holds at most 200 unique messages."
             )
         }
+        metadata = try Self.decodeMetadata(from: values)
     }
 
-    private enum CodingKeys: String, CodingKey { case chatId, revision, messages, hasOlder }
+    private static let metadataKeys: [CodingKeys] = [
+        .workspaceId, .botId, .title, .titlePending, .providerId, .modelId, .createdAt, .updatedAt,
+    ]
+
+    /// Revision-21 metadata is all-or-nothing and held to the chat
+    /// projection's bounds: a partial set fails closed rather than leaving a
+    /// refresh to mix the page's title with a stale model.
+    private static func decodeMetadata(
+        from values: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Metadata? {
+        guard metadataKeys.contains(where: { values.contains($0) }) else { return nil }
+        func invalid(_ key: CodingKeys, _ reason: String) -> DecodingError {
+            DecodingError.dataCorruptedError(forKey: key, in: values, debugDescription: reason)
+        }
+        func bounded(_ value: String, _ maximum: Int, allowEmpty: Bool = false) -> Bool {
+            (allowEmpty || !value.isEmpty) && value.unicodeScalars.count <= maximum
+        }
+        let workspaceId = try values.decode(String.self, forKey: .workspaceId)
+        guard bounded(workspaceId, AidenRemoteProtocol.maxIdentifierLength) else {
+            throw invalid(.workspaceId, "Expected a workspace ID.")
+        }
+        let botId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .botId)
+        if let botId {
+            guard bounded(botId, AidenRemoteProtocol.maxBotIdentifierLength),
+                  AidenChat.isPathSafeOpaqueIdentifier(botId) else {
+                throw invalid(.botId, "Expected a path-safe Bot ID.")
+            }
+        }
+        let title = try values.decode(String.self, forKey: .title)
+        guard bounded(title, 1_024, allowEmpty: true) else { throw invalid(.title, "Expected a bounded title.") }
+        let titlePending = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .titlePending)
+        guard titlePending != false else {
+            throw invalid(.titlePending, "titlePending may be omitted or true, but never false.")
+        }
+        let providerId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .providerId)
+        let modelId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .modelId)
+        guard (providerId == nil) == (modelId == nil) else {
+            throw invalid(providerId == nil ? .providerId : .modelId, "providerId and modelId must be supplied together.")
+        }
+        if let providerId, !bounded(providerId, 256) { throw invalid(.providerId, "Expected a bounded provider ID.") }
+        if let modelId, !bounded(modelId, 512) { throw invalid(.modelId, "Expected a bounded model ID.") }
+        let createdAt = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
+        let updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        guard AidenRemoteTimestamp.isOrdered(createdAt: createdAt, updatedAt: updatedAt) else {
+            throw invalid(.updatedAt, "updatedAt cannot precede createdAt.")
+        }
+        return Metadata(
+            workspaceId: workspaceId,
+            botId: botId,
+            title: title,
+            titlePending: titlePending,
+            providerId: providerId,
+            modelId: modelId,
+            createdAt: createdAt.date,
+            updatedAt: updatedAt.date
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatId, revision, messages, hasOlder
+        case workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt
+    }
 }
 
 extension AidenChatMessagesWindow: AidenBotPrivateResponseScoped {

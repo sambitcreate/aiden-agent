@@ -24,7 +24,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 20 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 21 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -180,6 +180,14 @@ export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v
  * `hasOlder` flag. `GET /chats/{chatId}` is unchanged for older clients.
  */
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1" as const;
+/**
+ * Server feature token (contract revision 21): every messages window also
+ * carries the chat's mutable metadata (`workspaceId`, `botId?`, `title`,
+ * `providerId?`/`modelId?`, `createdAt`, `updatedAt`, `titlePending?`), so a
+ * phone can refresh through windows alone and still learn renames and model
+ * changes. Hosts without it serve message-only windows.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1" as const;
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT = 50;
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT = 200;
 
@@ -1027,12 +1035,23 @@ export interface AidenRemoteContractFixture {
   hostFeedEvents?: AidenRemoteHostFeedFixtureEvent[];
   /** Revision 19: one complete run stream, ending with `run.ended`. */
   runEvents?: AidenRemoteHostFeedFixtureEvent[];
-  /** Revision 19: one `GET /chats/{chatId}/messages` page. */
+  /**
+   * Revision 19: one `GET /chats/{chatId}/messages` page. Since revision 21
+   * it also carries the chat metadata (`chat-messages-window-metadata-v1`).
+   */
   messagesWindow?: {
     chatId: string;
     revision: string;
     messages: unknown[];
     hasOlder: boolean;
+    workspaceId?: string;
+    botId?: string;
+    title?: string;
+    providerId?: string;
+    modelId?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    titlePending?: true;
   };
   /** Revision 19: a run-control loser's `409 approval_resolved`. */
   runControlError?: AidenRemoteErrorEnvelope;
@@ -5548,6 +5567,10 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
   return { ...(section as unknown as AidenRemotePairingRequestsFixture), error };
 }
 
+const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
+  "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
+] as const;
+
 function parseRevision19Fixture(
   value: Record<string, unknown>,
   context: { instanceId: string; contractRevision: number },
@@ -5649,13 +5672,28 @@ function parseRevision19Fixture(
 
   const window = value.messagesWindow;
   if (!isRecord(window)) throw new Error("Fixture messages window is invalid.");
-  assertExactKeys(window, ["chatId", "revision", "messages", "hasOlder"], "Fixture messages window");
+  const withMetadata = context.contractRevision >= 21;
+  assertExactKeys(
+    window,
+    [
+      "chatId", "revision", "messages", "hasOlder",
+      ...(withMetadata ? AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS : []),
+    ],
+    "Fixture messages window",
+  );
   boundedText(window.chatId, "Messages window chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
   boundedRevision(window.revision, "Messages window revision");
   if (!Array.isArray(window.messages) || window.messages.length > AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT) {
     throw new Error("Messages window messages must be a bounded array.");
   }
   if (typeof window.hasOlder !== "boolean") throw new Error("Messages window hasOlder must be boolean.");
+  if (withMetadata) {
+    // Revision 21: the window's metadata is the chat projection's, so it is
+    // held to the same rules (paired provider/model, ordered timestamps,
+    // Bot transcripts without reasoning).
+    const { chatId, hasOlder: _hasOlder, ...projection } = window;
+    parseAidenRemoteChatProjection({ ...projection, id: chatId }, "Fixture messages window");
+  }
 
   const runControlError = parseErrorEnvelopeFixture(value.runControlError, "Fixture run control error");
   return {
