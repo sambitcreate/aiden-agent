@@ -120,6 +120,20 @@ class AidenTranscriptWindowTest {
     }
 
     @Test
+    fun aColdOpenWithNothingCachedReadsTheLatestWindow() =
+        withWindowedMac(advertisesWindow = true, seedsChat = false) { mac, model ->
+            // Opening a chat the phone has never seen must not fall back to a
+            // whole-transcript read: a long chat would exceed the response cap.
+            val opened = withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }!!
+            assertEquals(ids(71..120), opened.messages.map { it.id })
+            assertEquals("Windowed", opened.title)
+            assertEquals("workspace-window", opened.workspaceId)
+            assertTrue(model.hasOlderMessages.value)
+            assertEquals(0, mac.fullReads.get())
+            assertEquals(mapOf("limit" to "50"), mac.windowQueries.first())
+        }
+
+    @Test
     fun refreshingAWindowedChatKeepsEarlierPagesAndAppendsNewMessages() = withWindowedMac(advertisesWindow = true) { mac, model ->
         withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }
         model.loadEarlierMessages()
@@ -290,6 +304,7 @@ class AidenTranscriptWindowTest {
     private fun withWindowedMac(
         advertisesWindow: Boolean,
         advertisesMetadata: Boolean = true,
+        seedsChat: Boolean = true,
         body: suspend (WindowedMac, AidenChatViewModel) -> Unit
     ) {
         val directory = kotlin.io.path.createTempDirectory("aiden-window-").toFile()
@@ -366,7 +381,7 @@ class AidenTranscriptWindowTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial.takeIf { seedsChat })
                 viewModels.put("window", model)
                 try {
                     body(mac, model)

@@ -2048,7 +2048,7 @@ class AidenChatViewModel(
      * metadata, it is the whole chat as before.
      */
     private suspend fun fetchLatestTranscript(client: AidenRemoteClient, replacing: Boolean = false): LatestTranscript {
-        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true || _chat.value == null) {
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true) {
             return LatestTranscript(client.chat(chatId), hasOlder = false)
         }
         val window = client.messagesWindow(chatId, limit = AidenTranscriptWindowing.PAGE_SIZE)
