@@ -98,7 +98,7 @@ fun AidenQRCodeScanner(
 
             Button(
                 onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -106,7 +106,7 @@ fun AidenQRCodeScanner(
             ) {
                 Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Enable Camera", fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Enable Camera", fontWeight = FontWeight.Bold)
             }
         }
     } else {
