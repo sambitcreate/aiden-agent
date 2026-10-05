@@ -391,6 +391,7 @@ export function registerChatHistoryHandlers(): void {
           const htmlMediaIds = selectedHtmlArtifactMediaIds(source.messages, parsed.forkAt);
           const targetChatId = randomUUID();
           let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+          let journalForked = false;
           const copied = await (async () => {
             try {
               return await chatStore.copyVisibleHistory({
@@ -399,21 +400,46 @@ export function registerChatHistoryHandlers(): void {
                 expectedWorkspaceId: workspaceId,
                 forkAt: parsed.forkAt,
                 assertCurrent,
-                beforeInstall: async () => {
-                  if (htmlMediaIds.length === 0) return;
-                  preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
-                    source.id,
-                    targetChatId,
-                    htmlMediaIds,
-                  );
+                beforeInstall: async (chat, sourceMessageIds) => {
+                  if (htmlMediaIds.length > 0) {
+                    preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
+                      source.id,
+                      targetChatId,
+                      htmlMediaIds,
+                    );
+                  }
+                  // Carry the source's model-side journal (tool results and
+                  // compactions) up to the cut. Without it the fork still
+                  // works; it rebuilds model context from visible history.
+                  try {
+                    journalForked = await piCompactionSessionStore.forkChat({
+                      sourceChatId: source.id,
+                      targetChatId,
+                      targetCreatedAt: chat.createdAt,
+                      messages: chat.messages.map((message, index) => ({
+                        sourceId: sourceMessageIds[index]!,
+                        id: message.id,
+                      })),
+                    });
+                  } catch {
+                    writeDiagnosticEvent({
+                      level: "warn",
+                      area: "chat",
+                      event: "chat-degraded",
+                      outcome: "degraded",
+                      code: "internal-error",
+                    });
+                  }
                 },
               });
             } catch (error) {
-              if (
-                preparedHtmlArtifacts.length > 0 &&
-                !isChatCreateReconciliationRequiredError(error)
-              ) {
-                await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+              if (!isChatCreateReconciliationRequiredError(error)) {
+                if (preparedHtmlArtifacts.length > 0) {
+                  await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+                }
+                if (journalForked) {
+                  await piCompactionSessionStore.deleteChat(targetChatId).catch(() => undefined);
+                }
               }
               throw error;
             }
