@@ -21,9 +21,13 @@ import {
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
+  FORK_SUMMARY_HOLD_MESSAGE,
+  forkSummaryHoldsSend,
   nextForkTitle,
   parseChatForkLineageV1,
+  type ChatForkLineageV1,
   type ChatForkPosition,
+  type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
@@ -931,10 +935,17 @@ export function createChatStore(
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
-      ...(chat.forkedFrom ? { forkedFrom: chat.forkedFrom } : {}),
+      ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
+  }
+
+  /** The index keeps a summary's state, not its text; only the transcript needs that. */
+  function indexedForkLineage(lineage: ChatForkLineageV1): ChatForkLineageV1 {
+    if (!lineage.summary) return lineage;
+    const { state, afterMessageId } = lineage.summary;
+    return { ...lineage, summary: { state, afterMessageId } };
   }
 
   /** Patch only this chat's entry; never re-read other transcripts. */
@@ -1216,6 +1227,8 @@ export function createChatStore(
       throughAssistantMessageId?: string;
       /** Fork cut that records `forkedFrom` lineage on the new chat. */
       forkAt?: { messageId: string; position: ChatForkPosition };
+      /** Start the fork with a pending summary of the source after the cut. */
+      forkSummary?: { instructions?: string };
       assertCurrent?: () => void;
       /**
        * Prepare dependent durable records before this chat becomes visible.
@@ -1279,6 +1292,13 @@ export function createChatStore(
                 : "The selected turn has no user message to copy.",
             );
           }
+        }
+
+        if (input.forkSummary && (!input.forkAt || source.botId)) {
+          throw new Error("Only a fork can carry a summary.");
+        }
+        if (input.forkSummary && throughIndex >= source.messages.length - 1) {
+          throw new Error("Nothing happened after this point to summarize.");
         }
 
         const copiedMessages: ChatMessage[] = [];
@@ -1387,6 +1407,17 @@ export function createChatStore(
                   messageId: input.forkAt.messageId,
                   position: input.forkAt.position,
                   at: now,
+                  ...(input.forkSummary
+                    ? {
+                        summary: {
+                          state: "pending" as const,
+                          afterMessageId: copiedMessages[copiedMessages.length - 1]!.id,
+                          ...(input.forkSummary.instructions
+                            ? { instructions: input.forkSummary.instructions }
+                            : {}),
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),
@@ -1410,6 +1441,28 @@ export function createChatStore(
         await assertCurrent(chat);
         chat.title = title.trim() || chat.title;
         chat.updatedAt = Date.now();
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
+    /**
+     * Move a fork's summary through its lifecycle. `next` sees the current
+     * summary and returns the replacement, `undefined` to drop it, or `null`
+     * to leave the chat untouched (returned as null). Not a user edit, so
+     * `updatedAt` and the sidebar order stay put.
+     */
+    async updateForkSummary(
+      id: string,
+      next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
+    ): Promise<Chat | null> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat?.forkedFrom) return null;
+        const summary = next(chat.forkedFrom.summary, chat);
+        if (summary === null) return null;
+        const { summary: _previous, ...lineage } = chat.forkedFrom;
+        chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
         await writeChatAndMeta(chat);
         return chat;
       });
@@ -1550,6 +1603,9 @@ export function createChatStore(
           throw new Error(
             "The chat workspace changed before the message could be saved.",
           );
+        }
+        if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
+          throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
         }
         const full: ChatMessage = {
           id: message.id ?? newId(),

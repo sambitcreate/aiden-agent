@@ -9,6 +9,11 @@ import {
   withCommittedRunInput,
   type QueuedChatMessage,
 } from "./chat-message-queue";
+import {
+  forkSummaryHoldsSend,
+  type ChatForkLineageV1,
+  type ChatForkSummaryV1,
+} from "../shared/chat-copy-contract";
 
 test("committed steer shows once in the open chat, even if a reload already has it", () => {
   const chat = {
@@ -325,6 +330,49 @@ test("a delivery waiting for idle defers when compaction takes the chat", async 
   assert.equal(queue.getSnapshot().sendingId, undefined);
   assert.equal(queue.getSnapshot().paused, false);
   queue.releaseCompactionHold({ compacted: true });
+  assert.deepEqual((await drain(queue)).sent, ["one"]);
+});
+
+test("a fork's follow-ups wait through a pending or failed summary and send in order once it settles", async () => {
+  const lineage = (summary?: ChatForkSummaryV1): ChatForkLineageV1 => ({
+    chatId: "source",
+    messageId: "a1",
+    position: "after",
+    at: 1,
+    ...(summary ? { summary } : {}),
+  });
+  const queue = new ChatMessageQueue();
+  queue.holdForForkSummary(forkSummaryHoldsSend(lineage({ state: "pending", afterMessageId: "f-a1" })));
+  ["one", "two"].forEach((id) => queue.add(message(id)));
+  assert.deepEqual((await drain(queue)).sent, [], "nothing sends while the summary runs");
+
+  // A failed summary still holds: main refuses the send until Retry or Continue.
+  queue.holdForForkSummary(
+    forkSummaryHoldsSend(lineage({ state: "failed", afterMessageId: "f-a1", error: "Summary cancelled." })),
+  );
+  // An unrelated compaction settling does not release the fork's hold.
+  queue.holdForCompaction();
+  queue.releaseCompactionHold({ compacted: true });
+  assert.deepEqual((await drain(queue)).sent, []);
+  assert.deepEqual(ids(queue), ["one", "two"]);
+  assert.equal(queue.getSnapshot().paused, false, "held messages are kept, not failed");
+
+  // Continue without summary drops the summary; the queue proceeds in order.
+  queue.holdForForkSummary(forkSummaryHoldsSend(lineage()));
+  assert.deepEqual((await drain(queue)).sent, ["one", "two"]);
+});
+
+test("a delivery waiting for idle defers when a fork summary starts holding sends", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const idle = deferred<boolean>();
+  const input = { ...delivery(queue), waitUntilIdle: () => idle.promise };
+  const pending = deliverQueuedMessage(input);
+  queue.holdForForkSummary(true);
+  idle.resolve(true);
+  await pending;
+  assert.deepEqual(input.sent, []);
+  queue.holdForForkSummary(false);
   assert.deepEqual((await drain(queue)).sent, ["one"]);
 });
 

@@ -86,6 +86,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:read-markers-changed",
   "chats:changed",
   "chats:metadata-updated",
+  "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",
   "chats:settled",

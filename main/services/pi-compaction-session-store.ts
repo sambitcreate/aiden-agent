@@ -29,6 +29,7 @@ import {
 import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import type { DurablePiRuntimeEffect } from "./pi-runtime-effect-core.js";
 import type { ChatMessage } from "./types.js";
+import type { ChatForkSummaryV1 } from "../../renderer/shared/chat-copy-contract.js";
 
 export const AIDEN_CHAT_MESSAGE_MARKER = "aiden.chat-message.v1";
 export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
@@ -442,6 +443,7 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
   session: PiSessionPort<M>,
   messages: readonly ChatMessage[],
   model: Model<Api>,
+  forkSummary?: ChatForkSummaryV1,
 ): Promise<PiSessionPort<M>> {
   const originalEntries = await session.getEntries();
   const originalLeafId = await session.getLeafId();
@@ -457,6 +459,21 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
         customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id } },
     ];
   });
+  // A fork's ready summary follows its last copied message here too; the
+  // durable journal's copy is hidden with the rest of the skill-era entries.
+  if (forkSummary?.state === "ready" && forkSummary.text) {
+    const after = visible.findIndex((entry) => entry.id === `visible-skill-free-marker-${forkSummary.afterMessageId}`);
+    if (after >= 0) {
+      const marker = visible[after]!;
+      const id = `visible-skill-free-${FORK_SUMMARY_ENTRY_PREFIX}${forkSummary.afterMessageId}`;
+      visible.splice(after + 1, 0, {
+        type: "message", id, parentId: marker.id, seq: marker.seq, timestamp: marker.timestamp,
+        message: { role: "branchSummary", summary: forkSummaryModelText(forkSummary), fromId: null, timestamp: marker.timestamp },
+      });
+      const next = visible[after + 2];
+      if (next) visible[after + 2] = { ...next, parentId: id };
+    }
+  }
   // Compaction fences writes against the real durable leaf. Keep that identity
   // as an inert boundary after the synthetic prefix, without exposing its data.
   if (originalLeafId) visible.push({
@@ -472,6 +489,8 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       appendMessage: (message) => session.appendMessage(message),
       appendCustomEntry: (type, data) => session.appendCustomEntry(type, data),
       appendCompaction: (input) => session.appendCompaction(input),
+      appendBranchSummary: () =>
+        Promise.reject(new Error("A projected Pi session cannot append a branch summary.")),
       importBranch: () => Promise.reject(new Error("A projected Pi session cannot import a branch.")),
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
@@ -701,6 +720,60 @@ export async function recordPiEffectRecoveryBoundary(
       } satisfies PiEffectRecoveryMarker);
     }
   });
+}
+
+const FORK_SUMMARY_ENTRY_PREFIX = "aiden-fork-summary-";
+
+function forkSummaryFileSection(tag: string, paths: readonly string[]): string {
+  return paths.length > 0 ? `\n\n<${tag}>\n${paths.join("\n")}\n</${tag}>` : "";
+}
+
+/** The text a ready fork summary contributes to the fork's model context. */
+export function forkSummaryModelText(summary: Pick<ChatForkSummaryV1, "text" | "files">): string {
+  return (
+    "This chat was forked from another chat. After the fork point, the original chat continued as summarized here; " +
+    "none of it has happened in this chat.\n\n" +
+    (summary.text ?? "") +
+    forkSummaryFileSection("read-files", summary.files?.read ?? []) +
+    forkSummaryFileSection("modified-files", summary.files?.modified ?? [])
+  );
+}
+
+/**
+ * Place a ready fork summary in the journal right after the fork's last
+ * copied message, once. Messages through that point are synchronized first,
+ * so a journal created lazily still orders the summary before anything newer.
+ * Returns false when the summary is not ready or its place has already
+ * passed (a later message is synchronized).
+ */
+export async function ensurePiForkSummary(
+  session: PiSessionPort,
+  messages: readonly ChatMessage[],
+  summary: ChatForkSummaryV1 | undefined,
+  model: Model<Api>,
+  supportsImages: boolean,
+): Promise<boolean> {
+  if (summary?.state !== "ready" || !summary.text) return false;
+  const id = `${FORK_SUMMARY_ENTRY_PREFIX}${summary.afterMessageId}`;
+  const through = messages.findIndex((message) => message.id === summary.afterMessageId);
+  if (through < 0) return false;
+  const branch = await session.getBranch();
+  if (branch.some((entry) => entry.id === id)) return false;
+  const later = new Set(messages.slice(through + 1).map((message) => message.id));
+  const passed = branch.some((entry) => {
+    if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) return false;
+    const marked = markerId(entry.data);
+    return marked !== undefined && later.has(marked);
+  });
+  if (passed) return false;
+  await syncChatMessagesToPiSession(session, messages.slice(0, through + 1), model, supportsImages);
+  await session.appendBranchSummary({
+    id,
+    fromId: null,
+    summary: forkSummaryModelText(summary),
+    details: { readFiles: summary.files?.read ?? [], modifiedFiles: summary.files?.modified ?? [] },
+  });
+  return true;
 }
 
 /** One visible message carried into a fork, paired with the source message it copies. */
@@ -1213,6 +1286,20 @@ export class PiCompactionSessionStore {
     }
     this.sessions.set(targetChatId, session);
     return true;
+  }
+
+  /**
+   * The source journal entries after a copied message's settled boundary, for
+   * a fork summary. Undefined when the chat has no journal or the boundary is
+   * not provable; nothing is created or migrated for a chat without history.
+   */
+  async journalEntriesAfter(chatId: string, messageId: string): Promise<PiSessionEntry[] | undefined> {
+    if (!(await this.hasChatHistory(chatId))) return undefined;
+    const opened = await this.openChatIfEligible(chatId);
+    if (!opened.session) return undefined;
+    const branch = await opened.session.getBranch();
+    const prefix = piJournalForkPrefix(branch, [{ sourceId: messageId, id: messageId }]);
+    return prefix ? branch.slice(prefix.length) : undefined;
   }
 
   async deleteChat(chatId: string): Promise<void> {

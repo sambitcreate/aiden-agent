@@ -1,9 +1,13 @@
-import type { ChatForkPosition } from "../../renderer/shared/chat-copy-contract.js";
+import {
+  MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
+  type ChatForkPosition,
+} from "../../renderer/shared/chat-copy-contract.js";
 
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
 const MAX_DRAFT_TEXT_CHARS = 65_536;
-const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position"]);
+const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position", "summary"]);
+const FORK_SUMMARY_KEYS = new Set(["instructions"]);
 const CHAT_ONLY_KEYS = new Set(["chatId"]);
 const CONTEXT_PRESSURE_KEYS = new Set([
   "chatId",
@@ -59,15 +63,31 @@ export interface ParsedChatCopyRequest {
   chatId: string;
   /** Absent for a whole-chat clone. */
   forkAt?: { messageId: string; position: ChatForkPosition };
+  /** Summarize what the source did after the fork point. Forks only. */
+  summary?: { instructions?: string };
+}
+
+function parseForkSummaryRequest(value: unknown): { instructions?: string } {
+  const record = exactRecord(value, FORK_SUMMARY_KEYS, "fork summary request");
+  if (record.instructions === undefined) return {};
+  if (typeof record.instructions !== "string") throw new Error("Invalid summary focus.");
+  const instructions = record.instructions.trim();
+  if (instructions.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) {
+    throw new Error("The summary focus is too long.");
+  }
+  return instructions ? { instructions } : {};
 }
 
 /**
  * `{ chatId }` clones; `{ chatId, messageId, position }` forks. The older
- * `{ chatId, throughMessageId }` shape remains a fork after that reply.
+ * `{ chatId, throughMessageId }` shape remains a fork after that reply. A
+ * fork may add `summary: { instructions? }`.
  */
 export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
   const record = exactRecord(value, COPY_KEYS, "chat copy request");
   const chatId = boundedId(record.chatId, "chat id");
+  const summary =
+    record.summary === undefined ? undefined : { summary: parseForkSummaryRequest(record.summary) };
   if (record.throughMessageId !== undefined) {
     if (record.messageId !== undefined || record.position !== undefined) {
       throw new Error("Invalid chat copy request.");
@@ -75,15 +95,20 @@ export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
     return {
       chatId,
       forkAt: { messageId: boundedId(record.throughMessageId, "turn id"), position: "after" },
+      ...summary,
     };
   }
-  if (record.messageId === undefined && record.position === undefined) return { chatId };
+  if (record.messageId === undefined && record.position === undefined) {
+    if (summary) throw new Error("Only a fork can carry a summary.");
+    return { chatId };
+  }
   if (record.position !== "after" && record.position !== "before") {
     throw new Error("Invalid fork position.");
   }
   return {
     chatId,
     forkAt: { messageId: boundedId(record.messageId, "message id"), position: record.position },
+    ...summary,
   };
 }
 

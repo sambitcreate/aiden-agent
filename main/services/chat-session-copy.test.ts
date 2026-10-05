@@ -245,6 +245,60 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
   assert.equal((await restarted.get(before.id))?.forkedFrom?.messageId, secondUserId);
 });
 
+test("a fork with a summary holds new messages until the summary settles", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-summary-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Source", workspaceId: "workspace-summary" });
+  await store.appendMessage(chat.id, { role: "user", content: "First" });
+  const firstReply = await store.appendMessage(chat.id, { role: "assistant", content: "One" });
+  await store.appendMessage(chat.id, { role: "user", content: "Second" });
+  const lastReply = await store.appendMessage(chat.id, { role: "assistant", content: "Two" });
+  const firstReplyId = firstReply.messages[firstReply.messages.length - 1]!.id;
+
+  const fork = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    forkAt: { messageId: firstReplyId, position: "after" },
+    forkSummary: { instructions: "the second question" },
+  });
+  assert.deepEqual(fork.forkedFrom?.summary, {
+    state: "pending",
+    afterMessageId: fork.messages[fork.messages.length - 1]!.id,
+    instructions: "the second question",
+  });
+  await assert.rejects(
+    store.appendMessage(fork.id, { role: "user", content: "Too early" }),
+    /waiting for its summary/u,
+  );
+
+  // The sidebar index keeps the state without the summary text.
+  await store.updateForkSummary(fork.id, (summary) => ({
+    ...summary!, state: "ready", text: "They asked a second question.", files: { read: [], modified: [] },
+  }));
+  const listed = await createChatStore(async () => directory).list("workspace-summary");
+  assert.deepEqual(listed.find((meta) => meta.id === fork.id)?.forkedFrom?.summary, {
+    state: "ready",
+    afterMessageId: fork.messages[fork.messages.length - 1]!.id,
+  });
+  const sent = await store.appendMessage(fork.id, { role: "user", content: "Now" });
+  assert.equal(sent.messages.length, 3);
+  assert.equal(sent.forkedFrom?.summary?.text, "They asked a second question.");
+
+  // Nothing to summarize after the last reply, and clones never summarize.
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: chat.id,
+      forkAt: { messageId: lastReply.messages[lastReply.messages.length - 1]!.id, position: "after" },
+      forkSummary: {},
+    }),
+    /nothing happened after/iu,
+  );
+  await assert.rejects(
+    store.copyVisibleHistory({ sourceChatId: chat.id, forkSummary: {} }),
+    /only a fork/iu,
+  );
+});
+
 test("a corrupt fork lineage is dropped without hiding the chat", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-lineage-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

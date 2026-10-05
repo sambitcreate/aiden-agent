@@ -13,7 +13,8 @@ import {
   saveComposerDraftText,
   seedComposerAttachments,
 } from "../lib/composer-draft-store";
-import type { ChatForkPosition } from "../shared/chat-copy-contract";
+import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
+import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
   chatMessageQueue,
   steerQueuedMessage,
@@ -95,7 +96,7 @@ import {
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { forkedFromLabel } from "../lib/chat-copy-view";
+import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
 import {
   isModelSelectionReadyForNewWork,
   resolveVisibleModelSelection,
@@ -851,6 +852,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (
       forkAt?: { messageId: string; position: ChatForkPosition },
       prefill?: { text: string; attachments: readonly Attachment[] },
+      summary?: { instructions?: string },
     ) => {
       if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
@@ -870,7 +872,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Finish the current response or approval before copying this chat.");
       }
       const sourceChatId = chatId;
-      const copied = await chatsApi.copyVisibleHistory(sourceChatId, forkAt);
+      const copied = await chatsApi.copyVisibleHistory(sourceChatId, forkAt, summary);
       if (prefill) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
@@ -943,9 +945,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
    * the same workspace instead.
    */
   const forkFromMessage = React.useCallback(
-    async (messageId: string, position: ChatForkPosition) => {
+    async (messageId: string, position: ChatForkPosition, summary?: { instructions?: string }) => {
       if (position === "after") {
-        await copyChat({ messageId, position });
+        await copyChat({ messageId, position }, undefined, summary);
         return;
       }
       if (chat.data?.botId) throw new Error("Bot chats can only fork after a reply.");
@@ -956,9 +958,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       const prefill = { text: message.content, attachments: message.attachments ?? [] };
       if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
-        await copyChat({ messageId, position }, prefill);
+        await copyChat({ messageId, position }, prefill, summary);
         return;
       }
+      if (summary) throw new Error("The first prompt has nothing before it to fork with a summary.");
       if (forkDisabledReason) throw new Error(`${forkDisabledReason}.`);
       const workspaceId = persistedChatWorkspaceId(chat.data?.workspaceId);
       const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
@@ -984,6 +987,58 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
     },
     [forkFromMessage],
+  );
+
+  const [forkSummaryRequest, setForkSummaryRequest] = React.useState<{
+    messageId: string;
+    position: ChatForkPosition;
+  } | null>(null);
+  const forkWithSummary = React.useCallback(
+    async (instructions: string | undefined) => {
+      if (!forkSummaryRequest) return;
+      const { messageId, position } = forkSummaryRequest;
+      try {
+        await forkFromMessage(messageId, position, instructions ? { instructions } : {});
+        toast.success(
+          position === "before"
+            ? "Forked — Aiden is summarizing the original chat. Edit your message and send"
+            : "Forked — Aiden is summarizing the original chat",
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
+        throw error;
+      }
+    },
+    [forkFromMessage, forkSummaryRequest],
+  );
+
+  const forkSummary = forkLineage?.summary;
+  const [forkSummaryBusy, setForkSummaryBusy] = React.useState(false);
+  const runForkSummaryAction = React.useCallback(
+    async (action: "retry" | "cancel" | "skip") => {
+      setForkSummaryBusy(true);
+      try {
+        if (action === "cancel") {
+          // Main publishes the failed state once the attempt stops.
+          if (!(await chatsApi.cancelForkSummary(chatId))) {
+            toast.info("The summary already finished.");
+          }
+          return;
+        }
+        const updated =
+          action === "retry"
+            ? await chatsApi.retryForkSummary(chatId)
+            : await chatsApi.skipForkSummary(chatId);
+        qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
+          current ? withForkLineage(current, updated.forkedFrom) : current,
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn't update the fork's summary.");
+      } finally {
+        if (mountedRef.current) setForkSummaryBusy(false);
+      }
+    },
+    [chatId, qc],
   );
 
   const exportChat = React.useCallback(async () => {
@@ -1651,6 +1706,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
     },
   });
+
+  // Main refuses a fork's sends while its summary is pending or failed, so
+  // follow-ups wait in the queue until the summary is ready or skipped.
+  const forkSummaryHeld = forkSummaryHoldsSend(forkLineage);
+  React.useEffect(() => {
+    messageQueue.holdForForkSummary(forkSummaryHeld);
+  }, [forkSummaryHeld, messageQueue]);
 
   const queueMessage = React.useCallback(
     async (
@@ -2617,6 +2679,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
+                forkSummaryHold={
+                  forkSummary?.state === "pending" || forkSummary?.state === "failed"
+                    ? forkSummary.state
+                    : undefined
+                }
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
@@ -2714,6 +2781,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
                 onForkChat={(messageId, position) => forkFromMessage(messageId, position)}
+                onForkWithSummary={
+                  chat.data?.botId
+                    ? undefined
+                    : (messageId, position) => setForkSummaryRequest({ messageId, position })
+                }
                 onExportChat={exportChat}
                 onCompactChat={
                   draft
@@ -2905,6 +2977,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
             readAloud={readAloudProps}
             onFork={chat.data?.botId ? undefined : forkFromTranscript}
             forkDisabledReason={forkDisabledReason}
+            onForkWithSummary={
+              chat.data?.botId
+                ? undefined
+                : (messageId, position) => setForkSummaryRequest({ messageId, position })
+            }
+            forkSummary={
+              forkSummary
+                ? {
+                    afterMessageId: forkSummary.afterMessageId,
+                    node: (
+                      <ForkSummaryCard
+                        key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
+                        summary={forkSummary}
+                        busy={forkSummaryBusy}
+                        onCancel={() => void runForkSummaryAction("cancel")}
+                        onRetry={() => void runForkSummaryAction("retry")}
+                        onSkip={() => void runForkSummaryAction("skip")}
+                      />
+                    ),
+                  }
+                : undefined
+            }
             error={
               error ??
               (imageArtifactRecoveryUnavailable
@@ -2916,6 +3010,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         )}
       </ScrollArea>
+      <ForkSummaryDialog
+        open={forkSummaryRequest !== null}
+        kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}
+        onOpenChange={(open) => {
+          if (!open) setForkSummaryRequest(null);
+        }}
+        onConfirm={forkWithSummary}
+      />
     </>
   );
 }

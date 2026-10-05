@@ -1081,15 +1081,23 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
-  /** Clone the whole visible chat, or fork it at `forkAt`. */
+  /**
+   * Clone the whole visible chat, or fork it at `forkAt`. A fork with
+   * `summary` also summarizes what the source did after the fork point.
+   */
   copyVisibleHistory: (
     chatId: string,
     forkAt?: { messageId: string; position: ChatForkPosition },
+    summary?: { instructions?: string },
   ) =>
     invokeChatMutation<Chat>("chats:copyVisibleHistory", {
       chatId,
       ...(forkAt ? { messageId: forkAt.messageId, position: forkAt.position } : {}),
+      ...(summary ? { summary } : {}),
     }),
+  retryForkSummary: (chatId: string) => invoke<Chat>("chats:retryForkSummary", { chatId }),
+  cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
+  skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
