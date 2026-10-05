@@ -964,6 +964,246 @@ enum AidenAttachmentUpload: Encodable, Equatable, Sendable {
     }
 }
 
+/// Where a fork cuts the source transcript (contract revision 21). `after`
+/// keeps the chosen settled reply; `before` keeps everything strictly before
+/// the chosen prompt so it can be edited and resent in the fork.
+enum AidenChatForkPosition: String, Codable, Equatable, Sendable {
+    case after
+    case before
+}
+
+enum AidenChatForkSummaryState: String, Codable, Equatable, Sendable {
+    case pending
+    case ready
+    case failed
+}
+
+struct AidenChatForkSummaryFiles: Codable, Equatable, Sendable {
+    let read: [String]
+    let modified: [String]
+}
+
+/// "Fork with summary": what happened in the source chat after the cut,
+/// summarized for the fork's model context. Decoding is exact-shape and
+/// throws on any violation so the lineage can drop a damaged summary alone.
+struct AidenChatForkSummary: Codable, Equatable, Sendable {
+    static let maximumInstructionsLength = 1_000
+    static let maximumTextLength = 32_000
+    static let maximumErrorLength = 1_000
+    static let maximumFiles = 200
+    static let maximumPathLength = 1_024
+
+    let state: AidenChatForkSummaryState
+    let afterMessageId: String
+    let instructions: String?
+    let text: String?
+    let files: AidenChatForkSummaryFiles?
+    let error: String?
+
+    init(
+        state: AidenChatForkSummaryState,
+        afterMessageId: String,
+        instructions: String? = nil,
+        text: String? = nil,
+        files: AidenChatForkSummaryFiles? = nil,
+        error: String? = nil
+    ) {
+        self.state = state
+        self.afterMessageId = afterMessageId
+        self.instructions = instructions
+        self.text = text
+        self.files = files
+        self.error = error
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let allKeys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        guard allKeys.allSatisfy({ CodingKeys(stringValue: $0.stringValue) != nil }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: values,
+                debugDescription: "Fork summaries carry no additional properties."
+            )
+        }
+        state = try values.decode(AidenChatForkSummaryState.self, forKey: .state)
+        afterMessageId = try values.decode(String.self, forKey: .afterMessageId)
+        instructions = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .instructions)
+        text = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .text)
+        files = try aidenDecodeOptionalNonNull(AidenChatForkSummaryFiles.self, from: values, forKey: .files)
+        error = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .error)
+
+        let afterIdScalars = afterMessageId.unicodeScalars
+        guard !afterIdScalars.isEmpty,
+              afterIdScalars.count <= 160,
+              afterIdScalars.allSatisfy(Self.isSummaryIdentifierScalar),
+              Self.isBounded(instructions, maximum: Self.maximumInstructionsLength),
+              Self.isBounded(text, maximum: Self.maximumTextLength),
+              Self.isBounded(error, maximum: Self.maximumErrorLength),
+              files.map(Self.areValidFiles) ?? true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .afterMessageId,
+                in: values,
+                debugDescription: "Fork summary fields are out of bounds."
+            )
+        }
+    }
+
+    private static func isBounded(_ value: String?, maximum: Int) -> Bool {
+        guard let value else { return true }
+        return !value.isEmpty && value.unicodeScalars.count <= maximum
+    }
+
+    private static func areValidFiles(_ files: AidenChatForkSummaryFiles) -> Bool {
+        [files.read, files.modified].allSatisfy { paths in
+            paths.count <= maximumFiles
+                && paths.allSatisfy { !$0.isEmpty && $0.unicodeScalars.count <= maximumPathLength }
+        }
+    }
+
+    private static func isSummaryIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 45, 48...57, 65...90, 95, 97...122:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state, afterMessageId, instructions, text, files, error
+    }
+}
+
+/// Provenance recorded on a chat created by Fork. The source chat may since
+/// have been deleted. Chat rows carry it without the summary.
+struct AidenChatForkLineage: Codable, Equatable, Sendable {
+    let chatId: String
+    let messageId: String
+    let position: AidenChatForkPosition
+    let at: Date
+    let summary: AidenChatForkSummary?
+
+    init(
+        chatId: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        at: Date,
+        summary: AidenChatForkSummary? = nil
+    ) {
+        self.chatId = chatId
+        self.messageId = messageId
+        self.position = position
+        self.at = at
+        self.summary = summary
+    }
+
+    /// The row projection: rows never carry the summary.
+    var withoutSummary: Self {
+        Self(chatId: chatId, messageId: messageId, position: position, at: at)
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        messageId = try values.decode(String.self, forKey: .messageId)
+        position = try values.decode(AidenChatForkPosition.self, forKey: .position)
+        // Wire payloads use strict RFC 3339 strings; the local cache encodes
+        // through its ISO 8601 strategy, which is also a strict RFC 3339 string.
+        at = try values.decode(AidenRemoteTimestamp.self, forKey: .at).date
+        // A damaged summary is dropped on its own: the fork stays a plain fork.
+        summary = try? values.decodeIfPresent(AidenChatForkSummary.self, forKey: .summary)
+        guard Self.isLineageIdentifier(chatId), Self.isLineageIdentifier(messageId) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .chatId,
+                in: values,
+                debugDescription: "Fork lineage identifiers must be bounded opaque identifiers."
+            )
+        }
+    }
+
+    private static func isLineageIdentifier(_ value: String) -> Bool {
+        let scalars = value.unicodeScalars
+        return !scalars.isEmpty
+            && scalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && scalars.allSatisfy { scalar in
+                switch scalar.value {
+                case 45, 46, 48...58, 65...90, 95, 97...122:
+                    return true
+                default:
+                    return false
+                }
+            }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatId, messageId, position, at, summary
+    }
+}
+
+private struct AidenChatForkAnyKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
+/// Only for `before` forks: the chosen prompt to edit and resend in the fork.
+struct AidenChatForkPrefill: Decodable, Equatable, Sendable {
+    static let maximumTextLength = 200_000
+    static let maximumAttachments = 10
+
+    let text: String
+    let attachments: [AidenAttachmentReference]
+
+    init(text: String, attachments: [AidenAttachmentReference] = []) {
+        self.text = text
+        self.attachments = attachments
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        text = try values.decode(String.self, forKey: .text)
+        attachments = try aidenDecodeOptionalNonNull(
+            [AidenAttachmentReference].self,
+            from: values,
+            forKey: .attachments
+        ) ?? []
+        guard text.unicodeScalars.count <= Self.maximumTextLength,
+              attachments.count <= Self.maximumAttachments else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .text,
+                in: values,
+                debugDescription: "Fork prefill exceeds its wire bounds."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, attachments
+    }
+}
+
+struct AidenChatForkResult: Decodable, Equatable, Sendable {
+    let chat: AidenChat
+    let prefill: AidenChatForkPrefill?
+
+    init(chat: AidenChat, prefill: AidenChatForkPrefill? = nil) {
+        self.chat = chat
+        self.prefill = prefill
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chat = try values.decode(AidenChat.self, forKey: .chat)
+        prefill = try aidenDecodeOptionalNonNull(AidenChatForkPrefill.self, from: values, forKey: .prefill)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chat, prefill
+    }
+}
+
 struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var workspaceId: String
@@ -976,6 +1216,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var updatedAt: Date
     var revision: String
     var titlePending: Bool? = nil
+    /// Additive in contract revision 21: present on a chat created by Fork.
+    var forkedFrom: AidenChatForkLineage? = nil
 
     // Presentation-only receipt overlay; excluded from the canonical wire/cache encoding.
     var localTitleOverride: String? = nil
@@ -995,7 +1237,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         revision: String,
-        titlePending: Bool? = nil
+        titlePending: Bool? = nil,
+        forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1008,6 +1251,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.revision = revision
         self.titlePending = titlePending
+        self.forkedFrom = forkedFrom
     }
 
     init(from decoder: Decoder) throws {
@@ -1029,6 +1273,9 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         updatedAt = updatedTimestamp.date
         revision = try values.decode(String.self, forKey: .revision)
         titlePending = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .titlePending)
+        // Additive lineage: absent on older Macs; an invalid value is dropped
+        // rather than rejecting the chat.
+        forkedFrom = try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom)
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1157,7 +1404,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, botId, title, providerId, modelId, messages
-        case createdAt, updatedAt, revision, titlePending
+        case createdAt, updatedAt, revision, titlePending, forkedFrom
     }
 }
 
@@ -1197,6 +1444,9 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     var rowState: AidenChatRowState?
     /// True only when assistant output arrived after the chat was last viewed.
     var unread: Bool
+    /// Additive in contract revision 21: lineage for the fork glyph. Rows
+    /// never carry the summary.
+    var forkedFrom: AidenChatForkLineage?
 
     init(
         id: String,
@@ -1208,7 +1458,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         revision: String,
         activity: AidenChatSummaryActivity,
         rowState: AidenChatRowState? = nil,
-        unread: Bool = false
+        unread: Bool = false,
+        forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1220,6 +1471,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.activity = activity
         self.rowState = rowState
         self.unread = unread
+        self.forkedFrom = forkedFrom?.withoutSummary
     }
 
     /// The row state to render. The local activity signal is authoritative for
@@ -1242,7 +1494,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
             createdAt: chat.createdAt,
             updatedAt: chat.updatedAt,
             revision: chat.revision,
-            activity: activity
+            activity: activity,
+            forkedFrom: chat.forkedFrom
         )
     }
 
@@ -1263,6 +1516,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         rowState = try values.decodeIfPresent(String.self, forKey: .rowState)
             .flatMap(AidenChatRowState.init(rawValue:))
         unread = try values.decodeIfPresent(Bool.self, forKey: .unread) ?? false
+        forkedFrom = (try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom))?
+            .withoutSummary
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1350,7 +1605,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
-        case rowState, unread
+        case rowState, unread, forkedFrom
     }
 }
 
