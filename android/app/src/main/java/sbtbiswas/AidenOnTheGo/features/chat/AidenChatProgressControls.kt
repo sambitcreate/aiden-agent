@@ -10,7 +10,6 @@ import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -361,33 +360,53 @@ private fun AidenTaskRow(task: AidenChatTask) {
 
 @Composable
 fun AidenAgentRosterSheet(
-    currentRoster: AidenChatAgentRoster,
-    selectedRoster: AidenChatAgentRoster,
+    currentRoster: AidenChatAgentRoster?,
+    selectedRoster: AidenChatAgentRoster?,
     history: List<AidenChatAgentRoster>,
     onSelectTurn: (String?) -> Unit,
     onAgentClick: (AidenChatAgent) -> Unit = {},
     onDismiss: () -> Unit,
-    instanceId: String = "",
-    deviceId: String = "",
+    instanceId: String? = "",
+    deviceId: String? = "",
+    requested: Boolean = true,
+    // Null means negotiation is still loading, not an authoritative denial.
+    canRead: Boolean? = true,
+    chatId: String = selectedRoster?.chatId.orEmpty(),
     stopControl: (AidenChatAgent) -> AidenAgentStopControl = { AidenAgentStopControl.HIDDEN },
     onStop: (AidenChatAgent) -> Unit = {}
 ) {
-    val navigationScope = AidenAgentNavigationScope(instanceId, deviceId, selectedRoster.chatId, selectedRoster.epoch, selectedRoster.turnId)
-    var navigation by rememberSaveable(stateSaver = Saver<AidenAgentNavigation, String>(
-        save = { Json.encodeToString(it) },
-        restore = { runCatching { Json.decodeFromString<AidenAgentNavigation>(it) }.getOrNull() }
-    )) { mutableStateOf(AidenAgentNavigation(navigationScope)) }
-    val current = navigation.reconcile(navigationScope, selectedRoster.agents)
-    LaunchedEffect(current) { navigation = current }
+    // This owner is always composed by the chat screen, even while the sheet
+    // is hidden for negotiation or roster loading. Save intent independently
+    // of the conditional ModalBottomSheet so process restoration can wait.
+    var savedNavigation by rememberSaveable { mutableStateOf<String?>(null) }
+    val navigation = remember(savedNavigation) {
+        savedNavigation?.let { runCatching { Json.decodeFromString<AidenAgentNavigation>(it) }.getOrNull() }
+    }
+    val identityChanged = navigation != null && (
+        navigation.scope.instanceId != instanceId || navigation.scope.deviceId != deviceId ||
+            navigation.scope.chatId != chatId
+    )
+    val invalidated = instanceId == null || deviceId == null || identityChanged || canRead == false
+    LaunchedEffect(requested, invalidated) {
+        if (!requested || invalidated) savedNavigation = null
+        if (requested && invalidated) onDismiss()
+    }
+    if (!requested || invalidated || canRead != true || selectedRoster == null || currentRoster == null) return
+
+    val navigationScope = AidenAgentNavigationScope(requireNotNull(instanceId), requireNotNull(deviceId), chatId, selectedRoster.epoch, selectedRoster.turnId)
+    val current = (navigation ?: AidenAgentNavigation(navigationScope)).reconcile(navigationScope, selectedRoster.agents)
+    val save: (AidenAgentNavigation) -> Unit = { savedNavigation = Json.encodeToString(it) }
+    LaunchedEffect(current) { save(current) }
     val agent = selectedRoster.agents.firstOrNull { it.agentId == current.path.lastOrNull() }
     val openAgent: (AidenChatAgent) -> Unit = {
-        navigation = current.open(it.agentId, selectedRoster.agents)
+        save(current.open(it.agentId, selectedRoster.agents))
         onAgentClick(it)
     }
-    val back = { navigation = current.back() ?: current }
+    val back = { save(current.back() ?: current) }
+    val dismiss = { savedNavigation = null; onDismiss() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismiss,
         sheetState = sheetState,
         containerColor = AidenTheme.palette.raised
     ) {
@@ -396,7 +415,10 @@ fun AidenAgentRosterSheet(
         CompositionLocalProvider(LocalOnBackPressedDispatcherOwner provides requireNotNull(LocalView.current.findViewTreeOnBackPressedDispatcherOwner())) {
             BackHandler(enabled = agent != null) { back() }
             if (agent == null) {
-                AidenAgentRosterContent(currentRoster, selectedRoster, history, onSelectTurn, openAgent)
+                AidenAgentRosterContent(currentRoster, selectedRoster, history, { turnId ->
+                    savedNavigation = null
+                    onSelectTurn(turnId)
+                }, openAgent)
             } else {
                 key(agent.agentId) {
                     AidenAgentDetailContent(agent, selectedRoster.agents, openAgent, back, stopControl(agent)) { onStop(agent) }

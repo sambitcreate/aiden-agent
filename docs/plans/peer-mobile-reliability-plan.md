@@ -37,8 +37,13 @@ Do not mark existing physical-device acceptance gates complete based on simulato
   dispatcher. Both show Started by and Sub-agents actions, update from the selected
   roster and prune vanished details. Pairing/read-access changes fence the inspector.
   Scrim/drag dismissal closes the sheet; the parent chat stays mounted.
+  Review follow-up: the Android inspector owner remains composed while server
+  negotiation and roster reads load. Its scoped saved path waits without displaying
+  cached agent content before confirmed access; denial or unpairing discards it.
+  Emulator tests exercise delayed hydration after saved-state restoration and the
+  child → parent → roster Back sequence, plus denial and unpairing while loading.
   Verification: all 25 Android progress unit tests, `lintDebug`, instrumentation
-  compilation and all 7 `AidenChatProgressUiTest` cases pass on
+  compilation and all 10 `AidenChatProgressUiTest` cases pass on
   `Medium_Phone_API_36.1` (Android 16). iOS test build and the final 235-test
   chat suite pass on the simulator recorded above. `npm run test:ci-policy`
   passes. Physical-device acceptance remains open.

@@ -239,7 +239,6 @@ fun AidenChatDetailScreen(
     LaunchedEffect(serverInfo) {
         viewModel.reconcileProgressAccess()
         if (progressSheet == "tasks" && !viewModel.canReadTaskProgress) progressSheet = null
-        if (progressSheet == "agents" && !viewModel.canReadAgentRoster) progressSheet = null
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
             (viewModel.canReadTaskProgress || viewModel.canReadAgentRoster)
         ) {
@@ -857,35 +856,30 @@ fun AidenChatDetailScreen(
             ?.let { progress ->
                 AidenTaskProgressSheet(progress = progress, onDismiss = { progressSheet = null })
             }
-        "agents" -> {
-            // The sheet stays reachable for an unavailable current roster so
-            // retained earlier turns remain inspectable, and for retained
-            // history when no current roster was ever accepted.
-            val selected = selectedAgentRoster ?: currentAgentRoster
-                ?: agentRosterHistory.firstOrNull()
-            if (canReadAgentRoster && selected != null) {
-                AidenAgentRosterSheet(
-                    currentRoster = currentAgentRoster ?: selected,
-                    selectedRoster = selected,
-                    history = agentRosterHistory,
-                    onSelectTurn = { turnId ->
-                        viewModel.selectAgentRosterTurn(turnId)
-                    },
-                    instanceId = coordinator.activeInstanceId.orEmpty(),
-                    deviceId = coordinator.installationStore.activeInstallation?.deviceId.orEmpty(),
-                    stopControl = { agent ->
-                        when {
-                            agent.agentId in interruptingAgentIds -> AidenAgentStopControl.STOPPING
-                            viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
-                            else -> AidenAgentStopControl.HIDDEN
-                        }
-                    },
-                    onStop = { viewModel.interruptAgent(it) },
-                    onDismiss = { progressSheet = null }
-                )
-            }
-        }
     }
+    // Keep the restoration owner mounted before negotiation/roster hydration.
+    // It withholds agent content until read access is authoritatively granted.
+    val selected = selectedAgentRoster ?: currentAgentRoster ?: agentRosterHistory.firstOrNull()
+    AidenAgentRosterSheet(
+        requested = progressSheet == "agents",
+        canRead = if (serverInfo == null) null else canReadAgentRoster,
+        chatId = chatId,
+        currentRoster = currentAgentRoster ?: selected,
+        selectedRoster = selected,
+        history = agentRosterHistory,
+        onSelectTurn = { viewModel.selectAgentRosterTurn(it) },
+        instanceId = coordinator.activeInstanceId,
+        deviceId = coordinator.installationStore.activeInstallation?.deviceId,
+        stopControl = { agent ->
+            when {
+                agent.agentId in interruptingAgentIds -> AidenAgentStopControl.STOPPING
+                viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
+                else -> AidenAgentStopControl.HIDDEN
+            }
+        },
+        onStop = { viewModel.interruptAgent(it) },
+        onDismiss = { progressSheet = null }
+    )
     selectTextFor?.let { text ->
         AidenSelectTextDialog(
             text = text,

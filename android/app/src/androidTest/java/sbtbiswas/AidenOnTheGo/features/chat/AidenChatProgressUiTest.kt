@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.test.espresso.Espresso
@@ -31,6 +34,89 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 class AidenChatProgressUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun chatInspectorOwnerRestoresAfterDelayedNegotiationAndRosterHydration() {
+        val restoration = StateRestorationTester(compose)
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val hydrated = roster("turn-current", listOf(parent, child))
+        val roster = mutableStateOf<AidenChatAgentRoster?>(hydrated)
+        val access = mutableStateOf<Boolean?>(true)
+        var dismissals = 0
+        restoration.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                // The same always-mounted owner used by AidenChatDetailScreen:
+                // null access corresponds to the coordinator's initial null serverInfo.
+                AidenAgentRosterSheet(
+                    currentRoster = roster.value, selectedRoster = roster.value,
+                    history = emptyList(), onSelectTurn = {}, requested = requested,
+                    canRead = access.value, chatId = "chat_progress", instanceId = "mac", deviceId = "phone",
+                    onDismiss = { requested = false; dismissals++ }
+                )
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null; roster.value = null }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, dismissals); access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { roster.value = hydrated }
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        Espresso.pressBack()
+        compose.onNodeWithText("Sub-agents").assertExists()
+        Espresso.pressBack()
+        compose.onNodeWithText("Agents").assertExists()
+        compose.runOnIdle { assertEquals(0, dismissals) }
+        Espresso.pressBack()
+        compose.runOnIdle { assertEquals(1, dismissals) }
+    }
+
+    @Test
+    fun authoritativeDenialDiscardsPendingInspectorInsteadOfRestoringIt() {
+        val child = agent("child").copy(label = "Child")
+        val current = roster("turn-current", listOf(child))
+        val access = mutableStateOf<Boolean?>(true)
+        var dismissals = 0
+        compose.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, emptyList(), {}, requested = requested,
+                    canRead = access.value, onDismiss = { requested = false; dismissals++ })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, dismissals); access.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, dismissals); access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+    }
+
+    @Test
+    fun unpairingWhileNegotiationIsPendingDiscardsInspector() {
+        val child = agent("child").copy(label = "Child")
+        val current = roster("turn-current", listOf(child))
+        val access = mutableStateOf<Boolean?>(true)
+        val device = mutableStateOf<String?>("phone")
+        var dismissals = 0
+        compose.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, emptyList(), {}, requested = requested,
+                    canRead = access.value, instanceId = "mac", deviceId = device.value,
+                    onDismiss = { requested = false; dismissals++ })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null; device.value = null }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, dismissals); device.value = "new-phone"; access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+    }
 
     @Test
     fun nestedAgentBackRestoresParentThenRosterAfterRecreation() {
