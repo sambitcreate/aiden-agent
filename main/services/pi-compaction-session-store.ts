@@ -1151,8 +1151,8 @@ export class PiCompactionSessionStore {
   /**
    * Give a forked chat its own journal holding the source's model context
    * (tool results, compaction checkpoints) up to the cut, never anything
-   * after it. Each copied message gets a fresh marker under its new id so
-   * later synchronization does not replay it. Returns false, creating
+   * after it. Each copied message's marker is renamed in place to its new
+   * id, so later synchronization does not replay it. Returns false, creating
    * nothing, when the source has no reusable journal boundary; the fork then
    * rebuilds its context from visible history on first use.
    */
@@ -1184,15 +1184,16 @@ export class PiCompactionSessionStore {
     }
     const opened = await this.openChatIfEligible(sourceChatId);
     if (!opened.session) return false;
-    const prefix = piJournalForkPrefix(await opened.session.getBranch(), input.messages);
-    if (!prefix) return false;
-    const synchronized = new Set(
-      prefix.flatMap((entry) => {
-        if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) return [];
-        const id = markerId(entry.data);
-        return id ? [id] : [];
-      }),
-    );
+    const sourcePrefix = piJournalForkPrefix(await opened.session.getBranch(), input.messages);
+    if (!sourcePrefix) return false;
+    // Rename each copied marker where it stands, so every inherited reply
+    // keeps the transaction boundary a later fork of the fork cuts at.
+    const copiedIds = new Map(input.messages.map((message) => [message.sourceId, message.id]));
+    const prefix = sourcePrefix.map((entry) => {
+      if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) return entry;
+      const id = copiedIds.get(markerId(entry.data) ?? "");
+      return id ? { ...entry, data: { chatMessageId: id } satisfies ChatMessageMarker } : entry;
+    });
 
     const { repo, root } = await this.repository();
     const session = await repo.create({
@@ -1206,14 +1207,6 @@ export class PiCompactionSessionStore {
       await chmod(persisted.path, 0o600);
       await this.rememberPath(root, targetChatId, persisted.path);
       await session.importBranch(prefix);
-      await appendPiTransaction(session, async () => {
-        for (const message of input.messages) {
-          if (!synchronized.has(message.sourceId)) continue;
-          await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
-            chatMessageId: message.id,
-          } satisfies ChatMessageMarker);
-        }
-      });
     } catch (error) {
       await this.deleteChat(targetChatId).catch(() => undefined);
       throw error;
