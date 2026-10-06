@@ -6,7 +6,6 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -39,8 +38,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
 import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
@@ -216,25 +221,8 @@ fun AidenAppearanceSettingsScreen(
             color = palette.secondary
         )
         Spacer(Modifier.height(10.dp))
-        AidenVoiceInputMode.entries.forEach { mode ->
-            Surface(
-                selected = voiceMode == mode,
-                onClick = { voiceInputStore.updateMode(mode) },
-                color = if (voiceMode == mode) MaterialTheme.colorScheme.primaryContainer else palette.raised,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    Text(mode.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                    Text(
-                        if (mode == AidenVoiceInputMode.ON_DEVICE) "Android SpeechRecognizer; speech stays on this device." else "Parakeet on your connected Aiden Agent desktop; final text appears after you stop.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.secondary
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
+        AidenVoiceInputModeChoices(selected = voiceMode, onSelect = voiceInputStore::updateMode)
+        Spacer(Modifier.height(10.dp))
 
         if (voiceMode == AidenVoiceInputMode.ON_DEVICE) {
             val available = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
@@ -325,19 +313,13 @@ fun AidenAppearanceSettingsScreen(
             color = palette.secondary
         )
         Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AidenAppearanceMode.values().forEach { mode ->
-                AidenSettingsChoice(
-                    label = mode.title,
-                    selected = currentConfig.mode == mode,
-                    onClick = { appearanceStore?.updateMode(mode) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        AidenSegmentedPillRow(
+            options = AidenAppearanceMode.entries,
+            selected = currentConfig.mode,
+            onSelect = { appearanceStore?.updateMode(it) },
+            label = { it.title },
+            segmentContentDescription = { "${it.title} appearance mode" }
+        )
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -394,11 +376,14 @@ private fun AidenThemeTile(
 ) {
     val palette = AidenTheme.palette
     val preview = AidenThemeCatalog.palette(preset, preset.signatureIsDark)
+    val interaction = remember { MutableInteractionSource() }
     Column(
         modifier = modifier.selectable(
             selected = selected,
             enabled = true,
             role = Role.RadioButton,
+            interactionSource = interaction,
+            indication = ripple(),
             onClick = onClick
         ),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -410,7 +395,7 @@ private fun AidenThemeTile(
                     .aspectRatio(1.52f)
                     .clip(RoundedCornerShape(12.dp))
                     .background(preview.canvas)
-                    .tactilePress()
+                    .tactilePress(interaction)
             ) {
                 Text(
                     text = "Aa",
@@ -461,28 +446,41 @@ private fun AidenThemeTile(
     }
 }
 
+internal fun AidenVoiceInputMode.choiceDescription(): String = when (this) {
+    AidenVoiceInputMode.ON_DEVICE -> "Android SpeechRecognizer; speech stays on this device."
+    AidenVoiceInputMode.PAIRED_MAC -> "Parakeet on your connected Aiden Agent desktop; final text appears after you stop."
+}
+
+/** Connected radio choice cards: a real radio control plus a tonal selected fill, no borders. */
 @Composable
-private fun AidenSettingsChoice(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+internal fun AidenVoiceInputModeChoices(
+    selected: AidenVoiceInputMode,
+    onSelect: (AidenVoiceInputMode) -> Unit
 ) {
     val palette = AidenTheme.palette
-    Surface(
-        onClick = onClick,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else palette.raised,
-        shape = RoundedCornerShape(14.dp),
-        modifier = modifier.heightIn(min = 44.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) palette.accent else palette.foreground,
-                maxLines = 1
-            )
+    val modes = AidenVoiceInputMode.entries
+    AidenConnectedColumn(modifier = Modifier.selectableGroup()) {
+        modes.forEachIndexed { index, mode ->
+            val isSelected = mode == selected
+            AidenGroupCard(
+                index = index,
+                count = modes.size,
+                selected = isSelected,
+                onClick = { if (!isSelected) onSelect(mode) },
+                role = Role.RadioButton,
+                modifier = Modifier.semantics { this.selected = isSelected },
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                RadioButton(
+                    selected = isSelected,
+                    onClick = null,
+                    colors = RadioButtonDefaults.colors(selectedColor = palette.accent, unselectedColor = palette.secondary)
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(mode.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                    Text(mode.choiceDescription(), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                }
+            }
         }
     }
 }

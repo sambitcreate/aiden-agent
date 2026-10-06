@@ -21,6 +21,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.features.chat.AidenTaskStepBar
+import sbtbiswas.AidenOnTheGo.features.chat.AidenTaskStepTone
 import sbtbiswas.AidenOnTheGo.models.AidenChatAgentRole
 import sbtbiswas.AidenOnTheGo.models.AidenChatProgressCodec
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
@@ -39,6 +41,41 @@ class AidenChatProgressTest {
         state = AidenChatAgentState.RUNNING, startedAt = Instant.parse("2026-10-05T12:00:00Z"),
         updatedAt = Instant.parse("2026-10-05T12:00:00Z"), modelId = "model-a", turns = 1, tools = 0, tokens = 10
     )
+
+    @Test
+    fun taskStepBarGivesShortPlansOneSegmentPerVisibleStep() {
+        val statuses = listOf(
+            AidenChatTaskStatus.COMPLETED,
+            AidenChatTaskStatus.DELETED,
+            AidenChatTaskStatus.IN_PROGRESS,
+            AidenChatTaskStatus.PENDING
+        )
+        assertEquals(
+            listOf(AidenTaskStepTone.DONE, AidenTaskStepTone.ACTIVE, AidenTaskStepTone.PENDING),
+            AidenTaskStepBar.segments(statuses)
+        )
+        assertEquals(1f / 3f, AidenTaskStepBar.completedFraction(statuses), 0.0001f)
+        assertTrue(AidenTaskStepBar.segments(listOf(AidenChatTaskStatus.DELETED)).isEmpty())
+        assertEquals(0f, AidenTaskStepBar.completedFraction(emptyList()), 0f)
+    }
+
+    @Test
+    fun taskStepBarFoldsLongPlansIntoBoundedBucketsThatKeepTheActiveStep() {
+        val statuses = List(30) { index ->
+            when {
+                index < 17 -> AidenChatTaskStatus.COMPLETED
+                index == 17 -> AidenChatTaskStatus.IN_PROGRESS
+                else -> AidenChatTaskStatus.PENDING
+            }
+        }
+        val segments = AidenTaskStepBar.segments(statuses, maxSegments = 10)
+        assertEquals(10, segments.size)
+        // Buckets of three: steps 0-14 done, 15-17 holds the active step, 18-29 pending.
+        assertEquals(List(5) { AidenTaskStepTone.DONE }, segments.subList(0, 5))
+        assertEquals(AidenTaskStepTone.ACTIVE, segments[5])
+        assertEquals(List(4) { AidenTaskStepTone.PENDING }, segments.subList(6, 10))
+        assertEquals(1, segments.count { it == AidenTaskStepTone.ACTIVE })
+    }
 
     @Test
     fun agentNavigationDirectChildEntryBackAndParentLink() {

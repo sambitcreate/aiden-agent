@@ -8,10 +8,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
@@ -86,6 +89,7 @@ fun AidenGitScreen(
     }
 
     val review = gitReviewResult?.review
+    val diffColors = aidenDiffColors(palette)
 
     Scaffold(
         topBar = {
@@ -101,7 +105,7 @@ fun AidenGitScreen(
                             }
                         }
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -151,21 +155,20 @@ fun AidenGitScreen(
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(vertical = 12.dp)) {
                         diff.diff.lines().forEach { line ->
-                            val color = when {
-                                line.startsWith("+") -> Color(0xFF4CAF50)
-                                line.startsWith("-") -> Color(0xFFE53935)
-                                line.startsWith("@@") -> palette.accent
-                                else -> palette.foreground
-                            }
+                            val kind = aidenDiffLineKind(line)
                             Text(
                                 text = line,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = color,
+                                color = diffColors.ink(kind),
                                 fontSize = 12.sp,
-                                lineHeight = 18.sp
+                                lineHeight = 18.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(diffColors.fill(kind))
+                                    .padding(horizontal = 12.dp)
                             )
                         }
                     }
@@ -244,68 +247,30 @@ fun AidenGitScreen(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Git action buttons row
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = { showBranchSheet = true },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Text("Branch", fontSize = 12.sp, maxLines = 1)
-                                }
-
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = {
-                                        if (client != null && !isCheckingPush) {
-                                            isCheckingPush = true
-                                            scope.launch {
-                                                try {
-                                                    val cap = client.gitPushCapability(workspaceId)
-                                                    pushCapability = cap.pushCapability
-                                                    pushRemote = cap.pushCapability?.remote ?: "origin"
-                                                    pushBranch = cap.pushCapability?.branch ?: review.branch
-                                                    showPushDialog = true
-                                                } catch (e: Exception) {
-                                                    lastError = e.localizedMessage
-                                                } finally {
-                                                    isCheckingPush = false
-                                                }
+                            AidenGitActionBar(
+                                pushInFlight = isCheckingPush,
+                                onBranch = { showBranchSheet = true },
+                                onPush = {
+                                    if (client != null && !isCheckingPush) {
+                                        isCheckingPush = true
+                                        scope.launch {
+                                            try {
+                                                val cap = client.gitPushCapability(workspaceId)
+                                                pushCapability = cap.pushCapability
+                                                pushRemote = cap.pushCapability?.remote ?: "origin"
+                                                pushBranch = cap.pushCapability?.branch ?: review.branch
+                                                showPushDialog = true
+                                            } catch (e: Exception) {
+                                                lastError = e.localizedMessage
+                                            } finally {
+                                                isCheckingPush = false
                                             }
                                         }
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Text("Push", fontSize = 12.sp, maxLines = 1)
-                                }
-
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = { showCompareDialog = true },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Text("Compare", fontSize = 12.sp, maxLines = 1)
-                                }
-
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = { showWorktreesSheet = true },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Text("Worktrees", fontSize = 12.sp, maxLines = 1)
-                                }
-                            }
+                                    }
+                                },
+                                onCompare = { showCompareDialog = true },
+                                onWorktrees = { showWorktreesSheet = true }
+                            )
                         }
                     }
 
@@ -359,15 +324,16 @@ fun AidenGitScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
                                     ) {
+                                        val statusTint = aidenGitStatusTint(file.status, palette)
                                         Surface(
-                                            color = file.status.tint.copy(alpha = 0.15f),
+                                            color = statusTint.copy(alpha = 0.15f),
                                             shape = RoundedCornerShape(6.dp)
                                         ) {
                                             Text(
                                                 text = file.status.symbol,
                                                 style = MaterialTheme.typography.labelMedium,
                                                 fontWeight = FontWeight.Bold,
-                                                color = file.status.tint,
+                                                color = statusTint,
                                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                             )
                                         }
@@ -381,11 +347,11 @@ fun AidenGitScreen(
                                         if (file.additions != null || file.deletions != null) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 file.additions?.let { adds ->
-                                                    Text("+$adds", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                                    Text("+$adds", color = diffColors.additionInk, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                 }
                                                 file.deletions?.let { dels ->
-                                                    Text("-$dels", color = Color(0xFFE53935), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                                    Text("-$dels", color = diffColors.deletionInk, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                                 }
                                             }
                                         }
@@ -400,18 +366,14 @@ fun AidenGitScreen(
                             shadowElevation = 8.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Button(
+                            AidenPrimaryButton(
+                                text = "Commit Changes (${review.files.size} files)",
                                 onClick = { showCommitSheet = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                shape = RoundedCornerShape(12.dp),
+                                leadingIcon = Icons.Default.Check,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(16.dp)
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Commit Changes (${review.files.size} files)", color = Color.White, fontWeight = FontWeight.Bold)
-                            }
+                            )
                         }
                     }
                 }
@@ -479,73 +441,58 @@ fun AidenGitScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Button(
+                AidenPrimaryButton(
+                    text = "Review & Commit",
                     onClick = {
                         if (commitMessage.trim().isNotEmpty()) {
                             showConfirmDialog = true
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth(),
                     enabled = commitMessage.trim().isNotEmpty() && !isOperating
-                ) {
-                    Text("Review & Commit", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                )
             }
 
             if (showConfirmDialog) {
-                AlertDialog(
+                AidenWorkspaceAlertDialog(
+                    title = "Confirm Commit",
                     onDismissRequest = { showConfirmDialog = false },
-                    title = { Text("Confirm Commit", fontWeight = FontWeight.Bold) },
-                    text = {
-                        Text("Create a commit on branch \"${review?.branch}\" with message:\n\n\"${commitMessage.trim()}\"")
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                showConfirmDialog = false
-                                showCommitSheet = false
-                                val snapshotId = gitReviewResult?.snapshotId ?: return@Button
-                                val key = UUID.randomUUID()
-                                lastIdempotencyKey = key
-                                var op: (() -> Unit)? = null
-                                op = {
-                                    if (client != null) {
-                                        isOperating = true
-                                        scope.launch {
-                                            try {
-                                                client.commitGit(
-                                                    workspaceId = workspaceId,
-                                                    snapshotId = snapshotId,
-                                                    message = commitMessage.trim(),
-                                                    stagedOnly = stagedOnly,
-                                                    idempotencyKey = key
-                                                )
-                                                refreshGit()
-                                                lastError = null
-                                            } catch (e: Exception) {
-                                                lastError = e.localizedMessage
-                                                lastFailedOperation = op
-                                            } finally {
-                                                isOperating = false
-                                            }
-                                        }
+                    confirmText = "Commit",
+                    onConfirm = confirm@{
+                        showConfirmDialog = false
+                        showCommitSheet = false
+                        val snapshotId = gitReviewResult?.snapshotId ?: return@confirm
+                        val key = UUID.randomUUID()
+                        lastIdempotencyKey = key
+                        var op: (() -> Unit)? = null
+                        op = {
+                            if (client != null) {
+                                isOperating = true
+                                scope.launch {
+                                    try {
+                                        client.commitGit(
+                                            workspaceId = workspaceId,
+                                            snapshotId = snapshotId,
+                                            message = commitMessage.trim(),
+                                            stagedOnly = stagedOnly,
+                                            idempotencyKey = key
+                                        )
+                                        refreshGit()
+                                        lastError = null
+                                    } catch (e: Exception) {
+                                        lastError = e.localizedMessage
+                                        lastFailedOperation = op
+                                    } finally {
+                                        isOperating = false
                                     }
                                 }
-                                op.invoke()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                        ) {
-                            Text("Commit", color = Color.White)
+                            }
                         }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showConfirmDialog = false }) {
-                            Text("Cancel", color = palette.foreground)
-                        }
+                        op.invoke()
                     }
-                )
+                ) {
+                    Text("Create a commit on branch \"${review?.branch}\" with message:\n\n\"${commitMessage.trim()}\"")
+                }
             }
         }
     }
@@ -649,39 +596,29 @@ fun AidenGitScreen(
             // Checkout branch confirmation
             if (branchToCheckout != null) {
                 val targetBranch = branchToCheckout!!
-                AlertDialog(
+                AidenWorkspaceAlertDialog(
+                    title = "Checkout Branch?",
                     onDismissRequest = { branchToCheckout = null },
-                    title = { Text("Checkout Branch?", fontWeight = FontWeight.Bold) },
-                    text = { Text("Switch working tree to branch \"$targetBranch\"?") },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                val branch = targetBranch
-                                branchToCheckout = null
-                                showBranchSheet = false
-                                val snapshotId = gitReviewResult?.snapshotId ?: ""
-                                scope.launch {
-                                    if (client != null) {
-                                        try {
-                                            client.checkoutGitBranch(workspaceId, branch, snapshotId)
-                                            refreshGit()
-                                        } catch (e: Exception) {
-                                            lastError = e.localizedMessage
-                                        }
-                                    }
+                    confirmText = "Checkout",
+                    onConfirm = {
+                        val branch = targetBranch
+                        branchToCheckout = null
+                        showBranchSheet = false
+                        val snapshotId = gitReviewResult?.snapshotId ?: ""
+                        scope.launch {
+                            if (client != null) {
+                                try {
+                                    client.checkoutGitBranch(workspaceId, branch, snapshotId)
+                                    refreshGit()
+                                } catch (e: Exception) {
+                                    lastError = e.localizedMessage
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                        ) {
-                            Text("Checkout", color = Color.White)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { branchToCheckout = null }) {
-                            Text("Cancel", color = palette.foreground)
+                            }
                         }
                     }
-                )
+                ) {
+                    Text("Switch working tree to branch \"$targetBranch\"?")
+                }
             }
 
             // Create new branch dialog
@@ -689,61 +626,49 @@ fun AidenGitScreen(
                 var newBranchName by remember { mutableStateOf("") }
                 var startPoint by remember { mutableStateOf(review?.branch ?: "main") }
 
-                AlertDialog(
+                AidenWorkspaceAlertDialog(
+                    title = "Create New Branch",
                     onDismissRequest = { showNewBranchDialog = false },
-                    title = { Text("Create New Branch", fontWeight = FontWeight.Bold) },
-                    text = {
-                        Column {
-                            TextField(
-                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                                value = newBranchName,
-                                onValueChange = { newBranchName = it },
-                                label = { Text("Branch name") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            TextField(
-                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                                value = startPoint,
-                                onValueChange = { startPoint = it },
-                                label = { Text("Start point (branch / commit)") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                val name = newBranchName.trim()
-                                val start = startPoint.trim()
-                                if (name.isNotEmpty()) {
-                                    showNewBranchDialog = false
-                                    showBranchSheet = false
-                                    scope.launch {
-                                        if (client != null) {
-                                            try {
-                                                client.createGitBranch(workspaceId, name, start)
-                                                refreshGit()
-                                            } catch (e: Exception) {
-                                                lastError = e.localizedMessage
-                                            }
-                                        }
+                    confirmText = "Create",
+                    onConfirm = {
+                        val name = newBranchName.trim()
+                        val start = startPoint.trim()
+                        if (name.isNotEmpty()) {
+                            showNewBranchDialog = false
+                            showBranchSheet = false
+                            scope.launch {
+                                if (client != null) {
+                                    try {
+                                        client.createGitBranch(workspaceId, name, start)
+                                        refreshGit()
+                                    } catch (e: Exception) {
+                                        lastError = e.localizedMessage
                                     }
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                        ) {
-                            Text("Create", color = Color.White)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showNewBranchDialog = false }) {
-                            Text("Cancel", color = palette.foreground)
+                            }
                         }
                     }
-                )
+                ) {
+                    Column {
+                        TextField(
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                            value = newBranchName,
+                            onValueChange = { newBranchName = it },
+                            label = { Text("Branch name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                            value = startPoint,
+                            onValueChange = { startPoint = it },
+                            label = { Text("Start point (branch / commit)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
         }
     }
@@ -751,56 +676,42 @@ fun AidenGitScreen(
     // --- Push Dialog ---
     if (showPushDialog) {
         val cap = pushCapability
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = "Push to Remote",
             onDismissRequest = { showPushDialog = false },
-            title = { Text("Push to Remote", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    if (cap?.allowed == false) {
-                        Text(
-                            text = "Push is not allowed: ${cap.reason ?: "Permission denied"}",
-                            color = palette.danger
-                        )
-                    } else {
-                        Text("Push branch \"$pushBranch\" to remote \"$pushRemote\"?")
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Aiden never force-pushes.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.secondary
-                        )
+            confirmText = if (cap?.allowed != false) "Push" else null,
+            onConfirm = {
+                showPushDialog = false
+                val snapshotId = gitReviewResult?.snapshotId ?: ""
+                scope.launch {
+                    if (client != null) {
+                        try {
+                            client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
+                            refreshGit()
+                        } catch (e: Exception) {
+                            lastError = e.localizedMessage
+                        }
                     }
-                }
-            },
-            confirmButton = {
-                if (cap?.allowed != false) {
-                    Button(
-                        onClick = {
-                            showPushDialog = false
-                            val snapshotId = gitReviewResult?.snapshotId ?: ""
-                            scope.launch {
-                                if (client != null) {
-                                    try {
-                                        client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
-                                        refreshGit()
-                                    } catch (e: Exception) {
-                                        lastError = e.localizedMessage
-                                    }
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                    ) {
-                        Text("Push", color = Color.White)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPushDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
                 }
             }
-        )
+        ) {
+            Column {
+                if (cap?.allowed == false) {
+                    Text(
+                        text = "Push is not allowed: ${cap.reason ?: "Permission denied"}",
+                        color = palette.danger
+                    )
+                } else {
+                    Text("Push branch \"$pushBranch\" to remote \"$pushRemote\"?")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Aiden never force-pushes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary
+                    )
+                }
+            }
+        }
     }
 
     // --- Compare Dialog ---
@@ -849,8 +760,8 @@ fun AidenGitScreen(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        shape = RoundedCornerShape(8.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = Color.White),
+                        shape = AidenShape.Button
                     ) {
                         if (isComparing) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
@@ -885,7 +796,7 @@ fun AidenGitScreen(
                                 ) {
                                     Text(
                                         text = file.status.symbol,
-                                        color = file.status.tint,
+                                        color = aidenGitStatusTint(file.status, palette),
                                         fontWeight = FontWeight.Bold,
                                         style = MaterialTheme.typography.labelSmall
                                     )
@@ -1000,62 +911,90 @@ fun AidenGitScreen(
                 var wtBranch by remember { mutableStateOf("") }
                 var wtName by remember { mutableStateOf("") }
 
-                AlertDialog(
+                AidenWorkspaceAlertDialog(
+                    title = "Create Managed Worktree",
                     onDismissRequest = { showNewWorktreeDialog = false },
-                    title = { Text("Create Managed Worktree", fontWeight = FontWeight.Bold) },
-                    text = {
-                        Column {
-                            TextField(
-                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                                value = wtBranch,
-                                onValueChange = { wtBranch = it },
-                                label = { Text("Branch name") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            TextField(
-                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                                value = wtName,
-                                onValueChange = { wtName = it },
-                                label = { Text("Worktree name") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                val branch = wtBranch.trim()
-                                val name = wtName.trim()
-                                if (branch.isNotEmpty() && name.isNotEmpty()) {
-                                    showNewWorktreeDialog = false
-                                    showWorktreesSheet = false
-                                    scope.launch {
-                                        if (client != null) {
-                                            try {
-                                                client.createGitWorktree(workspaceId, branch, name)
-                                                coordinator.refreshWorkspaces()
-                                            } catch (e: Exception) {
-                                                lastError = e.localizedMessage
-                                            }
-                                        }
+                    confirmText = "Create",
+                    onConfirm = {
+                        val branch = wtBranch.trim()
+                        val name = wtName.trim()
+                        if (branch.isNotEmpty() && name.isNotEmpty()) {
+                            showNewWorktreeDialog = false
+                            showWorktreesSheet = false
+                            scope.launch {
+                                if (client != null) {
+                                    try {
+                                        client.createGitWorktree(workspaceId, branch, name)
+                                        coordinator.refreshWorkspaces()
+                                    } catch (e: Exception) {
+                                        lastError = e.localizedMessage
                                     }
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                        ) {
-                            Text("Create", color = Color.White)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showNewWorktreeDialog = false }) {
-                            Text("Cancel", color = palette.foreground)
+                            }
                         }
                     }
-                )
+                ) {
+                    Column {
+                        TextField(
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                            value = wtBranch,
+                            onValueChange = { wtBranch = it },
+                            label = { Text("Branch name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                            value = wtName,
+                            onValueChange = { wtName = it },
+                            label = { Text("Worktree name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * Connected tonal action bar for the git review card. Each segment keeps its own action;
+ * Push shows a progress ring while its capability check is in flight.
+ */
+@Composable
+internal fun AidenGitActionBar(
+    pushInFlight: Boolean,
+    onBranch: () -> Unit,
+    onPush: () -> Unit,
+    onCompare: () -> Unit,
+    onWorktrees: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val actions = listOf(
+        Triple("Branch", Icons.Default.ForkRight, onBranch),
+        Triple("Push", Icons.Default.CloudUpload, onPush),
+        Triple("Compare", Icons.AutoMirrored.Filled.CompareArrows, onCompare),
+        Triple("Worktrees", Icons.Default.AccountTree, onWorktrees)
+    )
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        actions.forEachIndexed { index, (label, icon, action) ->
+            AidenConnectedActionSegment(
+                index = index,
+                count = actions.size,
+                label = label,
+                icon = icon,
+                onClick = action,
+                stacked = true,
+                loading = label == "Push" && pushInFlight,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
