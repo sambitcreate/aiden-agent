@@ -82,4 +82,23 @@ class AidenProviderIconTest {
         assertEquals(null, aidenProviderBrandFill("custom:my-server"))
         assertEquals(null, aidenProviderBrandFill(null))
     }
+
+    @Test
+    fun themeAccentFallbackInitialStaysReadableForEveryPreset() {
+        AidenThemePresetID.entries.forEach { preset ->
+            listOf(true, false).forEach { isDark ->
+                val palette = AidenThemeCatalog.palette(preset, isDark)
+                val badge = aidenProviderMonogramColors(
+                    brandFill = palette.accent,
+                    surface = palette.raised,
+                    liftedFill = aidenTonalSurfaces(palette, isDark).highest,
+                    liftedInk = palette.foreground
+                )
+                assertTrue(
+                    "fallback initial on $preset ${if (isDark) "dark" else "light"} must stay readable",
+                    contrast(badge.ink, badge.fill) >= 3f
+                )
+            }
+        }
+    }
 }

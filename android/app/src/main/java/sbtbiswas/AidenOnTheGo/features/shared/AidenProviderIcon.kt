@@ -165,10 +165,14 @@ internal fun aidenProviderMonogramColors(
         }
         AidenMonogramColors(fill = fill, ink = liftedInk)
     } else {
-        AidenMonogramColors(fill = brandFill, ink = Color.White)
+        // White ink stays the brand default; light fills (e.g. Monochrome dark's white
+        // accent fallback) take black ink so the initial never disappears.
+        val ink = if (contrastRatio(Color.White, brandFill) >= MinimumInkContrast) Color.White else Color.Black
+        AidenMonogramColors(fill = brandFill, ink = ink)
     }
 
 private const val LiftedInkAlpha = 0.22f
+private const val MinimumInkContrast = 3f
 
 private fun contrastRatio(a: Color, b: Color): Float {
     val hi = maxOf(a.luminance(), b.luminance())
