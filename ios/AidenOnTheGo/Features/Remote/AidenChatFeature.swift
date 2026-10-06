@@ -1721,6 +1721,13 @@ final class AidenChatViewModel {
         return installation.hasNegotiatedAccess(to: .tasksRead)
     }
 
+    /// Used only to fence an open inspector when the active pairing changes.
+    var agentNavigationConnectionIdentity: [String] {
+        guard !isReadOnlyPresentation,
+              let installation = coordinator.installationStore.activeInstallation else { return [] }
+        return [installation.instanceId, installation.deviceId]
+    }
+
     var canReadAgentRoster: Bool {
         guard let server = coordinator.server,
               server.supportsChatAgents,
