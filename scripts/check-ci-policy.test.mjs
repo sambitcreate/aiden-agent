@@ -434,3 +434,37 @@ test("foreground Electron smoke is a required package command in desktop verific
   assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
   assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
 });
+
+
+test("Linux required contexts exist for scoped PRs and fail closed", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const gate = jobs["linux-required"];
+  assert.equal(gate.name, "Linux ${{ matrix.arch }}");
+  assert.equal(gate.if, "${{ always() }}");
+  assert.deepEqual(gate.strategy.matrix.arch, ["x64", "arm64"]);
+  assert.deepEqual(gate.needs, ["changes", "linux"]);
+  assert.notEqual(jobs.linux.name, gate.name);
+  const step = gate.steps[0];
+  assert.deepEqual(step.env, {
+    CHANGES_RESULT: "${{ needs.changes.result }}",
+    LINUX_SELECTED: "${{ needs.changes.outputs.linux }}",
+    LINUX_RESULT: "${{ needs.linux.result }}",
+  });
+  for (const [detection, selected, result, expected] of [
+    ["success", "false", "skipped", 0],
+    ["success", "true", "success", 0],
+    ["success", "true", "failure", 1],
+    ["success", "true", "cancelled", 1],
+    ["success", "true", "skipped", 1],
+    ["failure", "false", "skipped", 1],
+    ["cancelled", "false", "skipped", 1],
+    ["success", "", "skipped", 1],
+    ["success", "false", "failure", 1],
+  ]) {
+    const run = spawnSync("bash", ["-e", "-c", step.run], {
+      env: { ...process.env, CHANGES_RESULT: detection, LINUX_SELECTED: selected, LINUX_RESULT: result },
+      encoding: "utf8",
+    });
+    assert.equal(run.status, expected, `${detection}/${selected}/${result}: ${run.stdout}${run.stderr}`);
+  }
+});
