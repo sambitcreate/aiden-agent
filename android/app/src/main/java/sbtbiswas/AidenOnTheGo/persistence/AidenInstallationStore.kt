@@ -149,12 +149,7 @@ class AidenInstallationStore(
         // The negotiation route can only add progress grants; a response that
         // drops or widens unrelated authority is contract-invalid. Reject it
         // instead of persisting different non-progress authority.
-        val progress = setOf(
-            AidenRemoteCapability.TASKS_READ,
-            AidenRemoteCapability.AGENTS_READ,
-            AidenRemoteCapability.QUESTIONS_RESPOND,
-            AidenRemoteCapability.SKILLS_INVOKE
-        )
+        val progress = AidenRemoteCapability.NEGOTIABLE.toSet()
         if (item.deviceCapabilities.toSet() - progress != deviceCapabilities.toSet() - progress) return
         list[index] = item.copy(deviceCapabilities = deviceCapabilities)
         _installations.value = list

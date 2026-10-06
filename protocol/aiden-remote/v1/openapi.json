@@ -4456,7 +4456,7 @@
       ],
       "get": {
         "operationId": "chatCurrentRunEvents",
-        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch.",
+        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -4492,7 +4492,7 @@
       ],
       "get": {
         "operationId": "runEvents",
-        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted.",
+        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -4556,7 +4556,7 @@
       ],
       "post": {
         "operationId": "cancelRun",
-        "description": "Contract revision 19 (run-control-v1). Stops a running run whatever surface started it. Requires chat write access to the run's chat. run_gone for an unknown run; operation_stale once the run has finished.",
+        "description": "Contract revision 19 (run-control-v1). Stops a running run whatever surface started it. Requires chat write access to the run's chat. run_gone for an unknown run; operation_stale once the run has finished. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4612,7 +4612,7 @@
       ],
       "post": {
         "operationId": "respondRunApproval",
-        "description": "Contract revision 19 (run-control-v1). Resolves an approval in this run whoever owns it. The first responder wins; a later responder receives 409 approval_resolved with the winning decision and resolvedAt, and an Idempotency-Key replay returns the same outcome. An approval that is not part of the run is not_found. Allowing an approval whose details were too large to send is capability_denied; review it on the host.",
+        "description": "Contract revision 19 (run-control-v1). Resolves an approval in this run whoever owns it. The first responder wins; a later responder receives 409 approval_resolved with the winning decision and resolvedAt, and an Idempotency-Key replay returns the same outcome. An approval that is not part of the run is not_found. Allowing an approval whose details were too large to send is capability_denied; review it on the host. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs approval:respond; a phone may allow only an approval its projection marked canAllow, otherwise allow is capability_denied and deny still works.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4676,7 +4676,7 @@
       ],
       "post": {
         "operationId": "respondRunQuestion",
-        "description": "Contract revision 19 (run-control-v1). Answers or dismisses a question in this run whoever owns it. The first responder wins; a later responder receives 409 question_already_resolved with the winning outcome and resolvedAt.",
+        "description": "Contract revision 19 (run-control-v1). Answers or dismisses a question in this run whoever owns it. The first responder wins; a later responder receives 409 question_already_resolved with the winning outcome and resolvedAt. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs questions:respond.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4740,7 +4740,7 @@
       ],
       "post": {
         "operationId": "submitRunInput",
-        "description": "Contract revision 19 (run-control-v1). Mid-flight steer or queue input for a running run, with the same admission semantics as /streams/{streamId}/inputs.",
+        "description": "Contract revision 19 (run-control-v1). Mid-flight steer or queue input for a running run, with the same admission semantics as /streams/{streamId}/inputs. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -5744,7 +5744,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
             "minItems": 1,
             "maxItems": 8,
             "items": {

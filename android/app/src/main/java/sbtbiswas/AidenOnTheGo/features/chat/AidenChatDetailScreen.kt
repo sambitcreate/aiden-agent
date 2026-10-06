@@ -448,7 +448,7 @@ fun AidenChatDetailScreen(
                     if (isStreaming) {
                         IconButton(
                             onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canControlCurrentRun && !isStopping
+                            enabled = viewModel.canStopCurrentRun && !isStopping
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
                         }
@@ -670,7 +670,7 @@ fun AidenChatDetailScreen(
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
-                    canStop = viewModel.canControlCurrentRun && !isStopping,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
                     canSend = viewModel.canSend && !hasActiveStream &&
                         preparingAttachmentBatches == 0 && !isUploadingAttachment,
                     isStreaming = isStreaming,

@@ -110,7 +110,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 23);
+  assert.equal(fixture.contractRevision, 24);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -387,6 +387,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // Pairing requests arrived in revision 20: a revision-19 fixture still
   // parses without the section and is refused with it.
   const revision19 = structuredClone(raw);
+  delete revision19.phoneRunEvents;
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
   // The messages window's metadata is revision 23, so the older fixture omits it.
@@ -396,6 +397,47 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
   delete revision19.pairingRequests;
   assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
+});
+
+test("phone run fixtures carry the phone approval projection and arrive in revision 24", async () => {
+  const raw = await json("fixtures/contract.json");
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const approvals = (fixture.phoneRunEvents ?? [])
+    .filter((event) => event.type === "approval_required")
+    .map((event) => event.payload as Record<string, unknown>);
+  assert.deepEqual(approvals.map((approval) => approval.canAllow), [true, false]);
+  for (const approval of approvals) {
+    assert.equal("details" in approval, false);
+    assert.equal("detailsOmitted" in approval, false);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => () => {
+    const copy = structuredClone(raw) as Record<string, unknown>;
+    change(copy);
+    return parseAidenRemoteContractFixture(copy);
+  };
+  const phoneApproval = (copy: Record<string, unknown>) =>
+    (copy.phoneRunEvents as Array<{ type: string; payload: Record<string, unknown> }>)
+      .filter((event) => event.type === "approval_required");
+  assert.throws(
+    mutate((copy) => {
+      phoneApproval(copy)[0]!.payload.details = { kind: "scheduled-task" };
+    }),
+    /unsupported field details/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      phoneApproval(copy)[1]!.payload.scopes = ["once", "always"];
+    }),
+    /deny-only phone run approval offers no scopes/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      copy.contractRevision = 23;
+      (copy.hostHealth as Record<string, unknown>).contractRevision = 23;
+    }),
+    /require contract revision 24/u,
+  );
 });
 
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {

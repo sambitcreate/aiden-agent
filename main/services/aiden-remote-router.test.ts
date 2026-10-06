@@ -23,6 +23,12 @@ import {
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import { HostRunRegistry } from "./host-run-registry.js";
+import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+} from "../../renderer/shared/assistant.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
@@ -55,7 +61,8 @@ async function fixture(options: {
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
-  hostRuns?: boolean;
+  /** `true` installs a recording fake; an object installs that run service. */
+  hostRuns?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostRuns"]>;
   messagesWindow?: boolean;
   /** "plain" forks; "summary" also forks with a summary. */
   forks?: "plain" | "summary";
@@ -992,7 +999,8 @@ async function fixture(options: {
           },
         }
       : {}),
-    ...(options.hostRuns
+    ...(typeof options.hostRuns === "object" ? { hostRuns: options.hostRuns } : {}),
+    ...(options.hostRuns === true
       ? {
           hostRuns: {
             chatIdForRun: (runId) => {
@@ -4027,7 +4035,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 23,
+      contractRevision: 24,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4040,7 +4048,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
   }
 });
 
-test("phones never see, negotiate or use host control, even holding the grants", async () => {
+test("phones never see, negotiate or use the host feed, even holding the grant", async () => {
   const phone = await fixture({
     hostFeed: true,
     hostRuns: true,
@@ -4050,25 +4058,19 @@ test("phones never see, negotiate or use host control, even holding the grants",
   });
   try {
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
-    for (const capability of ["host:events", "runs:observe", "runs:control"]) {
-      assert.equal(server.capabilities.includes(capability), false, capability);
-      assert.equal(server.serverCapabilities.includes(capability), false, capability);
-    }
+    assert.equal(server.capabilities.includes("host:events"), false);
+    assert.equal(server.serverCapabilities.includes("host:events"), false);
     for (const feature of ["host-events-v1", "run-streams-v1", "run-control-v1"]) {
       assert.equal(server.features.includes(feature), false, feature);
     }
-
-    for (const path of ["/host/events", "/runs/run-1/events", "/chats/chat-1/runs/current/events"]) {
-      const response = await fetch(`${phone.base}${path}`, { headers: HOST_HEADERS });
-      assert.equal(response.status, 403, path);
-      assert.equal(await errorCode(response), "capability_denied", path);
+    // What a phone holds is always something the server says it offers.
+    for (const capability of server.capabilities) {
+      assert.equal(server.serverCapabilities.includes(capability), true, capability);
     }
-    const cancel = await fetch(`${phone.base}/runs/run-1/cancel`, {
-      method: "POST",
-      headers: { ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": "k".repeat(16) },
-      body: "{}",
-    });
-    assert.equal(cancel.status, 403);
+
+    const feed = await fetch(`${phone.base}/host/events`, { headers: HOST_HEADERS });
+    assert.equal(feed.status, 403);
+    assert.equal(await errorCode(feed), "capability_denied");
 
     const negotiate = await fetch(`${phone.base}/device/capabilities`, {
       method: "POST",
@@ -4077,9 +4079,191 @@ test("phones never see, negotiate or use host control, even holding the grants",
     });
     assert.equal(negotiate.status, 403);
     assert.equal(await errorCode(negotiate), "capability_denied");
-    assert.equal(phone.calls.some((call) => /^(host-feed|run-|device-capabilities)/u.test(call)), false);
+    assert.equal(phone.calls.some((call) => /^(host-feed|device-capabilities)/u.test(call)), false);
   } finally {
     await phone.close();
+  }
+});
+
+test("a phone negotiates the phone run subset only where the host advertises phone-run-control-v1", async () => {
+  const older = await fixture({ deviceType: "iphone", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${older.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), false);
+    assert.equal(server.serverCapabilities.includes("runs:observe"), false);
+    const refused = await fetch(`${older.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...HOST_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["runs:observe", "runs:control"] }),
+    });
+    assert.equal(refused.status, 404);
+  } finally {
+    await older.close();
+  }
+
+  const phone = await fixture({ hostRuns: true, deviceType: "iphone", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), true);
+    assert.equal(server.serverCapabilities.includes("runs:observe"), true);
+    assert.equal(server.serverCapabilities.includes("runs:control"), true);
+    const negotiated = await fetch(`${phone.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...HOST_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["runs:observe", "runs:control"] }),
+    });
+    assert.equal(negotiated.status, 200);
+    assert.deepEqual(
+      ((await negotiated.json()) as { capabilities: string[] }).capabilities.filter((c) => c.startsWith("runs:")),
+      ["runs:observe", "runs:control"],
+    );
+  } finally {
+    await phone.close();
+  }
+
+  const mac = await fixture({ hostRuns: true, deviceType: "mac", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${mac.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), false);
+  } finally {
+    await mac.close();
+  }
+});
+
+test("a phone's run grants reach a foreign run only through its own per-chat grants", async () => {
+  const PHONE_RUN_GRANTS = ["server:read", "chat:read", "chat:write", "approval:respond", "runs:observe", "runs:control"] as AidenRemoteCapability[];
+  const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
+  const phone = await fixture({ hostRuns: true, deviceType: "iphone", capabilities: PHONE_RUN_GRANTS });
+  try {
+    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: HOST_HEADERS });
+    assert.equal(current.status, 200);
+    await current.text();
+    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4" } });
+    assert.equal(resumed.status, 200);
+    await resumed.text();
+    const cancelled = await fetch(`${phone.base}/runs/run-1/cancel`, {
+      method: "POST",
+      headers: controlHeaders("key-phone-cancel-01"),
+      body: "{}",
+    });
+    assert.equal(cancelled.status, 202);
+    const answered = await fetch(`${phone.base}/runs/run-1/approvals/approval-1/respond`, {
+      method: "POST",
+      headers: controlHeaders("key-phone-approve-1"),
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    assert.equal(answered.status, 200);
+    assert.deepEqual(
+      phone.calls.filter((call) => call.startsWith("run-")),
+      [
+        "run-events:device-authorized-12345678:run-1:0",
+        "run-events:device-authorized-12345678:run-1:4",
+        "run-cancel:device-authorized-12345678:run-1:key-phone-cancel-01",
+        "run-approval:device-authorized-12345678:run-1:approval-1:key-phone-approve-1",
+      ],
+    );
+  } finally {
+    await phone.close();
+  }
+
+  // The run grants alone do not open a chat the phone could not read or write.
+  const runOnly = await fixture({
+    hostRuns: true,
+    deviceType: "iphone",
+    capabilities: ["server:read", "runs:observe", "runs:control"] as AidenRemoteCapability[],
+  });
+  try {
+    for (const path of ["/runs/run-1/events", "/chats/chat-1/runs/current/events"]) {
+      const response = await fetch(`${runOnly.base}${path}`, { headers: HOST_HEADERS });
+      assert.equal(response.status, 403, path);
+      assert.equal(await errorCode(response), "capability_denied", path);
+    }
+    for (const [path, body] of [
+      ["/runs/run-1/cancel", "{}"],
+      ["/runs/run-1/approvals/approval-1/respond", JSON.stringify({ decision: "deny" })],
+      ["/runs/run-1/questions/prompt-1/respond", JSON.stringify({ outcome: "dismissed" })],
+    ] as const) {
+      const response = await fetch(`${runOnly.base}${path}`, {
+        method: "POST",
+        headers: controlHeaders("key-phone-denied-1"),
+        body,
+      });
+      assert.equal(response.status, 403, path);
+      assert.equal(await errorCode(response), "capability_denied", path);
+    }
+    assert.equal(runOnly.calls.some((call) => call.startsWith("run-")), false);
+  } finally {
+    await runOnly.close();
+  }
+});
+
+test("a phone allowing an automation approval on a foreign run needs schedule:write, as on its own approvals", async () => {
+  const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
+  const PHONE_RUN_GRANTS = ["server:read", "chat:read", "chat:write", "approval:respond", "runs:observe", "runs:control"] as AidenRemoteCapability[];
+  const scenario = async (capabilities: AidenRemoteCapability[]) => {
+    const registry = new HostRunRegistry({ now: () => 1_000, epoch: "epoch-router" });
+    const approvals: string[] = [];
+    const service = new AidenRemoteHostRunService({
+      registry,
+      now: () => 1_000,
+      controls: {
+        cancel: () => false,
+        approve: ({ approvalId, decision }) => {
+          if (!registry.pendingPrompt(approvalId)) return false;
+          approvals.push(`${approvalId}:${decision}`);
+          registry.resolveAttention(approvalId, { kind: "approval", decision });
+          return true;
+        },
+        answer: () => "rejected",
+        admitInput: async () => ({ admitted: false, reason: "unavailable" }) as never,
+      },
+    });
+    registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+    for (const [approvalId, toolName] of [
+      ["approval-create", ASSISTANT_AUTOMATION_TOOL_NAME],
+      ["approval-edit", ASSISTANT_AUTOMATION_EDIT_TOOL_NAME],
+    ] as const) {
+      registry.publish("run-1", "chat:approval", {
+        approvalId,
+        summary: "Create a nightly automation",
+        toolCallId: `call-${approvalId}`,
+        toolName,
+        scopes: ["once"],
+      });
+    }
+    const phone = await fixture({ hostRuns: service, deviceType: "iphone", capabilities });
+    const respond = (approvalId: string, decision: "allow" | "deny", key: string) =>
+      fetch(`${phone.base}/runs/run-1/approvals/${approvalId}/respond`, {
+        method: "POST",
+        headers: controlHeaders(key),
+        body: JSON.stringify({ decision }),
+      });
+    return { phone, approvals, respond };
+  };
+
+  const without = await scenario(PHONE_RUN_GRANTS);
+  try {
+    for (const approvalId of ["approval-create", "approval-edit"]) {
+      const refused = await without.respond(approvalId, "allow", `key-allow-${approvalId}`);
+      assert.equal(refused.status, 403, approvalId);
+      assert.equal(await errorCode(refused), "capability_denied", approvalId);
+    }
+    assert.deepEqual(without.approvals, []);
+    // Deny stays available without the automation grant.
+    const denied = await without.respond("approval-create", "deny", "key-deny-approval-create");
+    assert.equal(denied.status, 200);
+    assert.deepEqual(without.approvals, ["approval-create:deny"]);
+  } finally {
+    await without.phone.close();
+  }
+
+  const granted = await scenario([...PHONE_RUN_GRANTS, "schedule:write"]);
+  try {
+    const allowed = await granted.respond("approval-edit", "allow", "key-allow-approval-edit");
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(granted.approvals, ["approval-edit:allow"]);
+  } finally {
+    await granted.phone.close();
   }
 });
 
