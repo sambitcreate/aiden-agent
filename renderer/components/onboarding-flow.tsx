@@ -41,6 +41,7 @@ import { ProviderIcon } from "./provider-icon";
 import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
+import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
 import { appApi, profileApi, providersApi } from "../lib/ipc";
 import {
@@ -52,6 +53,8 @@ import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
+  visibleOnboardingFeatures,
+  onboardingModelDescription,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
 import {
@@ -59,6 +62,7 @@ import {
   getOnboardingMoreProviders,
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
+  onboardingChatGptSelection,
 } from "../lib/pi-provider-display";
 import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
@@ -97,6 +101,7 @@ const FEATURE_ILLUSTRATIONS = {
   vision: new URL("../assets/onboarding/features/attachments-vision.png", import.meta.url).href,
   webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
+  toolScripts: new URL("../assets/onboarding/features/tool-scripts.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
   geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
   bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
@@ -276,11 +281,20 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
+    description: onboardingModelDescription("other"),
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
+  },
+  {
+    id: "toolScripts",
+    group: "extend",
+    title: "Tool Scripts",
+    description:
+      "Combine workspace and connected-service tools in short scripts. Every tool keeps its normal permission checks; scripts cannot access your files or network directly.",
+    icon: SquareTerminal,
+    imageUrl: FEATURE_ILLUSTRATIONS.toolScripts,
+    size: "standard",
   },
   {
     id: "modelPad",
@@ -306,7 +320,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Attachments & Vision",
     description:
-      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline. Generate or edit attached images with configured image models after approving the prompt, reference images, and possible provider charges.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -334,7 +348,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
+    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools. Sharing a provider sign-in requires approval on each device.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
@@ -488,21 +502,10 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
-  const visibleFeatureBentos = React.useMemo(() => {
-    const visible: FeatureBento[] = [];
-    for (const feature of featureBentos) {
-      if (!capabilities.computerUse && feature.id === "computerUse") continue;
-      if (!capabilities.bots && feature.id === "bots") continue;
-      visible.push(
-        feature.id === "commands" && capabilities.platform === "linux"
-          ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
-          : feature.id === "models" && capabilities.platform === "linux"
-            ? { ...feature, description: "Choose from 30+ Pi providers, ChatGPT sign-in, or local and private endpoints." }
-            : feature,
-      );
-    }
-    return visible;
-  }, [capabilities.bots, capabilities.computerUse, capabilities.platform]);
+  const visibleFeatureBentos = React.useMemo(
+    () => visibleOnboardingFeatures(featureBentos, { bots: capabilities.bots, computerUse: capabilities.computerUse, platform: capabilities.platform }),
+    [capabilities.bots, capabilities.computerUse, capabilities.platform],
+  );
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
   // Main-owned state is authoritative. Block the workbench until it has been
@@ -588,13 +591,11 @@ export function OnboardingFlow() {
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
+  const openAiLoginProvider = providers.data?.find((provider) => provider.id === "openai" && provider.isBuiltin);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
-  const codexReady =
-    codexStatus.data?.configured === true &&
-    codexStatus.data.needsAttention === false &&
-    codexStatus.data.models.length > 0;
+  const chatGptSelection = onboardingChatGptSelection(openAiLoginProvider, codexStatus.data);
   const nextBlockedReason =
-    stateReady && step === "provider" && choice === "openai-signin" && !codexReady
+    stateReady && step === "provider" && choice === "openai-signin" && !chatGptSelection
       ? "Sign in with ChatGPT to continue, or choose another connection."
       : undefined;
   const canContinue = !stateReady
@@ -603,7 +604,7 @@ export function OnboardingFlow() {
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"
-          ? codexReady
+          ? Boolean(chatGptSelection)
           : hasProviderChoice
         : true;
 
@@ -724,13 +725,12 @@ export function OnboardingFlow() {
         return;
       }
       if (choice === "openai-signin") {
-        const model = codexStatus.data?.models[0]?.id;
-        if (!codexReady || !model) {
+        if (!chatGptSelection) {
           setProviderError("Complete ChatGPT sign-in before continuing.");
           return;
         }
-        persistModelSelection("openai-codex", model);
-        await completeProviderStep("openai-codex");
+        persistModelSelection(chatGptSelection.providerId, chatGptSelection.model);
+        await completeProviderStep(chatGptSelection.providerId);
         return;
       }
       if (choice === "custom") {
@@ -997,6 +997,10 @@ export function OnboardingFlow() {
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
                 </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
+                </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices
                     .filter((item) =>
@@ -1051,7 +1055,19 @@ export function OnboardingFlow() {
                 </div>
                 {choice === "openai-signin" ? (
                   <div className="mt-3">
-                    <CodexProviderSettings layer="onboarding" />
+                    <OnboardingOpenAiLogin
+                      available={openAiLoginProvider?.authMethods?.some((method) => method.type === "oauth" && method.canLogin) === true}
+                      disabled={saving}
+                      onConnect={() => {
+                        if (openAiLoginProvider) setSettingUpProvider(openAiLoginProvider);
+                      }}
+                    />
+                    <details className="mt-3">
+                      <summary className="cursor-pointer rounded-control text-small text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+                        Existing Codex connection
+                      </summary>
+                      <CodexProviderSettings layer="onboarding" />
+                    </details>
                   </div>
                 ) : null}
                 <button
@@ -1294,18 +1310,19 @@ export function OnboardingFlow() {
                             {features.length} features
                           </Text>
                         </div>
-                        <div className="grid auto-rows-[118px] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[112px] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
+                        <div className="grid auto-rows-[minmax(118px,auto)] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[minmax(112px,auto)] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
                           {features.map((feature) => {
                             const Icon = feature.icon;
                             return (
                               <article
                                 key={feature.id}
+                                tabIndex={0}
                                 aria-label={`${feature.title}. ${feature.description}`}
-                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
+                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none ${FEATURE_LAYOUTS[feature.size]}`}
                               >
                                 <div
                                   aria-hidden="true"
-                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0"
+                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0 motion-reduce:transition-none"
                                 >
                                   <FeatureBentoVisual feature={feature} />
                                   <Text
@@ -1325,13 +1342,13 @@ export function OnboardingFlow() {
                                 </div>
                                 <div
                                   aria-hidden="true"
-                                  className="absolute inset-0 bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+                                  className="relative flex min-h-full flex-col justify-end bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 motion-reduce:transition-none"
                                 >
                                   <Icon
                                     aria-hidden="true"
                                     className="absolute right-3 top-3 size-4 text-accent"
                                   />
-                                  <div className="absolute bottom-3 left-3 right-3">
+                                  <div className="mt-5">
                                     <Text variant="small-strong" className="block leading-4">
                                       {feature.title}
                                     </Text>
@@ -1339,6 +1356,7 @@ export function OnboardingFlow() {
                                       variant="small"
                                       color="secondary"
                                       className="mt-1 block text-small leading-4"
+                                      data-onboarding-feature-description
                                     >
                                       {feature.description}
                                     </Text>

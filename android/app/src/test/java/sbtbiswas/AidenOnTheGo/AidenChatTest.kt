@@ -50,6 +50,16 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @Test
+    fun workspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() {
+        val payload = """{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"""
+        val timeline = json.decodeFromString<AidenGenerationTimeline>(payload)
+        assertTrue(timeline.isRendererSafe())
+        assertEquals(listOf("call-1", "call-2"), timeline.steps.map { it.toolCallId })
+        assertEquals(listOf("codemode", "read_file"), timeline.steps.map { it.toolName })
+        assertEquals(2, timeline.steps.map { it.id }.toSet().size)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun backgroundChatRefreshReportsReadOnlyAfterReturningToChat() {
@@ -1568,6 +1578,23 @@ class AidenChatTest {
         )
         assertEquals("", activeProjection.finalText)
         assertEquals("Locating the workspace.\n\nRunning the clone.", activeProjection.progressText)
+    }
+
+    @Test
+    fun testModelOperationApprovalsRequireDesktopInspection() {
+        val now = Instant.ofEpochSecond(10_000)
+        for (toolName in listOf("generate_image", "classify")) {
+            val wire = AidenStreamPendingApproval(
+                approvalId = "model-approval", streamId = "stream-1", chatId = "chat-1",
+                summary = "Review the complete payload on desktop", toolCallId = "model-call",
+                toolName = toolName, expiresAt = now.plusSeconds(60), canAllow = false
+            )
+            val approval = AidenPendingApprovalResolution.resolve(wire, "stream-1", "chat-1", now = now)!!
+            assertTrue(approval.canRespond)
+            assertFalse(approval.canAllow)
+            assertFalse(approval.hostCanAllow)
+            assertEquals(listOf(AidenApprovalScope.ONCE), approval.scopes)
+        }
     }
 
     @Test

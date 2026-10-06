@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import type { AgentHarnessResources, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentHarnessResources } from "./pi-legacy-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import * as path from "node:path";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";

@@ -1,3 +1,5 @@
+import { McpProviderAuthFields } from "./mcp-provider-auth-fields";
+import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
 // Plugins settings — Codex official directory plus custom MCP servers whose
 // tools become available to the assistant. Connectable plugins reuse the
 // hosted HTTP preset flow; other directory entries explain compatibility.
@@ -30,7 +32,7 @@ import {
   mcpServerDraftForEditor,
   mcpServerEditorKind,
 } from "../../lib/mcp-preset-state";
-import { queryKeys, useMcpPresets, useMcpServers } from "../../lib/queries";
+import { queryKeys, useMcpPresets, useMcpServers, useProviders } from "../../lib/queries";
 import type { McpPresetState, McpServer, McpTransport } from "../../lib/types";
 import {
   filterPluginCatalog,
@@ -454,14 +456,24 @@ function McpEditor({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
+  const providers = useProviders();
+  const [authProvider, setAuthProvider] = React.useState(server.authProvider ?? "");
+  const [approvedProviderConnection, setApprovedProviderConnection] = React.useState<string>();
+  const [providerAuthorizing, setProviderAuthorizing] = React.useState(false);
   const [name, setName] = React.useState(server.name);
+  const [description, setDescription] = React.useState(server.description ?? "");
+  const [oauthClientName, setOauthClientName] = React.useState(server.oauthClientName ?? "");
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
   const [args, setArgs] = React.useState((server.args ?? []).join(" "));
   const [env, setEnv] = React.useState(recordToLines(server.env));
   const [url, setUrl] = React.useState(server.url ?? "");
   const [headers, setHeaders] = React.useState(recordToLines(server.headers));
+  const providerConnection = JSON.stringify([authProvider, url.trim(), transport]);
+  const providerApproved = approvedProviderConnection === providerConnection;
   const [oauth, setOauth] = React.useState(Boolean(server.oauth));
+  const [authServerMetadataUrl, setAuthServerMetadataUrl] = React.useState(server.authServerMetadataUrl ?? "");
+  const metadataError = transport !== "stdio" && oauth ? mcpOAuthMetadataFieldError(authServerMetadataUrl) : undefined;
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
@@ -469,6 +481,10 @@ function McpEditor({
   React.useEffect(() => {
     if (open) {
       setName(server.name);
+      setAuthProvider(server.authProvider ?? "");
+      setApprovedProviderConnection(undefined);
+      setDescription(server.description ?? "");
+      setOauthClientName(server.oauthClientName ?? "");
       setTransport(server.transport);
       setCommand(server.command ?? "");
       setArgs((server.args ?? []).join(" "));
@@ -476,7 +492,11 @@ function McpEditor({
       setUrl(server.url ?? "");
       setHeaders(recordToLines(server.headers));
       setOauth(Boolean(server.oauth));
+      setAuthServerMetadataUrl(server.authServerMetadataUrl ?? "");
       setAuthorized(false);
+      if (server.authProvider) {
+        void mcpApi.oauthStatus(server.id).then((status) => setApprovedProviderConnection(status.providerAuthorized ? JSON.stringify([server.authProvider ?? "", server.url?.trim() ?? "", server.transport]) : undefined)).catch(() => setApprovedProviderConnection(undefined));
+      }
       if (server.oauth) {
         void mcpApi.oauthStatus(server.id).then((status) => setAuthorized(status.authorized)).catch(() => setAuthorized(false));
       }
@@ -486,6 +506,8 @@ function McpEditor({
   const build = (): McpServer => ({
     id: server.id,
     name: name.trim(),
+    description: description.trim() || undefined,
+    oauthClientName: transport !== "stdio" && oauth ? oauthClientName.trim() || undefined : undefined,
     transport,
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
@@ -493,8 +515,23 @@ function McpEditor({
     env: transport === "stdio" ? linesToRecord(env) : undefined,
     url: transport !== "stdio" ? url.trim() || undefined : undefined,
     headers: transport !== "stdio" ? linesToRecord(headers) : undefined,
-    oauth: transport !== "stdio" ? oauth || undefined : undefined,
+    oauth: transport !== "stdio" && !authProvider ? oauth || undefined : undefined,
+    authProvider: transport === "http" ? authProvider || undefined : undefined,
+    authServerMetadataUrl: transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
   });
+
+  const handleProviderConsent = async (allowed: boolean) => {
+    setProviderAuthorizing(true);
+    try {
+      const record = build();
+      await mcpApi.save(record);
+      await mcpApi.providerAuth(record, allowed);
+      setApprovedProviderConnection(allowed ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport]) : undefined);
+      onSaved();
+      toast.success(allowed ? "Provider credential approved for this server on this device." : "Provider credential sharing stopped.");
+    } catch (error) { setApprovedProviderConnection(undefined); toast.error(error instanceof Error ? error.message : String(error)); }
+    finally { setProviderAuthorizing(false); }
+  };
 
   const handleAuthorize = async () => {
     if (!url.trim()) {
@@ -541,7 +578,7 @@ function McpEditor({
       description="Configure how Aiden connects to this tool server."
       size="large"
       confirmLabel="Save"
-      confirmDisabled={!name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
+      confirmDisabled={Boolean(metadataError) || !name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
       onConfirm={async () => {
         await mcpApi.save(build());
         onSaved();
@@ -552,8 +589,11 @@ function McpEditor({
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My MCP server" autoFocus />
         </Field>
+        <Field label="Description" description="Optional context to help Aiden find this server’s tools." orientation="vertical">
+          <Input aria-label="MCP server description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
+        </Field>
         <Field label="Connection">
-          <Select value={transport} onValueChange={(v) => setTransport(v as McpTransport)}>
+          <Select value={transport} onValueChange={(v) => { setTransport(v as McpTransport); setAuthProvider(""); setApprovedProviderConnection(undefined); }}>
             <SelectTrigger size="small">
               <SelectValue />
             </SelectTrigger>
@@ -580,10 +620,10 @@ function McpEditor({
         ) : (
           <>
             <Field label="Server URL">
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
+              <Input value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
             </Field>
             <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
-              <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
+              <Textarea disabled={Boolean(authProvider)} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
             </Field>
             <Field
               label="OAuth sign-in"
@@ -591,16 +631,27 @@ function McpEditor({
             >
               <Switch
                 checked={oauth}
+                disabled={Boolean(authProvider)}
                 onCheckedChange={(value) => {
                   setOauth(value);
                   if (!value) setAuthorized(false);
                 }}
               />
             </Field>
+            {transport === "http" ? <McpProviderAuthFields providerId={authProvider} endpoint={url.trim()} approved={providerApproved} busy={providerAuthorizing}
+              disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !providers.data?.some((provider) => provider.id === authProvider && provider.isBuiltin && provider.hasKey))}
+              providers={(providers.data ?? []).filter((provider) => provider.isBuiltin && (provider.hasKey || provider.id === authProvider))}
+              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders(""); setAuthServerMetadataUrl(""); setOauthClientName(""); } }}
+              onConsent={(allowed) => { void handleProviderConsent(allowed); }} /> : null}
             {oauth ? (
+              <>
+              <Field label="OAuth client name" description="Optional name required by the server’s registration policy. Defaults to Aiden Agent.">
+                <Input aria-label="OAuth client name" maxLength={128} value={oauthClientName} onChange={(event) => { setOauthClientName(event.target.value); setAuthorized(false); }} placeholder="Aiden Agent" />
+              </Field>
+              <McpOAuthMetadataField value={authServerMetadataUrl} onChange={(value) => { setAuthServerMetadataUrl(value); setAuthorized(false); }} />
               <Field label="Authorize" description={authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."}>
                 <div className="flex items-center gap-2">
-                  <Button size="small" variant="filled" onClick={handleAuthorize} disabled={authorizing || !url.trim()}>
+                  <Button size="small" variant="filled" onClick={handleAuthorize} disabled={authorizing || !url.trim() || Boolean(metadataError)}>
                     {authorizing ? "Waiting for browser…" : authorized ? "Re-authorize" : "Authorize"}
                   </Button>
                   {authorized ? (
@@ -611,12 +662,13 @@ function McpEditor({
                   ) : null}
                 </div>
               </Field>
+              </>
             ) : null}
           </>
         )}
 
         <Field label="Test">
-          <Button size="small" variant="filled" onClick={handleTest} disabled={testing || !name.trim()}>
+          <Button size="small" variant="filled" onClick={handleTest} disabled={testing || !name.trim() || Boolean(metadataError)}>
             {testing ? "Connecting…" : "Test connection"}
           </Button>
         </Field>

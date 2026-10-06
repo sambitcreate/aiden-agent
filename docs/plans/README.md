@@ -6,6 +6,10 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Active and partial
 
+- [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); integrated replacement preserves #299–#307 ancestry on `feature/pi-1.0.3-upgrade`. Main 5c094875c integrated with focused native/desktop acceptance. Exact 1.0.3 pins, Azure state migration and sampling support implemented; full local acceptance complete (6,991 unit cases plus preserved modes and 79 CLI tests); [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357) tracks exact-head CI and authorized auto-merge. Frozen 0.87.1 journal adapter remains. Release/rollout gates are separate.
+
+- [Pi 1.0.3 parity upgrade](pi-1-parity-plan.md) — Active; historical 1.0.0 stack implementation evidence retained. Current target, reconciliation and remaining acceptance are tracked in the [1.0.3 execution plan](pi-1.0.3-upgrade-plan.md).
+
 - [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; the Linux branch merged to main in PR #71 (2026-09-26) and shipped in 0.50.0. Linux runtime smoke, Linux CI burn-in, Gemini Live orb and managed-worktree checks on real Linux remain. Enforcing Fedora GNOME VM validated the SELinux file-descriptor probes, Electron role transitions, protected-socket transfer, payload inventory, root-managed generation staging, and fail-closed security-label preservation. Release provenance and cross-platform installer delivery are implemented. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. Computer Use remains disabled on Linux.
 - [Durable Bot and chat runs](durable-jobs-leases-plan.md) — Foundation (P0) merged in PR #243 and shipped in 0.50.0: SQLite admission/leases/controls and conservative runtime recovery port. Production Bot runtime, desktop and Remote/native rollout remain pending. No Comfy/Design integration.
 

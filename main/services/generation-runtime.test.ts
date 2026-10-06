@@ -703,7 +703,7 @@ test("matches Pi reasoning display for hosted providers and the local visibility
     "anthropic",
     "openai",
     "openai-codex",
-    "azure-openai-responses",
+    "azure",
     "deepseek",
     "google",
     "google-vertex",

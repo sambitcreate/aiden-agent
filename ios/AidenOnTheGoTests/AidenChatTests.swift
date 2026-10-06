@@ -7,6 +7,15 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testWorkspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() throws {
+        let data = Data(#"{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"#.utf8)
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: data)
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(timeline.steps.map(\.toolCallId), ["call-1", "call-2"])
+        XCTAssertEqual(timeline.steps.map(\.toolName), ["codemode", "read_file"])
+        XCTAssertEqual(Set(timeline.steps.map(\.id)).count, 2)
+    }
+
     func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
             let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
@@ -4120,6 +4129,7 @@ final class AidenChatTests: XCTestCase {
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "azure"), "azure-openai-responses")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "tailscale"), "tailscale")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")
@@ -5364,6 +5374,25 @@ final class AidenChatTests: XCTestCase {
             ifStreamId: "stream-new"
         )
         XCTAssertTrue(currentRemoval)
+    }
+
+    func testModelOperationApprovalsRequireDesktopInspection() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        for toolName in ["generate_image", "classify"] {
+            let approval = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+                .init(approvalId: "model-approval", streamId: "stream-1", chatId: "chat-1",
+                      summary: "Review the complete payload on desktop", toolCallId: "model-call",
+                      toolName: toolName, expiresAt: now.addingTimeInterval(60), canAllow: false),
+                streamId: "stream-1", chatId: "chat-1", capabilities: .unrestricted, now: now
+            ))
+            XCTAssertFalse(approval.canAllow)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .allow, capabilities: .unrestricted
+            ), .hostApprovalRequired)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .deny, capabilities: .unrestricted
+            ), .allowed)
+        }
     }
 
     func testApprovalSnapshotMustBeLiveAndBoundToTheExactStreamAndChat() {
